@@ -35,3 +35,122 @@ def test_switch_off_svg_is_byte_identical_to_v2(name):
     scene = castplane.load_scene(CASES / f"{name}.json")
     svg = castplane.render(scene)["svg"]
     assert hashlib.sha256(svg.encode("utf-8")).hexdigest() == GOLDEN["sha256"][name]
+
+
+# --------------------------------------------------------------------------- shadow.py unit tests (§5.1.2, §5.1.3.3)
+import math
+
+import numpy as np
+
+from castplane.shadow import bounds_functionals, clip_polygon_bounds, plate_loop, receiver_frame
+
+#: The wall plate of ``wall_and_ground``: the plane y = 6 with normal (0, -1, 0); its frame is (x, z).
+WALL_N = np.array([0.0, -1.0, 0.0])
+WALL_PI = np.array([0.0, -1.0, 0.0, 6.0])
+WALL_BOUNDS = np.array([[-3.0, 6.0, 0.0], [3.0, 6.0, 0.0], [3.0, 6.0, 2.5], [-3.0, 6.0, 2.5]])
+
+
+def wall_point(u, v, w=1.0):
+    """Homogeneous point of the wall plane with frame coordinates ``(u, v) = (x, z)``, scaled by ``w > 0``."""
+    return np.array([u * w, 6.0 * w, v * w, w])
+
+
+def wall_dir(du, dv):
+    n = math.hypot(du, dv)
+    return np.array([du / n, 0.0, dv / n, 0.0])
+
+
+def frame_area(V) -> float:
+    e1, e2 = receiver_frame(WALL_N)
+    X = V[:, :3] / V[:, 3:4]
+    uv = np.stack([X @ e1, X @ e2], axis=1)
+    x, y = uv[:, 0], uv[:, 1]
+    return 0.5 * float(np.sum(x * np.roll(y, -1) - np.roll(x, -1) * y))
+
+
+def clip_wall(poly):
+    poly = np.array(poly, dtype=np.float64)
+    psi = bounds_functionals(WALL_BOUNDS, WALL_N)
+    return clip_polygon_bounds(poly, list(range(len(poly))), psi, WALL_BOUNDS, 1e-9)
+
+
+def test_receiver_frame():
+    e1, e2 = receiver_frame([0.0, 0.0, 1.0])
+    assert e1.tolist() == [1.0, 0.0, 0.0] and e2.tolist() == [0.0, 1.0, 0.0]       # the ground: (x, y)
+    e1, e2 = receiver_frame(WALL_N)
+    assert np.allclose(e1, [1, 0, 0]) and np.allclose(e2, [0, 0, 1])
+    for n in ([0.0, 0.0, -1.0], [0.0, -0.6, 0.8], [0.48, 0.6, 0.64], [1.0, 0.0, 0.0]):
+        n = np.array(n)
+        e1, e2 = receiver_frame(n)
+        assert np.allclose(np.cross(e1, e2), n, atol=1e-15)
+        assert abs(float(e1 @ e2)) <= 1e-15 and abs(np.linalg.norm(e1) - 1) <= 1e-15
+
+
+def test_bounds_functionals_are_unit_inward_normals():
+    psi = bounds_functionals(WALL_BOUNDS, WALL_N)
+    assert np.allclose(psi, [[0, 0, 1, 0], [-1, 0, 0, 3], [0, 0, -1, 2.5], [1, 0, 0, 3]])
+    # signed distance times w for a finite point, m_k . d for a direction
+    X = wall_point(1.0, 1.0, w=7.0)
+    assert np.allclose(psi @ X, 7.0 * np.array([1.0, 2.0, 1.5, 4.0]))
+
+
+def test_half_plane_polygon_returns_the_full_plate():
+    """The half-plane counter-example of §5.1.3.3: directions parallel to a plate edge; plain
+    Sutherland-Hodgman returns the empty set, the anchor rule the whole plate (area 15, 4 vertices)."""
+    poly = [wall_point(-1, -1), wall_point(1, -1, w=2.0), wall_dir(1, 0), wall_dir(0, 1), wall_dir(-1, 0)]
+    V, src = clip_wall(poly)
+    assert V.shape[0] == 4 and np.all(V[:, 3] > 0)
+    assert abs(frame_area(V) - 15.0) <= 1e-12
+    X = V[:, :3] / V[:, 3:4]
+    assert sorted(map(tuple, np.round(X, 12).tolist())) == sorted(map(tuple, WALL_BOUNDS.tolist()))
+    assert ("bounds", 0, "anchor") in src
+
+
+def test_270_degree_wedge_returns_the_full_plate():
+    """The concave-prism counter-example (lamp in the notch): an arc at infinity spanning 270 degrees."""
+    poly = [wall_point(-4, -1)]
+    th0, delta = -0.5 * math.pi, 1.5 * math.pi
+    steps = math.ceil(delta / math.radians(60) - 1e-12)
+    for s in range(steps + 1):
+        th = th0 + delta * s / steps
+        poly.append(wall_dir(math.cos(th), math.sin(th)))
+    V, _src = clip_wall(poly)
+    assert V.shape[0] == 4
+    assert abs(frame_area(V) - 15.0) <= 1e-12
+
+
+def test_bounded_square_wedge_outside_and_nearly_parallel_direction():
+    square = [wall_point(-1, 0.5), wall_point(1, 0.5, 3.0), wall_point(1, 1.5), wall_point(-1, 1.5)]
+    V, src = clip_wall(square)
+    assert V.shape[0] == 4 and src == [0, 1, 2, 3] and abs(frame_area(V) - 2.0) <= 1e-12
+    # a < 180 degree wedge opening upwards from (0, 1): the triangle (0, 1), (1.5, 2.5), (-1.5, 2.5)
+    wedge = [wall_point(0, 1), wall_dir(1, 1), wall_dir(0, 1), wall_dir(-1, 1)]
+    V, _src = clip_wall(wedge)
+    assert V.shape[0] == 3 and abs(frame_area(V) - 2.25) <= 1e-12
+    # wholly outside the plate: empty
+    outside = [wall_point(5, 0.5), wall_point(6, 0.5), wall_point(6, 1.5), wall_point(5, 1.5)]
+    V, src = clip_wall(outside)
+    assert V.shape == (0, 4) and src == []
+    # directions nearly parallel to the bottom edge, pointing just below it: removed (strict >= 0)
+    nearly = [wall_point(-1, 0.5), wall_dir(1, -1e-12), wall_dir(0, 1), wall_dir(-1, -1e-12)]
+    V, _src = clip_wall(nearly)
+    # no direction survives; the vertex (-1, 0.5) stays and the plate corners close the region
+    assert np.all(V[:, 3] > 0) and V.shape[0] == 5 and abs(frame_area(V) - 12.0) <= 1e-9
+
+
+def test_band_rule_keeps_a_vertex_on_a_plate_edge_without_a_duplicate():
+    """A shadow vertex lying exactly on a plate edge (a fold point) is its own crossing."""
+    tri = [wall_point(-1, 0), wall_point(1, -1), wall_point(1, 1)]
+    V, src = clip_wall(tri)
+    # (-1, 0) is on the bottom edge (band) and is kept with its own source; one crossing on (1,-1)->(1,1)
+    assert src[0] == 0 and src[2] == 2 and sum(1 for s in src if isinstance(s, tuple)) == 1
+    assert V.shape[0] == 3
+
+
+def test_plate_loop_orientation_and_edge_on():
+    L_front = np.array([0.0, 2.0, 3.0, 1.0])                 # positive side of the wall (y < 6)
+    loop4, ids = plate_loop(WALL_BOUNDS, WALL_PI, L_front, 1e-9)
+    assert ids == [0, 1, 2, 3] and np.allclose(loop4[:, :3], WALL_BOUNDS)
+    loop4, ids = plate_loop(WALL_BOUNDS, WALL_PI, np.array([0.0, 9.0, 3.0, 1.0]), 1e-9)
+    assert ids == [3, 2, 1, 0]
+    assert plate_loop(WALL_BOUNDS, WALL_PI, np.array([0.0, 6.0, 3.0, 1.0]), 1e-9) is None

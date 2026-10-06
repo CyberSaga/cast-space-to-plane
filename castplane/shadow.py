@@ -505,7 +505,8 @@ def clip_polygon_bounds(points4, sources, psi, bounds, tol: float) -> tuple[np.n
     vertices ``w = 0`` and arcs at infinity included) against ``psi_k · X >= 0`` in row order.
 
     1. band: a vertex is kept iff ``f_i >= -tol·|w_i|`` (strict ``>= 0`` for directions); a kept vertex
-       inside its band is its own crossing (no crossing is inserted next to it);
+       inside its band (``|f_i| <= tol·|w_i|``; for a direction ``|f_i| <= 1e-9 max|D|``, the "on the clip
+       line" test of rule 3) is its own crossing (no crossing is inserted next to it);
     2. crossings ``(f_a B - f_b A) / (f_a - f_b)`` get the source ``("bounds", k, src_a, src_b)``; a
        zero-vector interpolation (antipodal directions) is dropped;
     3. anchor rule: two consecutive output directions on the clip line (``|psi_k · D| <= 1e-9 max|D|``)
@@ -531,7 +532,10 @@ def clip_polygon_bounds(points4, sources, psi, bounds, tol: float) -> tuple[np.n
         f = [float(row @ X) for X in P]
         w = [abs(float(X[3])) for X in P]
         keep = [fi >= -tol * wi if wi != 0.0 else fi >= 0.0 for fi, wi in zip(f, w)]
-        band = [abs(fi) <= tol * wi for fi, wi in zip(f, w)]
+        # a kept vertex inside its band is its own crossing; for a direction the band is the anchor rule's
+        # "on the clip line" test |psi_k . D| <= 1e-9 max|D| (see the implementation note of §5.1.11)
+        band = [abs(fi) <= tol * wi if wi != 0.0 else abs(fi) <= 1e-9 * float(np.max(np.abs(X)))
+                for fi, wi, X in zip(f, w, P)]
         n = len(P)
         out, out_src = [], []
         if all(keep):
