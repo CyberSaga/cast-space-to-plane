@@ -83,3 +83,378 @@ def test_point_inside_solid_mesh_branch():
     fb = build_object(load_scene(mesh_box_scene(CUBE_V, OPEN_BOTTOM_F))["objects"][0])
     assert fb["fallback"] is True and [w["code"] for w in fb["prep_warnings"]] == ["MESH_NON_MANIFOLD"]
     assert not point_inside_solid(fb, [0.0, 0.0, 0.5], 1e-9)          # a fallback mesh has no inside
+
+
+# --- step 4: the pipeline --------------------------------------------------------------------------
+
+import math  # noqa: E402
+
+from castplane import render, shadow_geometry  # noqa: E402
+from castplane.output.geometry_json import dumps  # noqa: E402
+from castplane.pipeline import compose, project_scene  # noqa: E402
+from tests.reference import raster  # noqa: E402
+
+
+def doc_of(scene, camera=None):
+    return render(load_scene(scene), camera=camera)["geometry"]
+
+
+def strip_mesh_keys(doc):
+    for e in doc["edges"]:
+        e.pop("smooth", None)
+        e.pop("camera_silhouette", None)
+    return doc
+
+
+def warning_set(doc):
+    return {(w["code"], tuple(w["ids"])) for w in doc["warnings"]}
+
+
+def test_acceptance_1_imported_box_equals_the_parametric_box_byte_for_byte():
+    ref = doc_of(analytic_box_scene())
+    doc = doc_of(mesh_box_scene())
+    assert all(e["smooth"] is False for e in doc["edges"]) and len(doc["edges"]) == 12
+    # camera silhouette edges are drawn like every feature edge; the key is camera dependent
+    assert {(e["from"], e["to"]) for e in doc["edges"] if e["camera_silhouette"]} == \
+        {("cube.v0", "cube.v1"), ("cube.v1", "cube.v2"), ("cube.v2", "cube.v6"), ("cube.v6", "cube.v7"),
+         ("cube.v4", "cube.v7"), ("cube.v0", "cube.v4")}
+    assert dumps(strip_mesh_keys(doc)) == dumps(ref)
+    # the hand values of contract §5.2.12
+    assert {(e["from"], e["to"]) for e in doc["edges"] if e["silhouette"]} == \
+        {("cube.v4", "cube.v5"), ("cube.v4", "cube.v7"), ("cube.v5", "cube.v6"), ("cube.v6", "cube.v7")}
+    sh = doc["shadows"][0]
+    assert sh["outline"] == [f"cube.v{k}.shadow.lamp" for k in (4, 5, 6, 7)]
+    assert [doc["points"][n]["world"] for n in sh["outline"]] == \
+        [[-.75, -.75, 0.0], [.75, -.75, 0.0], [.75, .75, 0.0], [-.75, .75, 0.0]]
+    con = doc["construction"]
+    assert con["light_point"] == pytest.approx([0, 87.93525754212652], abs=1e-9)
+    assert con["shadow_vp"] == pytest.approx([0, -15.270708139022979], abs=1e-9)
+    images = [doc["points"][n]["image"] for n in sh["outline"]]
+    np.testing.assert_allclose(images, [[-35.43926206447239, -21.040388381248047],
+                                        [12.57114643641712, -33.69048944708911],
+                                        [33.42375900867301, -9.829161370289384],
+                                        [-10.541723693318392, 0.17547618657507147]], atol=1e-9)
+    assert con["rays"] == [[k, f"cube.v{v}" if k == "L" else f"cube.v{v}.foot"] for v in (4, 5, 6, 7) for k in "LF"]
+    assert len(con["checks"]) == 4 and max(c["max_error_mm"] for c in con["checks"]) <= 1e-9
+    assert len(doc["form_shadow"][0]["faces"]) == 5 and doc["warnings"] == []
+
+
+def world_of(doc):
+    return {n: tuple(p["world"]) for n, p in doc["points"].items() if "world" in p}
+
+
+def mapper(doc):
+    """``φ``: a name -> its world-keyed form (``<obj>.v<k>`` replaced by the vertex's world triple)."""
+    world = world_of(doc)
+
+    def phi(name):
+        if isinstance(name, dict):
+            return ("dir", tuple(name["direction"]))
+        parts = name.split(".")
+        if len(parts) >= 2 and parts[1].startswith("v") and parts[1][1:].isdigit():
+            base = ".".join(parts[:2])
+            return (parts[0], world[base], ".".join(parts[2:]))
+        return name
+    return phi
+
+
+def cyclic_key(seq):
+    """Rotation-invariant key of a cyclic sequence (and the rotation that achieves it)."""
+    seq = list(seq)
+    reps = [tuple(seq[k:] + seq[:k]) for k in range(len(seq))]
+    best = min(range(len(seq)), key=lambda k: repr(reps[k])) if seq else 0
+    return (reps[best] if seq else ()), best
+
+
+def assert_equal_by_world(a, b, atol=1e-9):
+    """The equality criteria of contract §5.2.13 (a)–(h)."""
+    pa, pb = mapper(a), mapper(b)
+    # (a) vertex sets, (e) points after renaming
+    va = {pa(n): p for n, p in a["points"].items()}
+    vb = {pb(n): p for n, p in b["points"].items()}
+    assert set(va) == set(vb)
+    for k, p in va.items():
+        q = vb[k]
+        assert p.get("world") == q.get("world") and p.get("direction") == q.get("direction")
+        assert (p["image"] is None) == (q["image"] is None)
+        if p["image"] is not None:
+            np.testing.assert_allclose(p["image"], q["image"], atol=atol)
+        if "depth" in p:
+            assert abs(p["depth"] - q["depth"]) <= atol
+    # (b) edges as unordered world pairs with equal flags and segments as unordered pairs
+    def edge_map(doc, phi):
+        out = {}
+        for e in doc["edges"]:
+            key = frozenset([phi(e["from"]), phi(e["to"])])
+            seg = e["segment"]
+            out[key] = (e["silhouette"], e["back"], e.get("smooth", False), None if seg is None else sorted(seg))
+        return out
+    ea, eb = edge_map(a, pa), edge_map(b, pb)
+    assert set(ea) == set(eb)
+    for k, (s, bk, sm, seg) in ea.items():
+        s2, bk2, sm2, seg2 = eb[k]
+        assert (s, bk, sm) == (s2, bk2, sm2) and (seg is None) == (seg2 is None)
+        if seg is not None:
+            np.testing.assert_allclose(seg, seg2, atol=atol)
+
+    # (c) form_shadow faces as cyclic world sequences, polygons within atol
+    def faces_map(doc, phi):
+        out = {}
+        for f in doc["form_shadow"]:
+            for face, poly in zip(f["faces"], f["polygons"]):
+                key, rot = cyclic_key([phi(n) for n in face])
+                out[key] = poly[rot:] + poly[:rot] if len(poly) == len(face) else poly
+        return out
+    fa, fb = faces_map(a, pa), faces_map(b, pb)
+    assert set(fa) == set(fb)
+    for k in fa:
+        np.testing.assert_allclose(fa[k], fb[k], atol=atol)
+    # (d) shadows: unbounded, loops as cyclic sequences of mapped names, polygons
+    assert len(a["shadows"]) == len(b["shadows"])
+    for s1, s2 in zip(a["shadows"], b["shadows"]):
+        assert s1["unbounded"] == s2["unbounded"]
+
+        def loops_map(s, phi):
+            out = {}
+            for loop, poly in zip(s["loops"], s["polygons"]):
+                key, rot = cyclic_key([phi(n) for n in loop])
+                out[key] = poly[rot:] + poly[:rot] if len(poly) == len(loop) else poly
+            return out
+        la, lb = loops_map(s1, pa), loops_map(s2, pb)
+        assert set(la) == set(lb)
+        for k in la:
+            np.testing.assert_allclose(la[k], lb[k], atol=atol)
+    # (f) rays, checks, segments
+    ca, cb = a["construction"], b["construction"]
+    assert {(k, pa(n)) for k, n in ca["rays"]} == {(k, pb(n)) for k, n in cb["rays"]}
+    assert {pa(c["point"]) for c in ca["checks"]} == {pb(c["point"]) for c in cb["checks"]}
+    assert all(c["max_error_mm"] <= 1e-9 for c in ca["checks"] + cb["checks"])
+    sa = {(s["kind"], pa(s["point"])): s["points"] for s in ca["segments"]}
+    sb = {(s["kind"], pb(s["point"])): s["points"] for s in cb["segments"]}
+    assert set(sa) == set(sb)
+    for k in sa:
+        np.testing.assert_allclose(sa[k], sb[k], atol=atol)
+    # (g) warnings, (h) horizon / camera
+    assert warning_set(a) == warning_set(b)
+    assert a["horizon"] == b["horizon"] and a["camera"] == b["camera"]
+
+
+def test_acceptance_1_shuffled_vertex_and_face_order():
+    rng = np.random.default_rng(5)
+    perm = rng.permutation(len(SPLIT_V))                 # new position of old vertex k is inv[k]
+    inv = np.argsort(perm)
+    V = [SPLIT_V[int(k)] for k in perm]
+    F = [[int(inv[v]) for v in f] for f in SPLIT_F]
+    F = [F[int(k)] for k in rng.permutation(len(F))]
+    F = [f[r:] + f[:r] for f, r in zip(F, rng.integers(0, 3, size=len(F)).tolist())]
+    shuffled = doc_of(mesh_box_scene(V, F))
+    ref = doc_of(analytic_box_scene())
+    assert shuffled["warnings"] == []
+    names = [f"cube.v{k}" for k in range(8)]
+    assert [shuffled["points"][n]["world"] for n in names] != [ref["points"][n]["world"] for n in names]
+    assert_equal_by_world(ref, shuffled)
+    assert_equal_by_world(doc_of(mesh_box_scene()), shuffled)
+
+
+def open_bottom_doc(**keys):
+    return doc_of(mesh_box_scene(CUBE_V, OPEN_BOTTOM_F, **keys))
+
+
+def shoelace(pts):
+    pts = np.asarray(pts, dtype=float)
+    x, y = pts[:, 0], pts[:, 1]
+    return 0.5 * float(np.sum(x * np.roll(y, -1) - np.roll(x, -1) * y))
+
+
+def test_acceptance_2_open_bottom_box_fallback():
+    doc = open_bottom_doc()
+    assert warning_set(doc) == {("MESH_NON_MANIFOLD", ("cube",))}
+    sh = doc["shadows"][0]
+    assert len(sh["loops"]) == 5 and sh["unbounded"] is False and sh["outline"] == sh["loops"][0]
+    pts = doc["points"]
+    loops_xy = [[pts[n]["world"][:2] for n in loop] for loop in sh["loops"]]
+    assert sh["loops"][0] == [f"cube.v{k}.shadow.lamp" for k in (4, 5, 6, 7)]
+    assert loops_xy[0] == [[-.75, -.75], [.75, -.75], [.75, .75], [-.75, .75]]
+    assert sh["loops"][1] == [f"cube.v{k}.shadow.lamp" for k in (0, 4, 5, 1)]       # front, reversed
+    assert loops_xy[1] == [[-.5, -.5], [-.75, -.75], [.75, -.75], [.5, -.5]]
+    assert shoelace(loops_xy[0]) == pytest.approx(2.25)
+    assert shoelace(loops_xy[1]) == pytest.approx(0.3125)                          # CCW, sum +0.625
+    assert loops_xy[2] == [[.5, -.5], [.75, -.75], [.75, .75], [.5, .5]]
+    for xy in loops_xy[1:]:
+        assert shoelace(xy) == pytest.approx(0.3125)
+        assert all(abs(x) <= 0.75 and abs(y) <= 0.75 for x, y in xy)
+    # the union of the drawn loops is the parametric shadow (±0.75 square): raster IoU 1
+    xs = ys = np.linspace(-1.0, 1.0, 201) + 0.003
+    union = raster.rasterize_polygons(loops_xy, xs, ys)
+    square = raster.rasterize_polygons([loops_xy[0]], xs, ys)
+    assert raster.iou(union, square) == 1.0
+    # edges: 12, silhouette on the 4 top edges only, never smooth
+    assert len(doc["edges"]) == 12 and all(e["smooth"] is False for e in doc["edges"])
+    assert {(e["from"], e["to"]) for e in doc["edges"] if e["silhouette"]} == \
+        {("cube.v4", "cube.v5"), ("cube.v4", "cube.v7"), ("cube.v5", "cube.v6"), ("cube.v6", "cube.v7")}
+    assert all(e["segment"] is not None for e in doc["edges"])
+    assert doc["form_shadow"][0]["faces"] == [[f"cube.v{k}" for k in f] for f in OPEN_BOTTOM_F[1:]]
+    for k in range(8):
+        assert f"cube.v{k}.shadow.lamp" in pts and f"cube.v{k}.foot" in pts
+    for k in range(4):
+        assert pts[f"cube.v{k}.foot"]["world"] == pts[f"cube.v{k}"]["world"]
+    con = doc["construction"]
+    assert con["rays"] == [] and con["checks"] == [] and con["segments"] == []
+
+
+def test_fallback_buried_open_box_has_one_point_per_crossed_edge():
+    doc = open_bottom_doc(transform={"position": [0.0, 0.0, -0.5]})
+    assert warning_set(doc) == {("MESH_NON_MANIFOLD", ("cube",)), ("OBJECT_BELOW_RECEIVER", ("cube",))}
+    import re
+    is_ground = re.compile(r"^cube\.s\d+\.lamp$").match
+    ground = sorted(n for n in doc["points"] if is_ground(n))
+    assert ground == [f"cube.s{k}.lamp" for k in range(4)]
+    worlds = sorted(tuple(doc["points"][n]["world"]) for n in ground)
+    assert worlds == [(-.5, -.5, 0.0), (-.5, .5, 0.0), (.5, -.5, 0.0), (.5, .5, 0.0)]
+    sh = doc["shadows"][0]
+    assert len(sh["loops"]) == 5
+    # every side loop holds two crossings (one name per crossed vertical edge, shared by two faces)
+    for loop in sh["loops"][1:]:
+        assert sum(1 for n in loop if is_ground(n)) == 2
+    # the buried vertices v0..v3 get neither a shadow nor a foot (keep = finite & above)
+    assert all(f"cube.v{k}.shadow.lamp" not in doc["points"] for k in range(4))
+    assert doc["construction"]["rays"] == []
+
+
+def regular_polygon(n, r=0.5):
+    return [[r * math.cos(2 * math.pi * k / n), r * math.sin(2 * math.pi * k / n)] for k in range(n)]
+
+
+def prism_data(n, r=0.5, h=1.0):
+    ring = regular_polygon(n, r)
+    V = [[x, y, 0.0] for x, y in ring] + [[x, y, h] for x, y in ring]
+    F = [list(range(n - 1, -1, -1)), list(range(n, 2 * n))]
+    F += [[k, (k + 1) % n, n + (k + 1) % n, n + k] for k in range(n)]
+    return V, F
+
+
+def test_mesh_smooth_prism16_draws_two_lateral_edges():
+    V, F = prism_data(16)
+    doc = doc_of(mesh_box_scene(V, F))
+    edges = doc["edges"]
+    lateral = [e for e in edges if abs(int(e["from"].split("v")[1]) - int(e["to"].split("v")[1])) == 16]
+    caps = [e for e in edges if e not in lateral]
+    assert len(lateral) == 16 and len(caps) == 32
+    assert all(e["smooth"] for e in lateral) and not any(e["smooth"] for e in caps)
+    drawn = [e for e in lateral if e["segment"] is not None]
+    assert len(drawn) == 2 and all(e["camera_silhouette"] for e in drawn)
+    assert all(e["segment"] is None and e["visibility"] == "visible" for e in lateral if not e["camera_silhouette"])
+    assert all(e["segment"] is not None for e in caps)
+    # the SVG writer simply skips the null segments
+    svg = render(load_scene(mesh_box_scene(V, F)))["svg"]
+    assert svg.count("<line") >= 0 and "objects.cube" in svg
+
+
+def test_ray_cap_64_and_mesh_rays_capped():
+    V, F = prism_data(100)
+    for smooth in (0.0, 30.0):
+        doc = doc_of(mesh_box_scene(V, F, smooth_angle_deg=smooth))
+        assert ("MESH_RAYS_CAPPED", ("cube",)) in warning_set(doc)
+        sh = doc["shadows"][0]
+        assert len(sh["loops"]) == 1 and len(sh["outline"]) == 100
+        loop_vertices = [n[:-len(".shadow.lamp")] for n in sh["outline"]]
+        selected = set(loop_vertices[:64])
+        rays = doc["construction"]["rays"]
+        assert {n for k, n in rays if k == "L"} == selected
+        # emission order stays ascending vertex index
+        idx = [int(n.split(".v")[1]) for k, n in rays if k == "L"]
+        assert idx == sorted(idx) and len(idx) == 64
+        assert len(doc["construction"]["checks"]) == 64
+        assert all(f"{n}.shadow.lamp" in doc["points"] for n in loop_vertices)   # every vertex keeps its points
+    V, F = prism_data(32)
+    doc = doc_of(mesh_box_scene(V, F))
+    assert "MESH_RAYS_CAPPED" not in {w["code"] for w in doc["warnings"]}
+    assert len([r for r in doc["construction"]["rays"] if r[0] == "L"]) == 32
+
+
+def test_rays_only_for_feature_silhouette_vertices():
+    # a UV sphere mesh (32 x 16, dihedral angles < 30 deg): every edge is smooth, so no silhouette vertex
+    # is an endpoint of a feature silhouette edge -> no rays / checks / segments, but every silhouette
+    # vertex keeps its .shadow / .foot points
+    from castplane.mesh import sphere_mesh
+    sm = sphere_mesh(0.5)
+    scene = mesh_box_scene(sm["vertices"].tolist(), sm["faces"])
+    doc = doc_of(scene)
+    assert all(e["smooth"] for e in doc["edges"])
+    sil = {n for e in doc["edges"] if e["silhouette"] for n in (e["from"], e["to"])}
+    assert len(sil) > 20
+    assert doc["construction"]["rays"] == [] and doc["construction"]["checks"] == []
+    assert all(f"{n}.shadow.lamp" in doc["points"] and f"{n}.foot" in doc["points"] for n in sil)
+    # with smooth_angle_deg = 0 every edge is a feature edge: every silhouette vertex gets its rays
+    doc0 = doc_of(mesh_box_scene(sm["vertices"].tolist(), sm["faces"], smooth_angle_deg=0.0))
+    assert {n for k, n in doc0["construction"]["rays"] if k == "L"} == sil
+    # only the camera silhouette edges of the smooth sphere are drawn
+    drawn = [e for e in doc["edges"] if e["segment"] is not None]
+    assert drawn and all(e["camera_silhouette"] for e in drawn)
+
+
+def test_render_twice_is_bit_identical():
+    for scene in (mesh_box_scene(), mesh_box_scene(CUBE_V, OPEN_BOTTOM_F), mesh_box_scene(*prism_data(16))):
+        a, b = render(load_scene(scene)), render(load_scene(copy.deepcopy(scene)))
+        assert dumps(a["geometry"]) == dumps(b["geometry"]) and a["svg"] == b["svg"]
+
+
+def test_stage_a_is_camera_independent_with_meshes():
+    for scene in (mesh_box_scene(), mesh_box_scene(CUBE_V, OPEN_BOTTOM_F), mesh_box_scene(*prism_data(16))):
+        s = load_scene(scene)
+        A1 = shadow_geometry(s)
+        s2 = copy.deepcopy(s)
+        s2["camera"] = None                                 # stage A never touches the camera
+        A2 = shadow_geometry(s2)
+        assert dumps(A1) == dumps(A2)
+        cam2 = {"position": [-6.0, -4.0, 7.0], "target": [0.0, 3.0, 0.0], "roll_deg": 15.0,
+                "focal_length_mm": 20.0, "frame_mm": [36, 24], "shift_mm": [1.0, -2.0], "near_m": 0.1}
+        d1 = compose(s, project_scene(s, A1))
+        d2 = compose(s, project_scene(s, A1, camera=cam2))
+        assert [(e["from"], e["to"], e["silhouette"], e["smooth"]) for e in d1["edges"]] == \
+            [(e["from"], e["to"], e["silhouette"], e["smooth"]) for e in d2["edges"]]
+        assert {n: p.get("world") for n, p in d1["points"].items()} == {n: p.get("world") for n, p in d2["points"].items()}
+        assert [x["loops"] for x in d1["shadows"]] == [x["loops"] for x in d2["shadows"]]
+        assert [f["faces"] for f in d1["form_shadow"]] == [f["faces"] for f in d2["form_shadow"]]
+        assert d1["construction"]["rays"] == d2["construction"]["rays"]
+
+
+def mesh_invariant_scenes():
+    """Mesh scenes for the spec §7.1 rows: the split-vertex box rotated and moved, a 16-gon prism mesh
+    and a concave L-shaped extrusion, under a point and a directional light."""
+    V, F = prism_data(16)
+    L_poly = [[0, 0], [1.2, 0], [1.2, 0.4], [0.4, 0.4], [0.4, 1.0], [0, 1.0]]
+    LV = [[x, y, 0.0] for x, y in L_poly] + [[x, y, 0.8] for x, y in L_poly]
+    n = len(L_poly)
+    LF = [list(range(n - 1, -1, -1)), list(range(n, 2 * n))] + [[k, (k + 1) % n, n + (k + 1) % n, n + k] for k in range(n)]
+    scenes = []
+    for light in ({"id": "lamp", "type": "point", "position": [1.5, -2.0, 4.0]},
+                  {"id": "sun", "type": "directional", "direction": [-0.4, -0.5, 0.7681145747868608]}):
+        sc = mesh_box_scene()
+        sc["objects"][0]["transform"] = {"position": [0.3, -0.2, 0.0], "rotation_deg": [0.0, 0.0, 25.0]}
+        sc["objects"].append({"id": "prism", "type": "mesh", "data": {"vertices": V, "faces": F},
+                              "transform": {"position": [-1.5, 1.0, 0.0], "rotation_deg": [0, 0, 10]}})
+        sc["objects"].append({"id": "ell", "type": "mesh", "data": {"vertices": LV, "faces": LF},
+                              "transform": {"position": [1.5, 1.2, 0.0], "rotation_deg": [0, 0, -30]}})
+        sc["lights"] = [light]
+        scenes.append(load_scene(sc))
+    return scenes
+
+
+@pytest.mark.parametrize("k", [0, 1])
+def test_spec_7_1_row_1_construction_equals_direct_projection(k):
+    from tests.test_invariants import test_construction_equals_direct_projection
+    test_construction_equals_direct_projection(mesh_invariant_scenes()[k])
+
+
+@pytest.mark.parametrize("k", [0, 1])
+def test_spec_7_1_row_2_shadows_are_camera_independent(k):
+    from tests.test_invariants import test_shadows_are_camera_independent
+    test_shadows_are_camera_independent(mesh_invariant_scenes()[k])
+
+
+@pytest.mark.parametrize("k", [0, 1])
+@pytest.mark.parametrize("yaw_form", [False, True])
+def test_spec_7_1_row_4_rigid_equivariance(k, yaw_form):
+    from tests.test_invariants import test_rigid_equivariance
+    test_rigid_equivariance(mesh_invariant_scenes()[k], yaw_form)

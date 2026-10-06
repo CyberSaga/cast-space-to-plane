@@ -200,7 +200,8 @@ def test_project_shadows_batched_equals_per_record(basic_cam):
     empty = dict(recs[0], object="ghost", vertex_ids=np.zeros(0, dtype=np.int64), keep=np.zeros(0, dtype=bool),
                  P_world=np.zeros((0, 3)), S_world=np.zeros((0, 3)), Q_world=np.zeros((0, 3)), w_S=np.zeros(0),
                  shadow_names=[], foot_names=[], vertex_names=[], ground_points=[], loops=[], unbounded=False,
-                 S_lists=[], Q_lists=[], G_world=np.zeros((0, 3)), G_lists=[])
+                 S_lists=[], Q_lists=[], G_world=np.zeros((0, 3)), G_lists=[],
+                 ray_vertices=np.zeros(0, dtype=bool))             # M5 §5.2.4 record key, aligned with keep
     for order in ([empty] + recs, recs + [empty], [recs[0], empty] + recs[1:]):
         out, warnings = P._project_shadows(order, cam, tol, by_id)
         assert len(out) == len(order)

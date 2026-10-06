@@ -132,6 +132,7 @@ from .construction import (clip_segments_uv, coincidence_check, covering_segment
 from .errors import make_warning, merge_warnings
 from .homogeneous import TOL_DIR, scene_scale, to_homogeneous, tolerance
 from .light import face_lit_flags, light_vector, silhouette_loops
+from .meshprep import MESH_MAX_RAYS, inherit_edge_smooth
 from .output.geometry_json import canonical
 from .output.svg import write_svg
 from .primitives import build_object, point_inside_solid
@@ -218,7 +219,9 @@ def _object_light_data(obj: dict, lt: dict) -> tuple[dict, list]:
         "light_inside": inside,
         "edge_silhouette": edge_sil,
         "silhouette_vertices": sil_vertices,
-        "loops": silhouette_loops(mesh, lit_flags),
+        # M5 §5.2.5: a fallback (non-manifold) mesh has no silhouette loops (its edge_faces are only
+        # [f_min, f_max]); its shadow is the per-face union of _fallback_shadow_record
+        "loops": [] if obj.get("fallback") else silhouette_loops(mesh, lit_flags),
         "form_idx": obj["faces_padded"][unlit],
         "form_lens": obj["face_lens"][unlit],
         "form_faces": [names[k] for k in unlit.tolist()],
@@ -308,12 +311,20 @@ def _shadow_record(obj: dict, ol: dict, lt: dict, pi: np.ndarray, tol: float, re
         loops.append({"vertices": sh["vertices"], "sources": sh["sources"], "entries": entries,
                       "unbounded": bool(sh["unbounded"])})
     ground_points = list(ground.values())
+    # M5 §5.2.4: rays / checks only for the first MESH_MAX_RAYS feature silhouette vertices of a mesh
+    # (silhouette-loop order); every other record draws the rays of all its silhouette vertices
+    ray_vertices = np.ones(sil.shape[0], dtype=bool)
+    if obj["type"] == "mesh":
+        ray_vertices, capped = _mesh_ray_vertices(obj, ol, lt, sil, sil_loops, loop_mesh, origins)
+        if capped:
+            warnings.append(make_warning("MESH_RAYS_CAPPED", [oid]))
     return {
         "light": lid,
         "receiver": receiver_id,
         "object": oid,
         "vertex_ids": sil,
         "keep": keep,
+        "ray_vertices": ray_vertices,
         "P_world": mesh["vertices"][sil],
         "S_world": S_world,
         "Q_world": Q_world,
@@ -322,6 +333,129 @@ def _shadow_record(obj: dict, ol: dict, lt: dict, pi: np.ndarray, tol: float, re
         "foot_names": [f"{oid}.v{int(k)}.foot" for k in sil],
         "vertex_names": [obj["point_names"][int(k)] for k in sil],
         "ground_points": ground_points,
+        "loops": loops,
+        "unbounded": unbounded,
+    }, warnings
+
+
+def _mesh_ray_vertices(obj: dict, ol: dict, lt: dict, sil, sil_loops, loop_mesh: dict, origins):
+    """``(ray_vertices, capped)`` of a mesh shadow record (contract §5.2.4 [decision]).
+
+    Candidates are the original silhouette vertices that are endpoints of at least one **feature**
+    silhouette edge of the loop mesh actually used (the object's mesh, or the receiver-clipped mesh
+    whose edges inherit ``edge_smooth`` through :func:`castplane.meshprep.inherit_edge_smooth`; cut-face
+    edges are feature; crossing vertices are never candidates).  The first ``MESH_MAX_RAYS`` in
+    silhouette-loop order (loops in order, vertices in loop order, first occurrence) are selected;
+    the mask is aligned with ``vertex_ids`` (ascending original index), so the emission order is
+    unchanged."""
+    mesh = obj["mesh"]
+    if origins is None:
+        edge_sil = np.asarray(ol["edge_silhouette"], dtype=bool)
+        smooth = np.asarray(mesh["edge_smooth"], dtype=bool)
+    else:
+        lit_c, _parallel = face_lit_flags(loop_mesh, lt["L"], lt["tol_lit"])
+        ef = loop_mesh["edge_faces"]
+        edge_sil = lit_c[ef[:, 0]] != lit_c[ef[:, 1]]
+        smooth = inherit_edge_smooth(loop_mesh, origins, mesh, mesh["edge_smooth"])
+    feature = edge_sil & ~smooth
+    candidates = set(np.unique(np.asarray(loop_mesh["edges"], dtype=np.int64)[feature]).tolist())
+    order, seen = [], set()
+    for loop in sil_loops:
+        for v in loop:
+            v = int(v)
+            if v not in candidates:
+                continue
+            o = v if origins is None else origins[v]
+            if isinstance(o, tuple) or o in seen:
+                continue
+            seen.add(o)
+            order.append(int(o))
+    selected = np.array(order[:MESH_MAX_RAYS], dtype=np.int64)
+    ray_vertices = np.isin(np.asarray(sil, dtype=np.int64), selected)
+    return ray_vertices, len(order) > MESH_MAX_RAYS
+
+
+def _fallback_shadow_record(obj: dict, ol: dict, lt: dict, pi: np.ndarray, tol: float,
+                            receiver_id: str) -> tuple[dict, list]:
+    """Per-face shadow record of a non-manifold mesh (contract §5.2.5), replacing :func:`_shadow_record`.
+
+    ``vertex_ids`` = every vertex used by a kept face (ascending), each with its ``.shadow`` and
+    ``.foot`` point when finite and above the receiver; ``ray_vertices`` all False (no rays, checks
+    or segments).  Every face that is not parallel to the light (lit or not; an unlit face reversed
+    with ``[f0] + f[1:][::-1]`` so that the lit side is on the left) goes through
+    ``shadow.shadow_loop`` (receiver clip, direction vertices and arcs included); a loop with fewer
+    than 3 vertices, or a bounded loop whose receiver-plane area is ``<= tol·scale_A``, is dropped.
+    Crossings are named ``<obj>.s<k>.<light>`` in order of first appearance keyed by the undirected
+    original edge, so a crossing shared by two faces is one point.  The drawn region is the nonzero
+    union of the loops (one ``<path>``)."""
+    mesh = obj["mesh"]
+    oid, lid = obj["id"], lt["id"]
+    V4 = to_homogeneous(mesh["vertices"])
+    ids = np.array(sorted({int(v) for f in mesh["faces"] for v in f}), dtype=np.int64)
+    P4 = V4[ids]
+    w_S = np.asarray(shadow_w(pi, lt["L"], P4), dtype=np.float64).reshape(-1)
+    finite = w_S > lt["tol_w"]
+    above = (P4 @ pi) >= -tol
+    keep = finite & above
+    warnings = []
+    if ids.shape[0] and not bool(np.all(finite)):
+        warnings.append(make_warning("VERTEX_NOT_BELOW_LIGHT", [oid]))
+    S4 = P4 @ lt["M"].T
+    w_safe = np.where(keep, w_S, 1.0)
+    S_world = np.where(keep[:, None], S4[:, :3] / w_safe[:, None], 0.0)
+    Q4 = foot(pi, P4)
+    Q_world = Q4[:, :3] / Q4[:, 3:4]
+    n = pi[:3] / float(np.linalg.norm(pi[:3]))
+    area_tol = tol * float(obj.get("mesh_scale_A", 1.0))
+    lit_flags, parallel = np.asarray(ol["lit"], dtype=bool), np.asarray(ol["parallel"], dtype=bool)
+    loops, ground = [], {}
+    unbounded = False
+    for fi, face in enumerate(mesh["faces"]):
+        if parallel[fi]:
+            continue
+        cyc = [int(v) for v in face] if lit_flags[fi] else [int(face[0])] + [int(v) for v in face[1:]][::-1]
+        sh = shadow_loop(V4[cyc], lt["M"], pi, lt["tol_w"], tol_clip=tol)
+        verts = sh["vertices"]
+        if verts.shape[0] < 3:
+            continue
+        if not sh["unbounded"]:
+            X = verts[:, :3] / verts[:, 3:4]
+            area = 0.5 * float(n @ np.sum(np.cross(X, np.roll(X, -1, axis=0)), axis=0))
+            if abs(area) <= area_tol:
+                continue
+        entries = []
+        for row, src in enumerate(sh["sources"]):
+            if isinstance(src, tuple):
+                if src[0] == "ground":
+                    i, j = cyc[int(src[1])], cyc[int(src[2])]
+                    key = (min(i, j), max(i, j))
+                    if key not in ground:
+                        X = verts[row]
+                        ground[key] = (f"{oid}.s{len(ground)}.{lid}", X[:3] / X[3])
+                    entries.append(ground[key][0])
+                else:  # ("dir", i, j) or ("arc", k): a direction vertex (w = 0)
+                    d = verts[row]
+                    entries.append({"direction": [float(d[0]) + 0.0, float(d[1]) + 0.0, float(d[2]) + 0.0]})
+            else:
+                entries.append(f"{oid}.v{cyc[int(src)]}.shadow.{lid}")
+        unbounded = unbounded or bool(sh["unbounded"])
+        loops.append({"vertices": verts, "sources": sh["sources"], "entries": entries,
+                      "unbounded": bool(sh["unbounded"])})
+    return {
+        "light": lid,
+        "receiver": receiver_id,
+        "object": oid,
+        "vertex_ids": ids,
+        "keep": keep,
+        "ray_vertices": np.zeros(ids.shape[0], dtype=bool),
+        "P_world": mesh["vertices"][ids],
+        "S_world": S_world,
+        "Q_world": Q_world,
+        "w_S": w_S,
+        "shadow_names": [f"{oid}.v{int(k)}.shadow.{lid}" for k in ids],
+        "foot_names": [f"{oid}.v{int(k)}.foot" for k in ids],
+        "vertex_names": [obj["point_names"][int(k)] for k in ids],
+        "ground_points": list(ground.values()),
         "loops": loops,
         "unbounded": unbounded,
     }, warnings
@@ -367,6 +501,7 @@ def shadow_geometry(scene: dict) -> dict:
     for obj in objects:
         obj["lights"] = {}
         obj["clipped"] = {}
+        warnings.extend(obj.get("prep_warnings", ()))     # M5: MESH_* warnings of the preprocessing
         if default["bounded"]:
             _bounded_default_object(obj, receivers, lights, tol, warnings)
             continue
@@ -379,7 +514,8 @@ def shadow_geometry(scene: dict) -> dict:
         if bool(np.any(below)):
             warnings.append(make_warning("OBJECT_BELOW_RECEIVER", [obj["id"]]))
             try:
-                obj["ground_mesh"] = clip_mesh_to_plane(obj["mesh"], pi, tol)
+                # M5 §5.2.5: a fallback mesh is never cut (the cut would close its open rim into caps)
+                obj["ground_mesh"] = None if obj.get("fallback") else clip_mesh_to_plane(obj["mesh"], pi, tol)
             except ValueError:  # degenerate contact: fall back to clipping the silhouette loops
                 obj["ground_mesh"] = None
         _clip_object_to_receivers(obj, receivers, tol)
@@ -395,7 +531,8 @@ def shadow_geometry(scene: dict) -> dict:
                                 "shadow_names": [], "foot_names": [], "vertex_names": [],
                                 "ground_points": [], "loops": [], "unbounded": False})
                 continue
-            rec, w = _shadow_record(obj, ol, lt, pi, tol, receiver["id"])
+            record = _fallback_shadow_record if obj.get("fallback") else _shadow_record
+            rec, w = record(obj, ol, lt, pi, tol, receiver["id"])
             warnings.extend(w)
             shadows.append(rec)
     buckets: dict = {}       # (receiver index, light index) -> records in caster order (§5.1.3.1)
@@ -780,6 +917,7 @@ def _project_polyhedra(objs: list, cam: dict, tol: float, light_id) -> list:
     edges = np.concatenate([m["edges"] + off for m, off in zip(meshes, v_off.tolist())], axis=0)
     ef = np.concatenate([m["edge_faces"] + off for m, off in zip(meshes, f_off.tolist())], axis=0)
     back = ~face_lit[ef[:, 0]] & ~face_lit[ef[:, 1]]
+    camera_silhouette = face_lit[ef[:, 0]] != face_lit[ef[:, 1]]   # M5 §5.2.4 (mesh edges only use it)
     ols = [o.get("lights", {}).get(light_id) for o in objs]
     silhouette = np.concatenate([ol["edge_silhouette"] if ol is not None else np.zeros(m["edges"].shape[0], dtype=bool)
                                  for ol, m in zip(ols, meshes)])
@@ -827,6 +965,7 @@ def _project_polyhedra(objs: list, cam: dict, tol: float, light_id) -> list:
             "edges": m["edges"],
             "edge_templates": o["edge_templates"],
             "back": back[es:ee],
+            "camera_silhouette": camera_silhouette[es:ee],
             "silhouette": silhouette[es:ee],
             "segments_h": segments_h[es:ee],
             "segment_keep": keep[es:ee],
@@ -923,6 +1062,10 @@ def _project_shadows(records: list, cam: dict, tol: float, by_id: dict) -> tuple
     ok = keep & (nuP >= 0.0) & (nuS >= 0.0) & (nuQ >= 0.0)
     # M4 (contract §5.1.3.3): on a bounded receiver only shadow points inside the bounds get rays / checks
     ok &= np.concatenate([_ray_keep(rec) for rec in records])
+    # M5 §5.2.4: ok &= ray_vertices (mesh records select at most MESH_MAX_RAYS feature vertices,
+    # fallback records none; records without the mask draw every row)
+    ok &= np.concatenate([np.asarray(rec["ray_vertices"], dtype=bool) if "ray_vertices" in rec
+                          else np.ones(rec["keep"].shape[0], dtype=bool) for rec in records])
     P_uv = divide(np.where(ok[:, None], xP, _ORIGIN_H))
     S_uv = divide(np.where(ok[:, None], xS, _ORIGIN_H))
     Q_uv = divide(np.where(ok[:, None], xQ, _ORIGIN_H))
@@ -1313,6 +1456,16 @@ def _compose_curved(rec: dict, points: dict, edges: list, form_shadow: list, out
     return {key: [_conic_doc_entry(a) for a in arcs] for key, arcs in rec["shadow_arcs"].items()}
 
 
+def _mesh_edge_keys(entries: list, rec: dict) -> None:
+    """The two mesh-only edge keys (contract §5.2.4): ``smooth`` (from the stage-A template) and
+    ``camera_silhouette`` (stage B); a smooth edge that is not a camera silhouette edge is not a
+    drawable (``segment: null``; ``visibility`` keeps the template's ``"visible"``)."""
+    for e, cs in zip(entries, rec["camera_silhouette"].tolist()):
+        e["camera_silhouette"] = cs
+        if e.get("smooth") and not cs:
+            e["segment"] = None
+
+
 def compose(scene: dict, B: dict, hidden_lines=None) -> dict:
     """Stage C: the §6.2 geometry document (contract §3.1, full key listing §5.0.3), canonical floats,
     sorted point names.
@@ -1362,6 +1515,8 @@ def compose(scene: dict, B: dict, hidden_lines=None) -> dict:
                 e["segment"] = seg if kp else None
                 e["runs"] = []
                 edges.append(e)
+            if rec["type"] == "mesh" and m:
+                _mesh_edge_keys(edges[-m:], rec)
             if rec["form_faces"]:
                 form_entries.append((k, {"object": rec["id"], "faces": rec["form_faces"], "terminator": [],
                                          "polygons": rec["form_polygons"]}))
