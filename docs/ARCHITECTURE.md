@@ -1824,6 +1824,44 @@ unordered world pairs with equal `silhouette` / `back` flags and `segment` endpo
 `max_error_mm ≤ 1e-9` for the same mapped points, segments per mapped (kind, point) within 1e-9 mm; (g) warning
 `(code, ids)` sets equal; (h) horizon / camera blocks exact.
 
+### Implementation notes
+- **[decision, implementation] (M5) `triangles` follow the orientation fix.** §5.2.3 lists the fan triangulation as step 4
+  and the orientation fix as step 5; the record's `triangles` are the fans of the kept faces **after** propagation and the
+  volume / nesting flips (the same triangle set; a flipped face `[f0] + f[1:][::-1]` contributes its fans reversed), so the
+  generalised winding number of `point_inside_mesh` sees a consistently oriented surface (with the raw orientation a light
+  at the centre of a unit box with one flipped face has `w = 2/3 < 0.75` and would be "outside"). A fallback mesh keeps
+  the fans of its kept faces as given. Rays (M4, the ray-cast reference) are orientation-free.
+- **[decision, implementation] (M5) Unmerged regions and open edges in `merge_coplanar`.** A region left unmerged (hole or
+  pinch) contributes its member faces **in ascending face index at its seed's position** of the seed-ordered output;
+  `merge_coplanar` returns `(new_faces, origin)` with `origin[k]` the seed of a merged face or the face itself (the source
+  of its smoothing group). An edge with a single face (only possible in a direct call, e.g. the bent-strip test of
+  §5.2.11) is a region-boundary edge.
+- **[decision, implementation] (M5) Weld details.** Cell keys are `floor(x/τ + 0.5)` of the float quotient; when some `x/τ`
+  is not finite (a `τ` far below every float spacing) the weld is the exact `τ = 0` rule. The fast path computes the cell
+  occupancy on per-axis compressed cell indices (distinct indices renumbered with gaps capped at 2, so `|Δ| ≤ 1` is kept)
+  combined into one int64, merges a vertex directly only when its cell has no occupied neighbour **and** every vertex of
+  the cell is within `τ` of the cell's lowest input index (the float quotient may put two vertices more than `τ` apart into
+  one cell), and runs the reference loop on all other vertices; `tests/test_meshprep.py` proves it result-identical. The
+  degenerate-face collapse keeps the face's first vertex (`[a, b, c, a] → [a, b, c]`).
+- **[decision, implementation] (M5) Fallback area test.** "`|area| ≤ tol·scale_A`" uses the stage-A `tol` and the mesh's own
+  `scale_A` of §5.2.3 step 1 (stored on the record as `mesh_scale_A`); the receiver-plane area of a bounded loop is
+  `½·n̂·Σ X_i × X_{i+1}` of its finite vertices (the shoelace area for the ground).
+- **[decision, implementation] (M5, pre-M4 worktree) Receivers.** M5 was built before M4 was merged: the fallback's
+  "`obj["clipped"][r] = None` for every receiver" is `obj["ground_mesh"] = None` here (M4 makes `ground_mesh` the alias of
+  `clipped[receivers[0].id]` and extends the rule to every receiver); the per-face `clip_polygon_bounds` of a bounded
+  receiver and the "fallback mesh on a bounded receiver" test of §5.2.11 need M4's `shadow.clip_polygon_bounds` and are
+  added at the M4 / M5 merge. The four `MESH_*` codes sit at the end of `WARNING_CODES` in the M5 branch; the merge keeps
+  the §5.0.5 order (after `RECEIVER_UNLIT`). `MESH_RAYS_CAPPED` is evaluated per shadow record, i.e. per (object, light,
+  receiver) as §5.2.4 states (§5.0.5's "(object, light)" is the single-receiver reading).
+- **[decision, implementation] (M5) API details.** `preprocess_mesh(data, scale, weld_tolerance, smooth_angle_deg,
+  object_id="")` takes the object id of its `MESH_*` warnings as an extra keyword (the positional signature is the
+  contract's). Every object record carries `fallback` / `prep_warnings` / `mesh["edge_smooth"]` (primitives: `False`, `[]`,
+  all False); mesh records add `triangles`, `smooth_groups` and `mesh_scale_A`, and their edge templates carry the
+  camera-free `smooth` key. Stage-A shadow records carry `ray_vertices` (a record without it, e.g. an inactive light's empty
+  record, draws every row). Validation rejects booleans and floats as face indices / smoothing groups. Until the three v5
+  mesh cases are added, `test_set_covers_the_required_sources` requires every kind except `mesh` (a tripwire that fails as
+  soon as a mesh case exists).
+
 ### 5.3 M6 — multiple lights (amendment to §2.0, §2.3, §2.5–2.10, §3, §3.1, §4)
 
 This section extends the contract to `lights` of any length `N ≥ 1`. Everything of §2–§4 stays in force; the rules

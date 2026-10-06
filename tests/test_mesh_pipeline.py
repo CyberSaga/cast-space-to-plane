@@ -535,3 +535,38 @@ def test_make_scene_is_byte_identical_for_the_frozen_seeds():
     assert got == ['47a20ab723d05faf', '075436f29bcbff67', 'a5f2bc22b03e1134', '545a2aafc0cdddb1',
                    'abc0e0dff1ecc701', '5fa14e7a0a68466b', '3ca6efb78725a29b', '0a16a469ce154800',
                    'f7f4155414737479', 'dbce76c756497f29']
+
+
+# --- every polyhedral conformance scene, its objects rewritten as meshes ------------------------------
+
+def _polyhedral_case_names():
+    names = []
+    for path in sorted(CASES.glob("*.json")):
+        scene = json.loads(path.read_text(encoding="utf-8"))
+        if all(o["type"] in ("box", "prism") for o in scene["objects"]):
+            names.append(path.stem)
+    return names
+
+
+@pytest.mark.parametrize("name", _polyhedral_case_names())
+def test_polyhedral_cases_rewritten_as_meshes_are_unchanged(name):
+    """A box / prism written as a ``mesh`` with the parametric vertices and faces renders the same
+    document (after deleting the two mesh edge keys and the kind named in the LIGHT_INSIDE_OBJECT
+    message; ``smooth_angle_deg = 0`` so that every edge is drawn as for a primitive): the ground-clipped loop mesh, the feature-vertex ray selection and the inside test of
+    the mesh path agree with the primitive path on buried, concave, degenerate and random scenes."""
+    from castplane.mesh import box_mesh, prism_mesh
+    raw = json.loads((CASES / f"{name}.json").read_text(encoding="utf-8"))
+    ref = render(load_scene(raw))["geometry"]
+    scene = copy.deepcopy(raw)
+    validated = load_scene(raw)["objects"]
+    for k, o in enumerate(validated):
+        local = box_mesh(o["size"]) if o["type"] == "box" else prism_mesh(o["polygon"], o["height"])
+        # smooth_angle_deg 0: every edge a feature edge (a prism's nearly coplanar sides would otherwise
+        # be smooth edges, drawn only as camera silhouettes, which is the mesh rule and not the primitive's)
+        scene["objects"][k] = {"id": o["id"], "type": "mesh", "transform": o["transform"], "smooth_angle_deg": 0,
+                               "data": {"vertices": local["vertices"].tolist(), "faces": local["faces"]}}
+    doc = strip_mesh_keys(render(load_scene(scene))["geometry"])
+    for w in doc["warnings"] + ref["warnings"]:
+        if w["code"] == "LIGHT_INSIDE_OBJECT":
+            w["message"] = "inside"
+    assert dumps(doc) == dumps(ref)
