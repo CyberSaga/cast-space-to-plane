@@ -621,8 +621,194 @@ def write_svg(doc: dict, layers=None, hidden_style: str = "dashed") -> str:
         f'<svg xmlns="http://www.w3.org/2000/svg" width="{_f(W)}mm" height="{_f(H)}mm" '
         f'viewBox="0 0 {_f(W)} {_f(H)}">',
     ]
+    hidden = bool(doc.get("hidden_lines"))
     for name in selected:
         builder, attrs = _LAYER_BUILDERS[name]
+        if hidden and name in _HIDDEN_LAYER_BUILDERS:      # M4 (contract §5.1.8): hidden-run sub-groups
+            parts.append(_group(name, attrs, _HIDDEN_LAYER_BUILDERS[name](doc, cv, hidden_style)))
+            continue
         parts.append(_group(name, attrs, builder(doc, cv)))
     parts.append("</svg>")
     return "\n".join(parts) + "\n"
+
+
+# ---------------------------------------------------------------------------
+# M4: hidden-line runs (contract §5.1.8, §5.0.6)
+# ---------------------------------------------------------------------------
+
+#: Stroke colour of each layer's ``*.hidden`` group (the layer's own stroke colour, contract §5.1.8).
+HIDDEN_STROKE = {"objects": "#111", "form_shadow": "#335", "cast_shadow": "#000"}
+
+
+def _hidden_style(layer: str) -> str:
+    return f'stroke="{HIDDEN_STROKE[layer]}" stroke-width="0.15" stroke-dasharray="0.5 0.5" fill="none"'
+
+
+#: Stroke of the cast-shadow outline runs (the fill paths are then written ``stroke="none"``).
+OUTLINE_STYLE = 'stroke="#000" stroke-width="0.25"'
+
+
+def _split_runs(seg, item: dict) -> tuple[list, list]:
+    """Visible and hidden pieces ``[[u, v], [u, v]]`` of a drawn straight segment by its ``visibility`` /
+    ``runs`` (``segment[0] + s (segment[1] - segment[0])`` at the run boundaries, contract §5.1.8)."""
+    vis = item.get("visibility", "visible")
+    if vis == "visible":
+        return [seg], []
+    if vis == "hidden":
+        return [], [seg]
+    (ua, va), (ub, vb) = seg
+    du, dv = ub - ua, vb - va
+    shown, hidden = [], []
+    for r in item.get("runs", []) or []:
+        s0, s1 = r["s"]
+        a = [ua if s0 == 0.0 else ua + s0 * du, va if s0 == 0.0 else va + s0 * dv]
+        b = [ub if s1 == 1.0 else ua + s1 * du, vb if s1 == 1.0 else va + s1 * dv]
+        (shown if r["visible"] else hidden).append([a, b])
+    return shown, hidden
+
+
+def _hidden_group(layer: str, groups: list, hidden_style: str, cv: _Canvas) -> str:
+    """``<layer>.hidden`` with one sub-group per ``(id, segments, polylines)`` (empty under ``"omit"``)."""
+    sub = []
+    for gid, segs, plines in groups:
+        body = []
+        if hidden_style != "omit":
+            body.extend(_chunk(cv.lines(segs)))
+            body.extend(cv.polyline(pl) for pl in plines if len(pl) >= 2)
+        sub.append(_group(f"{layer}.hidden.{gid}", "", body))
+    return _group(f"{layer}.hidden", _hidden_style(layer), sub)
+
+
+def _conic_hidden(entry: dict) -> list:
+    return [pl for pl in entry.get("hidden_polylines", []) or [] if len(pl) >= 2]
+
+
+def _layer_objects_hidden(doc: dict, cv: _Canvas, hidden_style: str) -> list:
+    """The objects layer of a document with hidden lines on: ``objects.hidden`` (sub-groups per object, sorted
+    like the object groups) first, then the v2 object groups with the visible runs only."""
+    per_object = {}
+
+    def slot(oid):
+        return per_object.setdefault(oid, {"front": [], "back": [], "extra_front": [], "extra_back": [],
+                                           "hidden": [], "hidden_pl": []})
+
+    for e in doc.get("edges", []):
+        if e["segment"] is None:
+            continue
+        s = slot(e["object"])
+        shown, hid = _split_runs(e["segment"], e)
+        s["back" if e["back"] else "front"].extend(shown)
+        s["hidden"].extend(hid)
+    for entry in doc.get("outlines", []):
+        s = slot(entry["object"])
+        for g in entry.get("generators", []) or []:
+            if g.get("segment") is None:
+                continue
+            shown, hid = _split_runs(g["segment"], g)
+            s["back" if g.get("back") else "front"].extend(shown)
+            s["hidden"].extend(hid)
+        for c in entry.get("conics", []) or []:
+            s["extra_back" if c.get("back") else "extra_front"].extend(_drawables(c, cv))
+            s["hidden_pl"].extend(_conic_hidden(c))
+    ids = sorted(per_object)
+    body = [_hidden_group("objects", [(oid, per_object[oid]["hidden"], per_object[oid]["hidden_pl"]) for oid in ids
+                                      if per_object[oid]["hidden"] or per_object[oid]["hidden_pl"]],
+                          hidden_style, cv)]
+    for oid in ids:
+        s = per_object[oid]
+        front = _chunk(cv.lines(s["front"])) + s["extra_front"]
+        back = _chunk(cv.lines(s["back"])) + s["extra_back"]
+        sub = []
+        if front:
+            sub.append(_group(f"objects.{oid}.front", STYLE["objects"], front))
+        if back:
+            sub.append(_group(f"objects.{oid}.back", STYLE["objects_back"], back))
+        if sub or s["hidden"] or s["hidden_pl"]:
+            body.append(_group(f"objects.{oid}", "", sub))
+    return body
+
+
+def _layer_form_shadow_hidden(doc: dict, cv: _Canvas, hidden_style: str) -> list:
+    """The form-shadow layer with hidden lines on: ``form_shadow.hidden`` first (sub-groups in document
+    order), then the v2 entries whose terminator keeps the visible runs only (fills unchanged)."""
+    entries = doc.get("form_shadow", [])
+    hidden_groups, body = [], []
+    for entry in entries:
+        oid = entry.get("object", "")
+        polys = [poly for poly in entry.get("polygons", []) or [] if len(poly) >= 3]
+        records, offsets = cv.polygons(polys)
+        sub = _chunk(records)
+        term, hid, hid_pl = [], [], []
+        for t in entry.get("terminator", []) or []:
+            if "segment" in t:
+                for seg in t.get("polylines", []) or []:
+                    if len(seg) != 2:
+                        continue
+                    shown, h = _split_runs(seg, t)
+                    term.extend(cv.polyline(p) for p in shown)
+                    hid.extend(h)
+                continue
+            term.extend(_drawables(t, cv))
+            hid_pl.extend(_conic_hidden(t))
+        if term:
+            sub.append(_group(f"form_shadow.{oid}.terminator", STYLE["terminator"], term))
+        if hid or hid_pl:
+            hidden_groups.append((oid, hid, hid_pl))
+        if sub:
+            body.append(_group(f"form_shadow.{oid}", "", sub))
+    return [_hidden_group("form_shadow", hidden_groups, hidden_style, cv)] + body
+
+
+def _layer_cast_shadow_hidden(doc: dict, cv: _Canvas, hidden_style: str) -> list:
+    """The cast-shadow layer with hidden lines on: ``cast_shadow.hidden`` (sub-groups per light) first; per
+    record the fill path with ``stroke="none"``, the visible conic drawables in ``.conics`` and the visible
+    outline runs of the drawn polygon edges in ``cast_shadow.<light>.<object>[.<r>].outline``."""
+    shadows = doc.get("shadows", [])
+    first_receiver = doc["receivers"][0]["id"] if doc.get("receivers") else None
+    loop_sets = [[poly for poly in (sh.get("polygons") or []) if len(poly) >= 3] for sh in shadows]
+    with_loops = [k for k, loops in enumerate(loop_sets) if loops]
+    path_of = dict(zip(with_loops, cv.paths([loop_sets[k] for k in with_loops])))
+    per_light, hidden_by_light = {}, {}
+    for k, sh in enumerate(shadows):
+        lid = sh.get("light", "")
+        items = []
+        if k in path_of:
+            items.append(path_of[k][:-2] + ' stroke="none"/>')
+        conics, hid_pl = [], []
+        for entry in sh.get("conics", []) or []:
+            conics.extend(_drawables(entry, cv))
+            hid_pl.extend(_conic_hidden(entry))
+        if conics:
+            items.append(_group(_shadow_subgroup_id(sh, first_receiver, "conics"), STYLE["cast_shadow_conics"], conics))
+        shown, hid = [], []
+        records = sh.get("polygon_edges") or []
+        for j, poly in enumerate(sh.get("polygons") or []):
+            if len(poly) < 3:
+                continue
+            recs = records[j] if j < len(records) else []
+            n = len(poly)
+            for e in range(n):
+                seg = [poly[e], poly[(e + 1) % n]]
+                rec = recs[e] if e < len(recs) else {"visibility": "visible", "runs": []}
+                a, b = _split_runs(seg, rec)
+                shown.extend(a)
+                hid.extend(b)
+        if shown:
+            items.append(_group(_shadow_subgroup_id(sh, first_receiver, "outline"), OUTLINE_STYLE,
+                                _chunk(cv.lines(shown))))
+        if hid or hid_pl:
+            h = hidden_by_light.setdefault(lid, ([], []))
+            h[0].extend(hid)
+            h[1].extend(hid_pl)
+        per_light.setdefault(lid, []).extend(items)
+    body = [_hidden_group("cast_shadow", [(lid, *hidden_by_light[lid]) for lid in sorted(hidden_by_light)],
+                          hidden_style, cv)]
+    body.extend(_group(f"cast_shadow.{light}", "", items) for light, items in sorted(per_light.items()))
+    return body
+
+
+_HIDDEN_LAYER_BUILDERS = {
+    "objects": _layer_objects_hidden,
+    "form_shadow": _layer_form_shadow_hidden,
+    "cast_shadow": _layer_cast_shadow_hidden,
+}

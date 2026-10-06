@@ -469,3 +469,139 @@ def test_named_m4_hidden_scenes_render_finite(name):
         # the w = 0 endpoint: the shadow edge running to the vanishing point is a subject (not all visible)
         recs = doc["shadows"][0]["polygon_edges"][0]
         assert any(r["visibility"] != "visible" for r in recs)
+
+
+# --------------------------------------------------------------------------- SVG (contract §5.1.8, §5.0.6)
+import xml.etree.ElementTree as ET
+
+from castplane.output import svg as svg_mod
+
+SVG_NS = "{http://www.w3.org/2000/svg}"
+
+
+def _tree(svg_text: str):
+    return ET.fromstring(svg_text)
+
+
+def _group(root, gid):
+    found = [g for g in root.iter(f"{SVG_NS}g") if g.get("id") == gid]
+    assert len(found) == 1, gid
+    return found[0]
+
+
+def _child_ids(g):
+    return [c.get("id") for c in g if c.tag == f"{SVG_NS}g"]
+
+
+def _drawn(g):
+    return [c for c in g.iter() if c.tag in (f"{SVG_NS}line", f"{SVG_NS}polyline", f"{SVG_NS}path",
+                                             f"{SVG_NS}ellipse", f"{SVG_NS}polygon")]
+
+
+@pytest.mark.parametrize("name", sorted(DETERMINISM_SCENES))
+def test_hidden_groups_come_first_in_their_layers_with_the_stated_style(name):
+    r = render_hidden(DETERMINISM_SCENES[name]())
+    root = _tree(r["svg"])
+    ids = [g.get("id") for g in root.iter(f"{SVG_NS}g")]
+    assert len(ids) == len(set(ids))                                     # every id unique
+    for layer, colour in (("objects", "#111"), ("form_shadow", "#335"), ("cast_shadow", "#000")):
+        lg = _group(root, layer)
+        assert _child_ids(lg)[0] == f"{layer}.hidden"
+        hg = _group(root, f"{layer}.hidden")
+        assert hg.get("stroke") == colour and hg.get("stroke-width") == "0.15"
+        assert hg.get("stroke-dasharray") == "0.5 0.5" and hg.get("fill") == "none"
+        for sub in _child_ids(hg):
+            assert sub.startswith(f"{layer}.hidden.")
+    doc = r["geometry"]
+    # cast-shadow fill paths are not stroked; their outline runs are, in the .outline groups
+    cs = _group(root, "cast_shadow")
+    paths = [p for g in cs if g.get("id", "").startswith("cast_shadow.") and g.get("id") != "cast_shadow.hidden"
+             for p in g if p.tag == f"{SVG_NS}path"]
+    assert paths and all(p.get("stroke") == "none" for p in paths)
+    first = doc["receivers"][0]["id"]
+    for sh in doc["shadows"]:
+        if not any(len(p) >= 3 for p in sh["polygons"]):
+            continue
+        if all(r_["visibility"] == "hidden" for pe in sh["polygon_edges"] for r_ in pe):
+            continue
+        gid = svg_mod._shadow_subgroup_id(sh, first, "outline")
+        g = _group(root, gid)
+        assert g.get("stroke") == "#000" and g.get("stroke-width") == "0.25"
+
+
+def test_wall_base_edge_is_split_at_the_run_boundaries():
+    r = render_hidden(wall_and_ground_scene())
+    doc, root = r["geometry"], _tree(r["svg"])
+    base = _edge(doc, "wall.b0", "wall.b1")
+    (ua, va), (ub, vb) = base["segment"]
+    W, H = doc["canvas_mm"]
+    hidden_lines = list(_group(root, "objects.hidden.wall"))
+    assert len(hidden_lines) == 1
+    s0, s1 = base["runs"][1]["s"]
+    x1 = float(hidden_lines[0].get("x1"))
+    x2 = float(hidden_lines[0].get("x2"))
+    assert x1 == pytest.approx(ua + s0 * (ub - ua) + W / 2, abs=1e-4)
+    assert x2 == pytest.approx(ua + s1 * (ub - ua) + W / 2, abs=1e-4)
+    front = _group(root, "objects.wall.front")
+    ys = [round(float(l.get("y1")), 3) for l in front if l.tag == f"{SVG_NS}line"]
+    assert ys.count(round(H / 2 - va, 3)) >= 2                         # the two visible pieces of the base edge
+    # the crate's five hidden edges are in objects.hidden.crate, its seven visible ones in .front
+    assert len(list(_group(root, "objects.hidden.crate"))) == 5
+    assert len([c for c in _group(root, "objects.crate.front")]) == 7
+    assert "objects.crate.back" not in [g.get("id") for g in root.iter(f"{SVG_NS}g")]
+
+
+@pytest.mark.parametrize("name", sorted(DETERMINISM_SCENES))
+def test_omit_style_keeps_the_ids_and_draws_nothing_hidden(name):
+    scene = castplane.load_scene(DETERMINISM_SCENES[name]())
+    dashed = castplane.render(scene, hidden_lines=True)
+    omit = castplane.render(scene, hidden_lines=True, hidden_style="omit")
+    assert dumps(dashed["geometry"]) == dumps(omit["geometry"])
+    rd, ro = _tree(dashed["svg"]), _tree(omit["svg"])
+    assert [g.get("id") for g in rd.iter(f"{SVG_NS}g")] == [g.get("id") for g in ro.iter(f"{SVG_NS}g")]
+    drew_hidden = False
+    for layer in ("objects", "form_shadow", "cast_shadow"):
+        assert _drawn(_group(ro, f"{layer}.hidden")) == []
+        drew_hidden = drew_hidden or bool(_drawn(_group(rd, f"{layer}.hidden")))
+    assert drew_hidden
+    # outside the hidden groups the two SVGs are identical
+    for layer in ("objects", "form_shadow", "cast_shadow"):
+        for gid in _child_ids(_group(rd, layer))[1:]:
+            assert ET.tostring(_group(rd, gid)) == ET.tostring(_group(ro, gid))
+    # the scene's own output.hidden_style is the default of render
+    scene_omit = castplane.load_scene(dict(DETERMINISM_SCENES[name](), output=dict(
+        DETERMINISM_SCENES[name]().get("output", {}), hidden_style="omit")))
+    assert castplane.render(scene_omit, hidden_lines=True)["svg"] == omit["svg"]
+
+
+def test_hidden_groups_exist_only_when_the_switch_is_on():
+    scene = castplane.load_scene(wall_and_ground_scene())
+    off = castplane.render(scene)["svg"]
+    assert ".hidden" not in off and ".outline" not in off and '<path d="M' in off and 'Z" stroke="none"/>' not in off
+    on = castplane.render(scene, hidden_lines=True)["svg"]
+    assert 'id="objects.hidden"' in on and 'id="cast_shadow.lamp.crate.wall.outline"' in on
+    # a hidden-lines document written with a layer subset keeps the subset and the fixed order
+    doc = castplane.render(scene, hidden_lines=True)["geometry"]
+    sub = svg_mod.write_svg(doc, layers=["cast_shadow", "objects"])
+    root = _tree(sub)
+    assert [g.get("id") for g in root if g.tag == f"{SVG_NS}g"] == ["objects", "cast_shadow"]
+    with pytest.raises(ValueError):
+        svg_mod.write_svg(doc, hidden_style="dotted")
+
+
+def test_partly_hidden_conics_become_arcs_and_hidden_polylines():
+    r = render_hidden(curved_unbounded_scene())
+    doc, root = r["geometry"], _tree(r["svg"])
+    post = next(o for o in doc["outlines"] if o["object"] == "post")
+    assert any(c["visibility"] == "hidden" and c["hidden_polylines"] and not c["arcs"] for c in post["conics"])
+    sh = next(s for s in doc["shadows"] if s["object"] == "post")
+    c = sh["conics"][0]
+    assert c["visibility"] == "partial" and c["ellipses"] == []
+    assert len(c["arcs"]) + len(c["polylines"]) == sum(1 for r_ in c["runs"] if r_["visible"])
+    assert len(c["hidden_polylines"]) == sum(1 for r_ in c["runs"] if not r_["visible"])
+    # the arcs keep the run's theta range
+    vis_runs = [r_ for r_ in c["runs"] if r_["visible"]]
+    for arc in c["arcs"]:
+        assert any(arc["theta"] == r_["theta"] for r_ in vis_runs)
+    hidden_cs = _group(root, "cast_shadow.hidden.lamp")
+    assert any(e.tag == f"{SVG_NS}polyline" for e in hidden_cs)

@@ -289,6 +289,7 @@ castplane stages examples/basic.json | python3 -c "import json,sys; d=json.load(
 | `geometry_json.write_geometry_json(doc, path)` | 寫檔（UTF-8、結尾換行） |
 | `svg.write_svg(doc, layers=None, hidden_style="dashed") -> str` | 規格 §6.1 分圖層 SVG；`layers` 選子集，順序固定；未知 id 拋 `ValueError`；M4：`hidden_style`（`dashed` / `omit`）決定隱藏線子群組的畫法，`hidden_lines` 關閉的文件與 v2 輸出位元相同 |
 | `svg.LAYER_ORDER`、`svg.STYLE` | 圖層順序與預設樣式屬性字串 |
+| `svg.HIDDEN_STYLES`、`svg.HIDDEN_STROKE`、`svg.OUTLINE_STYLE` | M4：`hidden_style` 的允許值、各層 `*.hidden` 群組的線色（`#111` / `#335` / `#000`）、開啟消隱時影子輪廓群組 `cast_shadow.<light>.<object>.outline` 的描邊 |
 | `png.write_png(svg_str, dpi=300) -> bytes` | 以 cairosvg（或 resvg）柵格化；沒有後端時拋 `ImportError` |
 | `png.png_size(svg_str, dpi) -> (w_px, h_px)` | round(canvas_mm · dpi / 25.4) |
 
