@@ -100,8 +100,8 @@ castplane stages examples/basic.json | python3 -c "import json,sys; d=json.load(
 
 | 函式 | 說明 |
 | --- | --- |
-| `shadow_geometry(scene) -> dict` | A 段（見 2.1）。回傳 `{objects, vertices, bbox, scene_scale, tol, receiver, lights, shadows, warnings}` |
-| `project_scene(scene, A, camera=None) -> dict` | B 段（見 2.1）。回傳 `{camera, scene_scale, tol, objects, lights, horizon, shadows, construction, warnings}` |
+| `shadow_geometry(scene) -> dict` | A 段（見 2.1）。回傳 `{objects, vertices, bbox, scene_scale, tol, receiver, receivers, lights, shadows, warnings}`；M4：`receivers` 每個受影面一筆（平面、座標系、bounds 邊泛函、各光源紀錄、`lit` / `casts`），`shadows` 依受影面 → 光源 → 施影者排序 |
+| `project_scene(scene, A, camera=None) -> dict` | B 段（見 2.1）。回傳 `{A, camera, scene_scale, tol, objects, lights, receiver_lights, receivers, plates, horizon, shadows, construction, warnings}`；M4：`B["A"]` 就是 A 段本身，`receiver_lights` 是非預設受影面的 F′_r，`plates` 是有界面的 bounds 點、邊與背光面 |
 | `compose(scene, B, hidden_lines=None) -> dict` | C 段（見 2.1）；M4：`hidden_lines=None` 取場景 `output.hidden_lines`，文件頂層 `hidden_lines` 記錄實際值；另有 `receivers`、`construction.per_receiver` 等 M4 鍵（合約 §5.0.3） |
 | `render(scene, camera=None, hidden_lines=None, hidden_style=None) -> dict` | 見 2.1；M4：兩個關鍵字覆寫場景的 `output` 值（場景本身不改） |
 

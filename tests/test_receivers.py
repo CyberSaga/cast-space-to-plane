@@ -651,3 +651,242 @@ def _distance_to_polygon(p, Q) -> float:
         t = 0.0 if not float(ab @ ab) else min(1.0, max(0.0, float((p - a) @ ab) / float(ab @ ab)))
         best = min(best, float(np.linalg.norm(a + t * ab - p)))
     return best
+
+
+# --------------------------------------------------------------------------- spec §7.3 on plates (raycast IoU >= 0.99)
+from castplane.shadow import receiver_frame as _frame
+from tests.reference import random_scenes, raster, raycast
+
+
+def plate_masks(scene: dict, doc: dict, rid: str, n_u: int = 480):
+    """(document mask, ray-cast mask) on the plate ``rid`` in its frame coordinates: the union over the
+    shadow records on ``rid`` of the nonzero-rasterised loops, against ``raycast.occluded_on_receiver`` from
+    the plate samples; both restricted to the plate."""
+    rcv = next(r for r in scene["receivers"] if r["id"] == rid)
+    n = np.asarray(rcv["normal"], dtype=np.float64)
+    e1, e2 = _frame(n)
+    B = np.asarray(rcv["bounds"], dtype=np.float64)
+    uv_b = np.stack([B @ e1, B @ e2], axis=1)
+    lo, hi = uv_b.min(axis=0), uv_b.max(axis=0)
+    h = float(hi[0] - lo[0]) / n_u
+    us = lo[0] + h * (np.arange(n_u) + 0.5)
+    vs = lo[1] + h * (np.arange(int(math.ceil((hi[1] - lo[1]) / h))) + 0.5)
+    on_plate = raster.rasterize_polygons([uv_b], us, vs)
+    mask_doc = np.zeros(on_plate.shape, dtype=bool)
+    for sh in doc["shadows"]:
+        if sh["receiver"] != rid:
+            continue
+        loops = []
+        for loop in sh["loops"]:
+            P = np.array([doc["points"][e]["world"] for e in loop], dtype=np.float64)
+            loops.append(np.stack([P @ e1, P @ e2], axis=1))
+        if loops:
+            mask_doc |= raster.rasterize_polygons(loops, us, vs)
+    U, V = np.meshgrid(us, vs)
+    base = -float(rcv.get("offset", 0.0)) * n                      # a point of the plane
+    origins = base[None, :] + U.ravel()[:, None] * e1[None, :] + V.ravel()[:, None] * e2[None, :]
+    mask_ref = raycast.occluded_on_receiver(scene, scene["lights"][0], rid, origins).reshape(U.shape)
+    return mask_doc & on_plate, mask_ref & on_plate
+
+
+def random_plate_scene(seed: int) -> dict:
+    """A seeded random §7.3 scene (point light) with a wall plate behind the objects and a floor tile."""
+    scene = random_scenes.make_scene(seed, 3, "point")
+    pts = np.vstack([random_scenes.world_extreme_points(o) for o in scene["objects"]])
+    y_wall = float(pts[:, 1].max()) + 0.5
+    x0, x1 = float(pts[:, 0].min()) - 4.0, float(pts[:, 0].max()) + 4.0
+    scene["receivers"].append({"id": "wall", "type": "plane", "normal": [0, -1, 0], "offset": y_wall,
+                               "bounds": [[x0, y_wall, 0], [x1, y_wall, 0], [x1, y_wall, 3.0], [x0, y_wall, 3.0]]})
+    # the lamp in front of the objects, a little above their tops, so that they cast onto the wall
+    rng = np.random.default_rng(seed)
+    scene["lights"][0]["position"] = [float(pts[:, 0].mean() + rng.uniform(-1.0, 1.0)),
+                                      float(pts[:, 1].min()) - float(rng.uniform(1.0, 3.0)),
+                                      float(pts[:, 2].max()) + float(rng.uniform(0.2, 1.5))]
+    return scene
+
+
+def _iou_scenes():
+    scenes = [("wall_and_ground", wall_and_ground_scene(), "wall"),
+              ("fold_curved_cylinder", fold_curved_cylinder_scene(), "wall")]
+    floor = wall_and_ground_scene()
+    floor["receivers"] = [{"id": "floor", "type": "plane", "normal": [0, 0, 1], "offset": 0,
+                           "bounds": [[-2, 2, 0], [2, 2, 0], [2, 5.5, 0], [-2, 5.5, 0]]},
+                          dict(wall_and_ground_scene()["receivers"][1])]
+    scenes.append(("bounded floor + wall (floor)", floor, "floor"))
+    scenes.append(("bounded floor + wall (wall)", floor, "wall"))
+    for seed in range(8):
+        scenes.append((f"random {seed}", random_plate_scene(seed), "wall"))
+    return scenes
+
+
+@pytest.mark.parametrize("label, scene, rid", _iou_scenes(), ids=[s[0] for s in _iou_scenes()])
+def test_raycast_iou_on_plates(label, scene, rid):
+    validated = castplane.load_scene(scene)
+    doc = castplane.render(validated)["geometry"]
+    mask_doc, mask_ref = plate_masks(validated, doc, rid)
+    if not mask_ref.any() and not mask_doc.any():
+        return
+    assert raster.iou(mask_doc, mask_ref) >= 0.99, (label, raster.iou(mask_doc, mask_ref),
+                                                    int(mask_doc.sum()), int(mask_ref.sum()))
+
+
+# --------------------------------------------------------------------------- spec §7.1 rows 1-6 (§5.1.11)
+from tests.test_invariants import assert_images_equal, meet_lines, transform_scene
+
+INVARIANT_SCENES = [("wall_and_ground", wall_and_ground_scene), ("fold_curved_cylinder", fold_curved_cylinder_scene)]
+
+
+def _h(p):
+    return np.array([p[0], p[1], 1.0])
+
+
+@pytest.mark.parametrize("label, make", INVARIANT_SCENES)
+def test_row1_construction_equals_direct_projection(label, make):
+    doc = render(make())["geometry"]
+    con = doc["construction"]
+    Lp = _h(con["light_point"])
+    blocks = [(con, "", con["shadow_vp"])] + [(blk, f".{rid}", blk["shadow_vp"])
+                                               for rid, blk in con["per_receiver"].items()]
+    verified = 0
+    for blk, sfx, fp in blocks:
+        assert blk["checks"] and max(c["max_error_mm"] for c in blk["checks"]) <= 1e-6
+        Fp = _h(fp)
+        for kind, name in blk["rays"]:
+            if kind != "L":
+                continue
+            P = doc["points"][name]["image"]
+            S = doc["points"][f"{name}.shadow.lamp{sfx}"]["image"]
+            Q = doc["points"][f"{name}.foot{sfx}"]["image"]
+            s_check = meet_lines(Lp, _h(P), Fp, _h(Q))
+            np.testing.assert_allclose(s_check[:2] / s_check[2], S, atol=1e-6)
+            verified += 1
+    assert verified >= 4
+
+
+@pytest.mark.parametrize("label, make", INVARIANT_SCENES)
+def test_row2_all_receivers_shadow_points_are_camera_independent(label, make):
+    scene = make()
+    doc1 = render(scene)["geometry"]
+    cam2 = {"position": [-5.0, -3.0, 4.0], "target": [0.0, 5.0, 0.5], "roll_deg": 8.0, "focal_length_mm": 24.0,
+            "frame_mm": [36, 24], "shift_mm": [1.0, -2.0], "near_m": 0.1}
+    doc2 = render(scene, camera=cam2)["geometry"]
+    assert doc1["camera"]["P"] != doc2["camera"]["P"]
+    names = {n for n in doc1["points"] if ".og" not in n}
+    assert names == {n for n in doc2["points"] if ".og" not in n}
+    assert any(n.endswith(".wall") for n in names)
+    for n in names:
+        key = "world" if "world" in doc1["points"][n] else "direction"
+        np.testing.assert_allclose(doc1["points"][n][key], doc2["points"][n][key], atol=1e-9, err_msg=n)
+    assert [s["loops"] for s in doc1["shadows"]] == [s["loops"] for s in doc2["shadows"]]
+    assert [(s["receiver"], s["object"], s["unbounded"]) for s in doc1["shadows"]] == \
+        [(s["receiver"], s["object"], s["unbounded"]) for s in doc2["shadows"]]
+    assert doc1["receivers"] == doc2["receivers"]
+    for s1, s2 in zip(doc1["shadows"], doc2["shadows"]):
+        assert [(c["circle"], c["arc"]) for c in s1["conics"]] == [(c["circle"], c["arc"]) for c in s2["conics"]]
+
+
+@pytest.mark.parametrize("label, make", INVARIANT_SCENES)
+def test_row3_point_light_converges_to_directional_on_the_wall(label, make):
+    d = np.array([0.25, -0.55, 0.8])
+    d = d / np.linalg.norm(d)
+    scene_d = make()
+    scene_d["lights"] = [{"id": "lamp", "type": "directional", "direction": d.tolist()}]
+    doc_d = render(scene_d)["geometry"]
+    wall_names = [n for n in doc_d["points"] if ".shadow.lamp.wall" in n]
+    assert wall_names
+    gaps = {}
+    for D in (1e6, 1e7):
+        scene_p = make()
+        scene_p["lights"] = [{"id": "lamp", "type": "point", "position": (D * d).tolist()}]
+        doc_p = render(scene_p)["geometry"]
+        assert [s["loops"] for s in doc_d["shadows"]] == [s["loops"] for s in doc_p["shadows"]]
+        for n in wall_names:
+            gap = float(np.linalg.norm(np.subtract(doc_p["points"][n]["world"], doc_d["points"][n]["world"])))
+            assert gap <= 1e-4, (n, D, gap)
+            gaps.setdefault(n, {})[D] = gap
+    for n, g in gaps.items():
+        assert g[1e7] <= 0.1 * g[1e6] + 1e-9, (n, g)
+
+
+def _transform_receivers(scene, angle_deg, shift):
+    a = math.radians(angle_deg)
+    R = np.array([[math.cos(a), -math.sin(a), 0.0], [math.sin(a), math.cos(a), 0.0], [0.0, 0.0, 1.0]])
+    t = np.array([shift[0], shift[1], 0.0])
+    for r in scene["receivers"]:
+        if r.get("bounds") is None:
+            continue
+        n = R @ np.asarray(r["normal"], dtype=np.float64)
+        r["bounds"] = [(R @ np.asarray(b, dtype=np.float64) + t).tolist() for b in r["bounds"]]
+        r["normal"] = n.tolist()
+        r["offset"] = float(r["offset"]) - float(n @ t)
+    return scene
+
+
+@pytest.mark.parametrize("label, make", INVARIANT_SCENES)
+@pytest.mark.parametrize("yaw_form", [False, True])
+def test_row4_rigid_equivariance_with_bounds(label, make, yaw_form):
+    scene = castplane.load_scene(make())
+    doc1 = castplane.render(scene)["geometry"]
+    for angle, shift in ((37.0, (2.5, -1.25)), (-120.0, (-4.0, 3.0)), (180.0, (0.0, 0.0))):
+        moved = _transform_receivers(transform_scene(scene, angle, shift, yaw_form), angle, shift)
+        doc2 = castplane.render(castplane.load_scene(moved))["geometry"]
+        assert_images_equal(doc1, doc2, 1e-6)
+        pr1, pr2 = doc1["construction"]["per_receiver"], doc2["construction"]["per_receiver"]
+        assert set(pr1) == set(pr2)
+        for rid in pr1:
+            assert pr1[rid]["rays"] == pr2[rid]["rays"]
+            np.testing.assert_allclose(pr1[rid]["shadow_vp"], pr2[rid]["shadow_vp"], atol=1e-6)
+            for s1, s2 in zip(pr1[rid]["segments"], pr2[rid]["segments"]):
+                scale = max(1.0, max(abs(x) for p in s1["points"] for x in p))
+                np.testing.assert_allclose(s1["points"], s2["points"], atol=1e-6 * scale)
+
+
+@pytest.mark.parametrize("k_pi, k_L, k_P", [(2.0, 3.0, 0.5), (1e-3, 1e3, 7.0), (5.0, 0.25, 1e2)])
+def test_row5_scale_invariance_of_the_receiver_helpers(k_pi, k_L, k_P):
+    """Row 5 at the helper level (contract §4): shadow_loop in the wall frame with positively scaled pi, L and
+    loop points, and clip_polygon_bounds with positively scaled vertices, give the same divided polygons."""
+    from castplane.light import light_vector
+    from castplane.shadow import shadow_loop, shadow_matrix
+    psi = bounds_functionals(WALL_BOUNDS, WALL_N)
+    frame = receiver_frame(WALL_N)
+    for light in ({"id": "lamp", "type": "point", "position": [0.0, 4.3, 1.2]},     # unbounded on the wall plane
+                  {"id": "lamp", "type": "directional", "direction": [0.0, -0.9, math.sqrt(0.19)]}):
+        scene = wall_and_ground_scene()
+        scene["lights"] = [light]
+        A = castplane.shadow_geometry(castplane.load_scene(scene))
+        crate = A["objects"][0]
+        (loop_ids,) = crate["lights"]["lamp"]["loops"]
+        V = crate["mesh"]["vertices"][loop_ids]
+        loop = np.concatenate([V, np.ones((V.shape[0], 1))], axis=1)
+        Lv = light_vector(light)
+        M1, M2 = shadow_matrix(WALL_PI, Lv), shadow_matrix(k_pi * WALL_PI, k_L * Lv)
+        sh1 = shadow_loop(loop, M1, WALL_PI, 1e-9, frame=frame)
+        sh2 = shadow_loop(k_P * loop, M2, k_pi * WALL_PI, k_pi * 1e-9, tol_clip=k_pi * 1e-9, frame=frame)
+        V1, V2 = sh1["vertices"], sh2["vertices"]
+        assert V1.shape == V2.shape
+        n1 = V1 / np.max(np.abs(V1), axis=1, keepdims=True)
+        n2 = V2 / np.max(np.abs(V2), axis=1, keepdims=True)
+        np.testing.assert_allclose(n1, n2, rtol=1e-9, atol=1e-9)
+        C1, _s1 = clip_polygon_bounds(V1, sh1["sources"], psi, WALL_BOUNDS, 1e-9)
+        scales = np.linspace(0.5, 4.0, V1.shape[0])[:, None]
+        C2, _s2 = clip_polygon_bounds(V1 * scales, sh1["sources"], psi, WALL_BOUNDS, 1e-9)
+        assert C1.shape == C2.shape and C1.shape[0] >= 3
+        np.testing.assert_allclose(C1[:, :3] / C1[:, 3:4], C2[:, :3] / C2[:, 3:4], rtol=1e-9, atol=1e-9)
+        if light["type"] == "point":
+            assert sh1["unbounded"]
+
+
+@pytest.mark.parametrize("label, make", INVARIANT_SCENES + [
+    ("unlit", lambda: dict(wall_and_ground_scene(), lights=[{"id": "lamp", "type": "point", "position": [0, 9, 3]}])),
+    ("low lamp", lambda: dict(wall_and_ground_scene(), lights=[{"id": "lamp", "type": "point", "position": [0, 2, 0.6]}])),
+    ("camera behind the wall", lambda: dict(wall_and_ground_scene(), camera={
+        "position": [0.5, 9, 1.0], "target": [0, 3, 0.5], "focal_length_mm": 20, "frame_mm": [36, 24]})),
+])
+def test_row6_no_nan_or_inf(label, make):
+    import re
+    result = render(make())
+    text = dumps(result["geometry"])
+    assert "NaN" not in text and "Infinity" not in text and not re.search(r"-0\.0(?![0-9])", text)
+    assert all(math.isfinite(x) for x in _numbers(result["geometry"]))
+    low = result["svg"].lower().replace("infinity", "")
+    assert "nan" not in low and "inf" not in low

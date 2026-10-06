@@ -1310,6 +1310,41 @@ appended at the end of `WARNING_CODES`; CLI arguments in one block; in `pipeline
 the merged branch (M5's `mesh` kind works with M4's `hidden.occluder` fallback without edits). The file lists per
 worktree and the merge rule are in `docs/PLAN-v2.md`.
 
+### Implementation notes
+- **[decision, implementation] (M4 A-track) Own-crossing band of a direction in the bounds clip.** In
+  `shadow.clip_polygon_bounds` a kept direction vertex (`ψ_k·D >= 0`, strict as §5.1.3.3 rule 1 says) is its own
+  crossing when `|ψ_k·D| <= 1e-9·max|D|` — the anchor rule's "on the clip line" test of rule 3 — instead of only when
+  `ψ_k·D == 0`. A direction exactly parallel to a plate edge evaluates to ~1e-16 after rounding (`sin π`, a
+  `_direction_vertex` interpolation); with the literal band the crossing inserted next to it is a finite point at
+  ~1e16 m that defeats the anchor rule (the 270° wedge unit test returned the empty set instead of the plate). List
+  lengths and names only change in that rounding band; the TypeScript port must use the same test.
+- **[decision, implementation] (M4) Pre-v4 expected files inside the worktree.** Until the one v4 regeneration on the
+  merged branch (§5.0.8 rule 2), `tests/test_conformance.py::test_render_matches_expected` compares a case whose
+  expected file has no `hidden_lines` key after `tools/regen_conformance.py::strip_new_keys` (which also fails when a
+  stripped key does not carry its switch-off value), and `test_regen_tool_exit_codes_match_its_docstring` accepts
+  `--dry-run` drift of such cases only when they pass after stripping. Both bridges are inert once the expected files
+  carry the M4 keys. `tests/test_receivers.py` additionally requires, on the recorded NumPy build, the stripped JSON to
+  be **byte-identical** to the expected file and the SVG to match `tests/golden/v2_svg_sha256.json` (the v2 writer's
+  output hashed before M4) for all 34 v2 cases.
+- **[decision, implementation] (M4) Frame equivalence for the sphere.** The sphere's silhouette-circle frame is
+  `e1 = normalize(n × z)` with the world `z` (§2.6), which a rotation that moves `z` (wall → floor) does not carry
+  along: the 64 polygon samples start at another point of the same exact curve. The frame-equivalence test of §5.1.11
+  therefore compares the box and cylinder polygons vertex by vertex (names identical, 1e-9 m) and the sphere polygons as
+  curves (every vertex within the 64-gon sagitta of the other polygon, areas within 1e-3 relative).
+- **[decision, implementation] (M4) Small choices the contract leaves open.** `stage_a_object(obj, lights, receiver,
+  tol, warnings)` takes the stage-A receiver record (`{id, pi, bounded, frame, bounds, psi, suffix}`); its per-receiver
+  data is `obj["curved"][r][light]` with the polygon already bounds-clipped and the closed-form clipped arcs in
+  `conic_pieces` (`sub_arcs_where_nonnegative(..., tol)` with the stage-A `tol` on `ψ_k·X`). On a bounded receiver a
+  loop whose bounds clip is empty is dropped from `loops` (the ground keeps the v2 behaviour). A plate lit from its
+  negative side traverses `ids[::-1]` (`b<k-1> … b0`). A plate caster on the unbounded ground emits
+  `VERTEX_NOT_BELOW_LIGHT` with its receiver id like an object. `construction.per_receiver` lists every receiver
+  other than `receivers[0]`, lit or not (its `F'_r` is reported as `F` is for an unlit ground). With `N = 1` the plate's
+  `form_shadow` entry uses `lights[0]`. `edges[].runs` is set in `compose` (a fresh `[]` per edge; `primitives.py`
+  and its `edge_templates` belong to M5). The `F'_r` marker is labelled `F′<receiver id>`. `RECEIVER_UNLIT` messages
+  name the case ("light below the ground", "point light is behind …", "directional light is parallel …",
+  "directional light is behind …"). `castplane stages` writes `B` without its `A` reference. Until the H-track lands,
+  `compose` calls `hidden.classify_document` only when `castplane.hidden` can be imported.
+
 ### 5.2 M5 — mesh import (spec §9 rows 網格匯入 / 匯入格式, spec §10 M5, spec §11.3)
 
 Everything in §2–§4 stays in force. This section adds the object type `mesh`, the preprocessing pipeline, the per-face

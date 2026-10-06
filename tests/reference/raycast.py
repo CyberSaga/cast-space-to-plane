@@ -274,3 +274,56 @@ def shadow_mask(scene: dict, light: dict, xs, ys, chunk: int = CHUNK) -> np.ndar
     X, Y = np.meshgrid(xs, ys)
     origins = np.stack([X.ravel(), Y.ravel(), np.zeros(X.size)], axis=1)
     return occluded(scene, light, origins, chunk).reshape(len(ys), len(xs))
+
+
+# --------------------------------------------------------------------------- M4: plates and the ground (contract §5.1.11)
+def receiver_plane(receiver: dict) -> tuple[np.ndarray, float]:
+    """``(n, d)`` of a receiver dict (``n·x + d = 0``; ``offset`` defaults to 0)."""
+    n = np.asarray(receiver["normal"], dtype=np.float64).reshape(3)
+    return n, float(receiver.get("offset", 0.0))
+
+
+def hit_plate(receiver: dict, o: np.ndarray, d: np.ndarray, tmax) -> np.ndarray:
+    """Opaque convex plate (a bounded receiver): the ray ``o + t d`` meets its plane at ``t`` in
+    ``(T_EPS, tmax)`` inside the convex ``bounds`` polygon (edges tested against the plane normal, either
+    orientation, inclusive within ``GEOM_EPS``).  World coordinates (no object frame)."""
+    n, d0 = receiver_plane(receiver)
+    B = np.asarray(receiver["bounds"], dtype=np.float64).reshape(-1, 3)
+    denom = d @ n
+    t = _safe_div(-(o @ n + d0), denom)
+    X = o + np.nan_to_num(t)[:, None] * d
+    sides = []
+    for k in range(B.shape[0]):
+        a, b = B[k], B[(k + 1) % B.shape[0]]
+        sides.append(np.cross(b - a, X - a) @ n)
+    S = np.stack(sides, axis=1)
+    inside = np.all(S >= -GEOM_EPS, axis=1) | np.all(S <= GEOM_EPS, axis=1)
+    return (~np.isnan(t)) & _in_range(t, tmax) & inside
+
+
+def hit_ground(o: np.ndarray, d: np.ndarray, tmax) -> np.ndarray:
+    """The unbounded ground ``z = 0`` as an opaque plane: crossing at ``t = -o_z / d_z`` in ``(T_EPS, tmax)``."""
+    t = _safe_div(-o[:, 2], d[:, 2])
+    return (~np.isnan(t)) & _in_range(t, tmax)
+
+
+def occluded_on_receiver(scene: dict, light: dict, receiver_id: str, origins: np.ndarray,
+                         chunk: int = CHUNK) -> np.ndarray:
+    """Bool per origin (points on the receiver ``receiver_id``): the segment / ray towards the light meets an
+    object, another bounded receiver (an opaque plate) or the unbounded ground (``receivers[0]`` without
+    ``bounds``, when it is not the receiver itself)."""
+    origins = np.asarray(origins, dtype=np.float64).reshape(-1, 3)
+    hit = occluded(scene, light, origins, chunk)
+    receivers = scene.get("receivers", [])
+    for start in range(0, origins.shape[0], max(1, int(chunk))):
+        o_chunk = origins[start:start + chunk]
+        dirs, tmax = rays_to_light(light, o_chunk)
+        for k, r in enumerate(receivers):
+            if r["id"] == receiver_id:
+                continue
+            if r.get("bounds") is None:
+                if k == 0:
+                    hit[start:start + chunk] |= hit_ground(o_chunk, dirs, tmax)
+                continue
+            hit[start:start + chunk] |= hit_plate(r, o_chunk, dirs, tmax)
+    return hit
