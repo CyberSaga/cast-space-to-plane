@@ -339,7 +339,9 @@ C 段在 `hidden_lines` 開啟時呼叫；純 numpy、確定性（取樣位置�
 | `to_z_up(vertices) -> list` | 精確軸映射 `(x, y, z) ↦ (x, −z, y)`（分量交換與變號，不用三角函數） |
 | `AXIS_MAP`、`MESH_MAX_FACES`、`MESH_MAX_VERTICES`、`MESH_WELD_TOLERANCE_DEFAULT`、`MESH_SMOOTH_ANGLE_DEFAULT` | 軸映射矩陣、面數／頂點數上限（各 50 000）、預設焊接容差 1e-6 m 與平滑角 30° |
 
-`castplane.mesh.triangulate_faces(faces_padded, face_lens) -> (t, 3)`：填補面表的扇形三角化 `(f0, f_k, f_{k+1})`，以面為主序（合約 §5.2.3 第 4 步）。
+`castplane.primitives` 的 `prepared_mesh(obj) -> dict`：驗證過的 `mesh` 物件的前處理結果 `{mesh, triangles, fallback, smooth_groups, warnings, scale_A}`（局部座標）；`build_object` 在 mesh 紀錄上加 `triangles`、`fallback`、`smooth_groups`、`prep_warnings`，所有紀錄都有 `fallback`、`prep_warnings` 與 `mesh["edge_smooth"]`（基元全為 False）；`point_inside_solid` 對 mesh 用廣義纏繞數（退路網格沒有內部）。
+
+`castplane.mesh` 的 `triangulate_faces(faces_padded, face_lens) -> (t, 3)`：填補面表的扇形三角化 `(f0, f_k, f_{k+1})`，以面為主序（合約 §5.2.3 第 4 步）。
 
 `castplane.meshprep` — 網格前處理（核心模組，只用 numpy；合約 §5.2.3–§5.2.5）：
 

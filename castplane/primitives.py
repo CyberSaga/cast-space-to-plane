@@ -26,6 +26,10 @@ them directly to project every polyhedral object of a scene in a few numpy calls
 stage C copies the ``edge_templates`` and fills in the three camera / light dependent
 keys (``silhouette``, ``back``, ``segment``) instead of building every record from scratch.
 
+``mesh`` objects (M5, contract §5.2) carry the preprocessed mesh of :func:`prepared_mesh`
+(welded, oriented, coplanar-merged; or the per-face fallback mesh) plus ``triangles``,
+``fallback``, ``smooth_groups``, ``prep_warnings`` and ``mesh["edge_smooth"]``.
+
 Curved primitives (cylinder, sphere, cone) carry an approximate 32-segment
 mesh ONLY for bounding boxes / scene scale and the M5-shaped representation;
 their shadows and outlines are computed analytically from ``analytic`` by the
@@ -56,7 +60,22 @@ def local_mesh(obj: dict) -> dict:
         return cone_mesh(obj["radius"], obj["height"])
     if typ == "sphere":
         return sphere_mesh(obj["radius"])
+    if typ == "mesh":
+        return prepared_mesh(obj)["mesh"]
     raise ValueError(f"unknown object type {typ!r}")
+
+
+def prepared_mesh(obj: dict) -> dict:
+    """The preprocessed local mesh of a validated ``mesh`` object (contract §5.2.3):
+    ``{mesh, triangles, fallback, smooth_groups, warnings, scale_A}`` from
+    :func:`castplane.meshprep.preprocess_mesh` (``scale`` applied, ``transform`` not)."""
+    from .meshprep import mesh_scale, preprocess_mesh
+    mesh, triangles, fallback, groups, warnings = preprocess_mesh(
+        obj["data"], obj.get("scale", 1.0), obj.get("weld_tolerance", 1e-6), obj.get("smooth_angle_deg", 30.0),
+        obj["id"])
+    scale_A = mesh_scale(float(obj.get("scale", 1.0)) * np.asarray(obj["data"]["vertices"], dtype=np.float64))
+    return {"mesh": mesh, "triangles": triangles, "fallback": fallback, "smooth_groups": groups,
+            "warnings": warnings, "scale_A": scale_A}
 
 
 def analytic_record(obj: dict, R, position):
@@ -107,7 +126,8 @@ def face_tables(mesh: dict) -> dict:
 def build_object(obj: dict) -> dict:
     """Build the object record of a validated ``objects[i]`` dict with the world transform applied."""
     R, position = transform_frame(obj.get("transform"))
-    mesh = transform_mesh(local_mesh(obj), R, position)
+    prep = prepared_mesh(obj) if obj["type"] == "mesh" else None
+    mesh = transform_mesh(local_mesh(obj) if prep is None else prep["mesh"], R, position)
     names = [f"{obj['id']}.{n}" for n in mesh["vertex_names"]]
     rec = {
         "id": obj["id"],
@@ -125,6 +145,23 @@ def build_object(obj: dict) -> dict:
     rec["edge_templates"] = [{"object": obj["id"], "from": names[i], "to": names[j], "silhouette": False,
                               "back": False, "visibility": "visible", "segment": None}
                              for i, j in mesh["edges"].tolist()]
+    # M5 (contract §5.2.3 step 8): every record carries ``fallback`` / ``prep_warnings`` and
+    # ``mesh["edge_smooth"]`` (all False for the primitives); mesh records also ``triangles`` (the
+    # original surface on the welded vertices), ``smooth_groups`` (per final face) and the mesh
+    # length scale ``mesh_scale_A``; their edge templates carry the camera-free ``smooth`` key
+    rec["fallback"] = False
+    rec["prep_warnings"] = []
+    if prep is None:
+        mesh["edge_smooth"] = np.zeros(mesh["edges"].shape[0], dtype=bool)
+    else:
+        assert mesh["faces"], "a validated mesh object keeps at least one face (usable-face guard)"
+        rec["triangles"] = prep["triangles"]
+        rec["fallback"] = bool(prep["fallback"])
+        rec["smooth_groups"] = list(prep["smooth_groups"])
+        rec["prep_warnings"] = list(prep["warnings"])
+        rec["mesh_scale_A"] = prep["scale_A"]
+        for t, smooth in zip(rec["edge_templates"], mesh["edge_smooth"].tolist()):
+            t["smooth"] = smooth
     return rec
 
 
@@ -153,6 +190,13 @@ def point_inside_solid(rec: dict, x, tol: float = 0.0) -> bool:
     mapped into the object's local frame and compared with the local extents of §2.1."""
     if rec["analytic"] is not None:
         return False
+    if rec["type"] == "mesh":
+        # contract §5.2.3 step 8: generalised winding number of the original surface; a fallback
+        # (non-manifold) mesh has no inside
+        if rec.get("fallback"):
+            return False
+        from .meshprep import point_inside_mesh
+        return point_inside_mesh(rec["mesh"]["vertices"], rec["triangles"], x, tol)
     R, position = rec["frame"]
     local = np.asarray(R, dtype=np.float64).T @ (np.asarray(x, dtype=np.float64) - position)
     shape = rec["shape"]
