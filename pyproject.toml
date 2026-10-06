@@ -1,0 +1,26 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "castplane"
+version = "0.1.0"
+description = "Perspective shadow construction drawing: mathematically exact cast shadows, construction lines and vanishing points for painters (cast-space-to-plane)."
+readme = "README.md"
+license = {text = "GPL-3.0-or-later"}
+requires-python = ">=3.10"
+dependencies = ["numpy>=1.24"]
+
+[project.optional-dependencies]
+png = ["cairosvg>=2.5"]
+dev = ["pytest>=7", "hypothesis>=6", "pillow>=9", "cairosvg>=2.5"]
+
+[project.scripts]
+castplane = "castplane.cli:main"
+
+[tool.setuptools.packages.find]
+include = ["castplane*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"
