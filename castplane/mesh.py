@@ -10,6 +10,9 @@ A mesh is a plain dict::
     edge_flipped : (m, 2) bool, whether that face traverses the edge as j -> i (derived, optional:
                    lets the silhouette walk orient edges without scanning the face cycles)
     vertex_names : ["v0", "v1", ...]
+    edge_smooth  : (m,) bool, added by ``primitives.build_object`` (M5, contract §5.2.3 step 7): the
+                   edge is smooth (not drawn unless it is a camera silhouette edge, §5.2.4); all
+                   False for the primitives, ``meshprep.classify_edges`` for ``mesh`` objects
 
 Builders produce local coordinates (contract §2.1): box spans
 ``[-sx/2, sx/2] x [-sy/2, sy/2] x [0, sz]``; cylinder / cone / sphere axis is
@@ -226,3 +229,18 @@ def mesh_bbox(mesh: dict):
 def euler_characteristic(mesh: dict) -> int:
     """``V - E + F`` (2 for a closed genus-0 surface)."""
     return int(mesh["vertices"].shape[0] - mesh["edges"].shape[0] + len(mesh["faces"]))
+
+
+def triangulate_faces(faces_padded, face_lens) -> np.ndarray:
+    """Fan triangulation ``(f0, f_k, f_{k+1})`` of every face of a ``-1``-padded face table
+    (contract §5.2.3 step 4): vectorised, columns ``(0, k, k+1)`` masked by ``face_lens``; returns a
+    ``(t, 3)`` int array in face-major order (the triangles of face 0 first, ``k`` ascending)."""
+    P = np.asarray(faces_padded, dtype=np.int64)
+    lens = np.asarray(face_lens, dtype=np.int64).reshape(-1)
+    if P.ndim != 2 or P.shape[0] == 0 or P.shape[1] < 3:
+        return np.zeros((0, 3), dtype=np.int64)
+    width = P.shape[1]
+    first = np.broadcast_to(P[:, :1], (P.shape[0], width - 2))
+    tri = np.stack([first, P[:, 1:width - 1], P[:, 2:width]], axis=2)       # (F, W-2, 3)
+    mask = np.arange(2, width, dtype=np.int64)[None, :] < lens[:, None]     # triangle (0, k, k+1): k+1 < len
+    return np.ascontiguousarray(tri[mask]).reshape(-1, 3)

@@ -35,6 +35,11 @@ WARNING_CODES = {
     "CONSTRUCTION_CHECK_SKIPPED": "construction self-check skipped for a degenerate point",
     # M4 (contract §5.0.5 / §5.1.9): appended at the end; M5 appends its codes after this one
     "RECEIVER_UNLIT": "bounded receiver is not lit by this light (light behind or in its plane); it receives no shadow",
+    # M5 (contract §5.2.6 / §5.0.5): appended after M4's RECEIVER_UNLIT in the merged list
+    "MESH_NON_MANIFOLD": "mesh is not a closed consistently oriented manifold; per-face shadow fallback",
+    "MESH_WINDING_FIXED": "mesh faces were reoriented (winding propagation or signed volume)",
+    "MESH_DEGENERATE_FACES": "degenerate mesh faces were dropped",
+    "MESH_RAYS_CAPPED": "more than 64 feature silhouette vertices; construction rays for the first 64 only",
 }
 
 

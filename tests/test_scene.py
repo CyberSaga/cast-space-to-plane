@@ -367,3 +367,123 @@ def test_m4_hidden_output_switches():
     expect_error(mutate(["output", "hidden_lines"], 1), "output.hidden_lines")
     expect_error(mutate(["output", "hidden_lines"], "yes"), "output.hidden_lines")
     expect_error(mutate(["output", "hidden_style"], "dotted"), "output.hidden_style")
+
+
+# --- M5: the mesh object type (contract §5.2.1, §5.0.1) ------------------------
+_CUBE_V = [[-.5, -.5, 0], [.5, -.5, 0], [.5, .5, 0], [-.5, .5, 0], [-.5, -.5, 1], [.5, -.5, 1], [.5, .5, 1], [-.5, .5, 1]]
+_CUBE_F = [[0, 3, 2, 1], [4, 5, 6, 7], [0, 1, 5, 4], [1, 2, 6, 5], [2, 3, 7, 6], [3, 0, 4, 7]]
+
+
+def mesh_scene(**keys):
+    obj = {"id": "m", "type": "mesh", "data": {"vertices": copy.deepcopy(_CUBE_V), "faces": copy.deepcopy(_CUBE_F)}}
+    obj.update(keys)
+    return mutate(["objects"], [obj])
+
+
+def test_mesh_object_validated_form_and_defaults():
+    from castplane.scene import OBJECT_TYPES
+    assert OBJECT_TYPES == ("box", "cylinder", "sphere", "cone", "prism", "mesh")
+    o = validate_scene(mesh_scene())["objects"][0]
+    assert o == {"id": "m", "type": "mesh", "path": None, "node": None,
+                 "data": {"vertices": [[float(c) for c in v] for v in _CUBE_V], "faces": _CUBE_F,
+                          "smooth_groups": [0] * 6},
+                 "up": "z", "scale": 1.0, "weld_tolerance": 1e-6, "smooth_angle_deg": 30.0,
+                 "transform": {"position": [0.0, 0.0, 0.0], "rotation_deg": [0.0, 0.0, 0.0]}}
+    # both path and data: already expanded (path informational), node kept
+    o = validate_scene(mesh_scene(path="box.obj", node=2))["objects"][0]
+    assert o["path"] == "box.obj" and o["node"] == 2
+
+
+def test_mesh_path_only_must_be_expanded_and_data_required():
+    scene = mesh_scene(path="box.obj")
+    del scene["objects"][0]["data"]
+    with pytest.raises(SceneError) as info:
+        validate_scene(scene)
+    assert info.value.field == "objects[0].path" and "expand_scene" in info.value.message
+    scene = mesh_scene()
+    del scene["objects"][0]["data"]
+    expect_error(scene, "objects[0].data")
+    expect_error(mesh_scene(path=""), "objects[0].path")
+    expect_error(mesh_scene(data=[1, 2]), "objects[0].data")
+
+
+def test_mesh_data_rules():
+    expect_error(mesh_scene(data={"vertices": _CUBE_V[:2], "faces": [[0, 1, 0]]}), "objects[0].data.vertices")
+    expect_error(mesh_scene(data={"vertices": [[0, 0, 0], [1, 0, 0], [0, float("nan"), 0]], "faces": [[0, 1, 2]]}),
+                 "objects[0].data.vertices[2][1]")
+    expect_error(mesh_scene(data={"vertices": _CUBE_V, "faces": []}), "objects[0].data.faces")
+    expect_error(mesh_scene(data={"vertices": _CUBE_V, "faces": [[0, 1]]}), "objects[0].data.faces[0]")
+    expect_error(mesh_scene(data={"vertices": _CUBE_V, "faces": [[0, 1, 8]]}), "objects[0].data.faces[0]")
+    expect_error(mesh_scene(data={"vertices": _CUBE_V, "faces": [[0, 1, True]]}), "objects[0].data.faces[0]")
+    expect_error(mesh_scene(data={"vertices": _CUBE_V, "faces": [[0, 1, 2.0]]}), "objects[0].data.faces[0]")
+    expect_error(mesh_scene(data={"vertices": _CUBE_V, "faces": _CUBE_F, "smooth_groups": [0]}),
+                 "objects[0].data.smooth_groups")
+    expect_error(mesh_scene(data={"vertices": _CUBE_V, "faces": _CUBE_F, "smooth_groups": [0, 0, 0, 0, 0, -1]}),
+                 "objects[0].data.smooth_groups[5]")
+    o = validate_scene(mesh_scene(data={"vertices": _CUBE_V, "faces": _CUBE_F,
+                                        "smooth_groups": [1, 1, 2, 2, 0, 0]}))["objects"][0]
+    assert o["data"]["smooth_groups"] == [1, 1, 2, 2, 0, 0]
+
+
+def test_mesh_optional_keys():
+    expect_error(mesh_scene(up="x"), "objects[0].up")
+    expect_error(mesh_scene(scale=0), "objects[0].scale")
+    expect_error(mesh_scene(weld_tolerance=-1e-9), "objects[0].weld_tolerance")
+    expect_error(mesh_scene(smooth_angle_deg=180.5), "objects[0].smooth_angle_deg")
+    expect_error(mesh_scene(smooth_angle_deg=-1), "objects[0].smooth_angle_deg")
+    expect_error(mesh_scene(node=-1), "objects[0].node")
+    expect_error(mesh_scene(node=1.5), "objects[0].node")
+    expect_error(mesh_scene(transform={"scale": [1, 1, 1]}), "objects[0].transform.scale")
+    o = validate_scene(mesh_scene(scale=0.001, weld_tolerance=0, smooth_angle_deg=0, node="Cube"))["objects"][0]
+    assert (o["scale"], o["weld_tolerance"], o["smooth_angle_deg"], o["node"]) == (0.001, 0.0, 0.0, "Cube")
+
+
+def test_mesh_up_y_is_the_exact_axis_map():
+    from castplane.scene import AXIS_MAP, to_z_up
+    assert AXIS_MAP == ((1, 0, 0), (0, 0, -1), (0, 1, 0))
+    assert to_z_up([[1, 0, 2]]) == [[1.0, -2.0, 0.0]]
+    out = to_z_up([[0.0, 0.0, 0.0]])
+    assert str(out[0][1]) == "0.0"                       # no -0.0
+    y_up = [[x, z, -y] for x, y, z in _CUBE_V]          # A^T applied: the same cube written Y-up
+    o = validate_scene(mesh_scene(up="y", data={"vertices": y_up, "faces": _CUBE_F}))["objects"][0]
+    assert o["up"] == "z"
+    assert o["data"]["vertices"] == [[float(c) for c in v] for v in _CUBE_V]
+
+
+def test_mesh_size_guard_and_usable_face_guard(monkeypatch):
+    import castplane.scene as sc
+    monkeypatch.setattr(sc, "MESH_MAX_FACES", 5)
+    expect_error(mesh_scene(), "objects[0].data.faces")
+    expect_error(mesh_scene(path="box.obj"), "objects[0].path")
+    monkeypatch.setattr(sc, "MESH_MAX_FACES", 50000)
+    monkeypatch.setattr(sc, "MESH_MAX_VERTICES", 7)
+    expect_error(mesh_scene(), "objects[0].data.vertices")
+    monkeypatch.setattr(sc, "MESH_MAX_VERTICES", 50000)
+    assert (sc.MESH_MAX_FACES, sc.MESH_MAX_VERTICES) == (50000, 50000)
+    # every face degenerate after welding (all vertices within the weld tolerance)
+    tiny = [[0, 0, 0], [1e-7, 0, 0], [0, 1e-7, 0]]
+    with pytest.raises(SceneError) as info:
+        validate_scene(mesh_scene(data={"vertices": tiny, "faces": [[0, 1, 2]]}))
+    assert info.value.field == "objects[0].data.faces" and info.value.message == "no usable face"
+    expect_error(mesh_scene(path="t.obj", data={"vertices": tiny, "faces": [[0, 1, 2]]}), "objects[0].path")
+    # the guard runs on scale · vertices (scale before the weld): a 1-unit triangle welds away at
+    # scale 1e-6 and survives at scale 1e-3; the validated data stays raw (file units, unwelded)
+    unit = [[0, 0, 0], [1, 0, 0], [0, 1, 0]]
+    expect_error(mesh_scene(scale=1e-6, data={"vertices": unit, "faces": [[0, 1, 2]]}), "objects[0].data.faces")
+    o = validate_scene(mesh_scene(scale=1e-3, data={"vertices": unit, "faces": [[0, 1, 2]]}))["objects"][0]
+    assert o["data"]["vertices"] == [[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0]]
+    dup = [[0, 0, 0], [1, 0, 0], [0, 1, 0], [0, 0, 0]]
+    o = validate_scene(mesh_scene(data={"vertices": dup, "faces": [[3, 1, 2]]}))["objects"][0]
+    assert o["data"]["vertices"] == [[float(c) for c in v] for v in dup]
+    expect_error(mesh_scene(data={"vertices": _CUBE_V, "faces": [[0, 1, 0], [2, 2, 2]]}), "objects[0].data.faces")
+
+
+def test_read_json_is_the_load_scene_reader(tmp_path):
+    from castplane.scene import read_json
+    path = tmp_path / "s.json"
+    path.write_text(json.dumps(base_scene()), encoding="utf-8")
+    assert read_json(path) == base_scene()
+    path.write_text("{not json", encoding="utf-8")
+    with pytest.raises(SceneError) as info:
+        read_json(path)
+    assert info.value.field == "" and info.value.message.startswith("invalid JSON: ")

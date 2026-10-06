@@ -327,6 +327,43 @@ C 段在 `hidden_lines` 開啟時呼叫；純 numpy、確定性（取樣位置�
 | `runs_straight(result, a3, b3, length_mm)`、`runs_conic(interval, runs, cum, th)` | 文件的 run 紀錄：直線 `{s, t, mm, visible}`、圓錐曲線 `{interval, theta, mm, visible}` |
 | `HLR_SPACING_MM`、`HLR_MIN_SAMPLES`、`HLR_MAX_SAMPLES`、`HLR_BISECTIONS`、`HLR_RAY_EPS` | 1.0、8、4096、6、1e-5（合約固定） |
 
+### 2.17 M5 網格物件（`mesh`，合約 §5.2）
+
+`castplane.scene` 新增（合約 §5.2.1、§5.0.1）：
+
+| 函式 | 說明 |
+| --- | --- |
+| `read_json(path) -> dict` | 讀 JSON 檔；格式錯誤拋 `SceneError("", "invalid JSON: …")`（自 `load_scene` 抽出，供 `castplane.io.load_expanded_scene` 共用） |
+| `validate_mesh_object(o, field) -> dict` | `validate_object` 的 `mesh` 分支：`data` 必填（只有 `path` 時回報 `objects[i].path`「必須先展開」）、`node` / `up` / `scale` / `weld_tolerance` / `smooth_angle_deg`、`up: "y"` 的精確軸映射、可用面檢查 |
+| `validate_mesh_data(value, field, source_field=None) -> dict` | `objects[i].data`：`vertices`（≥ 3 個有限 `[x, y, z]`）、`faces`（≥ 1 個、每個 ≥ 3 個索引）、`smooth_groups`（預設全 0）、大小上限 |
+| `to_z_up(vertices) -> list` | 精確軸映射 `(x, y, z) ↦ (x, −z, y)`（分量交換與變號，不用三角函數） |
+| `AXIS_MAP`、`MESH_MAX_FACES`、`MESH_MAX_VERTICES`、`MESH_WELD_TOLERANCE_DEFAULT`、`MESH_SMOOTH_ANGLE_DEFAULT` | 軸映射矩陣、面數／頂點數上限（各 50 000）、預設焊接容差 1e-6 m 與平滑角 30° |
+
+`castplane.mesh.triangulate_faces(faces_padded, face_lens) -> (t, 3)`：填補面表的扇形三角化 `(f0, f_k, f_{k+1})`，以面為主序（合約 §5.2.3 第 4 步）。
+
+`castplane.meshprep` — 網格前處理（核心模組，只用 numpy；合約 §5.2.3–§5.2.5）：
+
+| 函式 | 說明 |
+| --- | --- |
+| `preprocess_mesh(data, scale, weld_tolerance, smooth_angle_deg, object_id="")` | 整條前處理 → `(mesh, triangles, fallback, smooth_groups, warnings)`：縮放 → 焊接 → 退化面 → 鄰接／流形／方向 → 共面合併 → 邊分類；非流形時走逐面退路 |
+| `mesh_scale(V) -> float` | `scale_A = max(1, 包圍盒最大邊長)`，本節所有容差的長度尺度 |
+| `weld_map(V, tol, fast=True)`、`weld_vertices(V, faces, tol, fast=True)` | 焊接（27 鄰格、輸入索引最低的代表、取代表點原座標、依首次出現編號）；`fast` 為結果相同的向量化路徑 → `(W, faces_w, index)` |
+| `prepare_faces(faces, index=None)` | 面轉成 int 串列並依 `index` 重新編號 |
+| `drop_degenerate_faces(V, faces, scale_A)` | 折疊連續重複、丟掉頂點不兩兩相異或 Newell 法線 ≤ 1e-12·scale_A² 的面 → `(kept_faces, kept_index)` |
+| `compact_vertices(V, faces)` | 移除沒有面用到的頂點（保持順序）→ `(V2, faces2, old_index)` |
+| `triangulate(faces)` | 面串列的扇形三角化（`mesh.triangulate_faces`） |
+| `build_adjacency(faces, n_v)` | 無向邊、每邊的相鄰面（不同的面索引）與走向、流形與一致性旗標 |
+| `fix_orientation(faces, adjacency)` | 依 BFS 傳播修正繞向 → `(faces, flipped, components, conflict)` |
+| `signed_volume(V, tris)`、`winding_number(V, tris, x)` | 依三角形順序逐項累加的有號體積與廣義纏繞數 |
+| `point_inside_mesh(verts, tris, x, tol=0.0)` | `\|w\| > 0.75` 且到每個三角形的距離 `> tol` 才算在內部 |
+| `merge_coplanar(V, faces, normals, adjacency, cos_tol)` | 依種子順序的區域生長共面合併 → `(new_faces, origin)` |
+| `classify_edges(mesh, smooth_angle_deg, smooth_groups)` | 平滑邊／特徵邊（平滑群組不同即為特徵邊） |
+| `fallback_mesh(V, faces, vertex_names=None)` | 非流形退路的 §2.4 形網格（`edge_faces = [f_min, f_max]`） |
+| `inherit_edge_smooth(loop_mesh, origins, mesh, edge_smooth)` | 受影面切割後的網格繼承原始邊的平滑旗標（切面上的邊為特徵邊） |
+| `COPLANAR_TOL_RAD`、`WELD_TOLERANCE_DEFAULT`、`SMOOTH_ANGLE_DEFAULT`、`MESH_MAX_RAYS`、`SMOOTH_BAND`、`INSIDE_WINDING` | 合約 §5.2.3 的常數（1e-3 rad、1e-6 m、30°、64、1e-9、0.75） |
+
+警告代碼增加 `MESH_NON_MANIFOLD`、`MESH_WINDING_FIXED`、`MESH_DEGENERATE_FACES`、`MESH_RAYS_CAPPED`（合約 §5.0.5，接在 M4 的 `RECEIVER_UNLIT` 之後）。
+
 ## 3. 警告代碼（合約 §2.9）
 
 | 代碼 | 條件 | ids | 效果 |

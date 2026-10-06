@@ -257,7 +257,10 @@ def test_set_covers_the_required_sources():
         forms.add("target" if "target" in scene["camera"] else "yaw_pitch")
         codes.update(w["code"] for w in load_expected(name)["warnings"])
     assert set(_DEGENERATE_ROW_CODES) <= codes, sorted(set(_DEGENERATE_ROW_CODES) - codes)
-    assert kinds == set(OBJECT_TYPES) and lights == set(LIGHT_TYPES) and forms == {"target", "yaw_pitch"}
+    # M5 adds the ``mesh`` kind to OBJECT_TYPES before its three conformance cases exist (they are added
+    # with ``--case`` after the M4 rebase, v5, contract §5.2.11).  Tripwire: this assertion fails as soon
+    # as a mesh case is added, and the step that adds them replaces ``- {"mesh"}`` by the full set.
+    assert kinds == set(OBJECT_TYPES) - {"mesh"} and lights == set(LIGHT_TYPES) and forms == {"target", "yaw_pitch"}
 
 
 @pytest.mark.parametrize("name", case_names())
