@@ -75,12 +75,16 @@ castplane stages examples/basic.json | python3 -c "import json,sys; d=json.load(
 | `validate_object(value, field) -> dict` | 一個 `objects[i]` 項目；`field` 是錯誤訊息用的路徑前綴 |
 | `validate_transform(value, field) -> dict` | `transform` 區塊：選填、`scale` 不允許、補預設值 |
 | `validate_light(value, field) -> dict` | 一個 `lights[i]` 項目（`id` 不含 `.`；平行光方向長度須為 1） |
-| `validate_receiver(value, field) -> dict` | 一個 `receivers[i]` 項目（v1 只接受地面） |
+| `validate_receiver(value, field) -> dict` | 一個 `receivers[i]` 項目（M4：任意平面、選填凸多邊形 `bounds`；無 bounds 的只能是 `receivers[0]` 的地面，由 `validate_scene` 檢查） |
 | `validate_camera(value, field="camera") -> dict` | `camera` 區塊：target 形式或 yaw/pitch 形式，二擇一 |
 | `validate_output(value, frame_mm, field="output") -> dict` | `output` 區塊：畫布長寬比須等於片幅長寬比（錯誤訊息列出兩個比值與可用的替代值）；`layers` 不得是空串列 |
 | `polygon_signed_area(poly) -> float` | 鞋帶公式的有向面積，逆時針為正 |
 | `polygon_is_simple(poly, eps_area, eps_len=None) -> bool` | 多邊形無自交（非相鄰邊不相觸） |
 | `OBJECT_TYPES`、`LIGHT_TYPES`、`LAYER_IDS` | 允許的物件類型、光源類型、六個圖層 id（表格順序） |
+| `validate_bounds(value, normal, offset, field) -> list` | M4：`receivers[i].bounds`（≥ 3 個世界座標點、在平面上、嚴格凸且簡單；順時針輸入靜默反轉成繞 n 逆時針，合約 §5.1.1） |
+| `validate_hidden_output(o, field="output") -> dict` | M4：`output.hidden_lines`（布林，預設 false）與 `output.hidden_style`（`dashed` 預設 / `omit`） |
+| `validate_receivers_in_scene(receivers, objects, lights)` | M4：受影面的場景層規則：id 唯一、不得與物件／光源 id 重複、保留字 `hidden`、無 bounds 只限 `receivers[0]` 的地面、有地面時 bounds 不得在地面以下 |
+| `RESERVED_IDS`、`HIDDEN_STYLES` | M4：保留 id（`hidden`）與 `hidden_style` 的允許值 |
 
 ### 2.3 `castplane.errors` — 錯誤與警告
 

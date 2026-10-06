@@ -18,7 +18,7 @@ class SceneError(ValueError):
         super().__init__(f"{field}: {message}")
 
 
-#: Closed list of warning codes for v1 (contract §2.9).  ``code -> default message``.
+#: Closed list of warning codes (contract §2.9, extended by §5.0.5).  ``code -> default message``.
 WARNING_CODES = {
     "CAMERA_LOOKING_ALONG_UP": "camera forward is parallel to world up; using (0,1,0) as up",
     "LIGHT_BEHIND_CAMERA": "finite light is behind the camera; L' is the anti-light point",
@@ -33,6 +33,8 @@ WARNING_CODES = {
     "LIGHT_INSIDE_OBJECT": "point light is inside the sphere; no shadow or terminator",
     "CONIC_SAMPLED": "conic is degenerate or ill-conditioned; emitted as a sampled polyline",
     "CONSTRUCTION_CHECK_SKIPPED": "construction self-check skipped for a degenerate point",
+    # M4 (contract §5.0.5 / §5.1.9): appended at the end; M5 appends its codes after this one
+    "RECEIVER_UNLIT": "bounded receiver is not lit by this light (light behind or in its plane); it receives no shadow",
 }
 
 

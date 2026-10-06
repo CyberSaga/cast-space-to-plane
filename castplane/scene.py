@@ -214,9 +214,12 @@ def validate_light(value, field: str) -> dict:
 
 
 def validate_receiver(value, field: str) -> dict:
-    """One ``receivers[i]`` entry: v1 ground plane only (contract §2.0)."""
+    """One ``receivers[i]`` entry (contract §2.0 as amended by §5.1.1): any plane ``n·x + d = 0`` with
+    ``|n| = 1``, optional convex ``bounds`` (:func:`validate_bounds`).  The rules that need the
+    receiver's index or the other blocks (unbounded only at index 0 and only for the ground, bounds
+    above the ground, disjoint ids) are checked by :func:`validate_scene`."""
     r = _dict(value, field)
-    out = {"id": _id(_require(r, "id", field), f"{field}.id", no_dot=False)}
+    out = {"id": _id(_require(r, "id", field), f"{field}.id", no_dot=True)}
     typ = _require(r, "type", field)
     if typ != "plane":
         raise SceneError(f"{field}.type", "must be 'plane'")
@@ -224,13 +227,12 @@ def validate_receiver(value, field: str) -> dict:
     n = _vector(_require(r, "normal", field), f"{field}.normal", 3)
     if abs(_norm(n) - 1.0) > _UNIT_TOL:
         raise SceneError(f"{field}.normal", "must be a unit vector (|n| = 1 within 1e-9)")
-    if any(abs(n[i] - [0.0, 0.0, 1.0][i]) > _UNIT_TOL for i in range(3)):
-        raise SceneError(f"{field}.normal", "v1 supports only the ground plane: normal must be [0, 0, 1]")
-    out["normal"] = [0.0, 0.0, 1.0]
     offset = _number(r.get("offset", 0.0), f"{field}.offset")
-    if abs(offset) > _UNIT_TOL:
-        raise SceneError(f"{field}.offset", "v1 supports only the ground plane: offset must be 0")
-    out["offset"] = 0.0
+    out["bounds"] = None if r.get("bounds") is None else validate_bounds(r["bounds"], n, offset, f"{field}.bounds")
+    if out["bounds"] is None and _is_ground(n, offset):
+        n, offset = [0.0, 0.0, 1.0], 0.0      # the unbounded ground keeps the literal v1 plane
+    out["normal"] = n
+    out["offset"] = offset
     return out
 
 
@@ -283,11 +285,13 @@ def validate_output(value, frame_mm, field: str = "output") -> dict:
             raise SceneError(f"{field}.layers[{i}]", f"must be one of {', '.join(LAYER_IDS)}")
     if len(set(layers)) != len(layers):
         raise SceneError(f"{field}.layers", "layer ids must be unique")
-    return {
+    out = {
         "canvas_mm": canvas,
         "layers": [name for name in LAYER_IDS if name in layers],
         "png_dpi": _number(o.get("png_dpi", 300), f"{field}.png_dpi", positive=True),
     }
+    out.update(validate_hidden_output(o, field))
+    return out
 
 
 def validate_scene(scene) -> dict:
@@ -326,9 +330,10 @@ def validate_scene(scene) -> dict:
         out_lights.append(vl)
 
     receivers = _require(s, "receivers", "")
-    if not isinstance(receivers, list) or len(receivers) != 1:
-        raise SceneError("receivers", "must be a list of exactly one receiver (v1)")
+    if not isinstance(receivers, list) or len(receivers) == 0:
+        raise SceneError("receivers", "must be a non-empty list")
     out_receivers = [validate_receiver(r, f"receivers[{i}]") for i, r in enumerate(receivers)]
+    validate_receivers_in_scene(out_receivers, out_objects, out_lights)
 
     camera = validate_camera(_require(s, "camera", ""), "camera")
     output = validate_output(_require(s, "output", ""), camera["frame_mm"], "output")
@@ -371,3 +376,102 @@ def load_camera(path_or_dict) -> dict:
     if isinstance(data, dict) and "camera" in data and "position" not in data:
         data = data["camera"]
     return validate_camera(data, "camera")
+
+
+# ---------------------------------------------------------------------------
+# M4 (contract §5.1.1, §5.0.1): bounded receivers, hidden-line output switches, reserved ids
+# ---------------------------------------------------------------------------
+
+#: Ids that no object, receiver or light may take (the ``*.hidden`` SVG sub-groups, contract §5.0.1).
+RESERVED_IDS = ("hidden",)
+#: ``output.hidden_style`` values (contract §5.1.8).
+HIDDEN_STYLES = ("dashed", "omit")
+
+
+def _is_ground(n, offset) -> bool:
+    """The plane is the ground ``z = 0`` (``normal == [0, 0, 1]`` and ``offset == 0`` within 1e-9)."""
+    return (all(abs(float(n[i]) - (0.0, 0.0, 1.0)[i]) <= _UNIT_TOL for i in range(3))
+            and abs(float(offset)) <= _UNIT_TOL)
+
+
+def validate_bounds(value, normal, offset, field: str) -> list:
+    """``receivers[i].bounds`` (contract §5.1.1): >= 3 world points on the plane ``n·x + d = 0``
+    forming a simple strictly convex polygon; a clockwise list (about ``n``) is reversed silently,
+    so the stored order is counter-clockwise about ``n`` seen from the positive side."""
+    if not isinstance(value, (list, tuple)) or len(value) < 3:
+        raise SceneError(field, "must be a list of at least 3 [x, y, z] vertices")
+    pts = [_vector(p, f"{field}[{k}]", 3) for k, p in enumerate(value)]
+    n = [float(c) for c in normal]
+    d = float(offset)
+    ext = max(1.0, max(abs(c) for p in pts for c in p))
+    m = len(pts)
+    for k, p in enumerate(pts):                                       # (1) coplanar
+        if abs(n[0] * p[0] + n[1] * p[1] + n[2] * p[2] + d) > 1e-9 * ext:
+            raise SceneError(f"{field}[{k}]", "must lie in the receiver plane (|n·b + offset| <= 1e-9 · extent)")
+    edges = [[pts[(k + 1) % m][j] - pts[k][j] for j in range(3)] for k in range(m)]
+    lengths = [_norm(e) for e in edges]
+    for k in range(m):                                                # (2) consecutive vertices distinct
+        if not lengths[k] > 1e-12 * ext:
+            raise SceneError(f"{field}[{k}]", "consecutive vertices coincide")
+    cross, dot = [], []
+    for k in range(m):
+        a, b = edges[k], edges[(k + 1) % m]
+        c = [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]]
+        cross.append(c[0] * n[0] + c[1] * n[1] + c[2] * n[2])
+        dot.append(a[0] * b[0] + a[1] * b[1] + a[2] * b[2])
+    message = "must be a simple strictly convex polygon"
+    sigma = 1.0 if cross[0] > 0.0 else -1.0
+    for k in range(m):                                                # (3) strictly convex
+        if sigma * cross[k] <= 1e-9 * lengths[k] * lengths[(k + 1) % m]:
+            raise SceneError(field, message)
+    turning = sum(math.atan2(sigma * cross[k], dot[k]) for k in range(m))
+    if abs(turning - 2.0 * math.pi) > 1e-9 * m:                        # (4) simple (no star polygon)
+        raise SceneError(field, message)
+    if sigma < 0.0:                                                   # (5) clockwise -> reversed silently
+        pts = pts[::-1]
+    return pts
+
+
+def validate_hidden_output(o: dict, field: str = "output") -> dict:
+    """``output.hidden_lines`` (boolean, default false) and ``output.hidden_style`` (``"dashed"``
+    default, or ``"omit"``) of contract §5.1.1 / §5.0.1."""
+    hidden = o.get("hidden_lines", False)
+    if not isinstance(hidden, bool):
+        raise SceneError(f"{field}.hidden_lines", "must be a boolean")
+    style = o.get("hidden_style", "dashed")
+    if style not in HIDDEN_STYLES:
+        raise SceneError(f"{field}.hidden_style", f"must be one of {', '.join(HIDDEN_STYLES)}")
+    return {"hidden_lines": hidden, "hidden_style": style}
+
+
+def validate_receivers_in_scene(receivers: list, objects: list, lights: list) -> None:
+    """The scene-level receiver rules of contract §5.1.1 / §5.0.1: ids unique, not reserved and
+    disjoint from object and light ids; a receiver without ``bounds`` only at index 0 and only for
+    the ground plane; with an unbounded ground every bounds vertex is above it (``b_z >= -1e-9·ext``).
+    Also the reserved-id rule for object and light ids (``hidden``)."""
+    for kind, items in (("objects", objects), ("lights", lights), ("receivers", receivers)):
+        for i, item in enumerate(items):
+            if item["id"] in RESERVED_IDS:
+                raise SceneError(f"{kind}[{i}].id", "reserved id")
+    object_ids = {o["id"] for o in objects}
+    light_ids = {lt["id"] for lt in lights}
+    seen = set()
+    for i, r in enumerate(receivers):
+        rid = r["id"]
+        if rid in seen:
+            raise SceneError(f"receivers[{i}].id", f"duplicate receiver id {rid!r}")
+        seen.add(rid)
+        if rid in object_ids:
+            raise SceneError(f"receivers[{i}].id", f"receiver id {rid!r} is also an object id")
+        if rid in light_ids:
+            raise SceneError(f"receivers[{i}].id", f"receiver id {rid!r} is also a light id")
+        if r["bounds"] is None and not (i == 0 and _is_ground(r["normal"], r["offset"])):
+            raise SceneError(f"receivers[{i}].bounds", "required unless the receiver is the ground plane at receivers[0]")
+    if receivers[0]["bounds"] is None:
+        for i, r in enumerate(receivers):
+            if r["bounds"] is None:
+                continue
+            ext = max(1.0, max(abs(c) for p in r["bounds"] for c in p))
+            for k, p in enumerate(r["bounds"]):
+                if p[2] < -1e-9 * ext:
+                    raise SceneError(f"receivers[{i}].bounds[{k}]", "below the ground receiver")

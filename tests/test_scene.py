@@ -193,9 +193,10 @@ def test_light_type_and_params():
 def test_receivers_rules():
     expect_error(mutate(["receivers"], []), "receivers")
     expect_error(mutate(["receivers", 0, "type"], "sphere"), "receivers[0].type")
-    expect_error(mutate(["receivers", 0, "normal"], [0, 1, 0]), "receivers[0].normal")
+    # contract §5.1.1 (M4): any plane is valid, but an unbounded receiver must be the ground at index 0
+    expect_error(mutate(["receivers", 0, "normal"], [0, 1, 0]), "receivers[0].bounds")
     expect_error(mutate(["receivers", 0, "normal"], [0, 0, 2]), "receivers[0].normal")
-    expect_error(mutate(["receivers", 0, "offset"], 0.5), "receivers[0].offset")
+    expect_error(mutate(["receivers", 0, "offset"], 0.5), "receivers[0].bounds")
     out = validate_scene(mutate(["receivers", 0, "offset"], None, delete=True))
     assert out["receivers"][0]["offset"] == 0.0
 
@@ -259,3 +260,110 @@ def test_invalid_json_file_reports_scene_error(tmp_path):
     path.write_text("{not json", encoding="utf-8")
     with pytest.raises(SceneError):
         load_scene(path)
+
+
+# --- M4: receivers, bounds, hidden-line output switches, reserved ids (contract §5.1.1, §5.0.1) ---------
+
+WALL = {"id": "wall", "type": "plane", "normal": [0, -1, 0], "offset": 6,
+        "bounds": [[-3, 6, 0], [3, 6, 0], [3, 6, 2.5], [-3, 6, 2.5]]}
+
+
+def with_receivers(*extra, first=None):
+    scene = base_scene()
+    if first is not None:
+        scene["receivers"] = [first]
+    scene["receivers"] = scene["receivers"] + [copy.deepcopy(r) for r in extra]
+    return scene
+
+
+def test_m4_wall_receiver_validates_and_keeps_its_plane():
+    out = validate_scene(with_receivers(WALL))
+    ground, wall = out["receivers"]
+    assert ground == {"id": ground["id"], "type": "plane", "normal": [0.0, 0.0, 1.0], "offset": 0.0, "bounds": None}
+    assert wall["normal"] == [0.0, -1.0, 0.0] and wall["offset"] == 6.0
+    assert wall["bounds"] == [[-3.0, 6.0, 0.0], [3.0, 6.0, 0.0], [3.0, 6.0, 2.5], [-3.0, 6.0, 2.5]]
+
+
+def test_m4_bounds_clockwise_is_reversed_silently():
+    cw = dict(WALL, bounds=WALL["bounds"][::-1])
+    out = validate_scene(with_receivers(cw))
+    # the clockwise input list reversed: the counter-clockwise order of WALL
+    assert out["receivers"][1]["bounds"] == [[-3.0, 6.0, 0.0], [3.0, 6.0, 0.0], [3.0, 6.0, 2.5], [-3.0, 6.0, 2.5]]
+    # the stored order is counter-clockwise about n: (e_0 x e_1) . n > 0
+    import numpy as np
+    b = np.array(out["receivers"][1]["bounds"])
+    assert float(np.cross(b[1] - b[0], b[2] - b[1]) @ np.array([0.0, -1.0, 0.0])) > 0.0
+
+
+def test_m4_receivers_list_and_ids():
+    expect_error(mutate(["receivers"], []), "receivers")
+    expect_error(with_receivers(dict(WALL, id="a.b")), "receivers[1].id")
+    expect_error(with_receivers(dict(WALL, id="")), "receivers[1].id")
+    expect_error(with_receivers(dict(WALL, id="ground")), "receivers[1].id")        # duplicate
+    expect_error(with_receivers(dict(WALL, id="crate")), "receivers[1].id")         # object id
+    expect_error(with_receivers(dict(WALL, id="lamp")), "receivers[1].id")          # light id
+    expect_error(with_receivers(dict(WALL, id="hidden")), "receivers[1].id")        # reserved
+    scene = base_scene()
+    scene["objects"][0]["id"] = "hidden"
+    expect_error(scene, "objects[0].id")
+    scene = base_scene()
+    scene["lights"][0]["id"] = "hidden"
+    expect_error(scene, "lights[0].id")
+    with pytest.raises(SceneError, match="reserved id"):
+        validate_scene(with_receivers(dict(WALL, id="hidden")))
+
+
+def test_m4_unbounded_only_for_the_ground_at_index_0():
+    no_bounds = {k: v for k, v in WALL.items() if k != "bounds"}
+    expect_error(with_receivers(no_bounds), "receivers[1].bounds")
+    ground2 = {"id": "g2", "type": "plane", "normal": [0, 0, 1], "offset": 0}
+    expect_error(with_receivers(ground2), "receivers[1].bounds")
+    # a bounded receiver may be receivers[0] (no ground at all)
+    out = validate_scene(with_receivers(first=copy.deepcopy(WALL)))
+    assert [r["id"] for r in out["receivers"]] == ["wall"]
+    assert out["receivers"][0]["bounds"] is not None
+
+
+def test_m4_bounds_rules():
+    def bad(bounds, field, **kw):
+        expect_error(with_receivers(dict(WALL, bounds=bounds, **kw)), field)
+    bad([[-3, 6, 0], [3, 6, 0]], "receivers[1].bounds")                               # < 3 vertices
+    bad("square", "receivers[1].bounds")
+    bad([[-3, 6, 0], [3, 6, 0], [3, 6.01, 2.5], [-3, 6, 2.5]], "receivers[1].bounds[2]")  # not coplanar
+    bad([[-3, 6, 0], [3, 6, 0], [3, 6, 0], [-3, 6, 2.5]], "receivers[1].bounds[1]")    # coincident
+    bad([[-3, 6, 0], [0, 6, 1], [3, 6, 0], [3, 6, 2.5], [-3, 6, 2.5]], "receivers[1].bounds")   # concave
+    bad([[-3, 6, 0], [0, 6, 0], [3, 6, 0], [3, 6, 2.5], [-3, 6, 2.5]], "receivers[1].bounds")   # collinear
+    bad([[-3, 6, 0], [3, 6, 0], [3, 6, 2.5], [-3, 6, 2.5], [-3, 6, 1, 2]], "receivers[1].bounds[4]")
+    import math
+    star = [[3 * math.cos(math.radians(90 + 144 * k)), 6, 3 + 3 * math.sin(math.radians(90 + 144 * k))]
+            for k in range(5)]
+    bad(star, "receivers[1].bounds")                                                    # pentagram
+    with pytest.raises(SceneError, match="strictly convex"):
+        validate_scene(with_receivers(dict(WALL, bounds=star)))
+    # with the unbounded ground every bounds vertex is above it
+    bad([[-3, 6, -0.5], [3, 6, -0.5], [3, 6, 2.5], [-3, 6, 2.5]], "receivers[1].bounds[0]")
+    with pytest.raises(SceneError, match="below the ground receiver"):
+        validate_scene(with_receivers(dict(WALL, bounds=[[-3, 6, -0.5], [3, 6, -0.5], [3, 6, 2.5], [-3, 6, 2.5]])))
+    # ... but without a ground receiver a plate may reach below z = 0
+    low = dict(WALL, bounds=[[-3, 6, -0.5], [3, 6, -0.5], [3, 6, 2.5], [-3, 6, 2.5]])
+    assert validate_scene(with_receivers(first=low))["receivers"][0]["bounds"][0] == [-3.0, 6.0, -0.5]
+
+
+def test_m4_any_unit_normal_and_offset():
+    tilted = {"id": "ramp", "type": "plane", "normal": [0, -0.6, 0.8], "offset": 0.0,
+              "bounds": [[-1, 0, 0], [1, 0, 0], [1, 4, 3], [-1, 4, 3]]}
+    out = validate_scene(with_receivers(tilted))
+    assert out["receivers"][1]["normal"] == [0.0, -0.6, 0.8]
+    expect_error(with_receivers(dict(tilted, normal=[0, -0.6, 0.9])), "receivers[1].normal")
+    expect_error(with_receivers(dict(tilted, offset="x")), "receivers[1].offset")
+
+
+def test_m4_hidden_output_switches():
+    out = validate_scene(base_scene())
+    assert out["output"]["hidden_lines"] is False and out["output"]["hidden_style"] == "dashed"
+    out = validate_scene(mutate(["output", "hidden_lines"], True))
+    assert out["output"]["hidden_lines"] is True
+    assert validate_scene(mutate(["output", "hidden_style"], "omit"))["output"]["hidden_style"] == "omit"
+    expect_error(mutate(["output", "hidden_lines"], 1), "output.hidden_lines")
+    expect_error(mutate(["output", "hidden_lines"], "yes"), "output.hidden_lines")
+    expect_error(mutate(["output", "hidden_style"], "dotted"), "output.hidden_style")

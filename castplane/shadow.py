@@ -25,6 +25,10 @@ __all__ = [
     "clip_mesh_to_plane",
     "shadow_loop",
     "ARC_STEP_DEG",
+    "receiver_frame",
+    "bounds_functionals",
+    "clip_polygon_bounds",
+    "plate_loop",
 ]
 
 # contract §2.5: at-infinity sub-edges must span < 90 degrees; use ceil(delta / 60 deg) steps.
@@ -284,7 +288,7 @@ def _cap_faces(cap_loops: list, vertices: np.ndarray, n: np.ndarray) -> list:
 
 
 def _direction_vertex(S_a: np.ndarray, w_a: float, S_b: np.ndarray, w_b: float,
-                      fallback_from: np.ndarray | None) -> np.ndarray:
+                      fallback_from: np.ndarray | None, last_resort: np.ndarray | None = None) -> np.ndarray:
     """Contract §2.5: ``D = (1 - t*) S_a + t* S_b`` with ``t* = w_a / (w_a - w_b)`` so
     that ``w_D = 0``; with canonical inputs ``+D`` is the outgoing (resp. incoming)
     direction of the shadow ray.  The result is scaled to unit length in the plane."""
@@ -305,7 +309,8 @@ def _direction_vertex(S_a: np.ndarray, w_a: float, S_b: np.ndarray, w_b: float,
                 D = np.array([d[0], d[1], d[2], 0.0], dtype=np.float64)
                 norm = float(np.linalg.norm(D[:3]))
         if not (norm > 1e-300 and math.isfinite(norm)):
-            return np.array([1.0, 0.0, 0.0, 0.0])
+            # contract §5.1.2: the last resort is (e1, 0) of the receiver frame ((1, 0, 0, 0) on the ground)
+            return np.array([1.0, 0.0, 0.0, 0.0]) if last_resort is None else np.array(last_resort, dtype=np.float64)
     return D / norm
 
 
@@ -328,7 +333,7 @@ def _light_foot_from_matrix(M: np.ndarray, pi: np.ndarray) -> np.ndarray | None:
     return F / F[3]
 
 
-def shadow_loop(points4, M, pi, tol: float = 0.0, tol_clip: float | None = None) -> dict:
+def shadow_loop(points4, M, pi, tol: float = 0.0, tol_clip: float | None = None, frame=None, F=None) -> dict:
     """Shadow polygon of one silhouette loop (spec §5.2 / §5.7 row 4, contract §2.5).
 
     ``points4`` is the ``(n, 4)`` loop in order (lit face on the left as seen from the
@@ -353,6 +358,12 @@ def shadow_loop(points4, M, pi, tol: float = 0.0, tol_clip: float | None = None)
     direction of edge i -> j, ("arc", k) for the k-th inserted sweep vertex),
     "below_ground": bool (some input vertex was below the receiver)}``.
     A loop with all vertices at ``w <= tol`` yields an empty polygon.
+
+    M4 (contract §5.1.2): ``frame = (e1, e2)`` (:func:`receiver_frame`) is given for every receiver
+    other than the unbounded ground; the arc at infinity is then swept counter-clockwise about ``n`` in
+    ``(e1, e2)`` coordinates and the last-resort direction is ``(e1, 0)``.  ``F`` is the light foot on
+    the receiver (used by the "edge through the light" fallback; recovered from ``M`` when ``None`` and
+    the receiver is the ground).  ``frame is None`` runs the literal v2 code (byte identity on the ground).
     """
     M = np.asarray(M, dtype=np.float64).reshape(4, 4)
     pi = np.asarray(pi, dtype=np.float64).reshape(4)
@@ -369,7 +380,15 @@ def shadow_loop(points4, M, pi, tol: float = 0.0, tol_clip: float | None = None)
     finite = w > tol
     if not np.any(finite):
         return empty
-    F = _light_foot_from_matrix(M, pi)  # only used when an edge passes through the light
+    if frame is None:
+        F = _light_foot_from_matrix(M, pi)  # only used when an edge passes through the light
+        last_resort = None
+    else:
+        e1, e2 = (np.asarray(e, dtype=np.float64).reshape(3) for e in frame)
+        if F is not None:
+            F = np.asarray(F, dtype=np.float64).reshape(4)
+            F = F / F[3] if abs(float(F[3])) > 1e-300 else None
+        last_resort = np.array([e1[0], e1[1], e1[2], 0.0])
 
     # rotate so that we start at a finite vertex
     start = int(np.argmax(finite))
@@ -386,12 +405,12 @@ def shadow_loop(points4, M, pi, tol: float = 0.0, tol_clip: float | None = None)
             sources.append(src[a])
             kinds.append("finite")
             if not finite[b]:
-                verts.append(_direction_vertex(S[a], wa, S[b], wb, F))
+                verts.append(_direction_vertex(S[a], wa, S[b], wb, F, last_resort))
                 sources.append(("dir", src[a], src[b]))
                 kinds.append("out")
         else:
             if finite[b]:
-                verts.append(_direction_vertex(S[a], wa, S[b], wb, F))
+                verts.append(_direction_vertex(S[a], wa, S[b], wb, F, last_resort))
                 sources.append(("dir", src[a], src[b]))
                 kinds.append("in")
             # both not finite: edge dropped
@@ -410,16 +429,172 @@ def shadow_loop(points4, M, pi, tol: float = 0.0, tol_clip: float | None = None)
             assert kinds[nxt] == "in", "an outgoing direction must be followed by an incoming one"
             d_out = verts[k]
             d_in = verts[nxt]
-            th0 = math.atan2(d_out[1], d_out[0])
-            th1 = math.atan2(d_in[1], d_in[0])
+            if frame is None:   # the ground: literal v2 expressions (contract §5.1.2 [decision])
+                th0 = math.atan2(d_out[1], d_out[0])
+                th1 = math.atan2(d_in[1], d_in[0])
+            else:               # counter-clockwise about n in the receiver frame (e1, e2)
+                th0 = math.atan2(float(d_out[:3] @ e2), float(d_out[:3] @ e1))
+                th1 = math.atan2(float(d_in[:3] @ e2), float(d_in[:3] @ e1))
             delta = (th1 - th0) % (2.0 * math.pi)
             if not math.isfinite(delta) or delta <= 1e-12:
                 delta = 2.0 * math.pi
             steps = max(1, int(math.ceil(delta / math.radians(ARC_STEP_DEG) - 1e-12)))
             for s in range(1, steps):
                 th = th0 + delta * s / steps
-                out_verts.append(np.array([math.cos(th), math.sin(th), 0.0, 0.0]))
+                if frame is None:
+                    out_verts.append(np.array([math.cos(th), math.sin(th), 0.0, 0.0]))
+                else:
+                    v = math.cos(th) * e1 + math.sin(th) * e2
+                    out_verts.append(np.array([v[0], v[1], v[2], 0.0]))
                 out_sources.append(("arc", s - 1))
     vertices = np.array(out_verts, dtype=np.float64).reshape(-1, 4)
     return {"vertices": vertices, "unbounded": unbounded, "sources": out_sources,
             "below_ground": below}
+
+
+# ---------------------------------------------------------------------------
+# M4: bounded receivers (contract §5.1.2, §5.1.3)
+# ---------------------------------------------------------------------------
+
+def receiver_frame(n) -> tuple[np.ndarray, np.ndarray]:
+    """Contract §5.1.2: ``(e1, e2)`` with ``e1 × e2 = n``: ``e1 = normalize(z × n)``, ``e2 = n × e1``;
+    when ``|z × n| <= 1e-9``: ``e1 = (1, 0, 0)``, ``e2 = n × e1``.  For the ground this is ``(x, y)``.
+    "Counter-clockwise about ``n``" means counter-clockwise in these coordinates."""
+    n = np.asarray(n, dtype=np.float64).reshape(3)
+    c = np.array([-n[1], n[0], 0.0])                      # z × n
+    norm = float(np.linalg.norm(c))
+    e1 = np.array([1.0, 0.0, 0.0]) if norm <= 1e-9 else c / norm
+    e2 = np.cross(n, e1)
+    return e1, e2
+
+
+def bounds_functionals(bounds, n) -> np.ndarray:
+    """Contract §5.1.2: ``Psi (k, 4)``, row ``k`` is ``psi_k = (m_k, -m_k · b_k)`` with the unit inward
+    normal ``m_k = n × (b_{k+1} - b_k) / |b_{k+1} - b_k|`` of the counter-clockwise (about ``n``) bounds
+    polygon, so that ``psi_k · X`` is the signed distance to edge ``k`` times ``w`` for a finite ``X`` and
+    ``m_k · d`` for a direction ``(d, 0)``.  A point of the plane is inside iff ``psi_k · X >= 0`` for all ``k``."""
+    B = np.asarray(bounds, dtype=np.float64).reshape(-1, 3)
+    n = np.asarray(n, dtype=np.float64).reshape(3)
+    E = np.roll(B, -1, axis=0) - B
+    m = np.cross(n[None, :], E)
+    m = m / np.linalg.norm(E, axis=1)[:, None]
+    return np.concatenate([m, -np.einsum("ij,ij->i", m, B)[:, None]], axis=1)
+
+
+def _merge_equal_neighbours(P: list, src: list) -> tuple[list, list]:
+    """Merge consecutive (cyclic) projectively equal vertices, keeping the first (contract §5.1.3.3 rule 5)."""
+    if len(P) < 2:
+        return P, src
+    N = [v / float(np.max(np.abs(v))) if float(np.max(np.abs(v))) > 0.0 else v for v in P]
+    keep_p, keep_s, keep_n = [P[0]], [src[0]], [N[0]]
+    for v, s, nv in zip(P[1:], src[1:], N[1:]):
+        if float(np.max(np.abs(nv - keep_n[-1]))) <= 1e-9:
+            continue
+        keep_p.append(v)
+        keep_s.append(s)
+        keep_n.append(nv)
+    while len(keep_p) >= 2 and float(np.max(np.abs(keep_n[-1] - keep_n[0]))) <= 1e-9:
+        keep_p.pop()
+        keep_s.pop()
+        keep_n.pop()
+    return keep_p, keep_s
+
+
+def clip_polygon_bounds(points4, sources, psi, bounds, tol: float) -> tuple[np.ndarray, list]:
+    """Contract §5.1.3.3: Sutherland–Hodgman of an oriented homogeneous shadow polygon (direction
+    vertices ``w = 0`` and arcs at infinity included) against ``psi_k · X >= 0`` in row order.
+
+    1. band: a vertex is kept iff ``f_i >= -tol·|w_i|`` (strict ``>= 0`` for directions); a kept vertex
+       inside its band is its own crossing (no crossing is inserted next to it);
+    2. crossings ``(f_a B - f_b A) / (f_a - f_b)`` get the source ``("bounds", k, src_a, src_b)``; a
+       zero-vector interpolation (antipodal directions) is dropped;
+    3. anchor rule: two consecutive output directions on the clip line (``|psi_k · D| <= 1e-9 max|D|``)
+       that are antipodal get the edge's start vertex ``(b_k, 1)`` inserted between them, source
+       ``("bounds", k, "anchor")``;
+    4. fewer than three vertices after any row: empty;
+    5. after the last row: projectively equal neighbours are merged (keeping the first), vertices with
+       ``w <= 0`` dropped, and a sliver (``|area| <= tol · perimeter``) is empty.
+
+    Returns ``(points4' (m, 4), sources')``; ``m == 0`` when the polygon misses the plate."""
+    P = [np.asarray(v, dtype=np.float64).reshape(4) for v in np.asarray(points4, dtype=np.float64).reshape(-1, 4)]
+    src = list(sources)
+    Psi = np.asarray(psi, dtype=np.float64).reshape(-1, 4)
+    B = np.asarray(bounds, dtype=np.float64).reshape(-1, 3)
+    empty = (np.zeros((0, 4), dtype=np.float64), [])
+    if len(P) < 3:
+        return empty
+    scale = max(float(np.max(np.abs(np.array(P)))), 0.0)
+    for k in range(Psi.shape[0]):
+        if len(P) < 3:
+            return empty
+        row = Psi[k]
+        f = [float(row @ X) for X in P]
+        w = [abs(float(X[3])) for X in P]
+        keep = [fi >= -tol * wi if wi != 0.0 else fi >= 0.0 for fi, wi in zip(f, w)]
+        band = [abs(fi) <= tol * wi for fi, wi in zip(f, w)]
+        n = len(P)
+        out, out_src = [], []
+        if all(keep):
+            out, out_src = list(P), list(src)
+        else:
+            for a in range(n):
+                b = (a + 1) % n
+                if keep[a]:
+                    out.append(P[a])
+                    out_src.append(src[a])
+                if keep[a] != keep[b]:
+                    if (keep[a] and band[a]) or (keep[b] and band[b]):
+                        continue
+                    fa, fb = f[a], f[b]
+                    X = (fa * P[b] - fb * P[a]) / (fa - fb)
+                    if not float(np.max(np.abs(X))) > 1e-12 * max(scale, float(np.max(np.abs(P[a]))),
+                                                                   float(np.max(np.abs(P[b])))):
+                        continue                         # antipodal directions: no projective point
+                    out.append(X)
+                    out_src.append(("bounds", k, src[a], src[b]))
+        # anchor rule (exactness for arcs at infinity spanning >= 180 degrees)
+        if len(out) >= 2:
+            anchored, anchored_src = [], []
+            m = len(out)
+            for a in range(m):
+                anchored.append(out[a])
+                anchored_src.append(out_src[a])
+                Da, Db = out[a], out[(a + 1) % m]
+                if Da[3] == 0.0 and Db[3] == 0.0 and m >= 2:
+                    on_a = abs(float(row @ Da)) <= 1e-9 * float(np.max(np.abs(Da)))
+                    on_b = abs(float(row @ Db)) <= 1e-9 * float(np.max(np.abs(Db)))
+                    if on_a and on_b and float(Da[:3] @ Db[:3]) < 0.0:
+                        anchored.append(np.array([B[k, 0], B[k, 1], B[k, 2], 1.0]))
+                        anchored_src.append(("bounds", k, "anchor"))
+            out, out_src = anchored, anchored_src
+        P, src = out, out_src
+        if len(P) < 3:
+            return empty
+    P, src = _merge_equal_neighbours(P, src)
+    kept = [(v, s) for v, s in zip(P, src) if float(v[3]) > 0.0]
+    if len(kept) < 3:
+        return empty
+    V = np.array([v for v, _s in kept], dtype=np.float64)
+    X = V[:, :3] / V[:, 3:4]
+    Xn = np.roll(X, -1, axis=0)
+    area = 0.5 * float(np.linalg.norm(np.sum(np.cross(X, Xn), axis=0)))
+    perimeter = float(np.sum(np.linalg.norm(Xn - X, axis=1)))
+    if area <= tol * perimeter:
+        return empty
+    return V, [s for _v, s in kept]
+
+
+def plate_loop(bounds, pi, L, tol: float):
+    """Contract §5.1.3.2: the silhouette loop of a bounded receiver used as a caster (an opaque plate):
+    its whole boundary, in the stored counter-clockwise order when the light is on the positive side of
+    its plane (``pi^T L > tol``), reversed when it is on the negative side (``< -tol``); ``None`` when the
+    plate is edge-on to the light (``|pi^T L| <= tol``: it casts nothing).  Returns ``(loop4 (k, 4),
+    vertex_ids)`` with ``vertex_ids[i]`` the index ``k`` of ``b<k>``."""
+    B = np.asarray(bounds, dtype=np.float64).reshape(-1, 3)
+    piL = float(np.asarray(pi, dtype=np.float64).reshape(4) @ np.asarray(L, dtype=np.float64).reshape(4))
+    if abs(piL) <= tol:
+        return None
+    ids = list(range(B.shape[0]))
+    if piL < 0.0:
+        ids = ids[::-1]
+    return to_homogeneous(B[ids]), ids
