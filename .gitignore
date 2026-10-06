@@ -15,3 +15,7 @@ out/
 !docs/**/*.png
 !tests/**/*.png
 !tests/golden/*.svg
+node_modules/
+ts/build/
+web/dist/
+web/build/

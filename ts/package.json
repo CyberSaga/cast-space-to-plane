@@ -1,0 +1,26 @@
+{
+  "name": "castplane",
+  "version": "0.1.0",
+  "private": true,
+  "description": "TypeScript port of the castplane core (perspective shadow construction); zero runtime dependencies",
+  "type": "module",
+  "exports": {
+    ".": {
+      "types": "./build/src/index.d.ts",
+      "default": "./build/src/index.js"
+    }
+  },
+  "engines": {
+    "node": ">=20.19.0"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json && tsc -p tsconfig.test.json",
+    "test": "npm run build && node --test build/test/*.test.js",
+    "bench": "npm run build && node build/bench/camera_only.js --gate both"
+  },
+  "dependencies": {},
+  "devDependencies": {
+    "typescript": "6.0.2",
+    "@types/node": "22.20.5"
+  }
+}

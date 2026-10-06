@@ -1,0 +1,92 @@
+/** Numerics of the port (contract §5.4.4, §5.4.13): Python float / int semantics and the source grep rules. */
+
+import assert from "node:assert/strict";
+import { readdirSync, statSync } from "node:fs";
+import { join } from "node:path";
+import { test } from "node:test";
+
+import { py_round, pyimod, pymod } from "../src/pyfloat.js";
+import { read_text, repo_path } from "./helpers.js";
+
+function src_files(dir = repo_path("ts", "src")): string[] {
+  const out: string[] = [];
+  for (const name of readdirSync(dir).sort()) {
+    const p = join(dir, name);
+    if (statSync(p).isDirectory()) out.push(...src_files(p));
+    else if (name.endsWith(".ts")) out.push(p);
+  }
+  return out;
+}
+
+test("pymod table (CPython float_rem)", () => {
+  const two_pi = 2 * Math.PI;
+  assert.equal(pymod(-1e-17, two_pi), two_pi);
+  assert.equal(pymod(7, two_pi), 0.7168146928204138);
+  assert.equal(pymod(-0.5, Math.PI), 2.641592653589793);
+  assert.ok(Object.is(pymod(0, -1), -0));
+  assert.ok(Object.is(pymod(-0, 1), 0));
+  assert.equal(pymod(-7, 4), 1);
+  assert.equal(pymod(7, -4), -1);
+});
+
+test("pyimod and py_round", () => {
+  assert.equal(pyimod(-1, 5), 4);
+  assert.equal(pyimod(-7, 4), 1);
+  assert.equal(pyimod(3, 4), 3);
+  assert.equal(py_round(0.5), 0);
+  assert.equal(py_round(1.5), 2);
+  assert.equal(py_round(2.5), 2);
+  assert.equal(py_round(-0.5), 0);     // Python round(-0.5) == 0 (the sign is irrelevant: the result indexes a list)
+  assert.equal(py_round(-1.5), -2);
+  assert.equal(py_round(2.4999999), 2);
+  assert.equal(py_round(-2.6), -3);
+});
+
+/** Remove comments and string literals so that only code is scanned. */
+function code_only(text: string): string {
+  return text
+    .replace(/\/\*[\s\S]*?\*\//g, (m) => m.replace(/[^\n]/g, " "))
+    .replace(/(["'`])(?:\\.|(?!\1)[^\\\n])*\1/g, (m) => " ".repeat(m.length))
+    .replace(/\/\/.*$/gm, "");
+}
+
+test("% rule (contract §5.4.4 (4b)): every % outside pyfloat.ts has a provably non-negative left operand", () => {
+  const offenders: string[] = [];
+  for (const file of src_files()) {
+    if (file.endsWith("pyfloat.ts")) continue;
+    const raw = read_text(file).split("\n");
+    const code = code_only(raw.join("\n")).split("\n");
+    code.forEach((line, i) => {
+      for (const m of line.matchAll(/%/g)) {
+        const left = line.slice(0, m.index).trimEnd();
+        let ok = false;
+        const paren = /\(([^()]*)\)$/.exec(left);
+        if (paren) ok = /^\s*(\w+|start \+ k)\s*\+\s*\d+\s*$/.test(paren[1] as string);
+        else ok = /(^|[^\w.])(k|s|idx)$/.test(left);
+        if (!ok && /\/\/ pyimod-free: \S/.test(raw[i] as string)) ok = true;
+        if (!ok) offenders.push(`${file}:${i + 1}: ${(raw[i] as string).trim()}`);
+      }
+    });
+  }
+  assert.deepEqual(offenders, []);
+});
+
+test("neutrality grep (contract §5.4.13): no node-only API under ts/src", () => {
+  const banned = ["node:", "process.", "Buffer", "require(", "import.meta", "performance."];
+  const offenders: string[] = [];
+  for (const file of src_files()) {
+    const text = read_text(file);
+    for (const s of banned) if (text.includes(s)) offenders.push(`${file}: ${s}`);
+  }
+  assert.deepEqual(offenders, []);
+});
+
+test("determinism grep (contract §5.4.4 (8)): no clock, randomness or typed float32 under ts/src", () => {
+  const banned = ["Date", "Math.random", "Float32Array", "Math.fround"];
+  const offenders: string[] = [];
+  for (const file of src_files()) {
+    const text = code_only(read_text(file));
+    for (const s of banned) if (new RegExp(`\\b${s.replace(".", "\\.")}\\b`).test(text)) offenders.push(`${file}: ${s}`);
+  }
+  assert.deepEqual(offenders, []);
+});
