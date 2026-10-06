@@ -1861,6 +1861,18 @@ unordered world pairs with equal `silhouette` / `back` flags and `segment` endpo
   record, draws every row). Validation rejects booleans and floats as face indices / smoothing groups. Until the three v5
   mesh cases are added, `test_set_covers_the_required_sources` requires every kind except `mesh` (a tripwire that fails as
   soon as a mesh case exists).
+- **[decision, implementation] (M5) Vertex field paths.** A vertex that is not a list of 3 numbers is reported at
+  `objects[i].data.vertices[k]` as the §5.2.1 row says; a non-finite or non-numeric component is reported one level
+  deeper, at `objects[i].data.vertices[k][c]`, the `_vector` convention every other vector of §2.0 already follows
+  (`transform.position[c]`, ...).
+- **[decision, implementation] (M5) Fallback `VERTEX_NOT_BELOW_LIGHT`.** In the per-face fallback of §5.2.5 the "some
+  silhouette vertex `w_S ≤ tol`" test of §2.3 reads "some vertex of a face that is **not parallel** to the light" (exactly
+  the vertices that can enter a per-face loop; faces with `parallel` are skipped). A vertex used only by light-parallel
+  faces never reaches a loop and does not raise the warning. `vertex_ids` / `keep` are unchanged (every kept-face vertex).
+- **[decision, implementation] (M5) Coplanar merge after a winding fix.** The merge of step 6 reads each face's edges by
+  position, so when step 5 flipped any face it runs on `build_adjacency` of the **oriented** faces (the undirected edge set
+  and its numbering are unchanged by flips; only `face_edge_at` / `edge_dirs` differ). A direct `preprocess_mesh` call
+  whose faces are all degenerate raises `ValueError("no usable face ...")` (unreachable on a validated scene).
 
 ### 5.3 M6 — multiple lights (amendment to §2.0, §2.3, §2.5–2.10, §3, §3.1, §4)
 

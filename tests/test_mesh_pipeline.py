@@ -239,6 +239,20 @@ def assert_equal_by_world(a, b, atol=1e-9):
     assert a["horizon"] == b["horizon"] and a["camera"] == b["camera"]
 
 
+def test_acceptance_1_inside_out_and_one_flipped_split_box_equal_the_parametric_box():
+    """Winding repair followed by the coplanar merge (contract §5.2.3 steps 5-6, §5.2.13)."""
+    ref = dumps(doc_of(analytic_box_scene()))
+    inside_out = [[f[0]] + f[1:][::-1] for f in SPLIT_F]
+    one = [list(f) for f in SPLIT_F]
+    one[4] = [one[4][0]] + one[4][1:][::-1]
+    for F in (inside_out, one):
+        doc = doc_of(mesh_box_scene(SPLIT_V, F))
+        assert [w["code"] for w in doc["warnings"]] == ["MESH_WINDING_FIXED"]
+        assert len(doc["edges"]) == 12 and len(doc["form_shadow"][0]["faces"]) == 5
+        doc["warnings"] = []
+        assert dumps(strip_mesh_keys(doc)) == ref
+
+
 def test_acceptance_1_shuffled_vertex_and_face_order():
     rng = np.random.default_rng(5)
     perm = rng.permutation(len(SPLIT_V))                 # new position of old vertex k is inv[k]
@@ -302,6 +316,20 @@ def test_acceptance_2_open_bottom_box_fallback():
     assert con["rays"] == [] and con["checks"] == [] and con["segments"] == []
 
 
+def test_fallback_vertex_not_below_light_only_for_vertices_that_reach_a_loop():
+    """§2.3 "some silhouette vertex": in the per-face fallback, a vertex of a light-parallel face only
+    never reaches a loop and does not warn; a vertex of a shadowed face above the light does."""
+    scene = mesh_box_scene([[0, 0, 0], [1, 0, 0], [1, 0, 1], [0, 0, 1]], [[0, 1, 2, 3]])
+    scene["lights"][0]["position"] = [0.5, 0.0, 0.5]          # in the plane of the quad, below its top
+    doc = doc_of(scene)
+    assert [w["code"] for w in doc["warnings"]] == ["FACE_PARALLEL_TO_LIGHT", "MESH_NON_MANIFOLD"]
+    assert doc["shadows"][0]["loops"] == []
+    scene = mesh_box_scene(CUBE_V, OPEN_BOTTOM_F)
+    scene["lights"][0]["position"] = [0.0, 0.0, 0.5]          # inside the open box, below the top face
+    doc = doc_of(scene)
+    assert ("VERTEX_NOT_BELOW_LIGHT", ("cube",)) in warning_set(doc)
+
+
 def test_fallback_buried_open_box_has_one_point_per_crossed_edge():
     doc = open_bottom_doc(transform={"position": [0.0, 0.0, -0.5]})
     assert warning_set(doc) == {("MESH_NON_MANIFOLD", ("cube",)), ("OBJECT_BELOW_RECEIVER", ("cube",))}
@@ -347,7 +375,8 @@ def test_mesh_smooth_prism16_draws_two_lateral_edges():
     assert all(e["segment"] is not None for e in caps)
     # the SVG writer simply skips the null segments
     svg = render(load_scene(mesh_box_scene(V, F)))["svg"]
-    assert svg.count("<line") >= 0 and "objects.cube" in svg
+    body = svg[svg.index('<g id="objects.cube">'):svg.index('<g id="form_shadow"')]
+    assert body.count("<line") == len([e for e in edges if e["segment"] is not None]) == 34   # 32 caps + 2
 
 
 def test_ray_cap_64_and_mesh_rays_capped():

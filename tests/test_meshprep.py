@@ -296,6 +296,18 @@ def test_triangulated_box_merges_into_the_six_parametric_quads():
     assert [f[0] for f in merged] == [0, 4, 0, 1, 2, 3]
 
 
+def test_reoriented_split_box_merges_into_the_six_parametric_quads():
+    """The merge must read the edges of the oriented faces, not of the input faces."""
+    inside_out = [[f[0]] + f[1:][::-1] for f in SPLIT_F]
+    one = [list(f) for f in SPLIT_F]
+    one[4] = [one[4][0]] + one[4][1:][::-1]
+    for F in (inside_out, one):
+        mesh, tris, fallback, groups, warnings = prep(SPLIT_V, F)
+        assert codes(warnings) == ["MESH_WINDING_FIXED"] and not fallback
+        assert mesh["faces"] == CUBE_F and mesh["edge_smooth"].tolist() == [False] * 12
+        assert signed_volume(mesh["vertices"], tris) == pytest.approx(1.0)
+
+
 def fan_prism(n=16, r=1.0, h=2.0):
     """A 16-gon prism whose caps are centre fans: vertices bottom ring 0..n-1, top ring n..2n-1,
     bottom centre 2n, top centre 2n+1; faces: bottom fan, top fan, side quads."""
@@ -448,6 +460,13 @@ def test_point_inside_mesh():
     inv = triangulate([[f[0]] + f[1:][::-1] for f in CUBE_F])
     assert winding_number(V, inv, [0, 0, 0.5]) == pytest.approx(-1.0)
     assert point_inside_mesh(V, inv, [0, 0, 0.5], 1e-9)
+
+
+def test_preprocess_without_a_usable_face_raises_a_clear_error():
+    # unreachable on a validated scene (the usable-face check of validate_mesh_data); direct calls only
+    for scale, weld in ((1.0, 10.0), (1e-7, WELD_TOLERANCE_DEFAULT)):
+        with pytest.raises(ValueError, match="no usable face"):
+            prep(CUBE_V, CUBE_F, scale=scale, weld=weld)
 
 
 def test_preprocess_is_deterministic_and_does_not_mutate_its_input():

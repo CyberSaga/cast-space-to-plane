@@ -410,7 +410,9 @@ def test_mesh_path_only_must_be_expanded_and_data_required():
 def test_mesh_data_rules():
     expect_error(mesh_scene(data={"vertices": _CUBE_V[:2], "faces": [[0, 1, 0]]}), "objects[0].data.vertices")
     expect_error(mesh_scene(data={"vertices": [[0, 0, 0], [1, 0, 0], [0, float("nan"), 0]], "faces": [[0, 1, 2]]}),
-                 "objects[0].data.vertices[2][1]")
+                 "objects[0].data.vertices[2][1]")          # the _vector component convention (§5.2 notes)
+    expect_error(mesh_scene(data={"vertices": [[0, 0, 0], [1, 0, 0], [0, 0]], "faces": [[0, 1, 2]]}),
+                 "objects[0].data.vertices[2]")             # the §5.2.1 row path for a malformed vertex
     expect_error(mesh_scene(data={"vertices": _CUBE_V, "faces": []}), "objects[0].data.faces")
     expect_error(mesh_scene(data={"vertices": _CUBE_V, "faces": [[0, 1]]}), "objects[0].data.faces[0]")
     expect_error(mesh_scene(data={"vertices": _CUBE_V, "faces": [[0, 1, 8]]}), "objects[0].data.faces[0]")

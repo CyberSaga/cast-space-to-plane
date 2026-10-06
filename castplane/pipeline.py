@@ -398,7 +398,11 @@ def _fallback_shadow_record(obj: dict, ol: dict, lt: dict, pi: np.ndarray, tol: 
     above = (P4 @ pi) >= -tol
     keep = finite & above
     warnings = []
-    if ids.shape[0] and not bool(np.all(finite)):
+    # the fallback analogue of "some silhouette vertex": a vertex of a face that is not parallel to
+    # the light, i.e. one that can reach a shadow loop (light-parallel faces are skipped below)
+    in_loop_faces = {int(v) for f, par in zip(mesh["faces"], ol["parallel"]) if not par for v in f}
+    reach = np.array([int(k) in in_loop_faces for k in ids], dtype=bool)
+    if bool(np.any(reach & ~finite)):
         warnings.append(make_warning("VERTEX_NOT_BELOW_LIGHT", [oid]))
     S4 = P4 @ lt["M"].T
     w_safe = np.where(keep, w_S, 1.0)

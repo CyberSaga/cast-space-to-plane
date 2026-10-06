@@ -692,6 +692,8 @@ def preprocess_mesh(data: dict, scale: float, weld_tolerance: float, smooth_angl
     warnings = []
     W, faces_w, _index = weld_vertices(V, data["faces"], float(weld_tolerance))
     kept, kept_idx = drop_degenerate_faces(W, faces_w, scale_A)
+    if not kept:
+        raise ValueError("no usable face (the scene must pass validate_scene first)")
     n_dropped = len(data["faces"]) - len(kept)
     if n_dropped:
         warnings.append(make_warning("MESH_DEGENERATE_FACES", [object_id],
@@ -716,7 +718,11 @@ def preprocess_mesh(data: dict, scale: float, weld_tolerance: float, smooth_angl
         warnings.append(make_warning("MESH_WINDING_FIXED", [object_id]))
     triangles = triangulate(oriented)
     normals = face_normals_newell(W, oriented)
-    merged, origin = merge_coplanar(W, oriented, normals, adjacency, math.cos(COPLANAR_TOL_RAD))
+    # the merge reads edge positions per face, so it needs the adjacency of the oriented faces
+    # (the undirected edge set and its numbering are unchanged by the flips)
+    winding_fixed = bool(np.any(flipped)) or flipped_volume
+    merge_adj = build_adjacency(oriented, W.shape[0]) if winding_fixed else adjacency
+    merged, origin = merge_coplanar(W, oriented, normals, merge_adj, math.cos(COPLANAR_TOL_RAD))
     merged_groups = [groups[k] for k in origin]
     mesh = mesh_from_faces(W, merged, names)
     mesh["edge_smooth"] = classify_edges(mesh, smooth_angle_deg, merged_groups)
