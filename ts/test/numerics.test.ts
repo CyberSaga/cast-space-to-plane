@@ -90,3 +90,52 @@ test("determinism grep (contract §5.4.4 (8)): no clock, randomness or typed flo
   }
   assert.deepEqual(offenders, []);
 });
+
+import {
+  COND_MAX, centred_conic, circle_matrix, classify, classify_and_condition, condition_number, ellipse_params,
+  is_sampled, jacobi_eigenvalues_3, sample_count, sub_arcs_where_nonnegative, transform_conic,
+} from "../src/conics.js";
+
+function affine(a: number, b: number, alpha: number, tx: number, ty: number): number[][] {
+  const c = Math.cos(alpha), s = Math.sin(alpha);
+  return [[c * a, -s * b, tx], [s * a, c * b, ty], [0, 0, 1]];
+}
+
+test("jacobi_eigenvalues_3 and the condition number (contract §5.4.4 (5))", () => {
+  const ev = jacobi_eigenvalues_3([[1, 0, 0], [0, 1e-9, 0], [0, 0, 1]]).map(Math.abs);
+  assert.ok(Math.max(...ev) / Math.min(...ev) > COND_MAX);
+  const sorted = jacobi_eigenvalues_3([[2, 1, 0], [1, 2, 0], [0, 0, 3]]).sort((x, y) => x - y);
+  sorted.forEach((x, i) => assert.ok(Math.abs(x - ([1, 3, 3][i] as number)) <= 1e-14));
+  const s3 = jacobi_eigenvalues_3([[4, -2, 1], [-2, 5, 3], [1, 3, -6]]);
+  const trace = s3[0] + s3[1] + s3[2];
+  assert.ok(Math.abs(trace - 3) <= 1e-12);
+  assert.ok(Math.abs(s3[0] * s3[1] * s3[2] - (4 * (5 * -6 - 9) + 2 * (-2 * -6 - 3) + 1 * (-6 - 5))) <= 1e-9);
+});
+
+test("a 0.3 m circle 50 m away classifies as a healthy ellipse, not sampled (contract §2.6)", () => {
+  for (const dist of [0.0, 50.0, 500.0, 5000.0]) {
+    const C = transform_conic(circle_matrix(0.3), affine(1, 1, 0, dist, 0.3 * dist));
+    assert.equal(classify(C), "ellipse");
+    assert.ok(condition_number(C) < 1e8);
+    assert.ok(!is_sampled(C));
+    const [kind, cond] = classify_and_condition(C);
+    assert.equal(kind, "ellipse");
+    assert.ok(cond < 1e8);
+    const [, centre] = centred_conic(C);
+    assert.ok(centre !== null && Math.abs(centre[0] - dist) <= 1e-6 * Math.max(1, dist));
+    const params = ellipse_params(C);
+    assert.ok(params !== null && Math.abs(params[1][0] - 0.3) <= 1e-6 && Math.abs(params[1][1] - 0.3) <= 1e-6);
+  }
+  assert.equal(classify([[0, 0, 0], [0, 0, 0], [0, 0, 1]]), "degenerate");
+});
+
+test("sample_count table and sub-arcs", () => {
+  assert.equal(sample_count(0, Math.PI), 32);
+  assert.equal(sample_count(0, 0.1), 8);
+  assert.equal(sample_count(0, 2 * Math.PI), 64);
+  assert.deepEqual(sub_arcs_where_nonnegative(0, 0, 1), [[0, 2 * Math.PI]]);
+  assert.deepEqual(sub_arcs_where_nonnegative(0, 0, -1), []);
+  const iv = sub_arcs_where_nonnegative(1, 0, 0);       // cos θ > 0: one seam-merged interval
+  assert.equal(iv.length, 1);
+  assert.ok(Math.abs((iv[0] as number[])[0]! - 1.5 * Math.PI) <= 1e-12 && Math.abs((iv[0] as number[])[1]! - 2.5 * Math.PI) <= 1e-12);
+});
