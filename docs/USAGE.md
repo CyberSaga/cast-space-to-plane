@@ -12,7 +12,7 @@ castplane [--version] <command> ...
 | --- | --- |
 | `castplane render SCENE -o OUTDIR [選項]` | 渲染場景，寫出 `OUTDIR/<場景檔名>.svg` / `.json` / `.png` |
 | `castplane validate SCENE [-q]` | 只驗證場景檔，印出物件、光源、受影面數量 |
-| `castplane info SCENE [--camera JSON]` | 印出物件清單、畫布、主點、地平線 v_mm、三個消失點（軸平行畫面時印 `at infinity (axis parallel to the picture plane)`，表示該方向的線在畫面上仍平行）、L′、F′（在無窮遠時印 `at infinity, direction (…)`）、點／邊／影子／作圖線數量、自我驗證最大誤差與警告表 |
+| `castplane info SCENE [--camera JSON]` | 印出物件清單、畫布、主點、地平線 v_mm、三個消失點（軸平行畫面時印 `at infinity (axis parallel to the picture plane)`，表示該方向的線在畫面上仍平行）、L′、F′（在無窮遠時印 `at infinity, direction (…)`）、點／邊／影子／作圖線數量、自我驗證最大誤差、受影面清單（M4：有界／無界、平面、各光源的 `lit` / `casts`）與警告表 |
 | `castplane stages SCENE [--camera JSON] [-o FILE] [-q]` | 把 A 段與 B 段的中間結果以標準 JSON（`{"A": …, "B": …}`）寫到 FILE 或 stdout，除錯與移植對照用 |
 
 ### `render` 選項
@@ -25,6 +25,8 @@ castplane [--version] <command> ...
 | `--layers LIST` | 逗號分隔的圖層 id 子集（`horizon,objects,form_shadow,cast_shadow,construction,labels`），預設用場景的 `output.layers`；輸出順序永遠固定 |
 | `--dpi N` | PNG 解析度，預設場景的 `output.png_dpi` |
 | `-q, --quiet` | 成功時不印任何東西（不印輸出路徑、不印警告）；錯誤仍印到 stderr |
+| `--hidden-lines` / `--no-hidden-lines` | M4：開／關取樣式消隱（預設用場景的 `output.hidden_lines`，預設關閉）；只傳給渲染器，不改寫場景（合約 §5.1.6.6） |
+| `--hidden-style dashed\|omit` | M4：`dashed`（預設）把隱藏段畫成虛線放在各層第一個 `*.hidden` 子群組；`omit` 讓這些群組留空（真正的消隱，合約 §5.1.8） |
 
 渲染的警告以 `warning: <CODE> ['id', …]: message` 寫到 stderr。
 

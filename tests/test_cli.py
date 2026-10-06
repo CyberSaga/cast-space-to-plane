@@ -297,3 +297,61 @@ def test_readme_milestone_table_reflects_the_benchmark_gate():
         assert "尚未達標" not in row and "部分完成" not in row, row
     else:
         assert "尚未達標" in row and "benchmarks/README.md" in row and "D17" in row, row
+
+
+# --------------------------------------------------------------------------- M4: hidden-line flags, info receivers
+def _wall_scene() -> dict:
+    from tests.test_receivers import wall_and_ground_scene
+    return wall_and_ground_scene()
+
+
+def test_m4_render_hidden_line_flags(tmp_path):
+    """``--hidden-lines`` / ``--no-hidden-lines`` / ``--hidden-style`` are passed to the renderer; the scene
+    file is not rewritten (contract §5.1.6.6, §5.0.7)."""
+    scene = _wall_scene()
+    path = write_json(tmp_path / "wall.json", scene)
+    before = (tmp_path / "wall.json").read_text(encoding="utf-8")
+
+    def run(*flags):
+        out = tmp_path / ("out" + "".join(f.strip("-").replace("-", "_") for f in flags))
+        assert main(["render", path, "-o", str(out), "-q", *flags]) == EXIT_OK
+        doc = json.loads((out / "wall.json").read_text(encoding="utf-8"))
+        return doc, (out / "wall.svg").read_text(encoding="utf-8")
+
+    doc, svg = run()
+    assert doc["hidden_lines"] is False and 'id="objects.hidden"' not in svg
+    doc, svg = run("--hidden-lines")
+    assert doc["hidden_lines"] is True and 'id="objects.hidden"' in svg
+    assert any(e["visibility"] == "partial" for e in doc["edges"])
+    dashed_lines = svg.count("<line")
+    doc_o, svg_o = run("--hidden-lines", "--hidden-style", "omit")
+    assert doc_o == doc and svg_o.count("<line") < dashed_lines and 'id="objects.hidden.crate"/>' in svg_o
+    assert (tmp_path / "wall.json").read_text(encoding="utf-8") == before
+    # the scene's own switch, overridden from the command line
+    scene["output"]["hidden_lines"] = True
+    on = write_json(tmp_path / "on.json", scene)
+    assert main(["render", on, "-o", str(tmp_path / "on"), "-q"]) == EXIT_OK
+    assert json.loads((tmp_path / "on" / "on.json").read_text(encoding="utf-8"))["hidden_lines"] is True
+    assert main(["render", on, "-o", str(tmp_path / "off"), "-q", "--no-hidden-lines"]) == EXIT_OK
+    assert json.loads((tmp_path / "off" / "on.json").read_text(encoding="utf-8"))["hidden_lines"] is False
+
+
+def test_m4_hidden_line_flag_usage_errors(tmp_path, capsys):
+    with pytest.raises(SystemExit) as exc:
+        main(["render", BASIC, "-o", str(tmp_path), "--hidden-lines", "--no-hidden-lines"])
+    assert exc.value.code == EXIT_INPUT
+    with pytest.raises(SystemExit) as exc:
+        main(["render", BASIC, "-o", str(tmp_path), "--hidden-style", "dotted"])
+    assert exc.value.code == EXIT_INPUT
+    capsys.readouterr()
+
+
+def test_m4_info_lists_receivers(tmp_path, capsys):
+    path = write_json(tmp_path / "wall.json", _wall_scene())
+    assert main(["info", path]) == EXIT_OK
+    out = capsys.readouterr().out
+    assert "receivers: 2" in out
+    assert "ground (default): unbounded, plane [0, 0, 1, 0]; lit: lamp=yes; casts: lamp=no" in out
+    assert "wall: bounded, 4 vertices, plane [0, -1, 0, 6]; lit: lamp=yes; casts: lamp=yes" in out
+    assert main(["info", BASIC]) == EXIT_OK
+    assert "receivers: 1" in capsys.readouterr().out

@@ -2,6 +2,7 @@
 
     castplane render   scene.json -o OUTDIR [--camera cam.json] [--formats svg,json,png]
                                             [--layers a,b] [--dpi N] [--quiet]
+                                            [--hidden-lines | --no-hidden-lines] [--hidden-style dashed|omit]
     castplane validate scene.json [--quiet]
     castplane stages   scene.json [--camera cam.json] [-o stages.json] [--quiet]
     castplane info     scene.json [--camera cam.json]
@@ -13,7 +14,9 @@ a bare ``camera`` block (spec §4 form) or a whole scene whose ``camera`` is use
 ``--layers`` restricts the SVG to a subset of the six layer ids.  ``stages`` dumps the
 stage A / stage B intermediates (contract §3) as one canonical JSON object
 ``{"A": ..., "B": ...}`` (stdout unless ``-o`` is given).  ``info`` prints the horizon,
-the vanishing points, the construction points and the warning table.
+the vanishing points, the construction points, the receivers (``lit`` / ``casts`` per light) and the
+warning table.  ``--hidden-lines`` / ``--no-hidden-lines`` / ``--hidden-style`` override the scene's
+``output.hidden_lines`` / ``hidden_style`` for ``render`` (contract §5.1.6.6; the scene is not rewritten).
 
 Exit codes:
 
@@ -38,7 +41,7 @@ from . import __version__
 from .errors import SceneError
 from .output.geometry_json import dumps
 from .output.png import write_png
-from .output.svg import LAYER_ORDER, write_svg
+from .output.svg import HIDDEN_STYLES, LAYER_ORDER, write_svg
 from .pipeline import compose, project_scene, shadow_geometry
 from .scene import load_camera, load_scene
 
@@ -67,12 +70,12 @@ def _split(value, allowed, what: str):
     return items
 
 
-def _run(scene_path, camera_path):
+def _run(scene_path, camera_path, hidden_lines=None):
     scene = load_scene(scene_path)
     camera = load_camera(camera_path) if camera_path else None
     A = shadow_geometry(scene)
     B = project_scene(scene, A, camera=camera)
-    return scene, compose(scene, B)
+    return scene, compose(scene, B, hidden_lines=hidden_lines)
 
 
 def _print_warnings(doc: dict, quiet: bool) -> None:
@@ -85,7 +88,7 @@ def _print_warnings(doc: dict, quiet: bool) -> None:
 def cmd_render(args) -> int:
     formats = _split(args.formats, FORMATS, "formats") or ["svg", "json"]
     layers = _split(args.layers, LAYER_ORDER, "layers")
-    scene, doc = _run(args.scene, args.camera)
+    scene, doc = _run(args.scene, args.camera, hidden_lines=args.hidden_lines)
     if layers is None:
         layers = scene["output"]["layers"]
     dpi = scene["output"]["png_dpi"] if args.dpi is None else args.dpi
@@ -93,7 +96,8 @@ def cmd_render(args) -> int:
         raise SceneError("--dpi", "must be > 0")
     os.makedirs(args.outdir, exist_ok=True)
     stem = os.path.splitext(os.path.basename(args.scene))[0]
-    svg = write_svg(doc, layers=layers)
+    hidden_style = scene["output"].get("hidden_style", "dashed") if args.hidden_style is None else args.hidden_style
+    svg = write_svg(doc, layers=layers, hidden_style=hidden_style)
     outputs = []
     if "svg" in formats:
         outputs.append((stem + ".svg", svg.encode("utf-8")))
@@ -190,8 +194,23 @@ def cmd_info(args) -> int:
           f"rays: {len(con['rays'])}, checks: {len(con['checks'])}")
     if con["checks"]:
         print(f"construction self-check max error: {max(c['max_error_mm'] for c in con['checks']):.3e} mm")
+    _print_receivers(doc)
     print(warning_table(doc["warnings"]))
     return EXIT_OK
+
+
+def _print_receivers(doc: dict) -> None:
+    """``info``: one line per receiver (contract §5.0.7): bounded / unbounded, plane, ``lit`` and ``casts``
+    per light (M4)."""
+    receivers = doc.get("receivers", [])
+    print(f"receivers: {len(receivers)}")
+    for k, r in enumerate(receivers):
+        kind = "unbounded" if r["bounds"] is None else f"bounded, {len(r['bounds'])} vertices"
+        plane = ", ".join(f"{v:g}" for v in r["plane"])
+        lit = ", ".join(f"{lid}={'yes' if v else 'no'}" for lid, v in r["lit"].items()) or "-"
+        casts = ", ".join(f"{lid}={'yes' if v else 'no'}" for lid, v in r["casts"].items()) or "-"
+        default = " (default)" if k == 0 else ""
+        print(f"  {r['id']}{default}: {kind}, plane [{plane}]; lit: {lit}; casts: {casts}")
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -212,6 +231,15 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--layers", metavar="LIST",
                    help="comma-separated subset of the six layer ids (default: the scene's output.layers)")
     p.add_argument("--dpi", type=float, help="PNG resolution (default: the scene's output.png_dpi)")
+    # M4 (contract §5.1.6.6 / §5.0.7): hidden-line switches, passed to the renderer (the scene is not rewritten)
+    hl = p.add_mutually_exclusive_group()
+    hl.add_argument("--hidden-lines", dest="hidden_lines", action="store_true", default=None,
+                    help="classify hidden lines by sampling (default: the scene's output.hidden_lines)")
+    hl.add_argument("--no-hidden-lines", dest="hidden_lines", action="store_false", default=None,
+                    help="draw every line as visible")
+    p.add_argument("--hidden-style", choices=HIDDEN_STYLES, default=None,
+                   help="dashed: hidden runs dashed in the *.hidden groups; omit: those groups empty "
+                        "(default: the scene's output.hidden_style)")
     p.set_defaults(func=cmd_render)
 
     p = sub.add_parser("validate", parents=[quiet], help="validate a scene file")
