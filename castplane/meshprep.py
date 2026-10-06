@@ -131,10 +131,19 @@ def _weld_reference(V: np.ndarray, tol: float) -> np.ndarray:
     return rep
 
 
-def _rows_view(a: np.ndarray) -> np.ndarray:
-    """``(n, 3)`` int64 rows as a 1-D void array (equality / membership only)."""
-    a = np.ascontiguousarray(a, dtype=np.int64)
-    return a.view(np.dtype((np.void, a.dtype.itemsize * a.shape[1]))).reshape(-1)
+def _compressed_cell_keys(keys: np.ndarray) -> tuple[np.ndarray, int]:
+    """One int64 per cell such that neighbour cells stay neighbours: per axis the distinct cell
+    indices are renumbered with gaps capped at 2 (``|Δ| <= 1`` is preserved exactly), offset by 1,
+    and combined as ``(c0·R + c1)·R + c2`` with ``R = max + 2`` (``R <= 2n + 3``, no overflow, no
+    carry for the offsets ``-1 .. 1``)."""
+    cols = []
+    for a in range(3):
+        u, inv = np.unique(keys[:, a], return_inverse=True)
+        steps = np.minimum(np.diff(u), 2)
+        c = np.concatenate([[0], np.cumsum(steps)]).astype(np.int64) + 1
+        cols.append(c[np.asarray(inv).reshape(-1)])
+    R = int(max(int(c.max()) for c in cols)) + 2
+    return (cols[0] * R + cols[1]) * R + cols[2], R
 
 
 def _weld_fast(V: np.ndarray, tol: float) -> np.ndarray:
@@ -146,16 +155,17 @@ def _weld_fast(V: np.ndarray, tol: float) -> np.ndarray:
     q = _cell_quotients(V, tol)
     if q is None or n == 0 or float(np.max(np.abs(q))) >= _INT64_SAFE:
         return _weld_reference(V, tol)
-    keys = np.floor(q).astype(np.int64)
-    uniq, inv = np.unique(keys, axis=0, return_inverse=True)
+    ckey, R = _compressed_cell_keys(np.floor(q).astype(np.int64))
+    uniq, inv = np.unique(ckey, return_inverse=True)
     inv = np.asarray(inv).reshape(-1)
     n_cells = uniq.shape[0]
     occupied = np.zeros(n_cells, dtype=bool)
-    u_view = _rows_view(uniq)
-    for off in _OFFSETS:
-        if off == (0, 0, 0):
+    for dx, dy, dz in _OFFSETS:
+        if (dx, dy, dz) == (0, 0, 0):
             continue
-        occupied |= np.isin(_rows_view(uniq + np.array(off, dtype=np.int64)), u_view)
+        shifted = uniq + ((dx * R + dy) * R + dz)
+        pos = np.minimum(np.searchsorted(uniq, shifted), n_cells - 1)
+        occupied |= uniq[pos] == shifted
     first = np.full(n_cells, n, dtype=np.int64)
     np.minimum.at(first, inv, np.arange(n, dtype=np.int64))
     near = np.max(np.abs(V - V[first[inv]]), axis=1) <= tol
@@ -533,12 +543,11 @@ def merge_coplanar(V, faces, normals, adjacency: dict, cos_tol: float):
         while queue:
             g = queue.popleft()
             for e in face_edges[g]:
-                ef = edge_faces[e]
-                h = ef[1] if ef[0] == g else ef[0]
-                if region[h] < 0 and dot(h, s) >= cos_tol and dot(h, g) >= cos_tol:
-                    region[h] = s
-                    members.append(h)
-                    queue.append(h)
+                for h in edge_faces[e]:     # the other face (an open edge of a direct call has none)
+                    if h != g and region[h] < 0 and dot(h, s) >= cos_tol and dot(h, g) >= cos_tol:
+                        region[h] = s
+                        members.append(h)
+                        queue.append(h)
         if len(members) == 1:
             new_faces.append(list(faces[s]))
             origin.append(s)
@@ -551,8 +560,7 @@ def merge_coplanar(V, faces, normals, adjacency: dict, cos_tol: float):
             for k in range(L):
                 e = face_edge_at[f][k]
                 ef = edge_faces[e]
-                other = ef[1] if ef[0] == f else ef[0]
-                if other not in member_set:
+                if len(ef) == 1 or not all(h in member_set for h in ef):
                     directed.append((e, cyc[k], cyc[(k + 1) % L]))
         directed.sort()
         loops = _boundary_loops([(a, b) for _e, a, b in directed])
