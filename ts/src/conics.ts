@@ -293,7 +293,12 @@ export function ellipse_params(Cin: M): [Vec2, [number, number], number] | null 
   else if (p >= r) v1 = [1.0, 0.0];
   else v1 = [0.0, 1.0];
   let major: number, minor: number, v: Vec2;
-  if (s1 >= s2) {
+  if (rad <= 1e-12 * Math.max(Math.abs(p), Math.abs(r))) {
+    // a circle within rounding: the axis direction is undefined; fixed at +x (as conics.py, M7 review)
+    major = Math.max(s1, s2);
+    minor = Math.min(s1, s2);
+    v = [1.0, 0.0];
+  } else if (s1 >= s2) {
     major = s1;
     minor = s2;
     v = v1;

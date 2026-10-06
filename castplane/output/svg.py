@@ -585,7 +585,9 @@ def _layer_labels(doc: dict, cv: _Canvas) -> list:
         labels.append(rest)
         z = p.get("world", (0.0, 0.0, 0.0))[2]
         t = top.get(oid)
-        if t is None or z > t[0]:
+        # strictly higher by more than rounding, else the first name in code-point order keeps the
+        # anchor (equal heights such as a lying cylinder's generator ends differ by ulps; M7 review)
+        if t is None or z > t[0] + 1e-9 * max(1.0, abs(t[0])):
             top[oid] = (z, img)
     body = cv.texts(lf_pts, lf_labels, None, 1.4, 2.4)
     body.extend(cv.texts(pts, labels, None, 0.8, -0.8))

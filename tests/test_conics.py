@@ -449,3 +449,39 @@ def test_ellipse_arc_params_matches_direct_points():
     assert ellipse_arc_params(H_behind, 1.0, 0.0, 1.0) is None
     H_hyp = np.array([[1.0, 0, 0], [0, 1.0, 0], [0, 1.0, 0.5]])
     assert ellipse_arc_params(H_hyp, 1.0, 0.0, 1.0) is None
+
+
+def _noisy_circle(p, q, r):
+    return np.array([[p, q, 0.0], [q, r, 0.0], [0.0, 0.0, 1.0]])
+
+
+@pytest.mark.parametrize("p, q, r", [
+    (-0.0032653061224489806, 1.27e-20, -0.0032653061224489793),    # numpy/BLAS values of the on-axis sphere (M7 review)
+    (-0.0032653061224489793, -1.27e-20, -0.0032653061224489806),
+    (-0.0032653061224489800, 0.0, -0.0032653061224489800),          # exact tie (the port's fixed-order sums)
+])
+def test_ellipse_params_circle_within_rounding_has_rotation_zero(p, q, r):
+    """A circle whose matrix carries ulp noise has no defined axis direction; the rotation is fixed at 0 instead of
+    being chosen by the exact tests ``p >= r`` / ``s1 >= s2`` from the noise (M7 review, §5.4 implementation notes)."""
+    centre, (major, minor), rot = ellipse_params(_noisy_circle(p, q, r))
+    assert rot == 0.0
+    assert major >= minor and major == pytest.approx(17.5, rel=1e-12) and minor == pytest.approx(17.5, rel=1e-12)
+
+
+def test_ellipse_params_near_circle_above_the_band_keeps_its_rotation():
+    centre, (major, minor), rot = ellipse_params(_noisy_circle(-(1.0 + 2e-6), 0.0, -1.0))
+    assert rot == pytest.approx(math.pi / 2, abs=1e-12) and major > minor        # the major axis lies along y
+
+
+def test_sphere_centred_on_the_camera_axis_outline_ellipse_has_rotation_zero():
+    import castplane
+    from castplane.scene import load_scene
+    scene = load_scene({
+        "version": "0.1", "units": "m", "up": "z",
+        "objects": [{"id": "s0", "type": "sphere", "radius": 0.5, "transform": {"position": [0, 0, 0]}}],
+        "lights": [{"id": "lamp", "type": "point", "position": [0, 0, 4]}],
+        "receivers": [{"id": "ground", "type": "plane", "normal": [0, 0, 1], "offset": 0}],
+        "camera": {"position": [4, -8, 5], "target": [0, 0, 0.5], "focal_length_mm": 35, "frame_mm": [36, 24]},
+        "output": {"canvas_mm": [360, 240]}})
+    ell = castplane.render(scene)["geometry"]["outlines"][0]["conics"][0]["ellipses"][0]
+    assert ell["rotation_deg"] == 0.0 and ell["rx"] == pytest.approx(ell["ry"], rel=1e-12)

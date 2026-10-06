@@ -101,6 +101,40 @@ function affine(a: number, b: number, alpha: number, tx: number, ty: number): nu
   return [[c * a, -s * b, tx], [s * a, c * b, ty], [0, 0, 1]];
 }
 
+test("ellipse_params: a circle within rounding has rotation 0, whatever the ulp noise (as conics.py, M7 review)", () => {
+  const noisy: [number, number, number][] = [
+    [-0.0032653061224489806, 1.27e-20, -0.0032653061224489793], // numpy/BLAS values of the on-axis sphere
+    [-0.0032653061224489793, -1.27e-20, -0.0032653061224489806],
+    [-0.00326530612244898, 0.0, -0.00326530612244898],            // exact tie (the port's fixed-order sums)
+  ];
+  for (const [p, q, r] of noisy) {
+    const res = ellipse_params([[p, q, 0], [q, r, 0], [0, 0, 1]]);
+    assert.ok(res !== null);
+    assert.equal(res[2], 0);
+    assert.ok(res[1][0] >= res[1][1] && Math.abs(res[1][0] - 17.5) <= 1e-11 && Math.abs(res[1][1] - 17.5) <= 1e-11);
+  }
+  const ell = ellipse_params([[-(1 + 2e-6), 0, 0], [0, -1, 0], [0, 0, 1]]);  // above the band: major axis along y
+  assert.ok(ell !== null && Math.abs(ell[2] - Math.PI / 2) <= 1e-12 && ell[1][0] > ell[1][1]);
+});
+
+test("sort grep (contract §5.4.4 (8)): every sort under ts/src has an explicit comparator", () => {
+  const offenders: string[] = [];
+  for (const file of src_files()) {
+    const lines = code_only(read_text(file)).split("\n");
+    lines.forEach((l, i) => { if (/\.(sort|toSorted)\(\s*\)/.test(l)) offenders.push(`${file}:${i + 1}`); });
+  }
+  assert.deepEqual(offenders, []);
+});
+
+test("catch grep: no bare catch under ts/src (only the named degenerate-contact error is turned into a fallback)", () => {
+  const offenders: string[] = [];
+  for (const file of src_files()) {
+    const lines = code_only(read_text(file)).split("\n");
+    lines.forEach((l, i) => { if (/catch\s*\{/.test(l)) offenders.push(`${file}:${i + 1}`); });
+  }
+  assert.deepEqual(offenders, []);
+});
+
 test("jacobi_eigenvalues_3 and the condition number (contract §5.4.4 (5))", () => {
   const ev = jacobi_eigenvalues_3([[1, 0, 0], [0, 1e-9, 0], [0, 0, 1]]).map(Math.abs);
   assert.ok(Math.max(...ev) / Math.min(...ev) > COND_MAX);

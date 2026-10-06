@@ -25,6 +25,7 @@ import { SceneError, make_warning, merge_warnings } from "./errors.js";
 import type { Warning } from "./errors.js";
 import { TOL_DIR, row_max_abs, scene_scale, tolerance } from "./homogeneous.js";
 import { face_lit_flags, light_vector, lit_value, silhouette_loops } from "./light.js";
+import { NotManifoldError } from "./mesh.js";
 import type { Mesh } from "./mesh.js";
 import { canonical } from "./output/geometry_json.js";
 import { write_svg } from "./output/svg.js";
@@ -402,7 +403,9 @@ export function shadow_geometry(scene: Scene): StageA {
       warnings.push(make_warning("OBJECT_BELOW_RECEIVER", [obj.id]));
       try {
         obj.ground_mesh = clip_mesh_to_plane(obj.mesh, pi, tol);
-      } catch {
+      } catch (exc) {
+        // degenerate contact (Python: `except ValueError`); any other error is a bug and propagates
+        if (!(exc instanceof NotManifoldError)) throw exc;
         obj.ground_mesh = null;
       }
     }
@@ -610,6 +613,23 @@ function project_shadow(rec: ShadowRecord, cam: CameraRecord, tol: number, light
  * Stage B: project stage-A geometry with the scene camera or an override (contract §3). `umbra` is the M6 switch
  * (phase 2, §5.4.14); it has no effect on a single-light scene.
  */
+/**
+ * The stage-B `construction` block of one light (contract §2.7, §5.4.14 (c)): `L'`, `F'` and the rays, self-checks
+ * and segments of that light's shadow records, flattened in record order. Phase 1 calls it once for the single
+ * light; the per-light `constructions` map of §5.3.5 (phase 2) is a loop around it.
+ */
+export function construction_block(light: LightStageB, shadows: readonly ShadowStageB[]): ConstructionStageB {
+  return {
+    light_point: light.light_point.point,
+    light_point_at_infinity: light.light_point.at_infinity,
+    shadow_vp: light.shadow_vp.point,
+    shadow_vp_at_infinity: light.shadow_vp.at_infinity,
+    rays: shadows.flatMap((s) => s.rays),
+    checks: shadows.flatMap((s) => s.checks),
+    segments: shadows.flatMap((s) => s.segments),
+  };
+}
+
 export function project_scene(scene: Scene, A: StageA, camera?: unknown, umbra = true): StageB {
   void umbra;
   const cam_dict = resolve_camera(scene, camera);
@@ -650,15 +670,7 @@ export function project_scene(scene: Scene, A: StageA, camera?: unknown, umbra =
   let construction: ConstructionStageB | null = null;
   if (lights.length > 0) {
     const lt = lights[0] as LightStageB;
-    construction = {
-      light_point: lt.light_point.point,
-      light_point_at_infinity: lt.light_point.at_infinity,
-      shadow_vp: lt.shadow_vp.point,
-      shadow_vp_at_infinity: lt.shadow_vp.at_infinity,
-      rays: shadows.flatMap((s) => s.rays),
-      checks: shadows.flatMap((s) => s.checks),
-      segments: shadows.flatMap((s) => s.segments),
-    };
+    construction = construction_block(lt, shadows.filter((s) => s.light === lt.id));
   }
   return {
     camera: cam,

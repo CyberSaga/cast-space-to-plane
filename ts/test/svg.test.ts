@@ -126,3 +126,40 @@ test("write_svg layer subsets, empty layers and unknown ids", () => {
   assert.ok(empty.includes(`<g id="form_shadow" ${STYLE["form_shadow"]}/>`));
   assert.ok(empty.includes(`<g id="labels" ${STYLE["labels"]}/>`));
 });
+
+function bold_and_plain_x(svg: string, oid: string, label: string): [string, string] {
+  const bold = new RegExp(`<text x="([^"]+)" y="[^"]+" font-weight="bold">${oid}</text>`).exec(svg);
+  const plain = new RegExp(`<text x="([^"]+)" y="[^"]+">${label}</text>`).exec(svg);
+  assert.ok(bold !== null && plain !== null);
+  return [bold[1] as string, plain[1] as string];
+}
+
+test("object-id label anchor: heights within rounding tie and the first name wins (as svg.py, M7 review)", () => {
+  const doc = structuredClone(doc_of("basic"));
+  const top = doc.points["crate.v7"].world as number[];
+  const z = top[2] as number;
+  const up = z + z * Number.EPSILON;                        // the next double above z (z = 0.6 is in [0.5, 1))
+  assert.ok(up > z);
+  doc.points["crate.v7"].world = [top[0], top[1], up];
+  let [bold, v4] = bold_and_plain_x(write_svg(doc), "crate", "v4");
+  assert.equal(bold, v4);
+  doc.points["crate.v7"].world = [top[0], top[1], z + 1e-6];
+  const [bold2, v7] = bold_and_plain_x(write_svg(doc), "crate", "v7");
+  assert.equal(bold2, v7);
+  assert.notEqual(v7, v4);
+});
+
+test("a sphere centred on the camera axis: the outline circle has rotation 0 and no transform (as Python, M7 review)", () => {
+  const scene = load_scene({
+    version: "0.1", units: "m", up: "z",
+    objects: [{ id: "s0", type: "sphere", radius: 0.5, transform: { position: [0, 0, 0] } }],
+    lights: [{ id: "lamp", type: "point", position: [0, 0, 4] }],
+    receivers: [{ id: "ground", type: "plane", normal: [0, 0, 1], offset: 0 }],
+    camera: { position: [4, -8, 5], target: [0, 0, 0.5], focal_length_mm: 35, frame_mm: [36, 24] },
+    output: { canvas_mm: [360, 240] },
+  });
+  const out = render(scene);
+  const ell = (out.geometry as any).outlines[0].conics[0].ellipses[0];
+  assert.equal(ell.rotation_deg, 0);
+  assert.ok(out.svg.includes('<ellipse cx="180" cy="120" rx="17.5" ry="17.5"/>'));
+});

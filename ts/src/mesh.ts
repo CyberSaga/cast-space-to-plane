@@ -61,6 +61,14 @@ export function face_normals_newell(vertices: readonly Vec3[], faces: readonly (
 }
 
 /**
+ * The `ValueError` of `mesh.mesh_from_faces` (an edge not shared by exactly two faces). Its own class so that the
+ * pipeline's degenerate-contact fallback catches exactly this error and nothing else (port-only name, M7 review).
+ */
+export class NotManifoldError extends Error {
+  override name = "NotManifoldError";
+}
+
+/**
  * Build the full mesh record from vertices and CCW faces (contract §2.4). Every edge must be shared by exactly two
  * faces (closed manifold), otherwise an `Error` is thrown (Python `ValueError`).
  */
@@ -92,7 +100,7 @@ export function mesh_from_faces(vertices: readonly (readonly number[])[], faces:
   while (s < occ.length) {
     let e = s;
     while (e < occ.length && (occ[e] as { key: number }).key === (occ[s] as { key: number }).key) e++;
-    if (e - s !== 2) throw new Error("mesh is not a closed manifold: every edge must have exactly two faces");
+    if (e - s !== 2) throw new NotManifoldError("mesh is not a closed manifold: every edge must have exactly two faces");
     const a = occ[s] as (typeof occ)[number], b = occ[s + 1] as (typeof occ)[number];
     edges.push([Math.floor(a.key / n_v), a.key % n_v]); // pyimod-free: edge keys are non-negative
     edge_faces.push([a.owner, b.owner]);

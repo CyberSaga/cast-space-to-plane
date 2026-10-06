@@ -553,3 +553,21 @@ def test_m6_layers_subset_and_hidden_style_omit():
     assert ids[0] == "cast_shadow" and ids[1] == "cast_shadow.hidden" and "cast_shadow.umbra" in ids
     assert not any(i.startswith(("form_shadow", "construction")) for i in ids)
     assert "stroke-dasharray" in _g_tags(svg)["cast_shadow.hidden"]
+def _bold_and_plain_x(svg: str, oid: str, label: str):
+    bold = re.search(rf'<text x="([^"]+)" y="[^"]+" font-weight="bold">{oid}</text>', svg).group(1)
+    plain = re.search(rf'<text x="([^"]+)" y="[^"]+">{label}</text>', svg).group(1)
+    return bold, plain
+
+
+def test_object_id_label_anchor_ignores_ulp_height_differences(basic):
+    """M7 review: the object id goes to the highest labelled point; heights within rounding (1e-9 relative) tie and
+    the first name in code-point order wins, so a one-ulp difference between implementations cannot move it."""
+    _scene, out = basic
+    doc = copy.deepcopy(out["geometry"])
+    top = doc["points"]["crate.v7"]["world"]
+    doc["points"]["crate.v7"]["world"] = [top[0], top[1], math.nextafter(top[2], math.inf)]
+    bold, v4 = _bold_and_plain_x(write_svg(doc), "crate", "v4")
+    assert bold == v4                                         # v4 (first name) keeps the anchor, not v7 (+1 ulp)
+    doc["points"]["crate.v7"]["world"] = [top[0], top[1], top[2] + 1e-6]
+    bold, v7 = _bold_and_plain_x(write_svg(doc), "crate", "v7")
+    assert bold == v7 and v7 != v4                            # a real height difference still moves it

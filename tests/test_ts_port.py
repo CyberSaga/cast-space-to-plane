@@ -123,3 +123,28 @@ def test_ts_core_is_node_neutral():
         text = path.read_text(encoding="utf-8")
         offenders += [f"{path.relative_to(ROOT)}: {s}" for s in NODE_ONLY if s in text]
     assert offenders == []
+
+
+def test_compare_svg_tolerates_only_differences_at_a_rounding_boundary():
+    """``tools/compare_svg.py`` (contract §5.4.6): a one-unit difference of the fourth decimal is tolerated only when
+    the reference's unrounded value lies within 1e-12 mm of the half-way; a genuine 1e-4 drift is a mismatch."""
+    import importlib.util
+    spec = importlib.util.spec_from_file_location("compare_svg", ROOT / "tools" / "compare_svg.py")
+    cs = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(cs)
+    py, ts = '<line x1="1.2345" y1="2"/>', '<line x1="1.2346" y1="2"/>'
+    assert cs.near_boundary(1.23455) and cs.near_boundary(-7.00005) and not cs.near_boundary(1.2345)
+    assert not cs.near_boundary(1.23455 + 1e-9)
+    assert cs.compare("x", py, ts, '<line x1="1.23455000000000004" y1="2.00000000000000000"/>') == (
+        ["x:1:\n  py: " + py + "\n  ts: " + ts], [])
+    b, m = cs.compare("x", py, ts, '<line x1="1.23452000000000000" y1="2.00000000000000000"/>')
+    assert b == [] and len(m) == 1                              # 3e-5 from the half-way: a drift, not rounding
+    assert cs.compare("x", py, ts)[1] != []                     # without the unrounded line nothing is tolerated
+    # the unrounded writer keeps the line structure of the real one
+    scene = castplane.load_scene(ROOT / "examples" / "curved_demo.json")
+    svg = castplane.render(scene)["svg"]
+    real, exact = svg.split("\n"), cs.unrounded_svg(scene).split("\n")
+    assert castplane.render(scene)["svg"] == svg                # the writer's formatters are restored
+    assert len(real) == len(exact)
+    assert [len(cs.split_numbers(a)[1]) for a in real] == [len(cs.split_numbers(e)[1]) for e in exact]
+    assert exact != real and all(cs.split_numbers(a)[0] == cs.split_numbers(e)[0] for a, e in zip(real, exact))

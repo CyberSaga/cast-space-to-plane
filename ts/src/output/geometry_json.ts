@@ -101,11 +101,16 @@ function newline(depth: number): string {
   return s;
 }
 
-/** Keys in Unicode code point order: the default (UTF-16 unit) order is the same unless a key holds a surrogate. */
+/** UTF-16 code-unit order (what `sort()` without a comparator does), spelled out per §5.4.4 (8). */
+function cmp_code_units(a: string, b: string): number {
+  return a < b ? -1 : a > b ? 1 : 0;
+}
+
+/** Keys in Unicode code point order: code-unit order is the same unless a key holds a surrogate (fast path). */
 function sorted_keys(o: object): string[] {
   const keys = Object.keys(o);
   for (const k of keys) if (SURROGATE.test(k)) return keys.sort(cmp_code_points);
-  return keys.sort();
+  return keys.sort(cmp_code_units);
 }
 
 function encode(v: unknown, key: string | null, depth: number): string {

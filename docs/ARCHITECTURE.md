@@ -3198,9 +3198,11 @@ and the hidden-run SVG groups (§5.1.8). Nothing an M4–M6 case needs lies beyo
   conic (`H = P·M·E`, §2.6): its `conic` matrix changes with `P` (verified on the Python reference: `examples/basic.json`,
   `curved_demo.json` and `directional.json` give different `conic` matrices for the scene camera and the test camera of
   §5.4.13), and `kind` (the classification of the image conic) and `arc` (the near-clipped range) are camera dependent in
-  principle too. Only `circle`, `map` and `which` are camera free; `ts/test/determinism.test.ts` compares those (and the
-  entry count). Likewise `construction.rays` is camera free only while every kept silhouette vertex has `P`, `S` and `Q`
-  in front of the near plane for both cameras (true for the five examples and the test camera).
+  principle too. `conic` is left out of the camera-free comparison; `kind` and `arc` are equal for the five examples and
+  the test camera and `ts/test/determinism.test.ts` compares them together with `circle`, `map`, `which` and the entry
+  count (narrowed after the M7 review). Likewise `construction.rays` is camera free only while every kept silhouette
+  vertex has `P`, `S` and `Q` in front of the near plane for both cameras (true for the five examples and the test
+  camera).
 - **[implementation] (M7 steps 2–6) Signatures the numpy forms could not keep.** `face_tables(mesh, names)` takes the
   point names because it returns `face_point_names` (§5.4.2); `covering_segments(A, B, C)` accepts `A` as one point
   (broadcast, as the pipeline passes `L'` / `F'`) or one point per row; the list forms of the clips return `null` for a
@@ -3216,6 +3218,47 @@ and the hidden-run SVG groups (§5.1.8). Nothing an M4–M6 case needs lies beyo
   The writer's number formatter `fmt` uses the table-driven fast path of D17-b (`round(x·1e4)` away from a half-way by
   1e-6, as `_fmt_bytes`) with the exact BigInt tie rule otherwise; `ts/test/svg.test.ts` proves the identity with an
   exact round-half-even reference on 10^5 values incl. every tie class.
+- **[decision, implementation] (M7 review) A circle within rounding has rotation 0.** `ellipse_params` decided the
+  axis direction of an image ellipse with the exact tests `p >= r` / `s1 >= s2`; for an exact circle (a sphere whose
+  centre lies on the camera axis) the two implementations' ulp noise picked different answers (numpy/BLAS left
+  `p < r` by 1.3e-18 → `rotation_deg = 90`, the port's fixed-order sums gave `p == r` → `0`: a `compare_documents`
+  failure and a structurally different `<ellipse … transform="rotate(-90 …)">`). Both `castplane/conics.py` and
+  `ts/src/conics.ts` now treat `rad <= 1e-12 · max(|p|, |r|)` (relative axis difference ≤ 1e-12, invisible at any canvas
+  size) as a circle: `major = max(s1, s2)`, `minor = min(s1, s2)`, axis `+x`, rotation 0. Drift rule of §5.4.8 (the
+  reference is fixed first): `tools/regen_conformance.py --dry-run` reports 0 of 34 expected files changed (no v3 case
+  has a circular image), so no regeneration and no set version; the SVG of the five examples, the 34 cases and
+  `benchmark_100.json` is unchanged as well.
+- **[decision, implementation] (M7 review) Object-id label anchor ties.** §2.10 puts the bold object id at the highest
+  labelled point; the strict `z > best` let a one-ulp height difference (the two generator ends of a cylinder lying on
+  its side) move the label between implementations. Both writers now replace the anchor only when
+  `z > best + 1e-9 · max(1, |best|)` (metres); otherwise the first name in code-point order keeps it. No case, example or
+  benchmark SVG changes.
+- **[implementation, deferred] (M7 review) `covering_segments` is ill-conditioned when `S' ≈ Q'`.** For a vertex a few
+  micrometres above the receiver the direction `C − B` (`S' − Q'`, ≈ 1e-5 mm long) amplifies the ulp noise of the
+  projected points by `|A − B| / |C − B|` (up to 4e7) into the far endpoint; the differential fuzz of the review shows
+  1.4e-6 and 1.7e-6 mm endpoint differences between the implementations on two non-set scenes, and the set itself has
+  rows with `|C − B| / |A − B|` down to 5.4e-9 (`random_seed14_2objects`, `random_seed3_3objects`, …) that pass with
+  ≤ 0.22 of the tolerance. A well-conditioned rule (take the direction from `A − B`, oriented like `C − B`, when
+  `|C − B| < 1e-3 · |A − B|`) was measured on the reference: it moves 8 of the 34 expected files by up to 1.6e-7 mm
+  (`construction.segments[].points` only), which the §5.0.8 plan does not allow inside M7 phase 1 (v3: no expected file
+  changes; v4 is key-additive only). Left unchanged in both implementations; the fix needs its own versioned
+  regeneration, to be decided by the maintainers.
+- **[implementation] (M7 review) Port-only exported names not in the §5.4.2 table:** `transform.ts` `radians`,
+  `degrees`, `matmul3`, `rotate`, `rigid`; `camera.ts` `clip_segment_rect_h`; `light.ts` `lit_value` (Python's private
+  `_lit_value`); `shadow.ts` `mat4_vec`; `conics.ts` `matmul`, `transpose`, `det3`, `conic_points`; `errors.ts`
+  `cmp_warning_keys`; `mesh.ts` `NotManifoldError` (the `ValueError` of `mesh_from_faces`, so that the pipeline's
+  degenerate-contact fallback catches exactly that error — Python `except ValueError` — and lets every other error
+  propagate).
+- **[implementation, deferred] (M7 review) The §5.4.3 port-only `objects[i].path` / `type: step` rows** reproduce §5.0.1
+  rows that M5 (`mesh` + `path`) and M8 (`LOADER_TYPES`) add to the Python reference; in phase 1 neither `mesh` nor `step`
+  is an object type and the port, like the v1 reference, rejects both at `objects[i].type` with the "must be one of …"
+  message and ignores unknown keys. The two rows are ported with the §5.0.1 table in phase 2.
+- **[implementation] (M7 review) `tools/compare_svg.py` applies the §5.4.6 rule literally:** a differing number is
+  tolerated only when the two texts differ by one unit of the fourth decimal **and** the reference's unrounded value
+  (the Python SVG written again with every number at 17 decimals, same line structure) lies within 1e-12 mm of the
+  half-way, in exact decimal arithmetic; a genuine 1e-4 drift is a mismatch. Over the 215 differential scenes of the
+  review this flags one non-set line (`poly_7`, a line clipped at the extended rectangle whose reference value lies
+  1.6e-9 mm below the half-way; the JSON documents agree within tolerance) — reported for review, not a CI gate.
 
 ### 5.5 M8 — STEP import (spec §9 row "STEP", spec §10 M8) — a loader, outside the core
 
