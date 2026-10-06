@@ -69,62 +69,76 @@ function canon(obj: unknown): unknown {
   throw new Error(`not JSON-serialisable: ${typeof obj}`);
 }
 
+const SURROGATE = /[\uD800-\uDFFF]/;
 const LONE_SURROGATE = /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/;
 
 function encode_string(s: string): string {
-  if (LONE_SURROGATE.test(s)) throw new Error("string contains a lone surrogate (not encodable as UTF-8)");
+  if (SURROGATE.test(s) && LONE_SURROGATE.test(s)) throw new Error("string contains a lone surrogate (not encodable as UTF-8)");
   return JSON.stringify(s);
 }
 
-function encode(v: unknown, key: string | null, depth: number, out: string[]): void {
-  if (v === null) {
-    out.push("null");
-    return;
+/** `"key": ` of the object keys, cached (a document repeats a few dozen keys hundreds of thousands of times). */
+const KEY_CACHE = new Map<string, string>();
+
+function encode_key(k: string): string {
+  let e = KEY_CACHE.get(k);
+  if (e === undefined) {
+    e = encode_string(k) + ": ";
+    if (KEY_CACHE.size < 4096) KEY_CACHE.set(k, e);
   }
+  return e;
+}
+
+const INDENTS: string[] = ["\n"];
+
+/** `"\n"` + `depth` spaces (cached). */
+function newline(depth: number): string {
+  let s = INDENTS[depth];
+  if (s === undefined) {
+    for (let d = INDENTS.length; d <= depth; d++) INDENTS.push("\n" + " ".repeat(d));
+    s = INDENTS[depth] as string;
+  }
+  return s;
+}
+
+/** Keys in Unicode code point order: the default (UTF-16 unit) order is the same unless a key holds a surrogate. */
+function sorted_keys(o: object): string[] {
+  const keys = Object.keys(o);
+  for (const k of keys) if (SURROGATE.test(k)) return keys.sort(cmp_code_points);
+  return keys.sort();
+}
+
+function encode(v: unknown, key: string | null, depth: number): string {
+  if (v === null) return "null";
   switch (typeof v) {
     case "number":
       if (key !== null && INT_KEYS.has(key)) {
         if (!Number.isFinite(v)) throw new Error(`Out of range float values are not JSON compliant: ${v}`);
-        out.push(String(Math.trunc(v) + 0));
-      } else {
-        out.push(py_repr(v));
+        return String(Math.trunc(v) + 0);
       }
-      return;
+      return py_repr(v);
     case "string":
-      out.push(encode_string(v));
-      return;
+      return encode_string(v);
     case "boolean":
-      out.push(v ? "true" : "false");
-      return;
+      return v ? "true" : "false";
     case "object": {
-      const inner = "\n" + " ".repeat(depth + 1);
+      const inner = newline(depth + 1);
       if (Array.isArray(v)) {
-        if (v.length === 0) {
-          out.push("[]");
-          return;
-        }
-        out.push("[");
-        for (let i = 0; i < v.length; i++) {
-          out.push(i === 0 ? inner : "," + inner);
-          encode(v[i], key, depth + 1, out);
-        }
-        out.push("\n" + " ".repeat(depth) + "]");
-        return;
+        const n = v.length;
+        if (n === 0) return "[]";
+        let out = "[" + inner + encode(v[0], key, depth + 1);
+        for (let i = 1; i < n; i++) out += "," + inner + encode(v[i], key, depth + 1);
+        return out + newline(depth) + "]";
       }
       const o = v as Record<string, unknown>;
-      const keys = Object.keys(o).sort(cmp_code_points);
-      if (keys.length === 0) {
-        out.push("{}");
-        return;
-      }
-      out.push("{");
+      const keys = sorted_keys(o);
+      if (keys.length === 0) return "{}";
+      let out = "{";
       for (let i = 0; i < keys.length; i++) {
         const k = keys[i] as string;
-        out.push((i === 0 ? inner : "," + inner) + encode_string(k) + ": ");
-        encode(o[k], k, depth + 1, out);
+        out += (i === 0 ? inner : "," + inner) + encode_key(k) + encode(o[k], k, depth + 1);
       }
-      out.push("\n" + " ".repeat(depth) + "}");
-      return;
+      return out + newline(depth) + "}";
     }
     default:
       throw new Error(`Object of type ${typeof v} is not JSON serializable`);
@@ -133,7 +147,5 @@ function encode(v: unknown, key: string | null, depth: number, out: string[]): v
 
 /** Serialise a geometry document deterministically (contract §3.1, §5.4.5); no trailing newline. */
 export function dumps(doc: unknown): string {
-  const out: string[] = [];
-  encode(doc, null, 0, out);
-  return out.join("");
+  return encode(doc, null, 0);
 }

@@ -3189,6 +3189,33 @@ and the hidden-run SVG groups (§5.1.8). Nothing an M4–M6 case needs lies beyo
   `tests/test_conformance.py::test_rules_json_is_versioned_in_the_changelog` requires the last recorded rules to equal
   `rules.json`, so a comparator change without a changelog entry fails the suite. A rules-only entry renders nothing and
   therefore records no `- build:` line; `recorded_numpy_version()` takes the build of the last entry that has one.
+- **[decision, implementation] (M7 steps 2–6) `node --test` takes the test files, not the directory.** Since node 21
+  the arguments of `node --test` are glob patterns; `node --test build/test/` fails on node 22 (`Cannot find module
+  '…/ts/build/test'`). The `ts` test script is therefore `npm run build && node --test build/test/*.test.js` (the shell
+  expands the glob, which works on node 20 and 22 alike); everything else of §5.4.1 is as written.
+- **[decision, implementation] (M7 steps 2–6) Camera-free part of `shadows[].conics`.** §5.4.7 / §5.0.3 list
+  `conics[].{conic, kind, arc, circle, map, which}` as camera free, but a shadow conic entry is the *image* of the ground
+  conic (`H = P·M·E`, §2.6): its `conic` matrix changes with `P` (verified on the Python reference: `examples/basic.json`,
+  `curved_demo.json` and `directional.json` give different `conic` matrices for the scene camera and the test camera of
+  §5.4.13), and `kind` (the classification of the image conic) and `arc` (the near-clipped range) are camera dependent in
+  principle too. Only `circle`, `map` and `which` are camera free; `ts/test/determinism.test.ts` compares those (and the
+  entry count). Likewise `construction.rays` is camera free only while every kept silhouette vertex has `P`, `S` and `Q`
+  in front of the near plane for both cameras (true for the five examples and the test camera).
+- **[implementation] (M7 steps 2–6) Signatures the numpy forms could not keep.** `face_tables(mesh, names)` takes the
+  point names because it returns `face_point_names` (§5.4.2); `covering_segments(A, B, C)` accepts `A` as one point
+  (broadcast, as the pipeline passes `L'` / `F'`) or one point per row; the list forms of the clips return `null` for a
+  dropped row instead of a separate keep mask. `project_scene(scene, A, camera?, umbra?)`, `compose(scene, B,
+  hidden_lines?)`, `write_svg(doc, layers?, hidden_style?)` and `render(scene, camera?, hidden_lines?, hidden_style?,
+  umbra?)` already carry the phase-2 switches of §5.4.7; in phase 1 they have no effect (v1 document, one light).
+- **[implementation] (M7 steps 2–6) Result of the port against set v3.** 34/34 cases pass `compare_documents` with the v3
+  rules; the worst leaf over the whole set is 0.22 of its tolerance (`random_seed3_3objects`,
+  `construction.segments[31].points[1][0]`, an extended ray), every other case stays below 0.16 and the analytic cases
+  below 1e-6 of it; 3 of 34 expected files are reproduced byte for byte (the others differ in last digits only: numpy's
+  BLAS sums). The SVG text of the port equals the Python writer's byte for byte on all 34 cases, the five examples and
+  `benchmarks/scenes/benchmark_100.json` (`tools/compare_svg.py`), whose JSON document also passes `compare_documents`.
+  The writer's number formatter `fmt` uses the table-driven fast path of D17-b (`round(x·1e4)` away from a half-way by
+  1e-6, as `_fmt_bytes`) with the exact BigInt tie rule otherwise; `ts/test/svg.test.ts` proves the identity with an
+  exact round-half-even reference on 10^5 values incl. every tie class.
 
 ### 5.5 M8 — STEP import (spec §9 row "STEP", spec §10 M8) — a loader, outside the core
 

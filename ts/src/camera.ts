@@ -8,7 +8,7 @@
 
 import { make_warning } from "./errors.js";
 import type { Warning } from "./errors.js";
-import { TOL_DIR, clip_polygon_halfspace, clip_segment_halfspace, cross3, join, normalize_max } from "./homogeneous.js";
+import { TOL_DIR, ZERO_REL, clip_polygon_halfspace, clip_segment_halfspace, cross3, join, normalize_max } from "./homogeneous.js";
 import type { Camera } from "./scene.js";
 import { radians } from "./transform.js";
 import type { Mat3, Mat34, Vec2, Vec3, Vec4 } from "./types.js";
@@ -166,15 +166,35 @@ export function clip_polygon_rect_h(points: readonly (readonly number[])[], rect
   return pts.map((p) => [p[0], p[1], p[2]] as Vec3);
 }
 
-/** Homogeneous rectangle clip of one 2-D segment; `null` when dropped. */
+/**
+ * Homogeneous rectangle clip of one 2-D segment; `null` when dropped. Exactly `clip_segment_halfspace` applied with
+ * the four `rect_functionals` rows in turn (same values, same interpolation and zero-row rule), written out on scalars
+ * so that the per-edge path of stage B allocates nothing but its result.
+ */
 export function clip_segment_rect_h(A: readonly number[], B: readonly number[], rect: readonly number[]): [Vec3, Vec3] | null {
-  let a: readonly number[] = A, b: readonly number[] = B;
-  for (const row of rect_functionals(rect)) {
-    const r = clip_segment_halfspace(a, b, dot3(a, row), dot3(b, row));
-    if (r === null) return null;
-    [a, b] = r;
+  let a0 = A[0] as number, a1 = A[1] as number, a2 = A[2] as number;
+  let b0 = B[0] as number, b1 = B[1] as number, b2 = B[2] as number;
+  const u_min = rect[0] as number, u_max = rect[1] as number, v_min = rect[2] as number, v_max = rect[3] as number;
+  for (let k = 0; k < 4; k++) {
+    const r0 = k === 0 ? -1.0 : k === 1 ? 1.0 : 0.0;
+    const r1 = k === 2 ? -1.0 : k === 3 ? 1.0 : 0.0;
+    const r2 = k === 0 ? u_max : k === 1 ? -u_min : k === 2 ? v_max : -v_min;
+    const fa = a0 * r0 + a1 * r1 + a2 * r2;
+    const fb = b0 * r0 + b1 * r1 + b2 * r2;
+    const a_in = fa >= 0.0, b_in = fb >= 0.0;
+    if (!(a_in || b_in)) return null;
+    const ma = Math.max(Math.abs(a0), Math.abs(a1), Math.abs(a2)), mb = Math.max(Math.abs(b0), Math.abs(b1), Math.abs(b2));
+    const scale = Math.max(ma, mb);
+    if (a_in !== b_in) {
+      const den = fa - fb;
+      const x0 = (fa * b0 - fb * a0) / den, x1 = (fa * b1 - fb * a1) / den, x2 = (fa * b2 - fb * a2) / den;
+      if (!a_in) [a0, a1, a2] = [x0, x1, x2];
+      else [b0, b1, b2] = [x0, x1, x2];
+    }
+    const lim = ZERO_REL * scale;
+    if (!(Math.max(Math.abs(a0), Math.abs(a1), Math.abs(a2)) > lim && Math.max(Math.abs(b0), Math.abs(b1), Math.abs(b2)) > lim)) return null;
   }
-  return [[a[0] as number, a[1] as number, a[2] as number], [b[0] as number, b[1] as number, b[2] as number]];
+  return [[a0, a1, a2], [b0, b1, b2]];
 }
 
 /** List form of the homogeneous rectangle clip of 2-D segments (row by row). */
