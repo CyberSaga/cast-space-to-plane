@@ -942,35 +942,26 @@ def test_svg_ids_are_unique_with_several_receivers(label, make):
 
 
 def test_hidden_bridge_only_tolerates_the_missing_module(monkeypatch):
-    """``_classify_hidden`` returns the switch-off document only when ``castplane.hidden`` itself does not
-    exist; an import error raised inside that module propagates instead of being swallowed."""
-    import importlib
-    import importlib.util
-    from castplane import pipeline
+    """The A-track import bridge is gone now that the H-track has landed (contract §5.1.6.5): ``compose`` with
+    hidden lines on calls ``castplane.hidden.classify_document(doc, B["A"], B)`` directly, an error raised
+    inside it propagates, and with hidden lines off it is never called."""
+    from castplane import hidden, pipeline
 
-    doc = {"hidden_lines": True}
-    real_import = importlib.import_module
-    if importlib.util.find_spec("castplane.hidden") is None:
-        pipeline._classify_hidden(doc, {"A": {}})            # module absent: a no-op
-        assert doc == {"hidden_lines": True}
+    calls = []
 
-    def broken(name, *a, **k):
-        if name == "castplane.hidden":
-            raise ModuleNotFoundError("No module named 'castplane._no_such_helper'", name="castplane._no_such_helper")
-        return real_import(name, *a, **k)
+    def spy(doc, A, B, *a, **k):
+        calls.append((A is B["A"], doc["hidden_lines"]))
+        raise RuntimeError("inside classify_document")
 
-    monkeypatch.setattr(importlib, "import_module", broken)
-    with pytest.raises(ModuleNotFoundError):
-        pipeline._classify_hidden(doc, {"A": {}})
-
-    def bad_symbol(name, *a, **k):
-        if name == "castplane.hidden":
-            raise ImportError("cannot import name 'x' from 'castplane.geometry'")
-        return real_import(name, *a, **k)
-
-    monkeypatch.setattr(importlib, "import_module", bad_symbol)
-    with pytest.raises(ImportError):
-        pipeline._classify_hidden(doc, {"A": {}})
+    monkeypatch.setattr(hidden, "classify_document", spy)
+    scene = castplane.load_scene(wall_and_ground_scene())
+    A = castplane.shadow_geometry(scene)
+    B = castplane.project_scene(scene, A)
+    with pytest.raises(RuntimeError, match="inside classify_document"):
+        pipeline.compose(scene, B, hidden_lines=True)
+    assert calls == [(True, True)]
+    pipeline.compose(scene, B, hidden_lines=False)
+    assert len(calls) == 1
 
 
 @pytest.mark.parametrize("name", ["example_basic", "example_curved_demo", "random_seed3_3objects"])

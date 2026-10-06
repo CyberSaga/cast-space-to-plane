@@ -302,6 +302,26 @@ castplane stages examples/basic.json | python3 -c "import json,sys; d=json.load(
 | `warning_table(warnings) -> str` | `info` 用的固定寬度警告表（code / ids / message） |
 | `EXIT_OK`、`EXIT_IO`、`EXIT_INPUT`、`EXIT_MISSING_DEPENDENCY`、`FORMATS` | 結束碼 0 / 1 / 2 / 3 與可用格式 |
 
+### 2.17 `castplane.hidden` — 取樣式消隱（合約 §5.1.6，M4）
+
+C 段在 `hidden_lines` 開啟時呼叫；純 numpy、確定性（取樣位置只取決於畫出的圖形）。
+
+| 函式 | 說明 |
+| --- | --- |
+| `classify_document(doc, A, B, cull=True) -> dict` | 填入 `edges[]`、外形母線、明暗交界線段的 `visibility` / `runs`，圓錐曲線的 `runs` / `hidden_polylines`（可見段之外的 `arcs` / `ellipses` / `polylines` 移除），以及 `shadows[].polygon_edges`；只指派新串列，不改 A、B。`cull=False` 關閉畫面矩形剔除（結果相同，測試用） |
+| `occluder(rec) -> dict` | A 段物件或受影面紀錄的精確遮擋物：方塊、稜柱（側面四邊形 + 端面點包含，凹稜柱正確）、圓柱／圓錐、球、有界面（凸板）、無界地面（平面）；其他種類用通用封閉網格（有 `triangles` 用它，否則用 `mesh` 的面），永不拋例外 |
+| `scene_occluders(A) -> list` | 所有物件 + 有界面 + `receivers[0]` 的無界地面 |
+| `first_hit(occ, O, D, eps=HLR_RAY_EPS) -> ndarray` | 射線 `O + t D` 的第一個邊界交點參數 `t > eps`（沒有時為 `inf`） |
+| `occluded(occs, C, X, eps, cam=None, bounds=None) -> ndarray` | 點 `X` 被隱藏：某遮擋物 `first_hit(C, X − C) < 1 − eps`；給 `bounds` 時做結果不變的剔除 |
+| `image_bounds(occ, cam)` | 遮擋物外包點的投影矩形與最小深度 `(u_min, u_max, v_min, v_max, depth_min)`；地面或有點在近平面後方時為 `None`（不剔除） |
+| `hlr_sample_count(length_mm) -> int` | `min(4096, max(8, ceil(ℓ/1 mm − 1e-9)))` |
+| `hlr_tol_mm(length_mm) -> float` | 邊界容差 `max(1/64, ℓ/262144)` mm |
+| `classify_curve(visible_at, p0, p1, length_mm)` | 一條曲線的中點取樣 + 固定 6 次二分：回傳 `(visibility, [(pa, pb, visible), ...])` |
+| `drawn_segment_4d(cam, A4, B4)`、`drawn_segments_4d(cam, A4, B4)` | 畫出線段的 4D 端點：近平面裁切，再以 `P·X` 上的四個矩形泛函裁切（端點可為方向） |
+| `clip_polygon_4d(cam, V4) -> (points4, ids)` | 影子多邊形的 4D 裁切路徑；`ids[j]` 是畫出邊 j 所在的原始邊，裁切產生的邊為 `None` |
+| `runs_straight(result, a3, b3, length_mm)`、`runs_conic(interval, runs, cum, th)` | 文件的 run 紀錄：直線 `{s, t, mm, visible}`、圓錐曲線 `{interval, theta, mm, visible}` |
+| `HLR_SPACING_MM`、`HLR_MIN_SAMPLES`、`HLR_MAX_SAMPLES`、`HLR_BISECTIONS`、`HLR_RAY_EPS` | 1.0、8、4096、6、1e-5（合約固定） |
+
 ## 3. 警告代碼（合約 §2.9）
 
 | 代碼 | 條件 | ids | 效果 |

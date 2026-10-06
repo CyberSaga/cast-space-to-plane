@@ -1495,6 +1495,7 @@ def arc_record(circle: dict, theta0: float, theta1: float, full: bool, T, cam: d
     entry.pop("cond", None)
     entry.update({
         "which": which, "back": bool(back), "H": H, "rho": rho,
+        "TE": TE,       # M4 (contract §5.1.6.4): the 4-D map X(theta) = T E (rho cos, rho sin, 1) for stage C
         "whole_circle": is_full, "near_cut": near_cut,
         "visible": [[float(a), float(b)] for a, b in visible],
         "front": [[float(a), float(b)] for a, b in front],
@@ -1583,7 +1584,8 @@ def _stage_b_prepare(obj: dict, cam: dict, tol: float) -> dict:
         for t in cd["terminator"]:
             if "segment" in t:
                 A4, B4 = t["segment"]
-                it = {"segment": _terminator_segment_names(oid, t, cd["silhouette"]), "segment_h": None, "keep": False}
+                it = {"segment": _terminator_segment_names(oid, t, cd["silhouette"]), "segment_h": None, "keep": False,
+                      "X4": (A4, B4)}   # M4 (contract §5.1.6.4): the stage-A world endpoints for stage C
                 items.append(it)
                 seg_A.append(A4)
                 seg_B.append(B4)

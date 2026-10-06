@@ -1465,16 +1465,9 @@ def compose(scene: dict, B: dict, hidden_lines=None) -> dict:
 
 
 def _classify_hidden(doc: dict, B: dict) -> None:
-    """Contract §5.1.6.5: the sampled hidden-line removal of stage C (``castplane.hidden``, the M4
-    H-track).  Until that module exists the document keeps the switch-off values; any other import error
-    (one raised inside ``castplane.hidden``) propagates.  The H-track replaces this bridge by a plain import."""
-    import importlib
-    try:
-        hidden = importlib.import_module(f"{__package__}.hidden")
-    except ModuleNotFoundError as exc:
-        if exc.name != f"{__package__}.hidden":
-            raise
-        return
+    """Contract §5.1.6.5: the sampled hidden-line removal of stage C (``castplane.hidden.classify_document``
+    with the camera-free stage A reached through ``B["A"]``)."""
+    from . import hidden
     hidden.classify_document(doc, B["A"], B)
 
 
