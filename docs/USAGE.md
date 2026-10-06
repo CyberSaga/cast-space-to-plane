@@ -277,7 +277,7 @@ castplane stages examples/basic.json | python3 -c "import json,sys; d=json.load(
 | 函式 | 說明 |
 | --- | --- |
 | `geometry_json.canonical(obj)` | 遞迴轉成 JSON 原生型別、浮點數 `x + 0.0`（去 −0.0）、numpy → Python |
-| `geometry_json.dumps(doc) -> str` | 確定性的序列化：`json.dumps(canonical(doc), sort_keys=True, indent=1, ensure_ascii=False)` |
+| `geometry_json.dumps(doc) -> str` | 確定性的序列化：`json.dumps(canonical(doc), sort_keys=True, indent=1, ensure_ascii=False, allow_nan=False)`；文件裡出現 NaN / Infinity 是合約違規（規格 §7.1 第 6 列），`dumps` 會丟出 `ValueError`，不會寫出 `NaN`（合約 §5.4.5，與 TypeScript 寫出器相同的失敗方式） |
 | `geometry_json.write_geometry_json(doc, path)` | 寫檔（UTF-8、結尾換行） |
 | `svg.write_svg(doc, layers=None) -> str` | 規格 §6.1 分圖層 SVG；`layers` 選子集，順序固定；未知 id 拋 `ValueError` |
 | `svg.LAYER_ORDER`、`svg.STYLE` | 圖層順序與預設樣式屬性字串 |

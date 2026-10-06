@@ -230,3 +230,21 @@ def test_cli_render_writes_construction_layers(tmp_path):
     assert '<g id="construction.LP"' in svg
     doc = json.loads((tmp_path / "construction_demo.json").read_text(encoding="utf-8"))
     assert doc["construction"]["rays"]
+
+
+def test_dumps_rejects_non_finite_numbers():
+    """Contract §5.4.5 [decision]: a NaN / Infinity in a document is a contract violation (spec §7.1 row 6);
+    the writer passes ``allow_nan=False`` on both of its paths (C encoder and reference), so ``dumps``
+    raises ``ValueError`` -- the same failure as the TypeScript writer -- and never writes ``NaN``."""
+    from castplane.output import geometry_json
+
+    for bad in (float("nan"), float("inf"), float("-inf"), np.float64("nan"), np.array([1.0, np.inf])):
+        with pytest.raises(ValueError):
+            dumps({"x": bad})
+        with pytest.raises(ValueError):
+            geometry_json._reference_dumps({"x": [0.0, {"y": bad}]})
+        with pytest.raises(ValueError):
+            dumps({"a": [1.0, {"b": [bad]}]})
+    assert geometry_json._REFERENCE_KW["allow_nan"] is False
+    assert dumps({"x": 1.0, "y": -0.0, "z": [1e300, 2]}) == json.dumps({"x": 1.0, "y": 0.0, "z": [1e300, 2]},
+                                                                      sort_keys=True, indent=1)

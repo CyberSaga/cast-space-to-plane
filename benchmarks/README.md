@@ -3,7 +3,11 @@
 `bench.py` measures the two spec §8 performance targets on the deterministic M3
 benchmark scene built by `tests.reference.random_scenes.make_benchmark_scene`:
 100 primitives (prisms on 33/34-gon bases plus a few cylinders, cones and one
-sphere; ≈10k mesh edges), one point light, one ground receiver.
+sphere; ≈10k mesh edges), one point light, one ground receiver.  Since M7 step 1
+(contract §5.4.9, §5.0.9) the scene is a **committed file**,
+`scenes/benchmark_100.json`, which `bench.py` loads under its default arguments;
+only the variants (`--objects N` ≠ 100, `--no-curved`) are generated.  The
+TypeScript benchmark reads the same file, so both measure the same input bytes.
 
 | path | what is timed | target |
 | --- | --- | --- |
@@ -49,6 +53,21 @@ that produced the status, so a PASS is never ambiguous.
 Determinism of the scene: `make_benchmark_scene` is seeded, so every run measures
 exactly the same input; `tests/test_reference.py` checks that the scene stays the
 same and carries ≈10k edges.
+
+## The committed scene file (M7 step 1)
+
+```sh
+python3 benchmarks/export_scene.py     # rewrites scenes/benchmark_100.json and scenes/benchmark_100.build.json
+```
+
+`export_scene.py` writes `make_benchmark_scene()` through `geometry_json.canonical` +
+`json.dumps(sort_keys=True, indent=1)` + newline (6748 floats, 4 ints, 213 strings) and records
+the build that wrote it in `benchmark_100.build.json` (`{"python": …, "numpy": …}`).  Lock rule
+(`tests/test_bench.py::test_benchmark_scene_file_matches_generator`): the file must equal the
+generator's output byte for byte when the running NumPy version equals the recorded one (a
+NumPy `Generator` bit stream is not frozen across releases, NEP 19); on another NumPy the
+committed file and the fresh scene must both load and have the same object count, types and
+mesh edge count.  Refresh the file only deliberately (and say so in the commit).
 
 ## Current status (M3, 2026-10-06, after the second §8 performance pass)
 
@@ -99,3 +118,22 @@ rule out for v1) or a compiled path, both outside the v1 "numpy only" constraint
 interactive host that keeps a stage A cached can recover most of the collector's share
 with `gc.freeze()` on the cache and a higher `gc.set_threshold`; the library does not do
 this for it.
+
+## M7 step 1 (2026-10-06): the committed file `scenes/benchmark_100.json`
+
+`python3 benchmarks/bench.py -n 5 --gate full`, three consecutive runs, now reading the committed
+file (byte-identical to the generator's scene on this build, so the measured document is the same
+as before: 100 primitives, 10726 mesh edges, 9030 drawn edges, 15171 named points). This container
+is slower than the one of the M3 table above: the pre-step-1 `bench.py` (generating the scene) on
+the same container measured full render 592 ms (695), camera-only 189 ms (195) in one run. The
+gate is unchanged (`--gate full`, D17); the camera-only row stays informational until the
+TypeScript measurement of §5.4.9.
+
+| path | run 1 | run 2 | run 3 | target | status |
+| --- | --- | --- | --- | --- | --- |
+| full render | 539 ms (599) | 553 ms (645) | 554 ms (584) | < 1 s | **PASS** (3/3) |
+| camera-only re-render | 156 ms (164) | 165 ms (182) | 164 ms (165) | < 100 ms | FAIL (informational, D17) |
+| same, cyclic GC disabled | 143 ms (148) | 147 ms (150) | 144 ms (153) | – | informational |
+| stage A only | 151 ms | 161 ms | 156 ms | – | – |
+| SVG writer only | 54 ms | 56 ms | 62 ms | – | – |
+| JSON dumps only | 223 ms | 217 ms | 223 ms | – | – |

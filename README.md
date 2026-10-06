@@ -171,8 +171,8 @@ result = castplane.render(scene)        # {"geometry": doc, "svg": "<svg …>"}
 | 退化情況（§5.7） | 每列至少一個測試，檢查警告代碼與輸出有限 | `python3 -m pytest tests/test_degenerate.py -q` |
 | 光線投射對照組（§7.3） | 亂數場景（1–10 個基元，含凹稜柱與光源垂足在凹口內的案例），地面取樣網格逐點射線測試，影子多邊形柵格化後 IoU ≥ 0.99（另逐物件比對）；與幾何法零程式碼共用 | `python3 -m pytest tests/test_raycast.py -q`（較慢） |
 | 屬性測試（§7.4） | hypothesis 生成隨機場景與相機，驗證全部不變量，並針對退化情況生成專門分佈 | `python3 -m pytest tests/test_property.py -q`（較慢） |
-| 一致性測試集（§7.5） | 34 個案例的輸入與 §6.2 輸出，畫面座標容差 1e-6 mm、警告代碼集合相同；TypeScript 移植的合約 | `python3 -m pytest tests/test_conformance.py -q`；重新產生：`python3 tools/regen_conformance.py --reason "…"` |
-| 效能基準（§8） | 100 個基元、約 1 萬條邊：完整渲染 < 1 s、只換相機 < 100 ms | `python3 benchmarks/bench.py`（不在預設測試內；目前量測狀態見 `benchmarks/README.md`） |
+| 一致性測試集（§7.5） | 34 個案例的輸入與 §6.2 輸出，畫面座標容差 1e-6 mm、警告代碼集合相同；TypeScript 移植的合約。比對常數的單一來源是 `tests/conformance/rules.json`（Python 與 TypeScript 執行器共用，含逐案例的 `case_overrides`） | `python3 -m pytest tests/test_conformance.py -q`；重新產生：`python3 tools/regen_conformance.py --reason "…"`；比對規則變更：`python3 tools/regen_conformance.py --rules-only --reason "…"` |
+| 效能基準（§8） | 100 個基元、約 1 萬條邊：完整渲染 < 1 s、只換相機 < 100 ms；預設讀取提交的場景檔 `benchmarks/scenes/benchmark_100.json`（`benchmarks/export_scene.py` 產生，TypeScript 基準讀同一個檔） | `python3 benchmarks/bench.py`（不在預設測試內；目前量測狀態見 `benchmarks/README.md`） |
 
 ## 里程碑（規格 §10）
 
@@ -181,11 +181,11 @@ result = castplane.render(scene)        # {"geometry": doc, "svg": "<svg …>"}
 | M0 骨架與相機 | 場景 JSON 讀取與驗證、相機矩陣、近平面裁切、方塊線框 SVG、地平線與消失點 | 完成 |
 | M1 多面體投射陰影與作圖線 | 平面投影矩陣、受光判定、光輪廓邊、影子多邊形、L′ F′ 與作圖線、六個 SVG 圖層、JSON 輸出 | 完成 |
 | M2 曲面基元與形體陰影 | 圓柱、球、圓錐的圓錐曲線影子、明暗交界線、SVG ellipse 輸出 | 完成 |
-| M3 核心穩定（閘門） | 光線投射對照組、屬性測試、一致性測試集 v1、效能基準 | **通過（D17 豁免）**：光線投射對照（IoU ≥ 0.99）、屬性測試、一致性測試集（目前 v2）與效能基準皆已交付並通過；§8 的「完整渲染 < 1 s」已達標（約 0.35–0.45 s），「只換相機 < 100 ms」**尚未達標**（約 110–130 ms，關閉循環 GC 約 90 ms；量測結果見 `benchmarks/README.md`）。規格 §8 將數字定為目標值，閘門審查依合約 §4 / D17 豁免這一項：CI 以 `python3 benchmarks/bench.py --gate full` 為閘門（`.github/workflows/ci.yml`），只換相機列為已知未達標、留待 M7 互動介面時收斂 |
+| M3 核心穩定（閘門） | 光線投射對照組、屬性測試、一致性測試集 v1、效能基準 | **通過（D17 豁免）**：光線投射對照（IoU ≥ 0.99）、屬性測試、一致性測試集（目前 v3）與效能基準皆已交付並通過；§8 的「完整渲染 < 1 s」已達標（約 0.35–0.45 s），「只換相機 < 100 ms」**尚未達標**（約 110–130 ms，關閉循環 GC 約 90 ms；量測結果見 `benchmarks/README.md`）。規格 §8 將數字定為目標值，閘門審查依合約 §4 / D17 豁免這一項：CI 以 `python3 benchmarks/bench.py --gate full` 為閘門（`.github/workflows/ci.yml`），只換相機列為已知未達標、留待 M7 互動介面時收斂 |
 | M4 多受影面與隱藏線 | 有界受影面、逐面裁切、轉折影、取樣式隱藏線、visibility 欄位 | 未排程／預留（`receivers` 為陣列、`edges[].visibility` 已存在） |
 | M5 網格匯入 | OBJ、glTF/GLB 載入、前處理管線 | 未排程／預留（內部網格表示即 M5 格式） |
 | M6 多光源 | 多光源影子分組、疊影規則、SVG 子圖層 | 未排程／預留（`lights` 為陣列、影子帶 light id、`cast_shadow.<light>` 子圖層） |
-| M7 TypeScript 移植與網頁 UI | 核心移植、three.js 場景顯示、相機拖曳 | 未排程／預留（一致性測試集即合約） |
+| M7 TypeScript 移植與網頁 UI | 核心移植、three.js 場景顯示、相機拖曳 | 進行中：第 1 步完成（`tests/conformance/rules.json` 與一致性測試集 v3、`regen_conformance.py --rules-only`、提交的基準場景檔 `benchmarks/scenes/benchmark_100.json`、`tests/test_ts_port.py`）；移植本身見合約 §5.4 與 `docs/PLAN-v2.md` |
 | M8 STEP 評估 | 可行性報告、原型解析器 | 未排程／預留 |
 
 ## 與規格文件的差異
@@ -207,7 +207,7 @@ result = castplane.render(scene)        # {"geometry": doc, "svg": "<svg …>"}
 13. **SVG 不依賴 svgwrite。** 規格 §8 列 svgwrite 為選用相依；實作以標準函式庫字串輸出，核心真正只依賴 numpy。
 14. **相機滾轉方向、yaw/pitch 形式、`det R = −1`** 等慣例在規格中未定義，見 `docs/ARCHITECTURE.md` §2.2（含測試向量）。
 15. **確定性。** 每個輸出浮點數先 `+ 0.0`（消除 −0.0），警告去重並排序，相同輸入兩次渲染必須位元相同（有測試）。
-16. **一致性測試集的比對。** 畫面座標 1e-6 mm 絕對容差，其餘數值 1e-9 相對容差，警告比對 `code` 集合與 `(code, ids)` 集合，不比對訊息；expected 只能由 `tools/regen_conformance.py --reason` 產生並記錄於 `CHANGELOG.md`。
+16. **一致性測試集的比對。** 畫面座標 1e-6 mm 絕對容差，其餘數值 1e-9 相對容差，警告比對 `code` 集合與 `(code, ids)` 集合，不比對訊息；expected 只能由 `tools/regen_conformance.py --reason` 產生並記錄於 `CHANGELOG.md`。比對常數寫在 `tests/conformance/rules.json`（v3 起；兩個執行器共用），唯一的逐案例放寬是 `degenerate_cylinder_cap_at_light_height` 的四個方向頂點改以 1e-6 絕對容差比對（D60）；比對規則的任何修改都經 `--rules-only` 記成新版本。
 17. **只換相機 < 100 ms 是目標值。** 目前約 110–130 ms（見 `benchmarks/README.md`），CI 以 `--gate full` 為閘門，收斂留到 M7。
 18. **自我驗證的範圍。** L′P′ ∩ F′Q′ = S′ 的驗證只對會畫出作圖線的頂點做（P、S、Q 都在近平面前方）；在相機平面附近的影子點沒有有意義的 mm 座標，兩線幾乎平行（正規化交點 < 1e-6）時略過並回報 `CONSTRUCTION_CHECK_SKIPPED`。
 19. **`LIGHT_BEHIND_CAMERA` 只對點光源。** 規格 §5.7 第 1 列沒有區分光源種類；平行光指向相機後方時 L′ 一樣是地平線下方的反光點，但那只是一個方向的普通影像、作圖線畫法不變，所以不發警告（`examples/directional.json` 即此例）。

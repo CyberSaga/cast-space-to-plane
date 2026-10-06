@@ -2777,6 +2777,21 @@ records and `per_receiver` construction), `src/meshprep.ts` (§5.2.3 incl. the f
 and the hidden-run SVG groups (§5.1.8). Nothing an M4–M6 case needs lies beyond scene JSON: M5 cases embed `data` inline
 (§5.2.9), M8 adds no case (§5.5.10), so the port implements **no loader**.
 
+### Implementation notes
+- **[decision, implementation] (M7 step 1) Path patterns are prefixes.** A `case_overrides` path (and, as before, an
+  `mm_key_paths` entry) matches a number when the pattern matches the **first `len(pattern)` entries** of the number's
+  path (`*` = any one list index or key): the v3 patterns end at the container key `direction` while the numbers sit one
+  level deeper (`shadows[0].loops[0][30].direction[1]`), so whole-path equality would match nothing. This is the rule
+  `is_image_path` already applied to `["construction", "segments", "*", "points"]`; the TS runner implements the same
+  prefix rule (`tests/test_conformance.py::path_has_prefix`).
+- **[decision, implementation] (M7 step 1) What `--rules-only` diffs against.** Each `--rules-only` entry records the
+  complete rules (one canonical JSON line under `- rules (tests/conformance/rules.json at v<N>):`) next to the diff, and
+  the diff of the next entry is taken against the last recorded rules (the first entry says "rules.json created"); git
+  is not consulted. An unchanged `rules.json` is refused (exit 1) and `--rules-only --case` is a usage error (exit 2).
+  `tests/test_conformance.py::test_rules_json_is_versioned_in_the_changelog` requires the last recorded rules to equal
+  `rules.json`, so a comparator change without a changelog entry fails the suite. A rules-only entry renders nothing and
+  therefore records no `- build:` line; `recorded_numpy_version()` takes the build of the last entry that has one.
+
 ### 5.5 M8 — STEP import (spec §9 row "STEP", spec §10 M8) — a loader, outside the core
 
 Everything in this section is a **loader** in the sense of spec §8 ("載入 … 為可選附加套件"): it runs *before*

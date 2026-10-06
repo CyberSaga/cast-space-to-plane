@@ -2,7 +2,10 @@
 
 Deterministic: every float is canonicalised with ``x + 0.0`` (no ``-0.0``),
 numpy values become plain Python, and ``json.dumps(doc, sort_keys=True,
-indent=1, ensure_ascii=False)`` writes shortest round-trip floats.
+indent=1, ensure_ascii=False, allow_nan=False)`` writes shortest round-trip floats.
+A NaN / Infinity is a contract violation (spec §7.1 row 6) and makes :func:`dumps`
+raise ``ValueError`` instead of writing the token ``NaN`` (contract §5.4.5, the same
+failure as the TypeScript writer's).
 """
 
 from __future__ import annotations
@@ -42,7 +45,7 @@ def canonical(obj):
 # serialisation (spec §8): the stdlib's C encoder when it can indent, else the pure-Python one
 # ---------------------------------------------------------------------------
 
-_REFERENCE_KW = {"sort_keys": True, "indent": 1, "ensure_ascii": False}
+_REFERENCE_KW = {"sort_keys": True, "indent": 1, "ensure_ascii": False, "allow_nan": False}
 
 
 def _reference_dumps(doc) -> str:
@@ -62,7 +65,8 @@ def _make_c_encoder():
     if c_make_encoder is None:
         return None
     try:
-        enc = c_make_encoder(None, canonical, json.encoder.encode_basestring, " ", ": ", ",", True, False, True)
+        # (markers, default, encoder, indent, key_separator, item_separator, sort_keys, skipkeys, allow_nan)
+        enc = c_make_encoder(None, canonical, json.encoder.encode_basestring, " ", ": ", ",", True, False, False)
         probe = {"b": [1, 2.5, [], {}, [[-1.0, 0.0]], {"y": None, "x": [True, "中文 \"q\""]}], "a": {}, "c": []}
         if "".join(enc(probe, 0)) != json.dumps(probe, **_REFERENCE_KW):
             return None
@@ -78,7 +82,8 @@ def dumps(doc: dict) -> str:
     """Serialise a geometry document deterministically (contract §3.1).
 
     The result is exactly ``json.dumps(canonical(doc), sort_keys=True, indent=1,
-    ensure_ascii=False)``; when the interpreter's C encoder can indent it does the work
+    ensure_ascii=False, allow_nan=False)`` -- a NaN or an infinity raises ``ValueError``
+    (contract §5.4.5) -- and when the interpreter's C encoder can indent it does the work
     (numpy values are converted by :func:`canonical` on the way).  A negative zero that the
     C path would print as ``-0.0`` is impossible in a document produced by ``compose`` (every
     float is canonical), and any other input that could carry one is re-encoded through

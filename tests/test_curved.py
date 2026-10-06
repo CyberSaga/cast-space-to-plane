@@ -935,3 +935,61 @@ def test_random_placements_and_lights_never_produce_nan_and_stay_ccw(seed):
         for entry in terminator(an, L, TOL):
             if "segment" in entry:
                 assert np.all(np.isfinite(entry["segment"]))
+
+
+# ---------------------------------------------------------------------------
+# M7 precondition (contract §5.4.4 (6)): the batched stage B of curved objects == the per-object loop
+# ---------------------------------------------------------------------------
+
+def _conformance_case_names():
+    import pathlib
+
+    cases = pathlib.Path(__file__).resolve().parent / "conformance" / "cases"
+    return sorted(p.stem for p in cases.glob("*.json"))
+
+
+@pytest.mark.parametrize("name", _conformance_case_names())
+def test_stage_b_objects_equals_per_object_loop(name, monkeypatch):
+    """``curved.stage_b_objects`` (all curved objects of a scene with the point and segment projections
+    batched) is a performance device: its result must equal :func:`curved.stage_b_object` called per
+    curved object **byte for byte** (``dumps(compose(scene, B))``), because the TypeScript port implements
+    the scalar semantics (contract §5.4.4 (6), a precondition of M7).  Checked on every conformance case
+    with the scene camera and one override camera."""
+    import pathlib
+    import types
+
+    import castplane
+    from castplane import curved as curved_mod
+    from castplane import pipeline
+    from castplane.output.geometry_json import dumps
+    from castplane.output.svg import write_svg
+    from castplane.scene import load_scene
+
+    path = pathlib.Path(__file__).resolve().parent / "conformance" / "cases" / f"{name}.json"
+    scene = load_scene(path)
+    A = castplane.shadow_geometry(scene)
+    cam = scene["camera"]
+    lens = {k: cam[k] for k in ("focal_length_mm", "frame_mm", "shift_mm", "near_m")}
+    other = dict(lens, position=[6.0, -28.0, 12.0], target=[0.0, 0.0, 0.5], roll_deg=3.0)
+    calls = []
+
+    def looped(objs, recs, cam_, tol, warnings):
+        assert len(objs) == len(recs)
+        calls.append(len(objs))
+        for obj, rec in zip(objs, recs):
+            curved_mod.stage_b_object(obj, rec, cam_, tol, warnings)
+
+    looped_module = types.SimpleNamespace(**{k: getattr(curved_mod, k) for k in dir(curved_mod)
+                                             if not k.startswith("__")})
+    looped_module.stage_b_objects = looped
+    for camera in (None, other):
+        batched = castplane.compose(scene, castplane.project_scene(scene, A, camera=camera))
+        with monkeypatch.context() as m:
+            m.setattr(pipeline, "_curved", looped_module)
+            per_object = castplane.compose(scene, castplane.project_scene(scene, A, camera=camera))
+        assert dumps(per_object) == dumps(batched)
+        assert write_svg(per_object) == write_svg(batched)
+    from castplane.primitives import CURVED_TYPES
+
+    n_curved = sum(1 for o in scene["objects"] if o["type"] in CURVED_TYPES)
+    assert calls == [n_curved, n_curved]      # the loop really replaced the batch, once per camera

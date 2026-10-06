@@ -9,6 +9,7 @@
 | `cases/<案例>.json` | 輸入：一個 spec §4 格式的場景檔，外加一個說明用的 `description` 欄位（驗證時會被忽略，contract §2.0「未知鍵忽略」） |
 | `expected/<案例>.json` | 輸出：`castplane.render(scene)["geometry"]` 經 `castplane.output.geometry_json.dumps` 寫出的 spec §6.2 幾何文件（contract §3.1 鍵、排序鍵、最短往返浮點數、結尾換行） |
 | `CHANGELOG.md` | 版本紀錄：每次重新產生 expected 的日期、版本號、案例清單與原因 |
+| `rules.json` | 比對規則常數的單一來源（v3 起，合約 §5.4.8 / §5.0.8）：`image_tol_mm`、`rel_tol`、`mm_keys`、`drawable_containers`、`arc_non_mm`、`mm_key_paths`、`int_keys`、`max_reported` 與逐案例的 `case_overrides`；Python 執行器保留自己的常數並以測試斷言兩者相等，TypeScript 執行器直接讀這個檔 |
 | `../test_conformance.py` | 比對程式（pytest） |
 | `../../tools/regen_conformance.py` | 重新產生 expected 檔的工具 |
 
@@ -27,7 +28,9 @@
 
 失敗訊息會列出案例名稱與不符的路徑（例如 `points.crate.v0.image[0]: expected …, got …`），最多列 25 條。
 
-## 來源（目前版本 v2，見 `CHANGELOG.md`；共 34 個案例）
+**逐案例放寬（`rules.json` 的 `case_overrides`，v3）。** 一筆放寬只對一個案例、只對路徑符合其 `paths`（`*` 代表任一個串列索引或鍵，比對路徑前綴）之下的**數值**改用絕對容差 `abs_tol`；非數值、串列長度、鍵集合與警告一律不放寬。目前只有一筆：`degenerate_cylinder_cap_at_light_height` 的 `shadows[*].loops[*][*].direction` 與 `shadows[*].outline[*].direction`（四個葉節點）以 1e-6 絕對容差比對——頂蓋恰在光源高度，`w_S = 0` 的交點是重根，方向頂點對 `M`、`L` 一個 ulp 的擾動以平方根放大（實測每 ulp 1.5e-9），這是案例的目的而非實作錯誤（合約 §5.4.4 (1)、D60）。`compare_documents(expected, actual, case_name)` 依案例名稱套用。
+
+## 來源（目前版本 v3，見 `CHANGELOG.md`；共 34 個案例）
 
 | 類別 | 案例 | 依據 |
 | --- | --- | --- |
@@ -45,7 +48,9 @@
 
 1. **先加案例、再改實作。** 新功能或行為變更先寫進 `cases/`，用工具產生 expected，確認差異合理後才改程式。
 2. **版本化。** expected 檔只能由 `tools/regen_conformance.py` 產生，不得手改（測試檢查檔案為 `geometry_json.dumps` 的標準形式）。工具強制要求 `--reason`，並在 `CHANGELOG.md` 追加一筆 `## v<N> — <日期>`：版本號、重新產生的案例清單、未變更的案例與原因。`v<N>` 就是測試集版本；每筆也記錄產生檔案的 Python / NumPy 版本。expected 檔只在該版本的直譯器／NumPy 上**位元相同**（別的 libm 會在少數葉節點的最後幾位有 ≈ 1e-12 的差異，容差比對仍全數通過）；`test_regen_tool_exit_codes_match_its_docstring` 只在 NumPy 版本與紀錄相同時要求 `--dry-run` 零差異，否則只要求每個有差異的案例仍通過上表的容差。
+   **比對規則也版本化（v3 起）。** `rules.json` 的任何修改都是一致性合約的修改：改完檔案後執行 `python3 tools/regen_conformance.py --rules-only --reason "…"`，工具不渲染、不碰 `expected/`，在 `CHANGELOG.md` 追加一筆 `## v<N>`（「comparator amendment, no expected file changed」），列出與上一筆紀錄的規則差異並完整記下新規則；`rules.json` 未變時拒絕記錄（結束碼 1），`--rules-only` 不能與 `--case` 併用（結束碼 2）。測試檢查最後一筆紀錄的規則等於 `rules.json`，所以比對器不能被悄悄放寬。這種條目不記錄建置版本（沒有渲染任何檔案），位元相同的判定沿用前一筆有 `build` 的條目。
 3. **TypeScript 移植必須全數通過**（spec §9、§10 M7）：移植版讀取 `cases/*.json`，產生同格式文件，依上表規則與 `expected/*.json` 比對。Python 為參考實作；兩邊不一致時先判定哪邊違反 spec / contract，再改測試集。
+   TypeScript 執行器是 `ts/test/conformance.test.ts`（合約 §5.4.8）：直接讀取倉庫中的 `cases/`、`expected/` 與 `rules.json`（不複製、不產生 expected），比對器是 `tests/test_conformance.py` 的逐字移植，同樣套用 `case_overrides`。兩個執行器必須在同一個 commit 上都通過。TS 失敗先當成 TS 的錯；若審查發現是 Python 輸出違反 spec / contract，修 Python 並以 `--reason` 重新產生（CHANGELOG 註明 TS 的發現）；若不一致來自案例刻意坐落的 ulp 放大邊界，則經 `--rules-only` 加一筆 `case_overrides`，並在 `reason` 寫下實測的敏感度。兩條路都是有版本的 CHANGELOG 條目，沒有任何東西可以悄悄改。
 4. **退化情況以警告代碼為準。** 退化案例的重點是 `warnings` 代碼集合與輸出仍然完整有限，不是特定數值。
 
 ## 新增案例

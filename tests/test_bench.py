@@ -276,3 +276,47 @@ def test_cached_stage_a_documents_are_stable_and_serialisable():
 def test_svg_module_exports():
     assert svg_mod.LAYER_ORDER == ("horizon", "objects", "form_shadow", "cast_shadow", "construction", "labels")
     assert callable(svg_mod._fmt_many) and callable(svg_mod._fmt_bytes)
+
+
+# ---------------------------------------------------------------------------
+# the committed benchmark scene file (contract §5.4.9 lock rule, §5.0.9)
+# ---------------------------------------------------------------------------
+
+def _mesh_edge_signature(raw: dict) -> tuple:
+    scene = load_scene(raw)
+    return (len(scene["objects"]), [o["type"] for o in scene["objects"]], random_scenes.count_edges(raw))
+
+
+def test_benchmark_scene_file_matches_generator():
+    """``benchmarks/scenes/benchmark_100.json`` is ``make_benchmark_scene()`` written by
+    ``benchmarks/export_scene.py``.  Byte equality is required only when the running NumPy version
+    equals the recorded one (the ``Generator`` bit stream is not frozen across NumPy releases, NEP 19);
+    otherwise the committed file and the fresh scene must both load and have the same object count,
+    types and mesh edge count (the spec §8 size)."""
+    import export_scene  # benchmarks/export_scene.py
+
+    scene_file = ROOT / "benchmarks" / "scenes" / "benchmark_100.json"
+    build = json.loads((ROOT / "benchmarks" / "scenes" / "benchmark_100.build.json").read_text(encoding="utf-8"))
+    assert set(build) == {"python", "numpy"} and all(isinstance(v, str) and v for v in build.values())
+    assert export_scene.SCENE_FILE == scene_file
+    text = scene_file.read_text(encoding="utf-8")
+    committed = json.loads(text)
+    assert text == json.dumps(committed, sort_keys=True, indent=1) + "\n"       # the exporter's canonical form
+    fresh = random_scenes.make_benchmark_scene()
+    if build["numpy"] == np.__version__:
+        assert text == export_scene.scene_text(fresh), "benchmark_100.json drifted from make_benchmark_scene()"
+    assert _mesh_edge_signature(committed) == _mesh_edge_signature(fresh)
+    n_objects, _, n_edges = _mesh_edge_signature(committed)
+    assert n_objects == 100 and 10_000 <= n_edges <= 11_000
+
+
+def test_bench_default_input_is_the_committed_file():
+    """Under its default arguments ``bench.py`` measures the committed file (the same bytes as the
+    TypeScript benchmark); the ``--objects`` / ``--no-curved`` variants are generated."""
+    raw, source = bench.benchmark_input()
+    assert source == "benchmarks/scenes/benchmark_100.json" and bench.SCENE_FILE.name == "benchmark_100.json"
+    assert raw == json.loads(bench.SCENE_FILE.read_text(encoding="utf-8"))
+    raw6, source6 = bench.benchmark_input(6)
+    assert source6.startswith("make_benchmark_scene(6") and raw6 == random_scenes.make_benchmark_scene(6)
+    raw_nc, _ = bench.benchmark_input(100, no_curved=True)
+    assert raw_nc == random_scenes.make_benchmark_scene(100, include_curved=False)
