@@ -13,7 +13,8 @@ import pytest
 
 from castplane.light import (face_lit_flags, is_parallel, light_vector, lit, lit_state,
                              silhouette_edges, silhouette_loops)
-from castplane.shadow import (clip_loop_to_plane, foot, shadow_loop, shadow_matrix, shadow_w)
+from castplane.shadow import (clip_loop_to_plane, clip_mesh_to_plane, foot, shadow_loop, shadow_matrix,
+                              shadow_w)
 
 GROUND = np.array([0.0, 0.0, 1.0, 0.0])
 TOL = 1e-9
@@ -632,3 +633,94 @@ def test_loops_with_several_excursions_to_infinity(seed, n_dir):
             # outgoing: the following vertex is at infinity too
             assert V[(k + 1) % n][3] == 0.0
     assert signed_area(truncate(V, 1e5)) > 0
+
+
+# --------------------------------------------------------------------------- ground clip of the solid (contract §2.3)
+def _rotated(mesh, rx_deg, ry_deg, dz):
+    """Tilt a mesh (Z-Y-X order: here Ry·Rx) and shift it by ``dz``; normals are rotated too."""
+    rx, ry = math.radians(rx_deg), math.radians(ry_deg)
+    Rx = np.array([[1, 0, 0], [0, math.cos(rx), -math.sin(rx)], [0, math.sin(rx), math.cos(rx)]])
+    Ry = np.array([[math.cos(ry), 0, math.sin(ry)], [0, 1, 0], [-math.sin(ry), 0, math.cos(ry)]])
+    R = Ry @ Rx
+    out = dict(mesh)
+    out["vertices"] = mesh["vertices"] @ R.T + np.array([0.0, 0.0, dz])
+    out["face_normals"] = mesh["face_normals"] @ R.T
+    return out
+
+
+def _euler(mesh):
+    return mesh["vertices"].shape[0] - mesh["edges"].shape[0] + len(mesh["faces"])
+
+
+def test_clip_mesh_to_plane_tilted_box_gets_one_cap_with_outward_normal_minus_n():
+    box = _rotated(prism_mesh([[-0.5, -0.5], [0.5, -0.5], [0.5, 0.5], [-0.5, 0.5]], 1.0), 25.0, -15.0, -0.3)
+    clipped, origins = clip_mesh_to_plane(box, GROUND, TOL)
+    assert _euler(clipped) == 2 and clipped["edge_faces"].shape[1] == 2
+    assert np.all(clipped["vertices"][:, 2] >= -TOL)
+    crossings = [k for k, o in enumerate(origins) if isinstance(o, tuple)]
+    assert crossings and all(abs(clipped["vertices"][k, 2]) <= 1e-12 for k in crossings)
+    caps = [i for i, f in enumerate(clipped["faces"]) if all(isinstance(origins[v], tuple) for v in f)]
+    assert len(caps) == 1
+    np.testing.assert_allclose(clipped["face_normals"][caps[0]], [0.0, 0.0, -1.0], atol=1e-12)
+    # original faces keep their normals; the kept original vertices keep their coordinates
+    for k, o in enumerate(origins):
+        if isinstance(o, int):
+            np.testing.assert_allclose(clipped["vertices"][k], box["vertices"][o])
+        else:
+            i, j = o[1], o[2]
+            a, b = box["vertices"][i], box["vertices"][j]
+            t = a[2] / (a[2] - b[2])
+            np.testing.assert_allclose(clipped["vertices"][k], a + t * (b - a), atol=1e-12)
+
+
+def test_clip_mesh_to_plane_bridges_a_hole_into_the_cap():
+    """A tilted U prism whose notch dips below the ground: the ground cross-section is an annulus and
+    must become ONE cap face (keyhole polygon), never a spurious upward-facing hole face."""
+    u = [[-1, -1], [1, -1], [1, 1], [0.3, 1], [0.3, -0.5], [-0.3, -0.5], [-0.3, 1], [-1, 1]]
+    mesh = _rotated(prism_mesh(u, 1.0), 15.0, 10.0, -0.2)
+    clipped, origins = clip_mesh_to_plane(mesh, GROUND, TOL)
+    # the bridge is one edge shared by the cap with itself: V - E + F = 2 - 2 (one hole)
+    assert _euler(clipped) == 0 and clipped["edge_faces"].shape[1] == 2
+    caps = [i for i, f in enumerate(clipped["faces"]) if all(isinstance(origins[v], tuple) for v in f)]
+    assert len(caps) == 1
+    cap = clipped["faces"][caps[0]]
+    assert len(cap) > len(set(cap))                                     # the bridge vertices appear twice
+    bridge = [k for k, e in enumerate(clipped["edges"].tolist()) if clipped["edge_faces"][k].tolist() == [caps[0]] * 2]
+    assert len(bridge) == 1
+    assert clipped["face_normals"][caps[0]][2] < 0.0                    # outward normal -n
+    # a face normal pointing up at z = 0 would be a hole drawn as a face
+    for i, f in enumerate(clipped["faces"]):
+        if np.all(np.abs(clipped["vertices"][f][:, 2]) <= 1e-9):
+            assert clipped["face_normals"][i][2] < 0.0
+    # the silhouette of the clipped solid under a light above is a closed walk with the cut-face edges in it
+    L = light_vector({"type": "point", "position": [1.5, -1.0, 6.0]})
+    lit_flags, _ = face_lit_flags(clipped, L, TOL)
+    assert not lit_flags[caps[0]]
+    loops = silhouette_loops(clipped, lit_flags)
+    assert loops and any(isinstance(origins[v], tuple) for loop in loops for v in loop)
+
+
+def test_clip_mesh_to_plane_whole_solid_below_gives_an_empty_mesh():
+    box = prism_mesh([[-0.5, -0.5], [0.5, -0.5], [0.5, 0.5], [-0.5, 0.5]], 1.0, position=(0.0, 0.0, -2.0))
+    clipped, origins = clip_mesh_to_plane(box, GROUND, TOL)
+    assert clipped["vertices"].shape == (0, 3) and clipped["faces"] == [] and origins == []
+    lit_flags, _ = face_lit_flags(clipped, light_vector({"type": "point", "position": [0.0, 0.0, 3.0]}), TOL)
+    assert silhouette_loops(clipped, lit_flags) == []
+
+
+def test_clip_mesh_to_plane_keeps_a_vertex_on_the_plane_without_duplicates():
+    # bottom edge v0-v1 exactly on the ground, the opposite bottom edge below (rotation about x)
+    a = math.radians(30.0)
+    box = prism_mesh([[-0.5, -0.5], [0.5, -0.5], [0.5, 0.5], [-0.5, 0.5]], 1.0)
+    R = np.array([[1, 0, 0], [0, math.cos(a), -math.sin(a)], [0, math.sin(a), math.cos(a)]])
+    V = box["vertices"] @ R.T
+    V[:, 2] -= V[2, 2]                   # v2 (and v3) exactly at z = 0, v0 / v1 below, the top above
+    box = dict(box, vertices=V, face_normals=box["face_normals"] @ R.T)
+    assert abs(V[2, 2]) <= 1e-15 and abs(V[3, 2]) <= 1e-15 and V[0, 2] < 0 and V[1, 2] < 0 and V[4, 2] > 0
+    clipped, origins = clip_mesh_to_plane(box, GROUND, TOL)
+    assert _euler(clipped) == 2
+    assert origins.count(2) == 1 and origins.count(3) == 1 and 0 not in origins and 1 not in origins
+    # the on-plane vertices are their own crossings: only the two vertical edges from v0 / v1 cross
+    assert sorted(o for o in origins if isinstance(o, tuple)) == [("ground", 0, 4), ("ground", 1, 5)]
+    caps = [i for i, f in enumerate(clipped["faces"]) if np.all(np.abs(clipped["vertices"][f][:, 2]) <= 1e-12)]
+    assert len(caps) == 1 and len(clipped["faces"][caps[0]]) == 4

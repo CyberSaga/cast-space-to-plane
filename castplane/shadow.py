@@ -14,11 +14,15 @@ import math
 
 import numpy as np
 
+from .homogeneous import to_homogeneous
+from .mesh import mesh_from_faces
+
 __all__ = [
     "shadow_matrix",
     "foot",
     "shadow_w",
     "clip_loop_to_plane",
+    "clip_mesh_to_plane",
     "shadow_loop",
     "ARC_STEP_DEG",
 ]
@@ -126,6 +130,165 @@ def clip_loop_to_plane(points4, pi, tol: float = 0.0, sources=None):
     if not out_pts:
         return np.zeros((0, 4), dtype=np.float64), [], True
     return np.array(out_pts, dtype=np.float64), out_src, True
+
+
+def clip_mesh_to_plane(mesh: dict, pi, tol: float = 0.0) -> tuple[dict, list]:
+    """Contract §2.3 ground clip of a whole closed mesh: the part of the solid on the side
+    ``pi^T X >= 0`` as a new closed mesh (contract §2.4 dict), so that its silhouette loops
+    are those of "the part above the ground", cut face included.
+
+    Every face polygon is clipped with :func:`clip_loop_to_plane` (crossing points are shared
+    through the crossed edge); the open boundary left by the dropped parts (directed edges
+    that occur in a single clipped face) is chained into cap faces oriented with their
+    outward normal ``-n`` (the cap is the bottom of the kept part).  Returns
+    ``(clipped_mesh, origins)`` where ``origins[k]`` is the original vertex index (int) of
+    the ``k``-th clipped vertex or ``("ground", i, j)`` for the crossing of the original
+    edge ``i-j`` (``i < j``), which lies on the plane and is its own shadow and foot.
+    Raises ``ValueError`` when the clipped surface is not a closed manifold (a degenerate
+    contact with the plane); callers fall back to clipping the silhouette loops only.
+    """
+    pi = np.asarray(pi, dtype=np.float64).reshape(4)
+    V = np.asarray(mesh["vertices"], dtype=np.float64).reshape(-1, 3)
+    V4 = to_homogeneous(V)
+    f = V4 @ pi
+    kept = f >= -tol
+    new_vertices: list = []
+    origins: list = []
+    index_of = {}
+    for k in range(V.shape[0]):
+        if kept[k]:
+            index_of[k] = len(new_vertices)
+            new_vertices.append(V[k])
+            origins.append(k)
+    crossing: dict = {}
+    faces_out: list = []
+    for face in mesh["faces"]:
+        face = [int(v) for v in face]
+        P, src, _below = clip_loop_to_plane(V4[face], pi, tol, sources=face)
+        if P.shape[0] < 3:
+            continue
+        poly = []
+        for row, s in zip(P, src):
+            if isinstance(s, tuple):
+                i, j = int(s[1]), int(s[2])
+                key = (min(i, j), max(i, j))
+                if key not in crossing:
+                    crossing[key] = len(new_vertices)
+                    new_vertices.append(row[:3] / row[3])
+                    origins.append(("ground", key[0], key[1]))
+                poly.append(crossing[key])
+            else:
+                poly.append(index_of[int(s)])
+        faces_out.append(poly)
+    # cap faces: the reversed boundary edges chained into loops (lowest-index unused outgoing edge)
+    directed = set()
+    for poly in faces_out:
+        for a in range(len(poly)):
+            directed.add((poly[a], poly[(a + 1) % len(poly)]))
+    boundary = sorted((q, p) for (p, q) in directed if (q, p) not in directed)
+    outgoing: dict = {}
+    for idx, (a, _b) in enumerate(boundary):
+        outgoing.setdefault(a, []).append(idx)
+    used = [False] * len(boundary)
+    cap_loops = []
+    for start in range(len(boundary)):
+        if used[start]:
+            continue
+        loop = []
+        cur = start
+        while True:
+            used[cur] = True
+            a, b = boundary[cur]
+            loop.append(a)
+            nxt = None
+            for cand in outgoing.get(b, []):
+                if not used[cand]:
+                    nxt = cand
+                    break
+            if nxt is None:
+                break
+            cur = nxt
+        if len(loop) >= 3:
+            cap_loops.append(loop)
+    vertices = np.array(new_vertices, dtype=np.float64).reshape(-1, 3)
+    faces_out.extend(_cap_faces(cap_loops, vertices, pi[:3]))
+    if not faces_out:  # the whole solid is below the plane: nothing is left to cast a shadow
+        empty = {"vertices": np.zeros((0, 3)), "edges": np.zeros((0, 2), dtype=np.int64), "faces": [],
+                 "face_normals": np.zeros((0, 3)), "edge_faces": np.zeros((0, 2), dtype=np.int64),
+                 "vertex_names": []}
+        return empty, []
+    names = [f"v{o}" if isinstance(o, int) else f"x{o[1]}_{o[2]}" for o in origins]
+    clipped = mesh_from_faces(vertices, faces_out, names)
+    return clipped, origins
+
+
+def _plane_basis(n: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+    """Orthonormal ``(e1, e2)`` spanning the plane with normal ``n`` (``e1 × e2`` along ``n``)."""
+    n = n / np.linalg.norm(n)
+    helper = np.array([0.0, 0.0, 1.0]) if abs(n[2]) < 0.9 else np.array([1.0, 0.0, 0.0])
+    e1 = np.cross(helper, n)
+    e1 = e1 / np.linalg.norm(e1)
+    e2 = np.cross(n, e1)
+    return e1, e2
+
+
+def _signed_area(uv: np.ndarray) -> float:
+    """Shoelace area of a closed 2-D loop (positive when counter-clockwise)."""
+    x, y = uv[:, 0], uv[:, 1]
+    return 0.5 * float(np.sum(x * np.roll(y, -1) - np.roll(x, -1) * y))
+
+
+def _point_in_loop(p: np.ndarray, uv: np.ndarray) -> bool:
+    """Even-odd point-in-polygon test of ``p`` against the closed 2-D loop ``uv``."""
+    inside = False
+    k = uv.shape[0]
+    for i in range(k):
+        x0, y0 = uv[i]
+        x1, y1 = uv[(i + 1) % k]
+        if (y0 > p[1]) != (y1 > p[1]):
+            xint = x0 + (p[1] - y0) * (x1 - x0) / (y1 - y0)
+            if p[0] < xint:
+                inside = not inside
+    return inside
+
+
+def _cap_faces(cap_loops: list, vertices: np.ndarray, n: np.ndarray) -> list:
+    """Turn the chained boundary loops of the ground clip into cap faces (contract §2.3 / §2.4).
+
+    The cut of a solid by the plane is a set of regions, each possibly with
+    holes (a tilted concave prism whose notch dips below the ground).  A loop
+    running counter-clockwise about ``-n`` is an outer boundary; one running the
+    other way is a hole, and it is bridged into the outer loop that contains it
+    (keyhole polygon: the bridge edge is traversed twice and cancels out), so
+    that every cap is ONE face with outward normal ``-n`` and the hole edges
+    keep the cap, not a spurious upward face, as their second face.
+    """
+    if not cap_loops:
+        return []
+    e1, e2 = _plane_basis(np.asarray(n, dtype=np.float64))
+    uv_of = [np.stack([vertices[loop] @ e1, vertices[loop] @ e2], axis=1) for loop in cap_loops]
+    areas = [_signed_area(uv) for uv in uv_of]
+    # the cap's outward normal is -n: an outer loop is clockwise in the (e1, e2) frame of n
+    outer = [k for k, a in enumerate(areas) if a < 0.0]
+    holes = [k for k, a in enumerate(areas) if a >= 0.0]
+    polys = {k: list(cap_loops[k]) for k in outer}
+    orphan = []
+    for h in holes:
+        p = uv_of[h][0]
+        containing = [k for k in outer if _point_in_loop(p, uv_of[k])]
+        if not containing:
+            orphan.append(list(cap_loops[h]))
+            continue
+        k = min(containing, key=lambda idx: abs(areas[idx]))
+        # bridge between the closest (outer vertex, hole vertex) pair
+        d = uv_of[k][:, None, :] - uv_of[h][None, :, :]
+        i, j = np.unravel_index(int(np.argmin(np.einsum("ijk,ijk->ij", d, d))), d.shape[:2])
+        hole = list(cap_loops[h])
+        rotated = hole[j:] + hole[:j]
+        poly = polys[k]
+        pos = poly.index(cap_loops[k][i])
+        polys[k] = poly[:pos + 1] + rotated + [rotated[0], cap_loops[k][i]] + poly[pos + 1:]
+    return [polys[k] for k in outer] + orphan
 
 
 def _direction_vertex(S_a: np.ndarray, w_a: float, S_b: np.ndarray, w_b: float,

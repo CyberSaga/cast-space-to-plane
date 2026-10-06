@@ -1,0 +1,141 @@
+{
+  "version": "0.1",
+  "units": "m",
+  "up": "z",
+  "objects": [
+    {
+      "id": "crate",
+      "type": "box",
+      "size": [
+        1.0,
+        1.0,
+        0.8
+      ],
+      "transform": {
+        "position": [
+          1.2,
+          5.0,
+          0.0
+        ],
+        "rotation_deg": [
+          0,
+          0,
+          20
+        ]
+      }
+    },
+    {
+      "id": "block",
+      "type": "box",
+      "size": [
+        0.6,
+        0.6,
+        1.6
+      ],
+      "transform": {
+        "position": [
+          -1.6,
+          6.5,
+          0.0
+        ],
+        "rotation_deg": [
+          0,
+          0,
+          -10
+        ]
+      }
+    },
+    {
+      "id": "wedge",
+      "type": "prism",
+      "polygon": [
+        [
+          -0.7,
+          -0.5
+        ],
+        [
+          0.7,
+          -0.5
+        ],
+        [
+          0.0,
+          0.6
+        ]
+      ],
+      "height": 0.7,
+      "transform": {
+        "position": [
+          -0.2,
+          3.8,
+          0.0
+        ],
+        "rotation_deg": [
+          0,
+          0,
+          35
+        ]
+      }
+    }
+  ],
+  "lights": [
+    {
+      "id": "lamp",
+      "type": "point",
+      "position": [
+        -1.8,
+        2.2,
+        2.6
+      ]
+    }
+  ],
+  "receivers": [
+    {
+      "id": "ground",
+      "type": "plane",
+      "normal": [
+        0,
+        0,
+        1
+      ],
+      "offset": 0.0
+    }
+  ],
+  "camera": {
+    "position": [
+      0.5,
+      -2.0,
+      1.6
+    ],
+    "target": [
+      0.0,
+      5.0,
+      0.8
+    ],
+    "roll_deg": 0,
+    "focal_length_mm": 20,
+    "frame_mm": [
+      36,
+      24
+    ],
+    "shift_mm": [
+      0.0,
+      0.0
+    ],
+    "near_m": 0.05
+  },
+  "output": {
+    "canvas_mm": [
+      273,
+      182
+    ],
+    "layers": [
+      "horizon",
+      "objects",
+      "form_shadow",
+      "cast_shadow",
+      "construction",
+      "labels"
+    ],
+    "png_dpi": 150
+  }
+}

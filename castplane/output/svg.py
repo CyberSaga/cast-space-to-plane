@@ -68,6 +68,15 @@ class _Canvas:
         sep = " " if attrs else ""
         return f'<polygon points="{coords}"{sep}{attrs}/>'
 
+    def path(self, loops, attrs: str = "") -> str:
+        """One ``<path>`` whose subpaths are the closed loops (filled together under the group's fill rule)."""
+        parts = []
+        for pts in loops:
+            coords = ["{},{}".format(*self.xy(p)) for p in pts]
+            parts.append("M " + " L ".join(coords) + " Z")
+        sep = " " if attrs else ""
+        return f'<path d="{" ".join(parts)}"{sep}{attrs}/>'
+
     def polyline(self, pts, attrs: str = "") -> str:
         coords = " ".join(",".join(self.xy(p)) for p in pts)
         sep = " " if attrs else ""
@@ -149,10 +158,16 @@ def _layer_form_shadow(doc: dict, cv: _Canvas) -> list:
     points = doc.get("points", {})
     for entry in doc.get("form_shadow", []):
         sub = []
-        for face in entry.get("faces", []) or []:
-            pts = [points.get(n, {}).get("image") for n in face]
-            if pts and all(p is not None for p in pts):
-                sub.append(cv.polygon(pts))
+        polygons = entry.get("polygons")
+        if polygons is not None:  # near-clipped drawable polygons in image mm (contract §2.2), M1+
+            for poly in polygons:
+                if len(poly) >= 3:
+                    sub.append(cv.polygon(poly))
+        else:
+            for face in entry.get("faces", []) or []:
+                pts = [points.get(n, {}).get("image") for n in face]
+                if pts and all(p is not None for p in pts):
+                    sub.append(cv.polygon(pts))
         term = []
         for t in entry.get("terminator", []) or []:
             if "segment" in t:
@@ -168,21 +183,25 @@ def _layer_form_shadow(doc: dict, cv: _Canvas) -> list:
 
 
 def _layer_cast_shadow(doc: dict, cv: _Canvas) -> list:
+    """One ``<path>`` per shadow entry with all of its loops as subpaths, so that the ``nonzero``
+    fill rule of the layer group unites the loops of one object (contract §2.5 / §2.10)."""
     per_light = {}
     points = doc.get("points", {})
     for sh in doc.get("shadows", []):
-        polys = []
-        for poly in sh.get("polygons", []) or []:  # clipped drawable polygons in image mm (M1)
-            if len(poly) >= 3:
-                polys.append(cv.polygon(poly))
-        if not polys:
+        items = []
+        polygons = sh.get("polygons")
+        if polygons is None:  # documents without drawables: fall back to the named outline points
+            polygons = []
             for loop in sh.get("loops", []) or []:
                 pts = [points.get(n, {}).get("image") if isinstance(n, str) else None for n in loop]
                 if len(pts) >= 3 and all(p is not None for p in pts):
-                    polys.append(cv.polygon(pts))
+                    polygons.append(pts)
+        loops = [poly for poly in polygons if len(poly) >= 3]  # clipped drawable polygons in image mm (§2.5)
+        if loops:
+            items.append(cv.path(loops))
         for entry in sh.get("conics", []) or []:
-            polys.extend(_drawables(entry, cv))
-        per_light.setdefault(sh.get("light", ""), []).extend(polys)
+            items.extend(_drawables(entry, cv))
+        per_light.setdefault(sh.get("light", ""), []).extend(items)
     return [_group(f"cast_shadow.{light}", "", items) for light, items in sorted(per_light.items())]
 
 
@@ -227,7 +246,7 @@ def _layer_labels(doc: dict, cv: _Canvas) -> list:
             if oid not in top or z > top[oid][0]:
                 top[oid] = (z, img)
         elif len(parts) == 2 and oid in ("L", "F"):
-            body.append(cv.text(img, name))
+            body.append(cv.text(img, name, dx=1.4, dy=2.4))  # below the L'/F' marker text of the construction layer
     for oid in sorted(top):
         z, img = top[oid]
         body.append(cv.text(img, oid, 'font-weight="bold"', dx=0.8, dy=-3.2))

@@ -19,6 +19,7 @@ from castplane.errors import WARNING_CODES
 from castplane.output.geometry_json import dumps
 from castplane.output.svg import LAYER_ORDER, write_svg
 from castplane.scene import load_scene
+from tests.reference import random_scenes
 
 EXAMPLES = pathlib.Path(__file__).resolve().parents[1] / "examples"
 
@@ -51,8 +52,9 @@ def test_render_basic_has_six_layers_in_order_and_finite_json(basic):
     assert all(math.isfinite(x) for x in walk_numbers(doc))
     assert set(doc) == {"canvas_mm", "camera", "points", "edges", "shadows", "form_shadow", "construction",
                         "horizon", "warnings"}
-    assert doc["shadows"] == [] and doc["form_shadow"] == []
-    assert doc["construction"]["light_point"] is None and doc["construction"]["rays"] == []
+    # M1: the crate casts a shadow and has unlit faces; the pillar (cylinder) is left to M2
+    assert [s["object"] for s in doc["shadows"]] == ["crate"] and [f["object"] for f in doc["form_shadow"]] == ["crate"]
+    assert doc["construction"]["light_point"] is not None and doc["construction"]["rays"]
     assert doc["warnings"] == []
     assert doc["canvas_mm"] == [273.0, 182.0]
     assert len(doc["camera"]["P"]) == 3 and len(doc["camera"]["P"][0]) == 4
@@ -75,7 +77,7 @@ def test_points_and_edges_shape(basic):
     p = doc["points"]["crate.v0"]
     assert set(p) == {"world", "image", "depth"} and len(p["image"]) == 2
     e = doc["edges"][0]
-    assert e["object"] == "crate" and e["from"] == "crate.v0" and e["silhouette"] is False
+    assert e["object"] == "crate" and e["from"] == "crate.v0" and isinstance(e["silhouette"], bool)
     assert e["visibility"] == "visible" and e["segment"] is not None
     # back flag with camera as light: the crate's bottom-face-only edges are back, top edges are front
     back = {(e["from"], e["to"]) for e in doc["edges"] if e["object"] == "crate" and e["back"]}
@@ -87,14 +89,21 @@ def test_points_and_edges_shape(basic):
 
 def test_svg_mapping_and_styles(basic):
     scene, result = basic
-    svg = result["svg"]
+    doc, svg = result["geometry"], result["svg"]
     assert 'width="273mm" height="182mm"' in svg and 'viewBox="0 0 273 182"' in svg
     assert '<circle cx="136.5" cy="91" r="0.6"' in svg  # principal point at (W/2, H/2)
     assert 'stroke-dasharray="1.2 0.8"' in svg and 'stroke="#111" stroke-width="0.3"' in svg
     assert '<g id="cast_shadow" fill="#000" fill-opacity="0.3"' in svg
     assert '<g id="form_shadow" fill="#335"' in svg
     assert ">VPy<" in svg and ">v0<" in svg and ">crate<" in svg
-    assert '<g id="construction" stroke-width="0.15" fill="none"/>' in svg  # empty layer still emitted
+    assert '<g id="construction" stroke-width="0.15" fill="none">' in svg
+    # an empty layer is still emitted as an empty group
+    assert '<g id="construction" stroke-width="0.15" fill="none"/>' in write_svg(dict(doc, construction=None))
+    # a light below the receiver: no rays / outlines, but L' and F' are still reported and drawn
+    below = castplane.render(dict(scene, lights=[{"id": "lamp", "type": "point", "position": [0.0, 3.0, -1.0]}]))
+    assert "LIGHT_BELOW_RECEIVER" in {w["code"] for w in below["geometry"]["warnings"]}
+    assert below["geometry"]["construction"]["rays"] == [] and ">L′<" in below["svg"]
+    assert '<g id="construction.LP"' not in below["svg"]
 
 
 def test_write_svg_layer_subset_and_errors(basic):
@@ -152,7 +161,9 @@ def test_segment_endpoints_equal_point_images(basic):
         if _inside(a, rect) and _inside(b, rect):
             np.testing.assert_allclose(e["segment"], [a, b], atol=1e-12)
             checked += 1
-    assert checked == len(doc["edges"]) == 12 + 32 * 3  # box + 32-gon cylinder, all inside the canvas
+    # the box only: the approximate mesh of the cylinder is not part of the document (contract §2.4)
+    assert checked == len(doc["edges"]) == 12
+    assert not any(n.startswith("pillar.") for n in doc["points"])
 
 
 def test_rect_clipped_segment_ends_on_rect_boundary_and_on_the_edge_line():
@@ -366,3 +377,68 @@ def test_cli_render_validate_stages_info_and_error_exit_code(tmp_path, capsys):
     assert main(["validate", str(bad)]) == 2
     err = capsys.readouterr().err
     assert "error: lights:" in err
+
+
+def _multi_loop_scene():
+    """A concave star prism lit from below its top: several silhouette loops whose drawn polygons overlap."""
+    for seed in range(20):
+        rng = np.random.default_rng(seed)
+        n = int(rng.integers(6, 9))
+        poly = random_scenes.star_polygon(rng, n, 0.35, 1.0, True)
+        lz, ang = float(rng.uniform(0.2, 0.8)), float(rng.uniform(0.0, 6.28))
+        prism = {"id": "star", "type": "prism", "polygon": poly, "height": 1.0, "transform": {"position": [0, 0, 0]}}
+        light = {"id": "lamp", "type": "point", "position": [2.0 * math.cos(ang), 2.0 * math.sin(ang), lz]}
+        scene = load_scene({
+            "version": "0.1", "objects": [prism], "lights": [light],
+            "receivers": [{"id": "ground", "type": "plane", "normal": [0, 0, 1], "offset": 0.0}],
+            "camera": {"position": [3.0, -6.0, 4.0], "target": [0.0, 0.0, 0.5], "focal_length_mm": 24,
+                       "frame_mm": [36, 24]},
+            "output": {"canvas_mm": [360, 240]}})
+        doc = castplane.render(scene)["geometry"]
+        if len(doc["shadows"][0]["loops"]) >= 2:
+            return scene, doc
+    raise AssertionError("no multi-loop scene found")
+
+
+def test_multi_loop_shadow_is_one_path_filled_with_the_nonzero_rule():
+    """Contract §2.5 / §2.10: all loops of one object's shadow form ONE <path> (subpaths) under the
+    ``fill-rule="nonzero"`` group, so overlapping loops are not double-darkened."""
+    scene, doc = _multi_loop_scene()
+    svg = write_svg(doc, layers=["cast_shadow"])
+    group = re.search(r'<g id="cast_shadow.lamp"[^>]*>(.*?)</g>', svg, re.S).group(1)
+    assert group.count("<path") == 1 and "<polygon" not in group
+    d = re.search(r'<path d="([^"]*)"', group).group(1)
+    assert d.count("M ") == len(doc["shadows"][0]["polygons"]) >= 2 and d.count(" Z") == d.count("M ")
+    assert re.search(r'<g id="cast_shadow"[^>]*fill-rule="nonzero"', svg)
+    # rasterised: the fill never stacks (alpha <= one 0.3 fill); the stroke is removed to isolate the fill
+    cairosvg = pytest.importorskip("cairosvg")
+    Image = pytest.importorskip("PIL.Image")
+    import io
+    plain = svg.replace('stroke="#000"', 'stroke="none"')
+    png = cairosvg.svg2png(bytestring=plain.encode("utf-8"), dpi=25.4)
+    alpha = np.array(Image.open(io.BytesIO(png)).convert("RGBA"))[:, :, 3]
+    assert alpha.max() <= round(0.3 * 255) + 1 and np.count_nonzero(alpha == round(0.3 * 255)) > 1000
+    # ... whereas separate polygons would stack to 1 - 0.7^2
+    stacked = plain.replace(f'<path d="{d}"/>', "".join(
+        f'<polygon points="{" ".join(pt.strip() for pt in sub.replace("L ", "").split())}"/>'
+        for sub in d.split("M ")[1:] for sub in [sub.replace(" Z", "")]))
+    assert "<polygon" in stacked
+    alpha2 = np.array(Image.open(io.BytesIO(cairosvg.svg2png(bytestring=stacked.encode("utf-8"), dpi=25.4)))
+                      .convert("RGBA"))[:, :, 3]
+    assert alpha2.max() >= round((1 - 0.7 ** 2) * 255) - 1
+
+
+def test_curved_objects_contribute_no_mesh_edges_or_vertex_labels(basic):
+    """Contract §2.4: the 32-segment mesh of a curved primitive exists only for bounding boxes; its
+    vertices are neither points, edges nor labels of the document (M2 adds outline generators and conics)."""
+    scene, result = basic
+    doc, svg = result["geometry"], result["svg"]
+    assert {e["object"] for e in doc["edges"]} == {"crate"}
+    assert not any(n.startswith("pillar.") for n in doc["points"])
+    labels = re.findall(r">v(\d+)<", svg)
+    assert sorted(int(v) for v in labels) == list(range(8))
+    assert ">crate<" in svg and ">pillar<" not in svg
+    # scene scale still includes the curved mesh (stage A)
+    A = castplane.shadow_geometry(scene)
+    assert [o["id"] for o in A["objects"]] == ["crate", "pillar"]
+    assert A["bbox"][1][1] >= 6.25 and A["bbox"][1][2] >= 2.4      # pillar at (-1.5, 6), r = 0.3, h = 2.4

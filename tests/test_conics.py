@@ -7,10 +7,12 @@ import math
 import numpy as np
 import pytest
 
-from castplane.conics import (adjugate3, arc_svg_flags, circle_matrix, classify, condition_number,
-                              conic_point, ellipse_params, embed_circle, functional_coeffs,
-                              ground_conic_map, normalize_conic, sample_arc,
-                              sub_arcs_where_nonnegative, transform_conic)
+from castplane.conics import (adjugate3, arc_svg_flags, centred_conic, circle_embedding, circle_frame,
+                              circle_matrix, circle_point, circle_record, classify, condition_number,
+                              conic_entry, conic_point, ellipse_arc_params, ellipse_params,
+                              embed_circle, functional_coeffs, ground_conic_map, is_sampled,
+                              normalize_conic, sample_arc, sample_count, sub_arcs_where_nonnegative,
+                              transform_conic)
 from castplane.light import light_vector
 from castplane.shadow import shadow_matrix
 
@@ -292,3 +294,158 @@ def test_arc_svg_flags_from_midpoint(th0, th1):
     span = abs(th1 - th0)
     assert large == (1 if span > math.pi else 0)
     assert sweep == (1 if th1 > th0 else 0)  # the map is orientation preserving
+
+
+
+# --------------------------------------------------------------------------- translation-invariant classification (contract §2.6)
+def test_far_small_circle_is_a_healthy_ellipse():
+    """Contract §2.6: a 0.3 m circle 50 m from the origin must classify as a healthy ellipse."""
+    for dist in (0.0, 50.0, 500.0, 5000.0):
+        H = affine(1.0, 1.0, 0.0, dist, 0.3 * dist)
+        C = transform_conic(circle_matrix(0.3), H)
+        assert classify(C) == "ellipse"
+        assert condition_number(C) < 1e8
+        assert not is_sampled(C)
+        Cc, centre = centred_conic(C)
+        assert np.allclose(centre, [dist, 0.3 * dist], atol=1e-6 * max(1.0, dist))
+        assert np.allclose(Cc[:2, 2], 0.0, atol=1e-9)        # centred: no linear terms
+        assert np.allclose(Cc, np.diag([1.0, 1.0, -0.09]), atol=1e-6)
+        params = ellipse_params(C)
+        assert params[1][0] == pytest.approx(0.3, rel=1e-6) and params[1][1] == pytest.approx(0.3, rel=1e-6)
+
+
+@pytest.mark.parametrize("seed", range(12))
+def test_classification_is_translation_invariant(seed):
+    rng = np.random.default_rng(seed)
+    C = circle_matrix(float(rng.uniform(0.2, 2.0)))
+    # an ellipse, a hyperbola and a parabola, each translated by a large offset
+    H_ell = affine(*rng.uniform(0.5, 3.0, size=2), rng.uniform(0, math.pi), 0.0, 0.0)
+    H_hyp = np.array([[1.0, 0, 0], [0, 1.0, 0], [0, 1.0, 0.5 * math.sqrt(-C[2, 2])]])
+    H_par = np.array([[1.0, 0, 0], [0, 1.0, 0], [0, 1.0, math.sqrt(-C[2, 2])]])
+    for H, expected in ((H_ell, "ellipse"), (H_hyp, "hyperbola"), (H_par, "parabola")):
+        Cp = transform_conic(C, H)
+        assert classify(Cp) == expected
+        # a parabola has no centre: its degeneracy / conditioning are judged at its vertex,
+        # so it is translation invariant like the ellipse and the hyperbola (contract §2.6)
+        for scale in (1.0, 1e3, 1e5):
+            tx, ty = rng.uniform(-1, 1, size=2) * scale
+            T = np.array([[1.0, 0, -tx], [0, 1.0, -ty], [0, 0, 1.0]])   # x^T (T^T C T) x: conic moved by (tx, ty)
+            Ct = T.T @ Cp @ T
+            assert classify(Ct) == expected, (expected, scale)
+            assert not is_sampled(Ct), (expected, scale)
+            assert condition_number(Ct) == pytest.approx(condition_number(Cp), rel=1e-3)
+
+
+def test_parabola_is_translated_to_its_vertex():
+    """Contract §2.6 [decision] (translation-invariant classification) for parabolas: the
+    vertex of ``y = x^2 / (2p)`` moved by ``(tx, ty)`` is ``(tx, ty)``, the vertex-centred
+    conic has no constant term and no linear term along the tangent, and the verdict
+    (kind, sampled, cond) does not depend on the distance from the origin."""
+    p = 0.7
+    C0 = np.array([[1.0, 0.0, 0.0], [0.0, 0.0, -p], [0.0, -p, 0.0]])      # x^2 - 2 p y = 0
+    Cc0, v0 = centred_conic(C0)
+    assert np.allclose(v0, 0.0)
+    for tx, ty in ((0.0, 0.0), (3.0, -2.0), (1e3, 0.5e3), (-1e4, 1e4)):
+        R = rot2(0.3 * tx / (abs(tx) + 1.0))
+        T = np.eye(3)
+        T[:2, :2] = R.T                                   # x_local = R^T (x - t)
+        T[:2, 2] = -(R.T @ np.array([tx, ty]))
+        Ct = T.T @ C0 @ T
+        Cc, vertex = centred_conic(Ct)
+        assert np.allclose(vertex, [tx, ty], atol=1e-6 * max(1.0, abs(tx), abs(ty)))
+        assert abs(Cc[2, 2]) < 1e-6                       # the vertex lies on the conic
+        assert classify(Ct) == "parabola"
+        assert not is_sampled(Ct)
+        assert condition_number(Ct) == pytest.approx(condition_number(C0), rel=1e-6)
+        # the vertex-centred conic is the rotated C_c0 up to the max-normalisation scale
+        sv, sv0 = np.linalg.svd(Cc, compute_uv=False), np.linalg.svd(Cc0, compute_uv=False)
+        assert np.allclose(sv / sv[0], sv0 / sv0[0], rtol=1e-6)
+    # the image-space case of the review: a parabola whose vertex is a metre (1e3 mm) off-canvas
+    C = transform_conic(circle_matrix(1.0), np.array([[1.0, 0, 0], [0, 1.0, 0], [0, 1.0, 1.0]]))
+    T = np.array([[1.0, 0, -1e3], [0, 1.0, 0], [0, 0, 1.0]])
+    far = T.T @ C @ T
+    assert classify(far) == "parabola" and not is_sampled(far) and condition_number(far) < 10.0
+    # a parabola without a linear term along its axis is a pair of parallel lines: degenerate
+    assert classify(np.diag([1.0, 0.0, -1.0])) == "degenerate"
+    assert centred_conic(np.diag([1.0, 0.0, -1.0]))[1] is None
+    assert classify(np.diag([1.0, 0.0, 0.0])) == "degenerate"              # a double line
+
+
+def test_classify_degenerate_cases_and_zero_block():
+    # two lines x^2 - y^2 = 0: det 0 -> degenerate even though the 2x2 block is fine
+    assert classify(np.diag([1.0, -1.0, 0.0])) == "degenerate"
+    # a single line (zero 2x2 block)
+    assert classify(np.array([[0, 0, 1.0], [0, 0, 1.0], [1.0, 1.0, 0]])) == "degenerate"
+    assert condition_number(np.zeros((3, 3))) == math.inf
+    assert is_sampled(np.diag([1.0, -1.0, 0.0]))
+    # a non-degenerate but ill-conditioned (tiny) ellipse is sampled; a very elongated one
+    # (|det| <= 1e-12 after max-normalisation) is degenerate -- sampled either way
+    C = transform_conic(circle_matrix(3e-5), affine(1.0, 1.0, 0.0, 5.0, 5.0))
+    assert classify(C) == "ellipse" and condition_number(C) > 1e8 and is_sampled(C)
+    C = transform_conic(circle_matrix(1.0), affine(1.0, 1e-5, 0.0, 0.0, 0.0))
+    assert classify(C) == "degenerate" and is_sampled(C)
+
+
+# --------------------------------------------------------------------------- circle helpers / output helpers
+def test_circle_frame_record_embedding_and_point():
+    e1, e2 = circle_frame([0.0, 0.0, 1.0])              # fallback n x x
+    assert np.allclose(e1, [0, 1, 0]) and np.allclose(e2, [-1, 0, 0])
+    e1, e2 = circle_frame([1.0, 1.0, 0.0])
+    n = np.array([1.0, 1.0, 0.0]) / math.sqrt(2)
+    assert np.allclose(e1, np.cross(n, [0, 0, 1.0]) / np.linalg.norm(np.cross(n, [0, 0, 1.0])))
+    assert np.allclose(e2, np.cross(n, e1))
+    assert np.allclose(np.cross(e1, e2), n)              # right-handed: theta increasing is CCW about n
+    circ = circle_record([1, 2, 3], e1, e2, 0.5)
+    E = circle_embedding(circ)
+    assert np.allclose(E, embed_circle([1, 2, 3], e1, e2))
+    P = circle_point(circ, 0.3)
+    assert P.shape == (4,) and P[3] == 1.0
+    assert np.allclose(P[:3], circ["centre"] + 0.5 * (math.cos(0.3) * e1 + math.sin(0.3) * e2))
+    assert circle_point(circ, np.array([0.0, 1.0])).shape == (2, 4)
+
+
+def test_sample_count_rule():
+    assert sample_count(0.0, 2 * math.pi) == 64
+    assert sample_count(0.0, math.pi) == 32
+    assert sample_count(1.0, 1.0 + math.pi / 2) == 16
+    assert sample_count(0.0, 0.01) == 8
+    assert sample_count(2 * math.pi, 0.0) == 64                     # direction does not matter
+    assert sample_count(0.0, math.pi, per_circle=256) == 128
+
+
+def test_conic_entry_shape_and_canonical_floats():
+    circ = circle_record([0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0], 1.0)
+    H = affine(2.0, 1.0, 0.3, 1.0, -1.0)
+    entry = conic_entry(circ, H, arc=(2.0, 0.5), map="shadow")
+    assert set(entry) == {"conic", "kind", "arc", "circle", "map", "sampled", "cond"}
+    assert entry["kind"] == "ellipse" and entry["map"] == "shadow" and not entry["sampled"]
+    assert entry["arc"] == {"theta0": 0.5, "theta1": 2.0}        # CCW range, theta1 > theta0
+    assert max(max(row) for row in entry["conic"]) == 1.0
+    assert entry["circle"]["radius"] == 1.0 and entry["circle"]["e1"] == [1.0, 0.0, 0.0]
+    assert conic_entry(circ, H)["arc"] is None
+    assert conic_entry(circ, H, arc={"theta0": 0.1, "theta1": 0.4})["arc"] == {"theta0": 0.1, "theta1": 0.4}
+    import json
+    json.dumps(entry)                                              # JSON serialisable
+    singular = np.array([[1.0, 0, 0], [0, 1.0, 0], [0, 0, 0]])
+    bad = conic_entry(circ, singular)
+    assert bad["kind"] == "degenerate" and bad["sampled"] and bad["cond"] == math.inf
+
+
+def test_ellipse_arc_params_matches_direct_points():
+    H = affine(2.0, 1.0, 0.4, 1.0, -1.0)
+    res = ellipse_arc_params(H, 1.0, 0.2, 2.5)
+    assert res is not None
+    centre, axes, rot = ellipse_params(transform_conic(circle_matrix(1.0), H))
+    assert np.allclose(res["centre"], centre) and res["axes"] == pytest.approx(axes) and res["rotation"] == pytest.approx(rot)
+    p0 = conic_point(H, 0.2, 1.0)
+    p1 = conic_point(H, 2.5, 1.0)
+    assert np.allclose(res["start"], p0[:2] / p0[2]) and np.allclose(res["end"], p1[:2] / p1[2])
+    assert res["large_arc"] == 0 and res["sweep"] == 1                 # 2.3 rad < pi, orientation preserving
+    assert ellipse_arc_params(H, 1.0, 2.5, 0.2)["sweep"] == 0
+    assert ellipse_arc_params(H, 1.0, 0.2, 4.0)["large_arc"] == 1
+    # a point behind the camera (x3 <= 0) -> None; a hyperbola -> None
+    H_behind = H.copy()
+    H_behind[2] = [0.0, 0.0, -1.0]
+    assert ellipse_arc_params(H_behind, 1.0, 0.0, 1.0) is None
+    H_hyp = np.array([[1.0, 0, 0], [0, 1.0, 0], [0, 1.0, 0.5]])
+    assert ellipse_arc_params(H_hyp, 1.0, 0.0, 1.0) is None

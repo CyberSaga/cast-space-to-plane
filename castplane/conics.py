@@ -23,16 +23,29 @@ __all__ = [
     "transform_conic",
     "ground_conic_map",
     "normalize_conic",
+    "centred_conic",
     "classify",
     "condition_number",
+    "is_sampled",
     "ellipse_params",
     "conic_point",
     "sample_arc",
+    "sample_count",
     "functional_coeffs",
     "sub_arcs_where_nonnegative",
     "arc_svg_flags",
+    "circle_frame",
+    "circle_record",
+    "circle_embedding",
+    "circle_point",
+    "conic_entry",
+    "ellipse_arc_params",
     "TWO_PI",
     "ARC_MIN_SPAN",
+    "SAMPLES_PER_CIRCLE",
+    "MIN_ARC_SAMPLES",
+    "COND_MAX",
+    "CLASSIFY_TOL",
 ]
 
 TWO_PI = 2.0 * math.pi
@@ -40,6 +53,16 @@ TWO_PI = 2.0 * math.pi
 # sub-arcs shorter than this (radians) are numerically meaningless and are dropped
 # (they would become zero-length SVG arcs); see sub_arcs_where_nonnegative.
 ARC_MIN_SPAN = 1e-12
+
+#: Contract §2.6 sampling rule (output stage only): 64 segments per full circle,
+#: proportionally fewer for arcs, minimum 8.
+SAMPLES_PER_CIRCLE = 64
+MIN_ARC_SAMPLES = 8
+#: Contract §2.6 / spec §11.3: condition number above which a conic is emitted as a
+#: sampled polyline (``CONIC_SAMPLED``).
+COND_MAX = 1e8
+#: Contract §2.6: threshold on the normalised determinants used by :func:`classify`.
+CLASSIFY_TOL = 1e-12
 
 
 def circle_matrix(rho: float) -> np.ndarray:
@@ -110,32 +133,121 @@ def normalize_conic(C) -> np.ndarray:
     return C / m
 
 
-def classify(C, tol: float = 1e-12) -> str:
-    """Contract §2.6: ``ellipse`` / ``parabola`` / ``hyperbola`` by the sign of the
-    determinant of the upper-left 2x2 block of the normalised conic (``|det2| <= tol`` ->
-    parabola); ``|det(C')| <= tol`` -> ``degenerate``."""
+def _parabola_vertex(A: np.ndarray, b: np.ndarray, c: float):
+    """Vertex of the parabola ``x^T A x + 2 b^T x + c = 0`` (``A`` singular, rank 1).
+
+    With ``n`` the unit eigenvector of the non-zero eigenvalue ``lam`` of ``A`` and ``m``
+    the axis direction (``A m = 0``), write ``x = alpha n + beta m``.  The gradient
+    ``A x + b = (lam alpha + b.n) n + (b.m) m`` is parallel to the axis at the vertex, so
+    ``alpha = -(b.n) / lam``, and the vertex lies on the conic, so
+    ``beta = -(lam alpha^2 + 2 (b.n) alpha + c) / (2 b.m)``.  Returns ``None`` when
+    ``|b.m| <= CLASSIFY_TOL`` (no linear term along the axis: the conic is a pair of
+    parallel lines or empty, i.e. degenerate, and has no vertex)."""
+    p, q, r = float(A[0, 0]), float(A[0, 1]), float(A[1, 1])
+    half = 0.5 * (p + r)
+    rad = math.hypot(0.5 * (p - r), q)
+    lam1, lam2 = half + rad, half - rad
+    lam = lam1 if abs(lam1) >= abs(lam2) else lam2
+    if lam == 0.0:
+        return None
+    if abs(q) > 1e-15 * max(1.0, abs(p), abs(r)):
+        n = np.array([q, lam - p], dtype=np.float64)
+    elif abs(p) >= abs(r):
+        n = np.array([1.0, 0.0])
+    else:
+        n = np.array([0.0, 1.0])
+    n = n / float(np.linalg.norm(n))
+    m = np.array([-n[1], n[0]], dtype=np.float64)
+    bn, bm = float(b @ n), float(b @ m)
+    if abs(bm) <= CLASSIFY_TOL:
+        return None
+    alpha = -bn / lam
+    beta = -(lam * alpha * alpha + 2.0 * bn * alpha + c) / (2.0 * bm)
+    return alpha * n + beta * m
+
+
+def centred_conic(C):
+    """Contract §2.6: the conic translated to its own centre, ``C_c = T^T C T`` with
+    ``T = [[I, centre], [0, 1]]`` and ``centre = -A^{-1} C[0:2, 2]`` (``A`` the upper-left
+    2x2 block), then max-normalised.  When ``A`` is singular within ``CLASSIFY_TOL``
+    (a parabola) the conic has no centre and is translated to its **vertex** instead
+    (:func:`_parabola_vertex`), which keeps the verdict translation invariant for
+    parabolas too (contract §2.6 **[decision]**: classification must be translation
+    invariant; a parabola far from the origin would otherwise read as degenerate /
+    ill-conditioned because its entries grow with the square of the distance).  When no
+    translation point exists (zero 2x2 block, or a parabola without a linear term along
+    its axis -- both degenerate) the normalised conic itself is returned.
+
+    Returns ``(C_c (3x3), point (2,) | None)`` with ``point`` the centre (ellipse /
+    hyperbola), the vertex (parabola) or ``None`` when no translation was applied.
+    Degeneracy and conditioning are judged on ``C_c`` so that the verdict is translation
+    invariant (a 0.3 m circle 50 m from the origin is a healthy ellipse)."""
+    N = normalize_conic(C)
+    if not np.all(np.isfinite(N)):
+        return N, None
+    A = N[:2, :2]
+    b = N[:2, 2]
+    amax = float(np.max(np.abs(A)))
+    if amax == 0.0:
+        return N, None
+    An = A / amax
+    det_n = float(An[0, 0] * An[1, 1] - An[0, 1] * An[1, 0])
+    if abs(det_n) <= CLASSIFY_TOL:
+        point = _parabola_vertex(A, b, float(N[2, 2]))
+        if point is None or not np.all(np.isfinite(point)):
+            return N, None
+    else:
+        detA = float(A[0, 0] * A[1, 1] - A[0, 1] * A[1, 0])
+        point = -np.array([A[1, 1] * b[0] - A[0, 1] * b[1],
+                           -A[1, 0] * b[0] + A[0, 0] * b[1]], dtype=np.float64) / detA
+    T = np.array([[1.0, 0.0, point[0]], [0.0, 1.0, point[1]], [0.0, 0.0, 1.0]], dtype=np.float64)
+    Cc = T.T @ N @ T
+    return normalize_conic(Cc), point
+
+
+def classify(C, tol: float = CLASSIFY_TOL) -> str:
+    """Contract §2.6 (translation-invariant classification): let ``A`` be the upper-left
+    2x2 block of the max-normalised conic, itself normalised by its max-|entry|;
+    ``kind`` is ``parabola`` when ``|det A| <= tol``, otherwise ``ellipse`` / ``hyperbola``
+    by the sign of ``det A``.  Degeneracy is judged on the conic translated to its centre
+    (its vertex for a parabola, :func:`centred_conic`): ``|det C_c| <= tol`` ->
+    ``degenerate``.  A zero 2x2 block (a line or an empty conic) is ``degenerate`` too."""
     N = normalize_conic(C)
     if not np.all(np.isfinite(N)):
         return "degenerate"
-    det3 = float(np.linalg.det(N))
-    if abs(det3) <= tol:
+    A = N[:2, :2]
+    amax = float(np.max(np.abs(A)))
+    if amax == 0.0:
         return "degenerate"
-    det2 = float(N[0, 0] * N[1, 1] - N[0, 1] * N[1, 0])
+    An = A / amax
+    det2 = float(An[0, 0] * An[1, 1] - An[0, 1] * An[1, 0])
+    Cc, _centre = centred_conic(N)
+    det3 = float(np.linalg.det(Cc))
+    if not math.isfinite(det3) or abs(det3) <= tol:
+        return "degenerate"
     if abs(det2) <= tol:
         return "parabola"
     return "ellipse" if det2 > 0.0 else "hyperbola"
 
 
 def condition_number(C) -> float:
-    """2-norm condition number of the normalised conic (``> 1e8`` -> ``CONIC_SAMPLED``,
-    contract §2.6 / spec §11.3).  Returns ``inf`` for a singular matrix."""
-    N = normalize_conic(C)
-    if not np.all(np.isfinite(N)):
+    """2-norm condition number of the conic translated to its centre (vertex for a
+    parabola; contract §2.6: ``> 1e8`` -> ``CONIC_SAMPLED``, spec §11.3).  Returns ``inf``
+    for a singular matrix."""
+    Cc, _centre = centred_conic(C)
+    if not np.all(np.isfinite(Cc)):
         return math.inf
-    s = np.linalg.svd(N, compute_uv=False)
+    s = np.linalg.svd(Cc, compute_uv=False)
     if s[-1] <= 0.0:
         return math.inf
     return float(s[0] / s[-1])
+
+
+def is_sampled(C, cond_max: float = COND_MAX) -> bool:
+    """Contract §2.6 / §2.9 ``CONIC_SAMPLED`` predicate: the conic is degenerate or its
+    (centred) condition number exceeds ``cond_max``; such conics are emitted as sampled
+    polylines instead of ``<ellipse>`` elements."""
+    return classify(C) == "degenerate" or condition_number(C) > cond_max
 
 
 def ellipse_params(C):
@@ -210,6 +322,14 @@ def sample_arc(H, rho: float, theta0: float, theta1: float, n: int) -> np.ndarra
     n = max(1, int(n))
     th = theta0 + (theta1 - theta0) * np.arange(n + 1, dtype=np.float64) / n
     return conic_point(H, th, rho)
+
+
+def sample_count(theta0: float, theta1: float, per_circle: int = SAMPLES_PER_CIRCLE,
+                 minimum: int = MIN_ARC_SAMPLES) -> int:
+    """Contract §2.6 sampling rule: number of segments for the arc ``[theta0, theta1]``,
+    ``max(minimum, ceil(per_circle * |theta1 - theta0| / (2 pi)))``."""
+    span = abs(float(theta1) - float(theta0))
+    return max(int(minimum), int(math.ceil(per_circle * span / TWO_PI - 1e-12)))
 
 
 def functional_coeffs(f, H, rho: float = 1.0) -> tuple[float, float, float]:
@@ -317,3 +437,115 @@ def arc_svg_flags(centre, axes, rotation: float, p_start, p_mid, p_end) -> tuple
         span = TWO_PI - ccw_end
     large = 1 if span > math.pi else 0
     return large, sweep
+
+
+# ---------------------------------------------------------------------------
+# circle records (contract §2.6) and output-stage helpers
+# ---------------------------------------------------------------------------
+
+def circle_frame(normal, tol: float = 1e-9) -> tuple[np.ndarray, np.ndarray]:
+    """Contract §2.6 frame of a silhouette circle with unit normal ``n``:
+    ``e1 = normalize(n x z)`` (fallback ``n x x`` when ``|n x z| <= tol``), ``e2 = n x e1``.
+    ``(e1, e2, n)`` is right-handed, so ``theta`` increasing is counter-clockwise about ``n``."""
+    n = np.asarray(normal, dtype=np.float64).reshape(3)
+    n = n / float(np.linalg.norm(n))
+    e1 = np.cross(n, np.array([0.0, 0.0, 1.0]))
+    if float(np.linalg.norm(e1)) <= tol:
+        e1 = np.cross(n, np.array([1.0, 0.0, 0.0]))
+    e1 = e1 / float(np.linalg.norm(e1))
+    e2 = np.cross(n, e1)
+    return e1, e2
+
+
+def circle_record(centre, e1, e2, radius: float) -> dict:
+    """The ``circle`` dict of contract §2.6 outputs: ``{"centre": (3,), "e1": (3,),
+    "e2": (3,), "radius": float}`` as float64 arrays.  ``theta`` parametrises the circle
+    as ``centre + radius (cos theta e1 + sin theta e2)``."""
+    return {
+        "centre": np.asarray(centre, dtype=np.float64).reshape(3).copy(),
+        "e1": np.asarray(e1, dtype=np.float64).reshape(3).copy(),
+        "e2": np.asarray(e2, dtype=np.float64).reshape(3).copy(),
+        "radius": float(radius),
+    }
+
+
+def circle_embedding(circle: dict) -> np.ndarray:
+    """``E = [e1 e2 c; 0 0 1]`` (4x3) of a :func:`circle_record` (contract §2.6)."""
+    return embed_circle(circle["centre"], circle["e1"], circle["e2"])
+
+
+def circle_point(circle: dict, theta) -> np.ndarray:
+    """Homogeneous world point(s) ``X(theta) = E (rho cos theta, rho sin theta, 1)`` of a
+    :func:`circle_record` (``w = 1``); ``theta`` scalar -> ``(4,)``, array -> ``(n, 4)``."""
+    return conic_point(circle_embedding(circle), theta, circle["radius"])
+
+
+def _circle_lists(circle: dict) -> dict:
+    return {
+        "centre": [float(v) + 0.0 for v in np.asarray(circle["centre"], dtype=np.float64).reshape(3)],
+        "e1": [float(v) + 0.0 for v in np.asarray(circle["e1"], dtype=np.float64).reshape(3)],
+        "e2": [float(v) + 0.0 for v in np.asarray(circle["e2"], dtype=np.float64).reshape(3)],
+        "radius": float(circle["radius"]) + 0.0,
+    }
+
+
+def conic_entry(circle: dict, H, arc=None, map: str = "image") -> dict:
+    """Build a contract §2.6 / §3.1 ``conics`` entry for the circle mapped by the 3x3
+    projective map ``H`` (``H = P E`` for image circles, ``H = P M E`` for ground
+    shadows)::
+
+        {"conic": 3x3 (max-normalised, +1 max entry), "kind": ellipse|parabola|hyperbola|degenerate,
+         "arc": {"theta0", "theta1"} | None, "circle": {centre, e1, e2, radius},
+         "map": "shadow" | "image", "sampled": bool, "cond": float}
+
+    ``arc`` is the circle-parameter range (radians, CCW in the circle frame,
+    ``theta1 > theta0``); ``None`` is the full conic.  ``sampled`` is the
+    ``CONIC_SAMPLED`` predicate (degenerate or condition number ``> 1e8``); the caller
+    emits the warning with the object id.  Every float is canonical (``+ 0.0``)."""
+    C = normalize_conic(transform_conic(circle_matrix(circle["radius"]), H))
+    kind = classify(C)
+    cond = condition_number(C)
+    if arc is not None:
+        a, b = float(arc[0]) if not isinstance(arc, dict) else float(arc["theta0"]), \
+            float(arc[1]) if not isinstance(arc, dict) else float(arc["theta1"])
+        lo, hi = (a, b) if a <= b else (b, a)
+        arc_out = {"theta0": lo + 0.0, "theta1": hi + 0.0}
+    else:
+        arc_out = None
+    return {
+        "conic": [[float(v) + 0.0 for v in row] for row in C.tolist()],
+        "kind": kind,
+        "arc": arc_out,
+        "circle": _circle_lists(circle),
+        "map": str(map),
+        "sampled": bool(kind == "degenerate" or cond > COND_MAX),
+        "cond": float(cond) if math.isfinite(cond) else math.inf,
+    }
+
+
+def ellipse_arc_params(H, rho: float, theta0: float, theta1: float):
+    """Image-space ellipse parameters of the arc ``[theta0, theta1]`` of the circle of
+    radius ``rho`` under the 3x3 map ``H`` (contract §2.6 ``<path d="M ... A ...">``
+    output).  Requires the mapped conic to be a real ellipse and the three sample points
+    (start, midpoint, end) to have ``x3 > 0`` (i.e. the arc was near-clipped first);
+    returns ``None`` otherwise.
+
+    Returns ``{"centre": (2,), "axes": (a, b), "rotation": radians, "start": (2,),
+    "end": (2,), "large_arc": 0|1, "sweep": 0|1}`` in the same ``(u, v)`` frame as ``H``
+    (``v`` up).  ``sweep = 1`` is the increasing-angle direction of that frame; an SVG
+    writer that mirrors ``v`` flips the flag (see :func:`arc_svg_flags`)."""
+    H = np.asarray(H, dtype=np.float64).reshape(3, 3)
+    C = transform_conic(circle_matrix(rho), H)
+    params = ellipse_params(C)
+    if params is None:
+        return None
+    centre, axes, rot = params
+    pts = conic_point(H, np.array([theta0, 0.5 * (theta0 + theta1), theta1], dtype=np.float64), rho)
+    if np.any(pts[:, 2] <= 0.0):
+        return None
+    uv = pts[:, :2] / pts[:, 2:3]
+    large, sweep = arc_svg_flags(centre, axes, rot, uv[0], uv[1], uv[2])
+    return {
+        "centre": centre, "axes": (float(axes[0]), float(axes[1])), "rotation": float(rot),
+        "start": uv[0], "end": uv[2], "large_arc": int(large), "sweep": int(sweep),
+    }

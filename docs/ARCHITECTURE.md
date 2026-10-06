@@ -149,8 +149,11 @@ Unknown keys are ignored. `load_scene` returns a new plain dict with all default
   directional one). `w_S ≤ tol` ⇒ vertex not below the light (§5.7 row 4) → `VERTEX_NOT_BELOW_LIGHT`
   (ids `[object]`), and the shadow outline becomes unbounded (§2.5).
 - Vertices with `πᵀP < −tol` (below the ground) → `OBJECT_BELOW_RECEIVER` (ids `[object]`). Before shadowing,
-  every silhouette loop edge is clipped to the half-space `πᵀX ≥ 0` (the crossing point lies on the ground and
-  is its own shadow), so the drawn shadow is that of the part above the ground.
+  the object's **mesh is cut by the receiver plane** (`shadow.clip_mesh_to_plane`; the cut face becomes part of the
+  solid and its lit-side edges become silhouette edges), so the drawn shadow is exactly that of the part above the
+  ground. Ground-crossing vertices are named `<obj>.s<k>.<light>` in order of first appearance; they are their own
+  shadow and foot and get no construction ray. Clipping the loop edge-by-edge to `πᵀX ≥ 0` is only the fallback when
+  the cut surface is not a closed manifold. Curved objects use the loop clip (straight chord) — see §2.6.
 
 ### 2.4 Mesh representation (also the M5 future mesh format)
 ```
@@ -199,8 +202,8 @@ where `(e1, e2, a)` is the rotated local frame.
   max-|entry| (made +1) before output. Classification must be translation-invariant **[decision]**: let `A` be the
   upper-left 2×2 block normalised by its own max-|entry|; `kind` = ellipse / hyperbola by the sign of `det A`,
   parabola when `|det A| ≤ 1e-12`. Degeneracy and conditioning are judged on the conic translated to its centre
-  (`C_c = Tᵀ C T`, `T = [[I, centre],[0,1]]`, centre = `−A⁻¹·(C[0:2,2])` when `A` is invertible, else on the
-  normalised conic itself) and then max-normalised: `|det C_c| ≤ 1e-12` → degenerate; condition number of `C_c`
+  (`C_c = Tᵀ C T`, `T = [[I, centre],[0,1]]`, centre = `−A⁻¹·(C[0:2,2])` when `A` is invertible; a parabola is
+  translated to its vertex instead) and then max-normalised: `|det C_c| ≤ 1e-12` → degenerate; condition number of `C_c`
   `> 1e8` → `CONIC_SAMPLED` (§11.3). A 0.3 m circle 50 m from the origin must classify as a healthy ellipse.
 - The **same** silhouette routine serves the light and the camera: `curved.silhouette(obj, L)` with `L`
   the light vector OR the camera position `(C,1)`. Camera outline = that silhouette; terminator = the
@@ -241,6 +244,11 @@ where `(e1, e2, a)` is the rotated local frame.
 
 ### 2.7 Construction (§5.5)
 - `L' = P·L`, `F' = P·F`, `P'_i = P·P_i`, `Q'_i = P·Q_i`, `S'_i = P·S_i` all as 2-D homogeneous 3-vectors.
+- Undefined special points **[decision]**: a directional light along the receiver normal makes `F = 0`; then the `F.<light>`
+  point is omitted, `shadow_vp` and `shadow_vp_at_infinity` are both `null`, no `SHADOW_VP_AT_INFINITY` warning, no `F'Q'`
+  rays, and the self-check uses `S' = Q'`. A point light at the camera centre makes `L' = 0` (tested as
+  `max|x̃| ≤ 1e-9·max|P|·max|L|`); then `light_point` and `light_point_at_infinity` are both `null`, no warning, no `L'P'`
+  rays, and the self-check uses `S' = P'`.
 - `L` and `F` are **never near-clipped or nulled**: `light_point`/`shadow_vp` are computed by plain division whenever
   `|x̃3| > tol`; `x̃3 < 0` for a finite `L` → `LIGHT_BEHIND_CAMERA` (反光點, finite, below the horizon); `|x̃3| ≤ tol`
   → `light_point_at_infinity = normalize_max((x̃1, x̃2))` and `LIGHT_POINT_AT_INFINITY`; likewise
@@ -263,8 +271,10 @@ where `(e1, e2, a)` is the rotated local frame.
   The sphere centre's shadow is a construction aid, not the centre of the shadow ellipse.
 
 ### 2.8 Numerics (§5.8)
-- float64 everywhere. `scene_scale = max(1, extent of the bounding box of all object mesh vertices and the
-  camera position)` (light positions excluded so that the 10⁶ m convergence test keeps tolerances sane).
+- float64 everywhere. Stage A uses `scene_scale_A = max(1, extent of the bounding box of all object mesh vertices)`
+  (camera-free, so world shadows stay camera-independent per §7.1 row 2); stage B/C use
+  `scene_scale = max(scene_scale_A, extent including the camera position)`. Light positions are excluded from both so
+  that the 10⁶ m convergence test keeps tolerances sane.
   `tol = 1e-9 · scene_scale` for length-valued predicates (`ν`, `w_S` and `lit` with point lights, ground clip);
   `tol_dir = 1e-9` for dimensionless ones (`lit`/`w_S` with directional lights, direction tests); projective
   equality of 2-D points/lines uses a relative 1e-9 after `normalize_max`.
