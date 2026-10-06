@@ -1344,6 +1344,12 @@ worktree and the merge rule are in `docs/PLAN-v2.md`.
   name the case ("light below the ground", "point light is behind …", "directional light is parallel …",
   "directional light is behind …"). `castplane stages` writes `B` without its `A` reference. Until the H-track lands,
   `compose` calls `hidden.classify_document` only when `castplane.hidden` can be imported.
+- **[decision, implementation] (M4) `objects` sub-group order.** §5.0.6 says the `objects.<id>` groups (objects and
+  bounded receivers) follow document order, but the v2 writer orders them by id (`sorted`), and five v2 cases
+  (`concave_prism_light_foot_in_notch`, `example_construction_demo`, `example_curved_demo`, `example_directional`,
+  `example_three_point`) have object ids out of sorted order: following the wording would break the byte-identity gate
+  of §5.0.6 / §5.1.8. The writer keeps the v2 rule (sorted by id; a receiver's group sorts with the objects), which is
+  what the golden hashes require. `form_shadow` entries keep document order (objects, then plates), as in v2.
 
 ### 5.2 M5 — mesh import (spec §9 rows 網格匯入 / 匯入格式, spec §10 M5, spec §11.3)
 

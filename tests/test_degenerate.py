@@ -558,3 +558,59 @@ def test_degenerate_example_renders_through_the_cli(tmp_path):
     path.write_text(json.dumps(scene), encoding="utf-8")
     assert main(["render", str(path), "-o", str(tmp_path)]) == 0
     assert (tmp_path / "low_lamp.svg").exists()
+
+
+# --------------------------------------------------------------------------- M4: bounded receivers (contract §5.1.11)
+from tests.test_receivers import wall_and_ground_scene
+
+
+def _m4_variant(name):
+    scene = wall_and_ground_scene()
+    if name == "light behind the wall":
+        scene["lights"] = [{"id": "lamp", "type": "point", "position": [0, 8, 3]}]
+    elif name == "light in the wall plane":
+        scene["lights"] = [{"id": "lamp", "type": "point", "position": [0, 6, 3]}]
+    elif name == "sun parallel to the wall":
+        scene["lights"] = [{"id": "lamp", "type": "directional", "direction": [0.6, 0.0, 0.8]}]
+    elif name == "sun behind the wall":
+        scene["lights"] = [{"id": "lamp", "type": "directional", "direction": [0.0, 0.6, 0.8]}]
+    elif name == "light below the ground":
+        scene["lights"] = [{"id": "lamp", "type": "point", "position": [0, 2, -1]}]
+    elif name == "sun along the wall normal":
+        scene["lights"] = [{"id": "lamp", "type": "directional", "direction": [0.0, -1.0, 0.0]}]
+    elif name == "plate seen edge-on":
+        scene["camera"] = {"position": [-6, 6, 1.6], "target": [0, 6, 1.0], "focal_length_mm": 35, "frame_mm": [36, 24]}
+    elif name == "crate straddling the wall":
+        scene["objects"][0]["transform"]["position"] = [0, 6.0, 0]
+    elif name == "coplanar caster":
+        scene["receivers"].append({"id": "tile", "type": "plane", "normal": [0, -1, 0], "offset": 6,
+                                   "bounds": [[3, 6, 0], [5, 6, 0], [5, 6, 2.5], [3, 6, 2.5]]})
+    return load_scene(scene)
+
+
+M4_CASES = {
+    "light behind the wall": {"RECEIVER_UNLIT"},
+    "light in the wall plane": {"RECEIVER_UNLIT"},
+    "sun parallel to the wall": {"RECEIVER_UNLIT"},
+    "sun behind the wall": {"RECEIVER_UNLIT"},
+    "light below the ground": {"RECEIVER_UNLIT", "LIGHT_BELOW_RECEIVER"},
+    "sun along the wall normal": {"DIRECTIONAL_HORIZONTAL"},
+    "plate seen edge-on": set(),
+    "crate straddling the wall": set(),
+    "coplanar caster": set(),
+}
+
+
+@pytest.mark.parametrize("name", sorted(M4_CASES))
+def test_m4_receiver_degeneracies_warn_and_stay_finite(name):
+    doc = castplane.render(_m4_variant(name))["geometry"]
+    codes = warning_codes(doc["warnings"])
+    assert M4_CASES[name] <= codes, (name, codes)
+    assert not codes & {"OBJECT_BELOW_RECEIVER"} or name == "light below the ground", (name, codes)
+    unlit = [w for w in doc["warnings"] if w["code"] == "RECEIVER_UNLIT"]
+    assert all(w["ids"] == ["lamp", "wall"] for w in unlit)
+    finite_and_drawable(doc)
+    if name == "sun along the wall normal":
+        assert "F.lamp.wall" not in doc["points"]
+    if name == "light in the wall plane":
+        assert {r["id"]: r["casts"]["lamp"] for r in doc["receivers"]}["wall"] is False
