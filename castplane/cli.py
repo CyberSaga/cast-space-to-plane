@@ -171,7 +171,10 @@ def cmd_info(args) -> int:
     v_mm = hz["v_mm"]
     print("horizon v_mm: " + ("none" if v_mm is None else f"{v_mm:.4f}"))
     for axis in ("x", "y", "z"):
-        print(f"vanishing point {axis}: {_fmt_point(hz['vanishing_points'][axis])}")
+        vp = hz["vanishing_points"][axis]
+        # contract §2.2: null when the axis is parallel to the picture plane (its lines stay parallel)
+        print(f"vanishing point {axis}: " + ("at infinity (axis parallel to the picture plane)" if vp is None
+                                             else _fmt_point(vp)))
     lp = con["light_point"]
     if lp is None and con["light_point_at_infinity"] is not None:
         print(f"light point L': at infinity, direction {_fmt_point(con['light_point_at_infinity'])}")

@@ -148,6 +148,9 @@ def test_info_prints_horizon_vanishing_points_and_the_warning_table(tmp_path, ca
     out = capsys.readouterr().out
     assert "objects: 2 (crate:box, pillar:cylinder)" in out
     assert "horizon v_mm:" in out and "vanishing point z: none" not in out
+    # the camera looks along +Y: the x axis is parallel to the picture plane (contract §2.2 gives null)
+    assert "vanishing point x: at infinity (axis parallel to the picture plane)" in out
+    assert "vanishing point y: (0.0000, 26.5417)" in out and "none" not in out.split("warnings")[0]
     assert "light point L':" in out and "shadow vanishing point F':" in out
     assert "construction self-check max error:" in out
     assert out.rstrip().endswith("warnings: none")
@@ -224,6 +227,21 @@ def documented_commands() -> list:
                     continue
                 found.append((path.name, cmd))
     return found
+
+
+def test_examples_readme_describes_the_directional_example_correctly():
+    """examples/README.md must describe what examples/directional.json renders: the sun direction has a
+    negative y component (behind the +Y-looking camera), so L' is the anti-light point BELOW the horizon
+    and no LIGHT_BEHIND_CAMERA is emitted for a direction (contract §2.7 [decision])."""
+    import castplane
+    doc = castplane.render(castplane.load_scene(str(EXAMPLES / "directional.json")))["geometry"]
+    con = doc["construction"]
+    assert con["light_point"] is not None and con["light_point"][1] < doc["horizon"]["v_mm"]
+    assert doc["warnings"] == []
+    row = [ln for ln in (EXAMPLES / "README.md").read_text(encoding="utf-8").splitlines()
+           if ln.startswith("| `directional.json`")]
+    assert len(row) == 1
+    assert "反光點" in row[0] and "下方" in row[0] and "上方" not in row[0]
 
 
 def test_every_documented_command_parses():

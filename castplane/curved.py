@@ -1413,10 +1413,10 @@ def arc_record(circle: dict, theta0: float, theta1: float, full: bool, T, cam: d
 
 
 def _project_points(cam: dict, names: list, X4: np.ndarray) -> dict:
-    x_h = X4 @ np.asarray(cam["P"], dtype=np.float64).T
-    fwd = np.asarray(cam["forward"], dtype=np.float64)
-    nu_v = X4[:, :3] @ fwd - (float(fwd @ cam["C"]) + float(cam["near"])) * X4[:, 3]
-    return {"names": names, "world": X4[:, :3].copy(), "image_h": x_h, "behind": nu_v < 0.0}
+    """Image points and near-plane flags of ``(n, 4)`` named points through the spec §9 camera
+    interface (``camera.project`` / ``camera.nu``), never re-implemented here."""
+    from .camera import nu, project
+    return {"names": names, "world": X4[:, :3].copy(), "image_h": project(cam, X4), "behind": nu(cam, X4) < 0.0}
 
 
 def _project_segments(cam: dict, A4: np.ndarray, B4: np.ndarray, rect) -> tuple:

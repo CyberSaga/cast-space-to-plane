@@ -12,7 +12,7 @@ castplane [--version] <command> ...
 | --- | --- |
 | `castplane render SCENE -o OUTDIR [選項]` | 渲染場景，寫出 `OUTDIR/<場景檔名>.svg` / `.json` / `.png` |
 | `castplane validate SCENE [-q]` | 只驗證場景檔，印出物件、光源、受影面數量 |
-| `castplane info SCENE [--camera JSON]` | 印出物件清單、畫布、主點、地平線 v_mm、三個消失點、L′、F′、點／邊／影子／作圖線數量、自我驗證最大誤差與警告表 |
+| `castplane info SCENE [--camera JSON]` | 印出物件清單、畫布、主點、地平線 v_mm、三個消失點（軸平行畫面時印 `at infinity (axis parallel to the picture plane)`，表示該方向的線在畫面上仍平行）、L′、F′（在無窮遠時印 `at infinity, direction (…)`）、點／邊／影子／作圖線數量、自我驗證最大誤差與警告表 |
 | `castplane stages SCENE [--camera JSON] [-o FILE] [-q]` | 把 A 段與 B 段的中間結果以標準 JSON（`{"A": …, "B": …}`）寫到 FILE 或 stdout，除錯與移植對照用 |
 
 ### `render` 選項
@@ -35,7 +35,7 @@ castplane [--version] <command> ...
 | 0 | 成功 |
 | 1 | 檔案錯誤（場景檔讀不到、輸出目錄寫不了） |
 | 2 | 輸入無效：`SceneError`（訊息含 JSON 欄位路徑，例如 `error: objects[1].radius: must be > 0`）、`--formats` / `--layers` 有未知項目，或命令列用法錯誤（argparse 慣例） |
-| 3 | 缺少選用相依套件：要求 PNG 但沒有 cairosvg 也沒有 resvg（`pip install 'castplane[png]'`） |
+| 3 | 缺少選用相依套件：要求 PNG 但沒有 cairosvg 也沒有 resvg（`pip install 'castplane[png]'`）。此時**不寫任何檔案**，同一次要求的 SVG / JSON 也不寫 |
 
 ### 範例
 
@@ -74,10 +74,10 @@ castplane stages examples/basic.json | python3 -c "import json,sys; d=json.load(
 | `validate_scene(scene) -> dict` | 整份場景的驗證（合約 §2.0 表） |
 | `validate_object(value, field) -> dict` | 一個 `objects[i]` 項目；`field` 是錯誤訊息用的路徑前綴 |
 | `validate_transform(value, field) -> dict` | `transform` 區塊：選填、`scale` 不允許、補預設值 |
-| `validate_light(value, field) -> dict` | 一個 `lights[i]` 項目（平行光方向長度須為 1） |
+| `validate_light(value, field) -> dict` | 一個 `lights[i]` 項目（`id` 不含 `.`；平行光方向長度須為 1） |
 | `validate_receiver(value, field) -> dict` | 一個 `receivers[i]` 項目（v1 只接受地面） |
 | `validate_camera(value, field="camera") -> dict` | `camera` 區塊：target 形式或 yaw/pitch 形式，二擇一 |
-| `validate_output(value, frame_mm, field="output") -> dict` | `output` 區塊：畫布長寬比須等於片幅長寬比 |
+| `validate_output(value, frame_mm, field="output") -> dict` | `output` 區塊：畫布長寬比須等於片幅長寬比（錯誤訊息列出兩個比值與可用的替代值）；`layers` 不得是空串列 |
 | `polygon_signed_area(poly) -> float` | 鞋帶公式的有向面積，逆時針為正 |
 | `polygon_is_simple(poly, eps_area, eps_len=None) -> bool` | 多邊形無自交（非相鄰邊不相觸） |
 | `OBJECT_TYPES`、`LIGHT_TYPES`、`LAYER_IDS` | 允許的物件類型、光源類型、六個圖層 id（表格順序） |
@@ -157,7 +157,8 @@ castplane stages examples/basic.json | python3 -c "import json,sys; d=json.load(
 
 | 函式 | 說明 |
 | --- | --- |
-| `build_object(obj) -> dict` | 驗證過的 `objects[i]` → `{id, type, mesh（世界座標）, point_names, analytic, bbox}`；曲面基元另帶 `analytic = {kind, base, axis, e1, e2, radius, height, centre}` |
+| `build_object(obj) -> dict` | 驗證過的 `objects[i]` → `{id, type, mesh（世界座標）, point_names, analytic, bbox, frame, shape, face_first, faces_padded, face_lens, face_point_names, edge_templates, world_lists}`（後六個是批次 B 段必要的表，合約 §2.4）；曲面基元另帶 `analytic = {kind, base, axis, e1, e2, radius, height, centre}` |
+| `point_inside_solid(rec, x, tol=0.0) -> bool` | 世界點 `x` 是否嚴格在多面體（box / prism）實體內超過 `tol`（在局部座標精確判定；曲面基元一律 False）；`LIGHT_INSIDE_OBJECT` 用 |
 | `local_mesh(obj) -> dict` | 物件在局部座標的網格 |
 | `analytic_record(obj, R, position)` | 曲面基元的世界座標解析參數；多面體為 `None` |
 | `face_tables(mesh) -> dict` | `{face_first, faces_padded, face_lens}`：面的填補索引表（批次投影用） |
@@ -197,9 +198,9 @@ castplane stages examples/basic.json | python3 -c "import json,sys; d=json.load(
 | `transform_conic(C, H) -> ndarray` | C′ = adj(H)ᵀ·C·adj(H)（H 奇異也不拋例外） |
 | `ground_conic_map(M, E) -> ndarray` | 圓座標到地面 (x, y, w) 的 3×3 映射 |
 | `normalize_conic(C) -> ndarray` | 對稱化並除以最大元素絕對值（使該元素為 +1） |
-| `centred_conic(C)` | 平移到自身中心（拋物線平移到頂點）的圓錐曲線 |
+| `centred_conic(C, normalized=False)` | 平移到自身中心（拋物線平移到頂點）的圓錐曲線；`normalized=True` 表示輸入已 max-正規化，略過正規化 |
 | `classify(C, tol=1e-12) -> str` | 平移不變的分類：`ellipse` / `parabola` / `hyperbola` / `degenerate` |
-| `classify_and_condition(C, tol=1e-12) -> (kind, cond)` | 分類與條件數一次算出 |
+| `classify_and_condition(C, tol=1e-12, normalized=False) -> (kind, cond)` | 分類與條件數一次算出 |
 | `condition_number(C) -> float` | 中心化後矩陣的 2-範數條件數 |
 | `is_sampled(C, cond_max=1e8) -> bool` | `CONIC_SAMPLED` 判定：退化或條件數過大 |
 | `ellipse_params(C)` | 實橢圓的 `(centre, (a, b), rotation)`；不是實橢圓時 `None` |
@@ -294,7 +295,7 @@ castplane stages examples/basic.json | python3 -c "import json,sys; d=json.load(
 | 代碼 | 條件 | ids | 效果 |
 | --- | --- | --- | --- |
 | `CAMERA_LOOKING_ALONG_UP` | 相機視線平行世界 z | `[]` | 改用 (0, 1, 0) 當 up |
-| `LIGHT_BEHIND_CAMERA` | 點光源的相機深度 < 0 | `[光源]` | L′ 為有限的反光點 |
+| `LIGHT_BEHIND_CAMERA` | 點光源的相機深度 < 0（平行光指向相機後方時 L′ 同樣是地平線下的反光點，但不發警告，D19） | `[光源]` | L′ 為有限的反光點 |
 | `LIGHT_POINT_AT_INFINITY` | L′ 的 x̃₃ 在容差內為 0 | `[光源]` | `light_point` 為 null、`light_point_at_infinity` 給方向、作圖線平行 |
 | `SHADOW_VP_AT_INFINITY` | F′ 的 x̃₃ 在容差內為 0 | `[光源]` | `shadow_vp` 為 null、`shadow_vp_at_infinity` 給方向 |
 | `DIRECTIONAL_HORIZONTAL` | 平行光與受影面平行 | `[光源]` | 不輸出影子與作圖線 |
@@ -303,6 +304,6 @@ castplane stages examples/basic.json | python3 -c "import json,sys; d=json.load(
 | `OBJECT_BELOW_RECEIVER` | 物件有部分在受影面下 | `[物件]` | 以地面切開後取地面以上部分的影子 |
 | `POINT_BEHIND_CAMERA` | 某個要畫的點在近平面後方 | `[物件]` | `image` 為 null、線段裁切、該頂點不畫作圖線 |
 | `FACE_PARALLEL_TO_LIGHT` | 某面（含圓柱、圓錐端面）與光線平行 | `[物件]` | 該面視為背光 |
-| `LIGHT_INSIDE_OBJECT` | 點光源在球內，或圓柱／圓錐完全無受光面 | `[物件]` | 該物件無影子、無明暗交界線、無作圖點 |
+| `LIGHT_INSIDE_OBJECT` | 點光源在球內、圓柱／圓錐完全無受光面，或嚴格在方塊／稜柱實體內 | `[物件]` | 該物件無影子、無明暗交界線、無作圖點（多面體的每個面都算背光，仍列在 `form_shadow`）；訊息指出種類 |
 | `CONIC_SAMPLED` | 某圓錐曲線退化或條件數 > 1e8 | `[物件]` | 以取樣折線取代橢圓／弧 |
 | `CONSTRUCTION_CHECK_SKIPPED` | 自我驗證的兩線其一為零向量、兩線平行或 S′ 在無窮遠 | `[點名]` | 該點不列入 `checks` |

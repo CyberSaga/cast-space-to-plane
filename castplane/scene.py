@@ -147,7 +147,7 @@ def _validate_polygon(value, field: str) -> list:
             raise SceneError(f"{field}[{i}]", "consecutive vertices coincide")
     area = polygon_signed_area(poly)
     if abs(area) <= 1e-12 * extent * extent:
-        raise SceneError(field, "vertices are collinear (zero area)")
+        raise SceneError(field, "zero area: vertices are collinear or the polygon is self-intersecting")
     if not polygon_is_simple(poly, 1e-12 * extent * extent, eps_len):
         raise SceneError(field, "polygon is self-intersecting")
     if area < 0:  # clockwise input is reversed silently (contract §2.0)
@@ -198,7 +198,7 @@ def validate_object(value, field: str) -> dict:
 def validate_light(value, field: str) -> dict:
     """One ``lights[i]`` entry (contract §2.0)."""
     lt = _dict(value, field)
-    out = {"id": _id(_require(lt, "id", field), f"{field}.id", no_dot=False)}
+    out = {"id": _id(_require(lt, "id", field), f"{field}.id", no_dot=True)}
     typ = _require(lt, "type", field)
     if typ not in LIGHT_TYPES:
         raise SceneError(f"{field}.type", f"must be one of {', '.join(LIGHT_TYPES)}")
@@ -267,10 +267,17 @@ def validate_output(value, frame_mm, field: str = "output") -> dict:
     o = _dict(value, field)
     canvas = _vector(_require(o, "canvas_mm", field), f"{field}.canvas_mm", 2, positive=True)
     if abs(canvas[0] / canvas[1] - frame_mm[0] / frame_mm[1]) > 1e-9:
-        raise SceneError(f"{field}.canvas_mm", "aspect ratio must equal camera.frame_mm aspect ratio")
+        ratio = frame_mm[0] / frame_mm[1]
+        raise SceneError(f"{field}.canvas_mm",
+                         f"aspect ratio {canvas[0]:g}/{canvas[1]:g} = {canvas[0] / canvas[1]:.4g} must equal "
+                         f"camera.frame_mm aspect ratio {frame_mm[0]:g}/{frame_mm[1]:g} = {ratio:.4g} "
+                         f"(e.g. canvas_mm [{canvas[1] * ratio:g}, {canvas[1]:g}] or frame_mm "
+                         f"[{frame_mm[0]:g}, {frame_mm[0] * canvas[1] / canvas[0]:g}])")
     layers = o.get("layers", list(LAYER_IDS))
     if not isinstance(layers, (list, tuple)):
         raise SceneError(f"{field}.layers", "must be a list of layer ids")
+    if not layers:
+        raise SceneError(f"{field}.layers", "must not be empty (omit the key to get all six layers)")
     for i, name in enumerate(layers):
         if name not in LAYER_IDS:
             raise SceneError(f"{field}.layers[{i}]", f"must be one of {', '.join(LAYER_IDS)}")

@@ -27,7 +27,7 @@
 
 失敗訊息會列出案例名稱與不符的路徑（例如 `points.crate.v0.image[0]: expected …, got …`），最多列 25 條。
 
-## 來源（v1 共 34 個案例）
+## 來源（目前版本 v2，見 `CHANGELOG.md`；共 34 個案例）
 
 | 類別 | 案例 | 依據 |
 | --- | --- | --- |
@@ -44,7 +44,7 @@
 ## 規則
 
 1. **先加案例、再改實作。** 新功能或行為變更先寫進 `cases/`，用工具產生 expected，確認差異合理後才改程式。
-2. **版本化。** expected 檔只能由 `tools/regen_conformance.py` 產生，不得手改（測試檢查檔案為 `geometry_json.dumps` 的標準形式）。工具強制要求 `--reason`，並在 `CHANGELOG.md` 追加一筆 `## v<N> — <日期>`：版本號、重新產生的案例清單、未變更的案例與原因。`v<N>` 就是測試集版本。
+2. **版本化。** expected 檔只能由 `tools/regen_conformance.py` 產生，不得手改（測試檢查檔案為 `geometry_json.dumps` 的標準形式）。工具強制要求 `--reason`，並在 `CHANGELOG.md` 追加一筆 `## v<N> — <日期>`：版本號、重新產生的案例清單、未變更的案例與原因。`v<N>` 就是測試集版本；每筆也記錄產生檔案的 Python / NumPy 版本。expected 檔只在該版本的直譯器／NumPy 上**位元相同**（別的 libm 會在少數葉節點的最後幾位有 ≈ 1e-12 的差異，容差比對仍全數通過）；`test_regen_tool_exit_codes_match_its_docstring` 只在 NumPy 版本與紀錄相同時要求 `--dry-run` 零差異，否則只要求每個有差異的案例仍通過上表的容差。
 3. **TypeScript 移植必須全數通過**（spec §9、§10 M7）：移植版讀取 `cases/*.json`，產生同格式文件，依上表規則與 `expected/*.json` 比對。Python 為參考實作；兩邊不一致時先判定哪邊違反 spec / contract，再改測試集。
 4. **退化情況以警告代碼為準。** 退化案例的重點是 `warnings` 代碼集合與輸出仍然完整有限，不是特定數值。
 

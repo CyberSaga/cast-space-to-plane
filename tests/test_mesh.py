@@ -98,6 +98,12 @@ def test_build_object_applies_world_transform_and_names():
     np.testing.assert_allclose(m["face_normals"][3], [c, s, 0.0], atol=1e-12)  # +x face rotated
     assert rec["point_names"][:2] == ["crate.v0", "crate.v1"]
     assert rec["analytic"] is None
+    # contract §2.4: the derived tables are a required part of the record (the batched stage B reads them)
+    for key in ("face_first", "faces_padded", "face_lens", "face_point_names", "edge_templates", "world_lists",
+                "frame", "shape"):
+        assert key in rec, key
+    assert len(rec["edge_templates"]) == m["edges"].shape[0] and len(rec["world_lists"]) == m["vertices"].shape[0]
+    assert rec["shape"] is obj and np.allclose(rec["frame"][1], [2.0, 4.0, 0.0])
     lo, hi = rec["bbox"]
     assert lo[2] == 0.0 and abs(hi[2] - 0.6) < 1e-12
 

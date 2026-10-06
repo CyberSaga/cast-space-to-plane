@@ -24,12 +24,15 @@ from __future__ import annotations
 import argparse
 import datetime as _dt
 import pathlib
+import platform
 import re
 import sys
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
+
+import numpy  # noqa: E402
 
 import castplane  # noqa: E402
 from castplane.output.geometry_json import dumps  # noqa: E402
@@ -61,7 +64,8 @@ def next_version(text: str) -> int:
 
 def changelog_entry(version: int, date: str, reason: str, changed: list[str], unchanged: list[str],
                     all_cases: bool) -> str:
-    lines = [f"## v{version} — {date}", "", f"- reason: {reason}"]
+    lines = [f"## v{version} — {date}", "", f"- reason: {reason}",
+             f"- build: Python {platform.python_version()}, numpy {numpy.__version__}"]
     scope = "all cases" if all_cases else "selected cases"
     lines.append(f"- regenerated ({scope}, {len(changed)} changed): " + (", ".join(changed) if changed else "none"))
     if unchanged:

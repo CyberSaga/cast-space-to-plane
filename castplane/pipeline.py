@@ -51,13 +51,15 @@ only (it must not touch the camera); stage B uses the full scale including the
 camera position.
 
 Cached stage A and the documents built from it (spec §8, camera-only re-render):
-stage A also holds derived, camera-independent data that stage B / C would
-otherwise rebuild on every camera change -- per object the padded unlit-face
-tables of the form shadow (``lights[<light>].form_idx / form_lens / form_faces``),
-the §3.1 edge record templates and the vertices as canonical Python lists
-(``primitives.build_object``: ``edge_templates``, ``world_lists``), per shadow record
-the shadow points / feet / ground points as canonical lists (``S_lists``, ``Q_lists``,
-``G_lists``, ``G_world``).  The camera-free Python lists of the document (the
+stage A also holds derived, camera-independent tables that the batched stage B / C
+read directly instead of rebuilding them on every camera change (contract §2.4:
+they are a required part of the stage-A records, not optional caches) -- per
+object the padded unlit-face tables of the form shadow
+(``lights[<light>].form_idx / form_lens / form_faces``), the §3.1 edge record
+templates and the vertices as canonical Python lists (``primitives.build_object``:
+``face_first``, ``edge_templates``, ``world_lists``), per shadow record the shadow
+points / feet / ground points as canonical lists (``S_lists``, ``Q_lists``,
+``G_lists``, ``G_world``; the ``*_lists`` are optional and rebuilt when absent).  The camera-free Python lists of the document (the
 ``world`` of every named point, the outline / loop entries, the face name lists)
 are **shared by reference** between the cached stage A and every document composed
 from it; a document is read-only data, and ``castplane.render`` / the CLI never
@@ -132,7 +134,7 @@ from .homogeneous import TOL_DIR, scene_scale, to_homogeneous, tolerance
 from .light import face_lit_flags, light_vector, silhouette_loops
 from .output.geometry_json import canonical
 from .output.svg import write_svg
-from .primitives import build_object
+from .primitives import build_object, point_inside_solid
 from .scene import validate_camera
 from .shadow import clip_mesh_to_plane, foot, shadow_loop, shadow_matrix, shadow_w
 
@@ -192,6 +194,14 @@ def _object_light_data(obj: dict, lt: dict) -> tuple[dict, list]:
     mesh = obj["mesh"]
     lit_flags, parallel = face_lit_flags(mesh, lt["L"], lt["tol_lit"])
     warnings = []
+    # contract §2.5 / §2.9: a point light strictly inside the solid lights nothing (every face is
+    # unlit, no silhouette edge, no shadow); the same code as for the curved kinds, naming the kind
+    inside = lt["type"] == "point" and point_inside_solid(obj, lt["L"][:3], lt["tol_lit"])
+    if inside:
+        lit_flags = np.zeros_like(lit_flags)
+        parallel = np.zeros_like(parallel)
+        warnings.append(make_warning("LIGHT_INSIDE_OBJECT", [obj["id"]],
+                                     f"point light is inside the {obj['type']}; no shadow"))
     if bool(np.any(parallel)):
         warnings.append(make_warning("FACE_PARALLEL_TO_LIGHT", [obj["id"]]))
     ef = mesh["edge_faces"]
@@ -204,6 +214,7 @@ def _object_light_data(obj: dict, lt: dict) -> tuple[dict, list]:
     return {
         "lit": lit_flags,
         "parallel": parallel,
+        "light_inside": inside,
         "edge_silhouette": edge_sil,
         "silhouette_vertices": sil_vertices,
         "loops": silhouette_loops(mesh, lit_flags),
@@ -344,7 +355,7 @@ def shadow_geometry(scene: dict) -> dict:
             ol, w = _object_light_data(obj, lt)
             warnings.extend(w)
             obj["lights"][lt["id"]] = ol
-            if not lt["active"]:
+            if not lt["active"] or ol["light_inside"]:
                 shadows.append({"light": lt["id"], "receiver": receiver["id"], "object": obj["id"],
                                 "vertex_ids": np.zeros(0, dtype=np.int64), "keep": np.zeros(0, dtype=bool),
                                 "P_world": np.zeros((0, 3)), "S_world": np.zeros((0, 3)),
@@ -531,12 +542,6 @@ def _project_polyhedra(objs: list, cam: dict, tol: float, light_id) -> list:
         })
         p_off += c
     return out
-
-
-def _project_object(obj: dict, cam: dict, tol: float, light_id) -> dict:
-    """Projection and clipping of one object's vertices and edges (contract §2.2): the batched
-    :func:`_project_polyhedra` on a single object."""
-    return _project_polyhedra([obj], cam, tol, light_id)[0]
 
 
 def _project_light(lt: dict, cam: dict, tol: float) -> tuple[dict, list]:

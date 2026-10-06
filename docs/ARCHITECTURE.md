@@ -59,7 +59,7 @@ Python ≥ 3.10. Core runtime dependency: numpy only. Optional extras:
 | `radius`, `height` | positive numbers (cylinder, cone: both; sphere: radius only) |
 | `objects[i].polygon` (prism) | ≥ 3 vertices `[x,y]`, non-collinear, simple (no self-intersection); clockwise input is reversed silently |
 | `objects[i].transform` | optional; `position` 3 numbers (default `[0,0,0]`); `rotation_deg` 3 numbers (default `[0,0,0]`); `scale` forbidden |
-| `lights` | list of length exactly 1 (v1) ; id unique |
+| `lights` | list of length exactly 1 (v1); ids unique, non-empty strings without `.` (like object ids: `.` is the separator of the §3.1 point-name grammar, `L.<light>`, `<obj>.s<k>.<light>`) |
 | `lights[i].type` | `point` (needs `position`, 3 numbers) or `directional` (needs `direction`, 3 numbers, \|d\| = 1 ± 1e-9, points **towards** the light) |
 | `receivers` | list of length exactly 1 (v1); `type == "plane"`; `normal` must be `[0,0,1]` and `offset` must be `0` (v1 ground only, §1); \|normal\| = 1 ± 1e-9 |
 | `camera` | `position` 3 numbers; exactly one of `target` (3 numbers, ≠ position) or `yaw_deg`+`pitch_deg`; `roll_deg` default 0; `focal_length_mm > 0`; `frame_mm` 2 positive; `shift_mm` default `[0,0]`; `near_m > 0` default 0.05 |
@@ -68,7 +68,7 @@ Python ≥ 3.10. Core runtime dependency: numpy only. Optional extras:
 **[decision]** The spec's own §4 example (`canvas_mm = [257, 182]` with `frame_mm = [36, 24]`) violates the spec's
 own aspect rule (1.412 ≠ 1.5) and is rejected. `examples/basic.json` therefore uses `[273, 182]` (3:2, same height);
 users who want JIS B5 paper should set `frame_mm` to a matching aspect (e.g. `[36, 25.5]`) or the canvas to 3:2.
-| `output.layers` | subset of the six ids of §2.10 (default: all six, in table order) |
+| `output.layers` | **non-empty** subset of the six ids of §2.10 (default when absent: all six, in table order); an empty list is rejected (field `output.layers`), exactly as the CLI rejects an empty `--layers` |
 | `output.png_dpi` | positive number, default 300 |
 
 Unknown keys are ignored. `load_scene` returns a new plain dict with all defaults filled in.
@@ -178,10 +178,14 @@ edge_faces : (m,2) int  the two faces adjacent to each edge (closed manifold ⇒
 vertex_names : ["v0", "v1", ...]   (names are "<object id>.v<k>")
 edge_flipped : (m,2) bool  DERIVED, optional: whether each edge runs against the orientation of its two faces
 ```
-Derived, optional tables that the batched stage B uses and that `build_object` adds to the object record:
+Derived tables that `build_object` adds to the object record and that the batched stage B / C read directly
+(they are a **required** part of the stage-A object record, not optional caches; only `edge_flipped` and the
+`S_lists` / `Q_lists` / `G_lists` / `G_world` caches of a shadow record are optional and rebuilt when absent):
 `face_first`, `faces_padded`, `face_lens`, `face_point_names` (padded face index tables, `primitives.face_tables`),
-`edge_templates` and `world_lists` (camera-free §3.1 record templates cached by stage A and shared by reference
-with every document composed from it). Every slow scalar path still works when they are absent.
+`edge_templates` and `world_lists` (camera-free §3.1 record templates built once by stage A and shared by reference
+with every document composed from it), plus per light `form_idx` / `form_lens` / `form_faces` (the unlit faces).
+The record also keeps `frame = (R, position)` and `shape` (the validated `objects[i]` dict) for the exact
+point-in-solid test of §2.5 (`primitives.point_inside_solid`).
 Builders: `box_mesh(size)`, `prism_mesh(polygon, height)`; cylinder/cone/sphere also produce a mesh
 (caps as n-gons / lateral quads, sphere as UV-sphere, 32 segments) ONLY for bounding boxes / scene scale and
 the M5-shaped representation; their shadows and outlines are computed analytically (§5.6), never from that mesh.
@@ -208,6 +212,14 @@ where `(e1, e2, a)` is the rotated local frame.
   `w=0` vertex. It goes through the full drawing pipeline of §2.2 (near clip → `P` → homogeneous rectangle
   clip → divide). Bounded outlines may skip the rectangle clip.
 - Fill rule for cast shadows is `nonzero` (needed for concave prisms, whose silhouette can be several loops).
+- A **point light strictly inside a polyhedron** (box / prism; `primitives.point_inside_solid`: the light mapped into
+  the object's local frame lies inside the §2.1 local extents by more than `tol`, exact also for concave prisms and
+  rotated objects) lights nothing: every face counts as unlit (all faces go to `form_shadow`, no
+  `FACE_PARALLEL_TO_LIGHT`), there are no silhouette edges, the shadow record is empty (`outline`, `loops`,
+  `polygons` empty, `unbounded=false`) and no construction points / rays exist; the warning is
+  `LIGHT_INSIDE_OBJECT` (ids `[object]`) with a message naming the kind, the same code as for the curved kinds
+  of §2.6. A point light exactly on the surface (within `tol`) is outside: the touching face is "parallel"
+  (§5.7 row 6) and the ordinary path applies.
 
 ### 2.6 Curved primitives (§5.6)
 - Circle in its own plane: `C = diag(1,1,−ρ²)` in local coordinates `(x,y,1)`; embedding
@@ -289,6 +301,12 @@ where `(e1, e2, a)` is the rotated local frame.
   `|x̃3| > tol`; `x̃3 < 0` for a finite `L` → `LIGHT_BEHIND_CAMERA` (反光點, finite, below the horizon); `|x̃3| ≤ tol`
   → `light_point_at_infinity = normalize_max((x̃1, x̃2))` and `LIGHT_POINT_AT_INFINITY`; likewise
   `shadow_vp_at_infinity` + `SHADOW_VP_AT_INFINITY` for `F`.
+- **[decision]** `LIGHT_BEHIND_CAMERA` is emitted for a **finite** `L` only. Spec §5.7 row 1 ("光源在觀者後方", `x̃3 < 0`)
+  does not say "point light", but for a directional light `L' = P·(d, 0)` is the ordinary image of a direction: it is
+  finite whenever `d` is not parallel to the picture plane, `x̃3 = forward·d < 0` only says that the sun is in the
+  hemisphere behind the camera, and the drawing rule below (the 2-D segment covering `L'`, `P'`, `S'`) is the same
+  in both hemispheres; `light_point` itself (below the horizon) tells the painter. Nothing is degenerate, so no
+  warning (same reasoning as the undefined special points above); `examples/directional.json` is this case.
 - Self-check: `S'_check = (L'×P') × (F'×Q')`; compared with `S'` after `normalize_max` of both; must agree within
   1e-6 mm in `(u,v)`. Skipped with `CONSTRUCTION_CHECK_SKIPPED` (ids `[point name]`) when either line is the zero
   vector (`P' = L'` or `Q' = F'` projectively), when the two lines are (nearly) parallel or coincident
@@ -322,7 +340,9 @@ where `(e1, e2, a)` is the rotated local frame.
   that the 10⁶ m convergence test keeps tolerances sane.
   `tol = 1e-9 · scene_scale` for length-valued predicates (`ν`, `w_S` and `lit` with point lights, ground clip);
   `tol_dir = 1e-9` for dimensionless ones (`lit`/`w_S` with directional lights, direction tests); projective
-  equality of 2-D points/lines uses a relative 1e-9 after `normalize_max`.
+  equality of 2-D points/lines uses a relative 1e-9 after `normalize_max`. The two places where the tests compare
+  with a looser tolerance than the spec's 1e-6 mm / 1e-9 are recorded in §4 (clipped ray endpoints, nearly
+  picture-plane-parallel lights).
 - `normalize_max(v)` divides a homogeneous vector by its max-|component| (sign preserved); never divide by `w`
   before clipping.
 - All predicates are `> tol` / `< −tol`; the band in between counts as the degenerate side.
@@ -336,7 +356,7 @@ where `(e1, e2, a)` is the rotated local frame.
 | code | predicate | ids | effect |
 | --- | --- | --- | --- |
 | `CAMERA_LOOKING_ALONG_UP` | \|forward × up_world\| ≤ 1e-9 | `[]` | fallback up (0,1,0) |
-| `LIGHT_BEHIND_CAMERA` | finite `L`, `x̃3(L') < −tol` | `[light]` | `L'` finite (反光點) |
+| `LIGHT_BEHIND_CAMERA` | finite `L` only (§2.7 [decision]), `x̃3(L') < −tol` | `[light]` | `L'` finite (反光點) |
 | `LIGHT_POINT_AT_INFINITY` | \|x̃3(L')\| ≤ tol | `[light]` | `light_point` null, `light_point_at_infinity` set, rays parallel |
 | `SHADOW_VP_AT_INFINITY` | \|x̃3(F')\| ≤ tol | `[light]` | `shadow_vp` null, `shadow_vp_at_infinity` set |
 | `DIRECTIONAL_HORIZONTAL` | directional, \|n·l\| ≤ tol_dir | `[light]` | no shadows / rays |
@@ -345,7 +365,7 @@ where `(e1, e2, a)` is the rotated local frame.
 | `OBJECT_BELOW_RECEIVER` | some vertex `πᵀP < −tol` | `[object]` | loop clipped to the ground (§2.3) |
 | `POINT_BEHIND_CAMERA` | some drawn point of the object (vertex, shadow, foot, ground point, curved point, part of a drawn circle) `ν < 0` | `[object]` (never `[light]`: `L` / `F` are not nulled) | image null / segment clipped / ray omitted |
 | `FACE_PARALLEL_TO_LIGHT` | some face (incl. a cylinder / cone cap) \|n_f·(l − w·p)\| ≤ tol | `[object]` | face unlit |
-| `LIGHT_INSIDE_OBJECT` | sphere \|l − c\| ≤ r; cylinder / cone with nothing lit (point light) | `[object]` | no shadow / terminator / construction points for that object; message names the kind |
+| `LIGHT_INSIDE_OBJECT` | point light: sphere \|l − c\| ≤ r; cylinder / cone with nothing lit; box / prism with the light strictly inside the solid (§2.5, `primitives.point_inside_solid`) | `[object]` | no shadow / terminator / construction points for that object (a polyhedron keeps all its faces, unlit, in `form_shadow`); message names the kind |
 | `CONIC_SAMPLED` | some conic of the object degenerate or cond > 1e8 | `[object]` | polyline instead of ellipse / arc |
 | `CONSTRUCTION_CHECK_SKIPPED` | §2.7 skip conditions | `[point name]` | check entry absent |
 
@@ -437,15 +457,22 @@ outline points `"<obj>.og<k>.base/.top"`. Floats are written with `repr`-style s
 `+ 0.0`; `json.dumps(doc, sort_keys=True, indent=1, ensure_ascii=False)`.
 
 ## 4. Testing contract (§7)
-- `tests/test_invariants.py` covers all six §7.1 rows with the stated tolerances. Row 4 (rigid equivariance) uses
+- `tests/test_invariants.py` covers all six §7.1 rows with the stated tolerances, with two recorded exceptions:
+  (i) the endpoints of the **clipped construction-ray segments** (rows 1–4) are compared with
+  `1e-6 mm × max(1, max |defining image coordinate| in mm)` (`P'`, `S'`, `Q'`, `L'`, `F'`), because the clipped
+  endpoint inherits the conditioning of the rectangle clip of a segment defined by points up to a few metres of
+  canvas away (measured worst case 2e-6 mm at a 2.2 m scale); every point, edge, polygon, `L'`, `F'` and horizon
+  comparison stays at 1e-6 mm; (ii) `tests/test_property.py` compares the (nearly) picture-plane-parallel light
+  family (`forward·d` down to 1e-7, `L'` at ~1e9 mm) with a relative 1e-8. Row 4 (rigid equivariance) uses
   the symmetry group of the ground: rotations about +Z and translations in XY applied to objects, light and
   camera (position + target, roll unchanged; a second variant uses the yaw/pitch form with `yaw += angle`).
   Row 5 per §2.1 (positive scalars on inputs; either sign on sign-free outputs). **Limitation**: the scene document
   only carries canonical inputs (finite positions, unit directions, `w = 1`), so row 5 cannot be exercised through
   `render`; it is tested at the helper level (`shadow_matrix`, `foot`, `project`, `self_check`, `conic_entry`,
   `curved.silhouette` / `shadow_outline` with scaled `L`, `π`, `P`, `M`), which is where homogeneous vectors exist.
-- `tests/test_analytic.py` covers all four §7.2 bullets plus the roll test vector of §2.2, the §4 pillar/lamp
-  tangent-generator boundaries (`θ_l = −63.43°`, boundaries `−148.30°` and `21.43°`), and the box `h/(h−1)` case.
+- `tests/test_analytic.py` covers §7.2 bullets 1, 2 and 4 plus the roll test vector of §2.2 and the box `h/(h−1)`
+  case; `tests/test_curved.py` covers the §7.2 sphere-ellipse bullet (closed form `a = r/sin φ`, `b = r`) and the
+  §4 pillar/lamp tangent-generator boundaries (`θ_l = −63.43°`, boundaries `−148.30°` and `21.43°`).
 - `tests/test_degenerate.py` has at least one test per §5.7 row (six rows) asserting warning codes and finite output.
 - `tests/test_raycast.py` (§7.3): seeded random scenes (1–10 primitives, incl. concave prisms and a case with the
   light foot inside a concavity), grid sampling on the ground, IoU ≥ 0.99.
@@ -454,17 +481,23 @@ outline points `"<obj>.og<k>.base/.top"`. Floats are written with `repr`-style s
 - `tests/conformance/` (§7.5): `cases/*.json` (spec §4 scenes + a `description` key) and `expected/*.json`
   (`geometry_json.dumps` of `render(...)["geometry"]`), compared by `tests/test_conformance.py`: every image
   coordinate / drawable within 1e-6 mm (absolute), every other number within 1e-9 relative (absolute floor 1e-9),
-  every non-number exactly, warning **code sets** equal (and the `(code, ids)` sets). v1 holds 34 cases: the four §7.2
+  every non-number exactly, warning **code sets** equal (and the `(code, ids)` sets). The set (currently v2, see
+  `tests/conformance/CHANGELOG.md`; "v1" elsewhere names the M3 deliverable) holds 34 cases: the four §7.2
   analytic cases, every §5.7 row (+ the undefined-`F`/`L'`, light-below-receiver, light-inside-object and cap-at-light-height
   corner cases), the five example scenes, the concavity case, two partly buried objects, roll + shift and yaw/pitch
   cameras and six random §7.3 scenes that pass the ray-cast gate. Expected files are regenerated only with
   `tools/regen_conformance.py --reason "..."` (optionally `--case NAME`), which appends `## v<N> — <date>` to
-  `tests/conformance/CHANGELOG.md`; the set is versioned by `N`. Rules in `tests/conformance/README.md`.
+  `tests/conformance/CHANGELOG.md` (with the Python / NumPy build that produced the files); the set is versioned
+  by `N`. Rules in `tests/conformance/README.md`. Expected files are **bit-exact only for the recorded
+  interpreter / NumPy build** (another libm rounds the last bits differently, ≈ 1e-12 on a few leaves); the
+  determinism requirement of §2.8 is per build, so `test_regen_tool_exit_codes_match_its_docstring` requires
+  zero drift of `--dry-run` only on the recorded NumPy version and otherwise only that every drifted case still
+  passes the §7.5 tolerances.
 - `tests/test_cli.py`: render / validate / info / stages, `--camera` (camera-only JSON and scene file), `--layers`,
   `--formats`, `--quiet`, the warning table and the exit codes (2 for a `SceneError` with the field path).
 - `benchmarks/bench.py`: 100 primitives / ~10k edges < 1 s full render incl. SVG; camera-only re-render < 100 ms.
   **[decision]** Spec §8 calls these numbers 目標值 (targets). After two vectorisation passes the full render measures
-  ≈ 0.35–0.45 s (PASS) and the camera-only re-render ≈ 110–130 ms with the default cyclic GC (≈ 100 ms with it
+  ≈ 0.35–0.45 s (PASS) and the camera-only re-render ≈ 110–130 ms with the default cyclic GC (≈ 90 ms with it
   disabled) on the 4-CPU CI container; the remaining cost is the Python-object floor of the §6.2 document (≈ 15k point
   dicts, 9k edge dicts, 12.8k ray dicts) plus ≈ 128k SVG coordinates, which numpy-only code cannot remove without
   changing the document's Python representation. For v1 the camera-only row is therefore recorded as a target

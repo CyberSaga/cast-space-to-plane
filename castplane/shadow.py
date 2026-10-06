@@ -77,14 +77,6 @@ def shadow_w(pi, L, P) -> np.ndarray | float:
     return piL * P[:, 3] - L[3] * (P @ pi)
 
 
-def _normalize_max(v: np.ndarray) -> np.ndarray:
-    """Divide by the max-|component| (sign preserved), contract §2.8; zero stays zero."""
-    m = float(np.max(np.abs(v)))
-    if m == 0.0:
-        return v
-    return v / m
-
-
 def clip_loop_to_plane(points4, pi, tol: float = 0.0, sources=None):
     """Contract §2.3 ground clip: Sutherland–Hodgman clip of a closed homogeneous loop
     to the half-space ``pi^T X >= 0`` with linear interpolation of homogeneous

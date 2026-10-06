@@ -24,7 +24,9 @@ from __future__ import annotations
 import json
 import math
 import pathlib
+import re
 
+import numpy
 import pytest
 
 import castplane
@@ -257,9 +259,21 @@ def run_regen(*argv: str):
                           cwd=str(CONFORMANCE.parents[1]), check=False)
 
 
+def recorded_numpy_version() -> str | None:
+    """The NumPy version recorded by the last ``## v<N>`` entry of the changelog (``None`` when absent)."""
+    text = (CONFORMANCE / "CHANGELOG.md").read_text(encoding="utf-8")
+    entries = re.split(r"^## v\d+ ", text, flags=re.MULTILINE)
+    m = re.search(r"^- build: .*numpy (\S+)", entries[-1], flags=re.MULTILINE)
+    return m.group(1) if m else None
+
+
 def test_regen_tool_exit_codes_match_its_docstring(tmp_path):
     """The documented contract: 2 for a usage error (argparse), 1 for an unknown case or a render
-    failure, 0 on success; ``--dry-run`` writes nothing and reports no drift for the committed set."""
+    failure, 0 on success; ``--dry-run`` writes nothing and reports no drift for the committed set.
+
+    Expected files are bit-exact only for the interpreter / NumPy build recorded in the changelog
+    (contract §4): on another build (a different libm rounds a few leaves by ~1e-12) the dry run
+    may list drifted cases, and each of them must then still pass the §7.5 tolerances."""
     doc = REGEN.read_text(encoding="utf-8")
     assert "2 for a command-line usage error" in doc and "1 for an unknown ``--case``" in doc
     assert run_regen().returncode == 2                                   # --reason is required
@@ -270,7 +284,14 @@ def test_regen_tool_exit_codes_match_its_docstring(tmp_path):
     changelog = (CONFORMANCE / "CHANGELOG.md").read_bytes()
     r = run_regen("--reason", "check", "--dry-run")
     assert r.returncode == 0, r.stderr
-    assert r.stdout.startswith("would change: 0 of"), r.stdout
+    m = re.match(r"would change: (\d+) of (\d+) case\(s\)(?: \((.*)\))?", r.stdout.strip())
+    assert m and int(m.group(2)) == len(case_names()), r.stdout
+    drifted = m.group(3).split(", ") if m.group(3) else []
+    assert len(drifted) == int(m.group(1))
+    if recorded_numpy_version() == numpy.__version__:
+        assert not drifted, f"expected files drift on the recorded NumPy build: {r.stdout}"
+    for name in drifted:
+        assert compare_documents(load_expected(name), render_case(name)) == [], name
     assert {p.name: p.read_bytes() for p in EXPECTED.glob("*.json")} == before
     assert (CONFORMANCE / "CHANGELOG.md").read_bytes() == changelog
 

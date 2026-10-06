@@ -115,6 +115,12 @@ def test_prism_polygon_rules():
     expect_error(prism([[0, 0], [1, 0]]), "objects[1].polygon")
     expect_error(prism([[0, 0], [1, 1], [2, 2]]), "objects[1].polygon")           # collinear
     expect_error(prism([[0, 0], [1, 1], [1, 0], [0, 1]]), "objects[1].polygon")   # bow-tie
+    with pytest.raises(SceneError) as info:   # a symmetric bow-tie has zero signed area: the message must not
+        validate_scene(prism([[0, 0], [1, 1], [1, 0], [0, 1]]))                   # call it "collinear" only
+    assert "self-intersecting" in info.value.message and "collinear" in info.value.message
+    with pytest.raises(SceneError) as info:
+        validate_scene(prism([[0, 0], [2, 0], [2, 2], [0, 2], [2, 1]]))            # non-zero-area bow-tie
+    assert info.value.message == "polygon is self-intersecting"
     expect_error(prism([[0, 0], [1, 0], [1, 0], [0, 1]]), "objects[1].polygon[1]")  # repeated vertex
     expect_error(prism([[0, 0], [1, 0, 0], [0, 1]]), "objects[1].polygon[1]")
     ccw = validate_scene(prism([[0, 0], [1, 0], [0, 1]]))["objects"][1]["polygon"]
@@ -172,6 +178,8 @@ def test_light_type_and_params():
     expect_error(mutate(["lights", 0, "type"], "spot"), "lights[0].type")
     expect_error(mutate(["lights", 0, "position"], None, delete=True), "lights[0].position")
     expect_error(mutate(["lights", 0, "id"], None, delete=True), "lights[0].id")
+    expect_error(mutate(["lights", 0, "id"], "a.b"), "lights[0].id")   # "." is the point-name separator (§3.1)
+    expect_error(mutate(["lights", 0, "id"], ""), "lights[0].id")
     scene = mutate(["lights", 0], {"id": "sun", "type": "directional", "direction": [0, 0, 2]})
     expect_error(scene, "lights[0].direction")
     scene = mutate(["lights", 0], {"id": "sun", "type": "directional"})
@@ -229,6 +237,12 @@ def test_output_canvas_aspect_and_defaults():
     expect_error(mutate(["output", "canvas_mm"], None, delete=True), "output.canvas_mm")
     expect_error(mutate(["output"], None, delete=True), "output")
     expect_error(mutate(["output", "layers"], ["horizon", "shadows"]), "output.layers[1]")
+    expect_error(mutate(["output", "layers"], []), "output.layers")                 # empty subset rejected
+    expect_error(mutate(["output", "layers"], ["horizon", "horizon"]), "output.layers")
+    with pytest.raises(SceneError) as info:   # the spec's own §4 example: the message names both ratios and a fix
+        validate_scene(mutate(["output", "canvas_mm"], [257, 182]))
+    assert "257/182 = 1.412" in info.value.message and "36/24 = 1.5" in info.value.message
+    assert "[273, 182]" in info.value.message
     expect_error(mutate(["output", "png_dpi"], 0), "output.png_dpi")
     scene = base_scene()
     del scene["output"]["layers"]

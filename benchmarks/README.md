@@ -37,14 +37,14 @@ never touches the collector.
 
 | `--gate` | exit 0 when | use |
 | --- | --- | --- |
-| `both` (default) | both targets pass | the contract as written (ARCHITECTURE §4 last bullet: both targets) |
-| `full` | the full-render target passes; the camera-only row is informational | CI once the camera-only target is formally deferred (see below) |
+| `both` (default) | both targets pass | the spec-literal check (§8 names both numbers); still exits 1 so the camera-only miss is never hidden |
+| `full` | the full-render target passes; the camera-only row is informational | **the v1 CI gate** (ARCHITECTURE §4 last bullet [decision] / DECISIONS D17: the camera-only target is deferred to M7) |
 | `none` | always | measurements only |
 
-A CI gate is therefore `python3 benchmarks/bench.py --gate both || exit 1` for the
-contract as written, or `--gate full` once a **[decision]** in `docs/ARCHITECTURE.md`
-records that the camera-only target is deferred.  The text and the JSON output
-always name the gate that produced the status, so a PASS is never ambiguous.
+The CI gate for v1 is therefore `python3 benchmarks/bench.py --gate full || exit 1`;
+`--gate both` is the spec-literal check that will become the gate again once the
+camera-only target is met (M7).  The text and the JSON output always name the gate
+that produced the status, so a PASS is never ambiguous.
 
 Determinism of the scene: `make_benchmark_scene` is seeded, so every run measures
 exactly the same input; `tests/test_reference.py` checks that the scene stays the

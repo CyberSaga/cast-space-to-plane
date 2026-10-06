@@ -425,6 +425,46 @@ def test_point_light_inside_a_sphere_only_warns():
     assert '<g id="objects.ball"' in svg and '<g id="form_shadow.ball"' not in svg
 
 
+@pytest.mark.parametrize("obj, light_pos", [
+    ({"id": "b", "type": "box", "size": [2.0, 2.0, 2.0], "transform": {"position": [0.0, 5.0, 0.0]}},
+     [0.0, 5.0, 1.0]),
+    ({"id": "b", "type": "box", "size": [2.0, 1.0, 1.5],                      # rotated: the local frame matters
+      "transform": {"position": [0.0, 5.0, 0.0], "rotation_deg": [0.0, 0.0, 45.0]}},
+     [0.6, 5.6, 0.5]),
+    ({"id": "b", "type": "prism", "height": 1.0,                              # concave U: light inside one arm
+      "polygon": [[-1.5, -1], [1.5, -1], [1.5, 2], [0.5, 2], [0.5, 0], [-0.5, 0], [-0.5, 2], [-1.5, 2]],
+      "transform": {"position": [0.0, 5.0, 0.0]}},
+     [1.0, 6.5, 0.5]),
+])
+def test_point_light_inside_a_polyhedron_only_warns(obj, light_pos):
+    """Contract §2.5 / §2.9 ``LIGHT_INSIDE_OBJECT`` for box / prism: a point light strictly inside the solid
+    lights nothing, so the shadow record is empty, every face is in the form shadow, no construction rays
+    exist for that object, and the other object is unaffected; the test is exact in the local frame (the
+    concave case puts the light in one arm of a U, where some faces would otherwise count as lit)."""
+    crate = {"id": "crate", "type": "box", "size": [1.0, 1.0, 0.3], "transform": {"position": [3.5, 5.0, 0.0]}}
+    lamp = {"id": "lamp", "type": "point", "position": light_pos}
+    scene = scene_with([obj, crate], lamp, {"position": [3.0, -3.0, 2.5], "target": [0.0, 5.0, 0.5]})
+    doc = castplane.render(scene)["geometry"]
+    inside = [w for w in doc["warnings"] if w["code"] == "LIGHT_INSIDE_OBJECT"]
+    assert [w["ids"] for w in inside] == [["b"]] and obj["type"] in inside[0]["message"]
+    assert [w["code"] for w in doc["warnings"] if "b" in w["ids"]] == ["LIGHT_INSIDE_OBJECT"]
+    sh = [s for s in doc["shadows"] if s["object"] == "b"][0]
+    assert sh["outline"] == [] and sh["loops"] == [] and sh["polygons"] == [] and not sh["unbounded"]
+    fs = [f for f in doc["form_shadow"] if f["object"] == "b"]
+    n_faces = 6 if obj["type"] == "box" else len(obj["polygon"]) + 2
+    assert len(fs) == 1 and len(fs[0]["faces"]) == n_faces
+    assert all(r[1].split(".")[0] == "crate" for r in doc["construction"]["rays"])
+    assert not any(n.startswith("b.") and (".shadow." in n or n.endswith(".foot")) for n in doc["points"])
+    assert [s for s in doc["shadows"] if s["object"] == "crate"][0]["outline"]
+    assert all(e["silhouette"] is False for e in doc["edges"] if e["object"] == "b")
+    finite_and_drawable(doc)
+    # the same light in the notch of the U (outside the solid) or exactly on a box face is NOT inside
+    for pos in ([0.0, 6.0, 0.5], [0.0, 5.0, obj["size"][2] if obj["type"] == "box" else 1.0]):
+        doc2 = castplane.render(scene_with([obj, crate], dict(lamp, position=pos),
+                                           {"position": [3.0, -3.0, 2.5], "target": [0.0, 5.0, 0.5]}))["geometry"]
+        assert "LIGHT_INSIDE_OBJECT" not in warning_codes(doc2["warnings"])
+
+
 def test_point_light_exactly_at_a_cylinder_cap_height():
     """Spec §5.7 rows 4 and 6 at once: the top cap is parallel to the light (``FACE_PARALLEL_TO_LIGHT``,
     unlit) and the top generator endpoints are at the light's height (``VERTEX_NOT_BELOW_LIGHT``): the top

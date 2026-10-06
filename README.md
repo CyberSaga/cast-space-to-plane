@@ -38,7 +38,7 @@ castplane render examples/basic.json -o out --camera my_camera.json   # 只換�
 castplane stages examples/basic.json -o stages.json # A 段 / B 段中間結果（除錯與移植用）
 ```
 
-`render` 預設只寫 SVG 與 JSON；PNG 要明確以 `--formats` 要求，沒有 cairosvg / resvg 時以結束碼 3 回報。結束碼：0 成功、1 檔案錯誤、2 輸入無效（訊息含欄位路徑，例如 `error: objects[1].radius: must be > 0`）、3 缺少選用相依套件。完整選項見 [`docs/USAGE.md`](docs/USAGE.md)。
+`render` 預設只寫 SVG 與 JSON；PNG 要明確以 `--formats` 要求，沒有 cairosvg / resvg 時以結束碼 3 回報，而且**什麼檔案都不寫**（同一次要求的 SVG / JSON 也不寫，避免半成品；先不加 `png` 再跑一次即可）。結束碼：0 成功、1 檔案錯誤、2 輸入無效（訊息含欄位路徑，例如 `error: objects[1].radius: must be > 0`）、3 缺少選用相依套件。完整選項見 [`docs/USAGE.md`](docs/USAGE.md)。
 
 ### Python API
 
@@ -133,13 +133,13 @@ result = castplane.render(scene)        # {"geometry": doc, "svg": "<svg …>"}
 | `objects[]` | `id` | 必填、唯一、非空、不含 `.` |
 | | `type` | `box`（`size` 三個正數）、`cylinder` / `cone`（`radius`、`height` 正數）、`sphere`（`radius`）、`prism`（`polygon` 至少 3 個 `[x, y]`、不共線、不自交；順時針輸入會自動反向；`height`） |
 | | `transform` | 選填；`position` 預設 `[0, 0, 0]`，`rotation_deg` 預設 `[0, 0, 0]`（Z-Y-X 順序的歐拉角，`R = Rz·Ry·Rx`）；`scale` 不允許（用 size 參數） |
-| `lights[]` | | v1 恰好一個；`id` 唯一 |
+| `lights[]` | | v1 恰好一個；`id` 唯一、非空、不含 `.` |
 | | `type` | `point`（`position`）或 `directional`（`direction` 指向光源，長度必須為 1，容差 1e-9） |
 | `receivers[]` | | v1 恰好一個；`type: "plane"`、`normal` 必須是 `[0, 0, 1]`、`offset` 必須是 0（預設 0） |
 | `camera` | 姿態 | `position` + `target`（≠ position）**或** `position` + `yaw_deg` + `pitch_deg`，二擇一；`roll_deg` 預設 0 |
 | | 鏡頭 | `focal_length_mm` > 0；`frame_mm` 兩個正數；`shift_mm` 主點偏移，預設 `[0, 0]`；`near_m` > 0，預設 0.05 |
-| `output` | `canvas_mm` | 兩個正數，長寬比必須等於 `frame_mm` 的長寬比（容差 1e-9） |
-| | `layers` | 六個圖層 id 的子集，預設全部；輸出順序固定 |
+| `output` | `canvas_mm` | 兩個正數，長寬比必須等於 `frame_mm` 的長寬比（容差 1e-9）。**注意**：規格 §4 自己的範例（257×182 配 36×24）違反這條、會被拒絕（錯誤訊息列出兩個比值與可用的替代值），見下方「差異」第 1 點 |
+| | `layers` | 六個圖層 id 的**非空**子集，省略時為全部（空串列會被拒絕，與 `--layers` 一致）；輸出順序固定 |
 | | `png_dpi` | 正數，預設 300 |
 
 違反任一規則時 `load_scene` 拋出 `SceneError`，`field` 屬性是 JSON 路徑（例如 `camera.target`、`objects[2].polygon`、`output.canvas_mm`），命令列以結束碼 2 回報。幾何退化（光源在地面下、頂點高於點光源……）**不是**錯誤，只產生警告。
@@ -166,7 +166,7 @@ result = castplane.render(scene)        # {"geometry": doc, "svg": "<svg …>"}
 
 | 層 | 內容 | 執行 |
 | --- | --- | --- |
-| 單元與不變量（§7.1） | 作圖法 = 直接計算（1e-6 mm）、影子與相機無關（1e-9 m）、點光趨近平行光（1e-4 m）、剛體等變（1e-6 mm）、齊次尺度不變（1e-9）、無 NaN / Inf | `python3 -m pytest -q`（全套約 800 個測試，1.5–2 分鐘） |
+| 單元與不變量（§7.1） | 作圖法 = 直接計算（1e-6 mm）、影子與相機無關（1e-9 m）、點光趨近平行光（1e-4 m）、剛體等變（1e-6 mm）、齊次尺度不變（1e-9）、無 NaN / Inf | `python3 -m pytest -q`（全套約 865 個測試，2–3 分鐘；`test_raycast.py` 與 `test_property.py` 最慢） |
 | 解析案例（§7.2） | 單位方塊 h/(h−1)、太陽 45° / 30° 影長、球影橢圓閉式解、平視與俯仰相機 | `python3 -m pytest tests/test_analytic.py tests/test_curved.py -q` |
 | 退化情況（§5.7） | 每列至少一個測試，檢查警告代碼與輸出有限 | `python3 -m pytest tests/test_degenerate.py -q` |
 | 光線投射對照組（§7.3） | 亂數場景（1–10 個基元，含凹稜柱與光源垂足在凹口內的案例），地面取樣網格逐點射線測試，影子多邊形柵格化後 IoU ≥ 0.99（另逐物件比對）；與幾何法零程式碼共用 | `python3 -m pytest tests/test_raycast.py -q`（較慢） |
@@ -181,7 +181,7 @@ result = castplane.render(scene)        # {"geometry": doc, "svg": "<svg …>"}
 | M0 骨架與相機 | 場景 JSON 讀取與驗證、相機矩陣、近平面裁切、方塊線框 SVG、地平線與消失點 | 完成 |
 | M1 多面體投射陰影與作圖線 | 平面投影矩陣、受光判定、光輪廓邊、影子多邊形、L′ F′ 與作圖線、六個 SVG 圖層、JSON 輸出 | 完成 |
 | M2 曲面基元與形體陰影 | 圓柱、球、圓錐的圓錐曲線影子、明暗交界線、SVG ellipse 輸出 | 完成 |
-| M3 核心穩定（閘門） | 光線投射對照組、屬性測試、一致性測試集 v1、效能基準 | **部分完成**：光線投射對照（IoU ≥ 0.99）、屬性測試、一致性測試集 v1 與效能基準腳本皆已交付；§8 的「完整渲染 < 1 s」已達標，但「只換相機 < 100 ms」**尚未達標**（目前約 110–130 ms，關閉循環 GC 約 100 ms；量測結果見 `benchmarks/README.md`）。規格 §8 將數字定為目標值，合約 §4 已記錄決策：v1 以 `--gate full` 作為 CI 閘門，只換相機一項列為已知未達標、留待 M7 互動介面時收斂 |
+| M3 核心穩定（閘門） | 光線投射對照組、屬性測試、一致性測試集 v1、效能基準 | **部分完成**：光線投射對照（IoU ≥ 0.99）、屬性測試、一致性測試集 v1 與效能基準腳本皆已交付；§8 的「完整渲染 < 1 s」已達標，但「只換相機 < 100 ms」**尚未達標**（目前約 110–130 ms，關閉循環 GC 約 90 ms；量測結果見 `benchmarks/README.md`）。規格 §8 將數字定為目標值，合約 §4 已記錄決策：v1 以 `--gate full` 作為 CI 閘門，只換相機一項列為已知未達標、留待 M7 互動介面時收斂 |
 | M4 多受影面與隱藏線 | 有界受影面、逐面裁切、轉折影、取樣式隱藏線、visibility 欄位 | 未排程／預留（`receivers` 為陣列、`edges[].visibility` 已存在） |
 | M5 網格匯入 | OBJ、glTF/GLB 載入、前處理管線 | 未排程／預留（內部網格表示即 M5 格式） |
 | M6 多光源 | 多光源影子分組、疊影規則、SVG 子圖層 | 未排程／預留（`lights` 為陣列、影子帶 light id、`cast_shadow.<light>` 子圖層） |
@@ -190,7 +190,7 @@ result = castplane.render(scene)        # {"geometry": doc, "svg": "<svg …>"}
 
 ## 與規格文件的差異
 
-實作過程中規格有幾處互相矛盾或留白，決定如下（完整理由見 [`docs/DECISIONS.md`](docs/DECISIONS.md)，合約原文見 `docs/ARCHITECTURE.md` 中標記 **[decision]** 的條目）：
+實作過程中規格有幾處互相矛盾或留白，決定如下（完整理由見 [`docs/DECISIONS.md`](docs/DECISIONS.md) 的 D1–D19；其中**覆寫規格字面**的條目在 `docs/ARCHITECTURE.md` 標記 **[decision]**，其餘是規格留白時定下的慣例，合約正文記載）：
 
 1. **畫布 257×182 改為 273×182。** 規格 §4 範例的 `canvas_mm = [257, 182]` 與 `frame_mm = [36, 24]` 長寬比不符（1.412 ≠ 1.5），違反規格自己的規則，因此驗證會拒絕它；`examples/basic.json` 改用 273×182（3:2，高度不變）。要用 JIS B5 紙請改片幅（例如 `[36, 25.5]`）或把畫布改成 3:2。
 2. **畫面座標原點在畫幅中心，主點在 `shift_mm` 處。** 規格 §2 說「原點在主點」，§5.4 的 K 矩陣卻把主點放在 (u₀, v₀)；兩者只在無移軸時一致。採 K 公式：原點在畫幅中心，主點標記畫在 (u₀, v₀) = shift_mm × 放大倍率；所有 `image` 座標與容差都是畫布 mm（畫幅依 `canvas_mm / frame_mm` 放大）。
@@ -201,7 +201,7 @@ result = castplane.render(scene)        # {"geometry": doc, "svg": "<svg …>"}
 7. **無界影子的無窮遠弧。** 影子多邊形在無窮遠處的兩個方向頂點之間，區域取「在地面 (x, y) 中由出射方向逆時針掃到入射方向」的弧，並插入中間方向頂點使每段小於 90°；畫出來的多邊形以放大 25% 的畫布矩形在齊次座標裁切後才除以 w。
 8. **繪圖管線順序。** 每條線段與多邊形固定：4D 近平面裁切 → 乘 P → 2D 齊次矩形裁切（畫布外擴 25%）→ 最後除以 x̃₃。L、F 與消失點永遠不被近平面裁切或設為 null（反光點必須存在）。
 9. **部分埋入地面的物件。** 多面體先被受影面切成實體，切面的受光側邊成為光輪廓邊，影子正是地面以上部分的影子（含足印）；曲面基元把輪廓迴圈在地面下的部分換成地面截面的受光邊界折線，而不是直線弦。
-10. **圓錐曲線的分類與取樣。** 分類必須平移不變（以中心化後的矩陣判定橢圓／拋物線／雙曲線、退化與條件數 > 1e8 → 取樣折線並回報 `CONIC_SAMPLED`）；取樣只在輸出階段，每整圓 64 段、弧按比例、最少 8 段，段數四捨五入而非無條件進位。
+10. **圓錐曲線的分類與取樣。** 分類必須平移不變（以中心化後的矩陣判定橢圓／拋物線／雙曲線、退化與條件數 > 1e8 → 取樣折線並回報 `CONIC_SAMPLED`）。精確的圓錐曲線在 A、B 段不取樣（近平面裁切、畫布裁切與 w_S = 0 的交點都閉式求解）；可繪圖形（`polylines` / `arcs` / `ellipses`）只在輸出階段取樣，但曲面物件的**填色影子多邊形**與部分埋入物件的地面截面折線是與相機無關的輪廓的一部分，在 A 段就以同一規則取樣（頂點即 `<物件>.s<k>.<光源>`），精確邊界另存於 `shadows[].conics`。規則：每整圓 64 段、弧按比例、最少 8 段，段數四捨五入而非無條件進位。
 11. **受影面限制。** v1 驗證只接受 `normal = [0, 0, 1]`、`offset = 0`（規格 §1「v1 只有地面」），雖然 §4 表格的寫法看似允許任意平面。
 12. **規格 §5.7 第 6 列的「容差內取等號為負」** 實作為：內積絕對值 ≤ 容差的面視為「平行」，不受光並回報 `FACE_PARALLEL_TO_LIGHT`（圓柱、圓錐的端面也適用）。
 13. **SVG 不依賴 svgwrite。** 規格 §8 列 svgwrite 為選用相依；實作以標準函式庫字串輸出，核心真正只依賴 numpy。
@@ -210,6 +210,7 @@ result = castplane.render(scene)        # {"geometry": doc, "svg": "<svg …>"}
 16. **一致性測試集的比對。** 畫面座標 1e-6 mm 絕對容差，其餘數值 1e-9 相對容差，警告比對 `code` 集合與 `(code, ids)` 集合，不比對訊息；expected 只能由 `tools/regen_conformance.py --reason` 產生並記錄於 `CHANGELOG.md`。
 17. **只換相機 < 100 ms 是目標值。** 目前約 110–130 ms（見 `benchmarks/README.md`），CI 以 `--gate full` 為閘門，收斂留到 M7。
 18. **自我驗證的範圍。** L′P′ ∩ F′Q′ = S′ 的驗證只對會畫出作圖線的頂點做（P、S、Q 都在近平面前方）；在相機平面附近的影子點沒有有意義的 mm 座標，兩線幾乎平行（正規化交點 < 1e-6）時略過並回報 `CONSTRUCTION_CHECK_SKIPPED`。
+19. **`LIGHT_BEHIND_CAMERA` 只對點光源。** 規格 §5.7 第 1 列沒有區分光源種類；平行光指向相機後方時 L′ 一樣是地平線下方的反光點，但那只是一個方向的普通影像、作圖線畫法不變，所以不發警告（`examples/directional.json` 即此例）。
 
 ## 授權
 
