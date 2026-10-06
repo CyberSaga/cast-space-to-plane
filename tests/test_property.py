@@ -36,7 +36,7 @@ import re
 
 import numpy as np
 import pytest
-from hypothesis import HealthCheck, assume, given, settings
+from hypothesis import HealthCheck, assume, example, given, settings
 from hypothesis import strategies as st
 
 import castplane
@@ -743,15 +743,48 @@ def test_light_nearly_parallel_to_picture_plane_only_warns(scene):
     assert con["light_point"] is not None and con["light_point_at_infinity"] is None
 
 
+def _base_scene(objects, light, camera):
+    return {"version": "0.1", "objects": objects, "lights": [light],
+            "receivers": [{"id": "ground", "type": "plane", "normal": [0, 0, 1], "offset": 0.0}],
+            "camera": dict(camera, roll_deg=0.0, focal_length_mm=18.0, frame_mm=[36.0, 24.0], shift_mm=[0.0, 0.0],
+                           near_m=0.5),
+            "output": {"canvas_mm": [360.0, 240.0]}}
+
+
+#: Regression examples found by hypothesis: a shadow point lying almost exactly in the camera plane (its
+#: image is meaningless, so it must get no self-check), and a light below the whole object (no ground shadow).
+SHADOW_IN_CAMERA_PLANE = _base_scene(
+    [{"id": "o0", "type": "box", "size": [1.6875, 1.0938, 1.5625],
+      "transform": {"position": [-0.7188, 2.0, 0.300001], "rotation_deg": [0.0, 0.0, 275.25]}},
+     {"id": "o1", "type": "box", "size": [0.2, 1.8, 1.0199],
+      "transform": {"position": [2.6323, 0.0, 1e-06], "rotation_deg": [0.0, 0.0, 53.875]}}],
+    {"id": "lamp", "type": "point", "position": [0.0, 0.0, 1.5159]},
+    {"position": [5.8482, 1.1394, 1.4367], "target": [1.1638, 1.1394, 0.9313]})
+LIGHT_BELOW_WHOLE_OBJECT = _base_scene(
+    [{"id": "o0", "type": "box", "size": [1.0, 1.0, 1.0],
+      "transform": {"position": [0.0, 0.0, 0.300001], "rotation_deg": [0.0, 0.0, 0.0]}}],
+    {"id": "lamp", "type": "point", "position": [0.9988, 0.0, 0.3]},
+    {"position": [2.9982, 0.0, 0.9047], "target": [0.0, 0.0, 0.8]})
+
+
 @settings(max_examples=25, **COMMON)
+@example(scene=SHADOW_IN_CAMERA_PLANE)
+@example(scene=LIGHT_BELOW_WHOLE_OBJECT)
 @given(scene=scenes(kinds=POLYHEDRAL, light=lambda objs: point_lights(objs, above=False)))
 def test_vertices_above_the_light_only_warn(scene):
     """Spec §5.7 row 4: unbounded outlines (direction entries) with ``VERTEX_NOT_BELOW_LIGHT``."""
     doc = check_all_invariants(scene)
     light = scene["lights"][0]["position"]
-    if max(random_scenes.highest_z(o) for o in scene["objects"]) > light[2]:
+    top = max(random_scenes.highest_z(o) for o in scene["objects"])
+    bottom = min(random_scenes.lowest_z(o) for o in scene["objects"])
+    if top > light[2]:
         assert "VERTEX_NOT_BELOW_LIGHT" in codes(doc)
+    if bottom < light[2] < top:
+        # some vertex below and some above the light: at least one outline reaches infinity
         assert any(s["unbounded"] for s in doc["shadows"])
+    if bottom > light[2]:
+        # the whole scene is above the light: no ray reaches the ground, so no shadow at all
+        assert all(not s["unbounded"] and all(loop == [] for loop in s["loops"]) for s in doc["shadows"])
     for s in doc["shadows"]:
         assert s["unbounded"] == any(not isinstance(e, str) for loop in s["loops"] for e in loop)
 

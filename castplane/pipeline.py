@@ -669,8 +669,9 @@ def _project_shadows(records: list, cam: dict, tol: float, by_id: dict) -> tuple
                 segments[k] = flat[seg_cum[pos]:seg_cum[pos + n_rows]]
                 rays[k] = ray_flat[pos * len(ray_kinds):(pos + n_rows) * len(ray_kinds)]
                 pos += n_rows
-        # self-check (spec §5.5) for every finite shadow point; degenerate forms when L' or F' is undefined
-        rows_keep = rows_all[np.nonzero(keep[rows_all])[0]]
+        # self-check (spec §5.5) for every vertex whose rays are drawn (P, S, Q in front of the near plane,
+        # contract §2.7 [decision]); degenerate forms when L' or F' is undefined
+        rows_keep = rows_ok
         if lp_undefined:    # light at the camera centre: S' = P'
             err, skipped = coincidence_check(xS[rows_keep], xP[rows_keep], tol)
         elif fp_undefined:  # directional light along the receiver normal: S' = Q'
@@ -687,7 +688,7 @@ def _project_shadows(records: list, cam: dict, tol: float, by_id: dict) -> tuple
         good_cum = np.concatenate([[0], np.cumsum(good)])
         pos = 0
         for k in rec_idx:
-            n_rows = int(n_keep_rec[k])
+            n_rows = int(n_ok_rec[k])
             checks[k] = check_flat[good_cum[pos]:good_cum[pos + n_rows]]
             pos += n_rows
     behind_cum = np.concatenate([[0], np.cumsum(behind_any)])

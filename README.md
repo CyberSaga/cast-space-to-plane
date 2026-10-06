@@ -206,6 +206,10 @@ result = castplane.render(scene)        # {"geometry": doc, "svg": "<svg …>"}
 12. **規格 §5.7 第 6 列的「容差內取等號為負」** 實作為：內積絕對值 ≤ 容差的面視為「平行」，不受光並回報 `FACE_PARALLEL_TO_LIGHT`（圓柱、圓錐的端面也適用）。
 13. **SVG 不依賴 svgwrite。** 規格 §8 列 svgwrite 為選用相依；實作以標準函式庫字串輸出，核心真正只依賴 numpy。
 14. **相機滾轉方向、yaw/pitch 形式、`det R = −1`** 等慣例在規格中未定義，見 `docs/ARCHITECTURE.md` §2.2（含測試向量）。
+15. **確定性。** 每個輸出浮點數先 `+ 0.0`（消除 −0.0），警告去重並排序，相同輸入兩次渲染必須位元相同（有測試）。
+16. **一致性測試集的比對。** 畫面座標 1e-6 mm 絕對容差，其餘數值 1e-9 相對容差，警告比對 `code` 集合與 `(code, ids)` 集合，不比對訊息；expected 只能由 `tools/regen_conformance.py --reason` 產生並記錄於 `CHANGELOG.md`。
+17. **只換相機 < 100 ms 是目標值。** 目前約 110–130 ms（見 `benchmarks/README.md`），CI 以 `--gate full` 為閘門，收斂留到 M7。
+18. **自我驗證的範圍。** L′P′ ∩ F′Q′ = S′ 的驗證只對會畫出作圖線的頂點做（P、S、Q 都在近平面前方）；在相機平面附近的影子點沒有有意義的 mm 座標，兩線幾乎平行（正規化交點 < 1e-6）時略過並回報 `CONSTRUCTION_CHECK_SKIPPED`。
 
 ## 授權
 

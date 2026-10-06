@@ -291,8 +291,12 @@ where `(e1, e2, a)` is the rotated local frame.
   `shadow_vp_at_infinity` + `SHADOW_VP_AT_INFINITY` for `F`.
 - Self-check: `S'_check = (L'×P') × (F'×Q')`; compared with `S'` after `normalize_max` of both; must agree within
   1e-6 mm in `(u,v)`. Skipped with `CONSTRUCTION_CHECK_SKIPPED` (ids `[point name]`) when either line is the zero
-  vector (`P' = L'` or `Q' = F'` projectively), when the two lines are parallel or coincident
-  (`max|l1 × l2| ≤ 1e-9 · |l1|·|l2|` after `normalize_max`), or when `S'` is at infinity (`|x̃3| ≤ tol`).
+  vector (`P' = L'` or `Q' = F'` projectively), when the two lines are (nearly) parallel or coincident
+  (`max|l1 × l2| ≤ 1e-6` after `normalize_max` of both lines — the intersection amplifies rounding by `1/sin θ`,
+  so below that the 1e-6 mm comparison is meaningless), or when `S'` is at infinity (`|x̃3| ≤ tol`).
+  **[decision]** Checks are produced exactly for the vertices whose construction rays are drawn (`ν(P)`, `ν(S)`,
+  `ν(Q) ≥ 0`, see below): a shadow point behind the near plane has no meaningful mm image (its depth may be
+  arbitrarily close to 0), is not drawn, and gets neither a check nor a `CONSTRUCTION_CHECK_SKIPPED` warning.
 - **Rays drawn [decision]**: construction rays are 2-D segments, never near-clipped 3-D segments. For a silhouette
   vertex with `ν(P) ≥ 0`, `ν(S) ≥ 0` and `ν(Q) ≥ 0` the ray `L'P'` is the 2-D segment covering `L'`, `P'`, `S'`
   (when `L'` is at infinity: the segment `P'→S'` extended by 20 % beyond both ends), likewise `F'Q'` covers

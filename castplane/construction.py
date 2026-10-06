@@ -31,6 +31,10 @@ from .homogeneous import TOL_DIR, normalize_max, row_max_abs
 RAY_EXTENSION = 0.2
 #: Relative threshold under which a 2-D line / meet counts as the zero vector (contract §2.7 / §2.8).
 LINE_ZERO_REL = 1e-9
+#: Lines whose max-normalised meet is smaller than this are treated as parallel / coincident for the
+#: self-check (contract §2.7): the intersection of two lines at an angle θ amplifies rounding by 1/sin θ,
+#: so below ≈ 1e-6 the 1e-6 mm comparison is meaningless and the check is skipped instead.
+LINE_PARALLEL_REL = 1e-6
 
 
 def special_point_image(cam: dict, X, tol: float) -> dict:
@@ -154,7 +158,8 @@ def self_check(Lp, Pp, Fp, Qp, Sp, tol: float):
     ``Lp``, ``Fp`` are ``(3,)``; ``Pp``, ``Qp``, ``Sp`` are ``(n, 3)`` homogeneous
     image points.  Returns ``(max_error_mm (n,), skipped (n,) bool)``; the error of
     a skipped row is ``0``.  Skip rules: a zero line (``P' = L'`` or ``Q' = F'``
-    projectively), parallel / coincident lines, ``S'`` at infinity
+    projectively), (nearly) parallel / coincident lines (max-normalised meet ≤ 1e-6, where
+    the intersection amplifies rounding by more than 1e6), ``S'`` at infinity
     (``|x̃3| ≤ tol``) or the meet itself at infinity (two distinct parallel
     lines).  The comparison is ``max(|Δu|, |Δv|)`` after max-normalising both.
     """
@@ -174,7 +179,7 @@ def self_check(Lp, Pp, Fp, Qp, Sp, tol: float):
     l1n = normalize_max(l1)
     l2n = normalize_max(l2)
     meet = np.cross(l1n, l2n)
-    skipped |= row_max_abs(meet) <= LINE_ZERO_REL                        # parallel or coincident lines
+    skipped |= row_max_abs(meet) <= LINE_PARALLEL_REL                    # parallel or coincident lines (ill-conditioned)
     skipped |= np.abs(Sp[:, 2]) <= tol                                   # S' at infinity
     meet_n = normalize_max(meet)
     skipped |= np.abs(meet_n[:, 2]) <= TOL_DIR                           # meet at infinity (parallel lines)

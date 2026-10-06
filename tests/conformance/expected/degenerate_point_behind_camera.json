@@ -48,22 +48,6 @@
    {
     "max_error_mm": 5.684341886080802e-14,
     "point": "crate.v3.shadow.lamp"
-   },
-   {
-    "max_error_mm": 7.105427357601002e-15,
-    "point": "crate.v4.shadow.lamp"
-   },
-   {
-    "max_error_mm": 7.105427357601002e-15,
-    "point": "crate.v5.shadow.lamp"
-   },
-   {
-    "max_error_mm": 7.105427357601002e-15,
-    "point": "crate.v6.shadow.lamp"
-   },
-   {
-    "max_error_mm": 7.105427357601002e-15,
-    "point": "crate.v7.shadow.lamp"
    }
   ],
   "light_point": [
