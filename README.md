@@ -166,7 +166,7 @@ result = castplane.render(scene)        # {"geometry": doc, "svg": "<svg …>"}
 
 | 層 | 內容 | 執行 |
 | --- | --- | --- |
-| 單元與不變量（§7.1） | 作圖法 = 直接計算（1e-6 mm）、影子與相機無關（1e-9 m）、點光趨近平行光（1e-4 m）、剛體等變（1e-6 mm）、齊次尺度不變（1e-9）、無 NaN / Inf | `python3 -m pytest -q`（全套約 865 個測試，2–3 分鐘；`test_raycast.py` 與 `test_property.py` 最慢） |
+| 單元與不變量（§7.1） | 作圖法 = 直接計算（1e-6 mm）、影子與相機無關（1e-9 m）、點光趨近平行光（max(1e-4 m, 2·δ)，δ 為 D20 推導的位似差距，並須在 10⁷ m 時縮十倍）、剛體等變（1e-6 mm）、齊次尺度不變（1e-9）、無 NaN / Inf | `python3 -m pytest -q`（全套約 865 個測試，2–3 分鐘；`test_raycast.py` 與 `test_property.py` 最慢） |
 | 解析案例（§7.2） | 單位方塊 h/(h−1)、太陽 45° / 30° 影長、球影橢圓閉式解、平視與俯仰相機 | `python3 -m pytest tests/test_analytic.py tests/test_curved.py -q` |
 | 退化情況（§5.7） | 每列至少一個測試，檢查警告代碼與輸出有限 | `python3 -m pytest tests/test_degenerate.py -q` |
 | 光線投射對照組（§7.3） | 亂數場景（1–10 個基元，含凹稜柱與光源垂足在凹口內的案例），地面取樣網格逐點射線測試，影子多邊形柵格化後 IoU ≥ 0.99（另逐物件比對）；與幾何法零程式碼共用 | `python3 -m pytest tests/test_raycast.py -q`（較慢） |
@@ -181,7 +181,7 @@ result = castplane.render(scene)        # {"geometry": doc, "svg": "<svg …>"}
 | M0 骨架與相機 | 場景 JSON 讀取與驗證、相機矩陣、近平面裁切、方塊線框 SVG、地平線與消失點 | 完成 |
 | M1 多面體投射陰影與作圖線 | 平面投影矩陣、受光判定、光輪廓邊、影子多邊形、L′ F′ 與作圖線、六個 SVG 圖層、JSON 輸出 | 完成 |
 | M2 曲面基元與形體陰影 | 圓柱、球、圓錐的圓錐曲線影子、明暗交界線、SVG ellipse 輸出 | 完成 |
-| M3 核心穩定（閘門） | 光線投射對照組、屬性測試、一致性測試集 v1、效能基準 | **部分完成**：光線投射對照（IoU ≥ 0.99）、屬性測試、一致性測試集 v1 與效能基準腳本皆已交付；§8 的「完整渲染 < 1 s」已達標，但「只換相機 < 100 ms」**尚未達標**（目前約 110–130 ms，關閉循環 GC 約 90 ms；量測結果見 `benchmarks/README.md`）。規格 §8 將數字定為目標值，合約 §4 已記錄決策：v1 以 `--gate full` 作為 CI 閘門，只換相機一項列為已知未達標、留待 M7 互動介面時收斂 |
+| M3 核心穩定（閘門） | 光線投射對照組、屬性測試、一致性測試集 v1、效能基準 | **通過（D17 豁免）**：光線投射對照（IoU ≥ 0.99）、屬性測試、一致性測試集（目前 v2）與效能基準皆已交付並通過；§8 的「完整渲染 < 1 s」已達標（約 0.35–0.45 s），「只換相機 < 100 ms」**尚未達標**（約 110–130 ms，關閉循環 GC 約 90 ms；量測結果見 `benchmarks/README.md`）。規格 §8 將數字定為目標值，閘門審查依合約 §4 / D17 豁免這一項：CI 以 `python3 benchmarks/bench.py --gate full` 為閘門（`.github/workflows/ci.yml`），只換相機列為已知未達標、留待 M7 互動介面時收斂 |
 | M4 多受影面與隱藏線 | 有界受影面、逐面裁切、轉折影、取樣式隱藏線、visibility 欄位 | 未排程／預留（`receivers` 為陣列、`edges[].visibility` 已存在） |
 | M5 網格匯入 | OBJ、glTF/GLB 載入、前處理管線 | 未排程／預留（內部網格表示即 M5 格式） |
 | M6 多光源 | 多光源影子分組、疊影規則、SVG 子圖層 | 未排程／預留（`lights` 為陣列、影子帶 light id、`cast_shadow.<light>` 子圖層） |
@@ -190,7 +190,7 @@ result = castplane.render(scene)        # {"geometry": doc, "svg": "<svg …>"}
 
 ## 與規格文件的差異
 
-實作過程中規格有幾處互相矛盾或留白，決定如下（完整理由見 [`docs/DECISIONS.md`](docs/DECISIONS.md) 的 D1–D19；其中**覆寫規格字面**的條目在 `docs/ARCHITECTURE.md` 標記 **[decision]**，其餘是規格留白時定下的慣例，合約正文記載）：
+實作過程中規格有幾處互相矛盾或留白，決定如下（完整理由見 [`docs/DECISIONS.md`](docs/DECISIONS.md) 的 D1–D20；其中**覆寫規格字面**的條目在 `docs/ARCHITECTURE.md` 標記 **[decision]**，其餘是規格留白時定下的慣例，合約正文記載）：
 
 1. **畫布 257×182 改為 273×182。** 規格 §4 範例的 `canvas_mm = [257, 182]` 與 `frame_mm = [36, 24]` 長寬比不符（1.412 ≠ 1.5），違反規格自己的規則，因此驗證會拒絕它；`examples/basic.json` 改用 273×182（3:2，高度不變）。要用 JIS B5 紙請改片幅（例如 `[36, 25.5]`）或把畫布改成 3:2。
 2. **畫面座標原點在畫幅中心，主點在 `shift_mm` 處。** 規格 §2 說「原點在主點」，§5.4 的 K 矩陣卻把主點放在 (u₀, v₀)；兩者只在無移軸時一致。採 K 公式：原點在畫幅中心，主點標記畫在 (u₀, v₀) = shift_mm × 放大倍率；所有 `image` 座標與容差都是畫布 mm（畫幅依 `canvas_mm / frame_mm` 放大）。
@@ -211,6 +211,7 @@ result = castplane.render(scene)        # {"geometry": doc, "svg": "<svg …>"}
 17. **只換相機 < 100 ms 是目標值。** 目前約 110–130 ms（見 `benchmarks/README.md`），CI 以 `--gate full` 為閘門，收斂留到 M7。
 18. **自我驗證的範圍。** L′P′ ∩ F′Q′ = S′ 的驗證只對會畫出作圖線的頂點做（P、S、Q 都在近平面前方）；在相機平面附近的影子點沒有有意義的 mm 座標，兩線幾乎平行（正規化交點 < 1e-6）時略過並回報 `CONSTRUCTION_CHECK_SKIPPED`。
 19. **`LIGHT_BEHIND_CAMERA` 只對點光源。** 規格 §5.7 第 1 列沒有區分光源種類；平行光指向相機後方時 L′ 一樣是地平線下方的反光點，但那只是一個方向的普通影像、作圖線畫法不變，所以不發警告（`examples/directional.json` 即此例）。
+20. **§7.1 第 3 列的 1e-4 m 改為推導出的上界。** 點光源從原點沿太陽方向退 D 公尺時，影子是平行光影子以原點為中心放大 D sin e / (D sin e − h) 倍的位似（h 頂點高度、e 太陽仰角），差距 δ = h·|S_dir| / (D sin e − h) 在測試域邊緣（2.95 m 頂點、20° 太陽）達 1.001e-4 m，而程式庫與閉式解只差 1e-15 m；測試改為差距 ≤ max(1e-4 m, 2·δ)、多面體頂點與位似式在 1e-9 m 內相等、退到 10⁷ m 時差距縮十倍（D20，合約 §4 第三個例外）。
 
 ## 授權
 

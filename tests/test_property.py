@@ -6,7 +6,7 @@ Random scenes and cameras are generated with hypothesis strategies (``st.composi
 | row | invariant                                   | tolerance        |
 | 1   | construction self-check (document checks)   | 1e-6 mm          |
 | 2   | world shadow points independent of camera   | 1e-9 m           |
-| 3   | point light at 1e6 m -> directional light   | 1e-4 m           |
+| 3   | point light at 1e6 m -> directional light   | max(1e-4 m, 2·δ) |
 | 4   | rigid equivariance (Z rotations + XY shifts)| 1e-6 mm          |
 | 5   | positive homogeneous scaling of the inputs  | 1e-9 (relative)  |
 | 6   | no NaN / Inf in the JSON and the SVG        | --               |
@@ -22,7 +22,10 @@ Rows 1 and 4 compare image coordinates; for the extreme-camera distributions (ne
 parallel to the picture plane its ``L'``, have image coordinates of order 1e9 mm whose
 last bits move under a rigid motion of the inputs, so those rows use
 ``1e-6 mm + 1e-9 · |coordinate|`` (the relative projective equality of contract §2.8);
-the other distributions keep the absolute 1e-6 mm.
+the other distributions keep the absolute 1e-6 mm.  Row 3 uses the first-order bound ``δ`` of
+contract §4 (iii) / DECISIONS D20 (``tests.test_invariants.predicted_gap``) and also requires the gap
+to shrink tenfold when the light recedes from 1e6 m to 1e7 m, because the spec's flat 1e-4 m is not
+universally true in the tested domain (a 2.95 m vertex under a 20° sun gives 1.001e-4 m).
 
 All settings use ``derandomize=True`` (deterministic in CI) and ``deadline=None``; the
 example counts are sized so that the whole file runs well under a minute.
@@ -49,6 +52,8 @@ from castplane.scene import load_scene, validate_camera
 from castplane.shadow import foot, shadow_loop, shadow_matrix
 from castplane import curved
 from tests.reference import random_scenes, raster, raycast
+from tests.test_invariants import (FAR, FARTHER, TOL_CONVERGE, assert_shrinks_tenfold, far_point_light_scene,
+                                   polyline_distance, predicted_gap, shadow_gap)
 
 #: Curved primitives (cylinder / sphere / cone, M2) take part in the mixed distributions.
 INCLUDE_CURVED = True
@@ -61,9 +66,9 @@ SUPPRESS = [HealthCheck.too_slow, HealthCheck.filter_too_much, HealthCheck.data_
             HealthCheck.function_scoped_fixture]
 COMMON = dict(deadline=None, derandomize=True, suppress_health_check=SUPPRESS)
 
-#: Row 2 tolerance (m), row 3 tolerance (m), rows 1/4 tolerance (mm), row 5 relative tolerance.
+#: Row 2 tolerance (m), rows 1/4 tolerance (mm), row 5 relative tolerance (row 3: ``TOL_CONVERGE`` and the
+#: D20 bound, imported from ``tests.test_invariants``).
 TOL_WORLD = 1e-9
-TOL_CONVERGE = 1e-4
 TOL_IMAGE = 1e-6
 TOL_SCALE = 1e-9
 
@@ -202,7 +207,7 @@ def light_behind_camera(draw, objects, cam):
 
 
 #: Minimum ``d_z`` of a light (nearly) parallel to the picture plane: elevation > 17 deg keeps the
-#: 1e6 m convergence of row 3 within 1e-4 m.
+#: 1e6 m convergence of row 3 near the spec's 1e-4 m (the D20 bound covers the rest).
 PARALLEL_MIN_Z = 0.3
 
 
@@ -351,32 +356,58 @@ def assert_camera_independent(scene, doc):
         assert [e["silhouette"] for e in doc["edges"]] == [e["silhouette"] for e in other_doc["edges"]]
 
 
+def assert_on_shadow_boundary(name, doc_a, doc_b, distance, sin_e):
+    """The shadow point ``name`` of ``doc_a`` (absent from ``doc_b``) lies on the shadow boundary of the same
+    object in ``doc_b`` within the D20 bound: its face is edge-on to the light within ``~|p| / D`` rad, so
+    its shadow is a collinear vertex of the other outline."""
+    oid = name.split(".")[0]
+    h = float(doc_a["points"][name.split(".shadow.")[0]]["world"][2])
+    s = np.asarray(doc_a["points"][name]["world"][:2], dtype=np.float64)
+    bound = h * float(np.linalg.norm(s)) / (distance * sin_e - h)
+    loops = [[doc_b["points"][n]["world"][:2] for n in loop if isinstance(n, str)]
+             for sh in doc_b["shadows"] if sh["object"] == oid for loop in sh["loops"]]
+    dist = min(polyline_distance([s], loop) for loop in loops if len(loop) >= 2)
+    assert dist <= max(TOL_CONVERGE, 2.0 * bound), (name, distance, dist, bound)
+
+
 def assert_point_light_converges(scene, doc):
-    """Row 3: the point light at 1e6 m along the sun direction reproduces the directional shadow."""
+    """Row 3 (contract §4 (iii), D20): the point light at 1e6 m along the sun direction reproduces the
+    directional shadow within ``max(1e-4 m, 2·δ)`` per named point, the gap shrinks tenfold at 1e7 m, and
+    the shadow regions of curved objects coincide (IoU)."""
     lt = scene["lights"][0]
     if lt["type"] != "directional":
         return
-    far = copy.deepcopy(scene)
-    d = np.asarray(lt["direction"], dtype=np.float64)
-    far["lights"][0] = {"id": lt["id"], "type": "point", "position": (1e6 * d).tolist()}
-    doc_p = render(far)["geometry"]
-    assert "VERTEX_NOT_BELOW_LIGHT" not in codes(doc_p)
+    sin_e = float(lt["direction"][2])
+    docs = {D: render(far_point_light_scene(scene, D))["geometry"] for D in (FAR, FARTHER)}
     names_d = {n for n in doc["points"] if ".shadow." in n}
-    names_p = {n for n in doc_p["points"] if ".shadow." in n}
-    # a face exactly parallel to the sun (n·l = 0) may be lit by the far point light (n·(l − p) ≠ 0): the
-    # silhouettes may then differ by edge-on faces whose shadows have no area; compare the common points
-    parallel = "FACE_PARALLEL_TO_LIGHT" in codes(doc) | codes(doc_p)
+    # a face (nearly) parallel to the sun -- |n·l| ≤ tol (FACE_PARALLEL_TO_LIGHT) or merely below the ~|p| / D
+    # rad by which the far light's direction differs across the object -- may be lit by one light and not
+    # by the other: the silhouettes then differ by edge-on faces whose shadows have no area, so the common
+    # points are compared, the others must lie on the other outline, and the regions are compared by IoU
+    parallel = "FACE_PARALLEL_TO_LIGHT" in codes(doc) | codes(docs[FAR]) | codes(docs[FARTHER])
     curved = any(o["type"] in ("cylinder", "sphere", "cone") for o in scene["objects"])
-    if not parallel:
-        assert names_d == names_p
-    if not parallel and not curved:
-        assert [s["loops"] for s in doc["shadows"]] == [s["loops"] for s in doc_p["shadows"]]
-    for name in names_d & names_p:
-        np.testing.assert_allclose(doc["points"][name]["world"], doc_p["points"][name]["world"],
-                                   rtol=0.0, atol=TOL_CONVERGE, err_msg=name)
-    if curved or parallel:
+    edge_on = parallel
+    gaps = {}
+    for D, doc_p in docs.items():
+        assert "VERTEX_NOT_BELOW_LIGHT" not in codes(doc_p)
+        names_p = {n for n in doc_p["points"] if ".shadow." in n}
+        if names_d != names_p:
+            edge_on = True
+            for name in names_d - names_p:
+                assert_on_shadow_boundary(name, doc, doc_p, D, sin_e)
+            for name in names_p - names_d:
+                assert_on_shadow_boundary(name, doc_p, doc, D, sin_e)
+        elif not curved and not parallel:
+            assert [s["loops"] for s in doc["shadows"]] == [s["loops"] for s in doc_p["shadows"]]
+        for name in names_d & names_p:
+            gap = shadow_gap(doc, doc_p, name)
+            assert gap <= max(TOL_CONVERGE, 2.0 * predicted_gap(doc, doc_p, name, D, sin_e)), (name, D, gap)
+            gaps.setdefault(name, {})[D] = gap
+    assert_shrinks_tenfold({k: g for k, g in gaps.items() if len(g) == 2})
+    if curved or edge_on:
         # arc samples of curved shadows are named by index and their count may differ by one between
         # the two lights: compare the shadow regions themselves (nonzero rule, union over objects)
+        doc_p = docs[FAR]
         pts = np.vstack([random_scenes.world_extreme_points(o) for o in scene["objects"]])[:, :2]
         lo, hi = pts.min(axis=0) - 6.0, pts.max(axis=0) + 6.0
         centre, far = 0.5 * (lo + hi), 1e6 * float(np.max(hi - lo))
@@ -696,7 +727,7 @@ def test_mixed_scenes_satisfy_all_invariants(scene):
 @settings(max_examples=25, **COMMON)
 @given(scene=scenes(kinds=POLYHEDRAL, light=lambda objs: directional_lights(20.0, 85.0)))
 def test_directional_light_scenes_converge_from_point_lights(scene):
-    """Row 3 focus: every example has a directional light (point light at 1e6 m within 1e-4 m)."""
+    """Row 3 focus: every example has a directional light (point light at 1e6 m within the D20 bound)."""
     doc = check_all_invariants(scene)
     assert doc["points"][f"L.{scene['lights'][0]['id']}"]["at_infinity"] is True
 

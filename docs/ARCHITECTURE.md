@@ -457,13 +457,21 @@ outline points `"<obj>.og<k>.base/.top"`. Floats are written with `repr`-style s
 `+ 0.0`; `json.dumps(doc, sort_keys=True, indent=1, ensure_ascii=False)`.
 
 ## 4. Testing contract (§7)
-- `tests/test_invariants.py` covers all six §7.1 rows with the stated tolerances, with two recorded exceptions:
+- `tests/test_invariants.py` covers all six §7.1 rows with the stated tolerances, with three recorded exceptions:
   (i) the endpoints of the **clipped construction-ray segments** (rows 1–4) are compared with
   `1e-6 mm × max(1, max |defining image coordinate| in mm)` (`P'`, `S'`, `Q'`, `L'`, `F'`), because the clipped
   endpoint inherits the conditioning of the rectangle clip of a segment defined by points up to a few metres of
   canvas away (measured worst case 2e-6 mm at a 2.2 m scale); every point, edge, polygon, `L'`, `F'` and horizon
   comparison stays at 1e-6 mm; (ii) `tests/test_property.py` compares the (nearly) picture-plane-parallel light
-  family (`forward·d` down to 1e-7, `L'` at ~1e9 mm) with a relative 1e-8. Row 4 (rigid equivariance) uses
+  family (`forward·d` down to 1e-7, `L'` at ~1e9 mm) with a relative 1e-8; (iii) row 3 (point light at 10⁶ m
+  along the sun direction from the world origin) is compared with `max(1e-4 m, 2·δ)` instead of a flat 1e-4 m,
+  where `δ = h·|S_dir| / (D·sin e − h) + |X_pt − X_dir| / sin e` is the exact gap of the homothety
+  `S_pt = S_dir · D sin e / (D sin e − h)` (vertex height `h`, sun elevation `e`, `|S_dir|` the distance of the
+  directional shadow from the origin; the second term is the first-order motion of a curved object's own
+  construction point, zero for mesh vertices), the mesh-vertex gap must equal that homothety within 1e-9 m and
+  every gap must shrink tenfold at 10⁷ m, because the spec's 1e-4 m is not universally true in the tested
+  domain (a 2.95 m vertex under a 20° sun gives 1.001e-4 m while the library matches the closed form to 1e-15 m;
+  D20). Row 4 (rigid equivariance) uses
   the symmetry group of the ground: rotations about +Z and translations in XY applied to objects, light and
   camera (position + target, roll unchanged; a second variant uses the yaw/pitch form with `yaw += angle`).
   Row 5 per §2.1 (positive scalars on inputs; either sign on sign-free outputs). **Limitation**: the scene document

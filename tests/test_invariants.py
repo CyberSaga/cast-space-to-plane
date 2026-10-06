@@ -4,7 +4,7 @@
 | row | invariant                         | tolerance |
 | 1   | construction = direct             | 1e-6 mm   |
 | 2   | shadows independent of the camera | 1e-9 m    |
-| 3   | point light -> directional light  | 1e-4 m    |
+| 3   | point light -> directional light  | max(1e-4 m, 2·δ), tenfold shrink 1e6 → 1e7 m (D20) |
 | 4   | rigid equivariance (Z rot + XY)   | 1e-6 mm   |
 | 5   | homogeneous scale invariance      | 1e-9      |
 | 6   | no NaN / Inf                      | -         |
@@ -156,19 +156,74 @@ def test_shadows_are_camera_independent(scene):
 
 
 # --------------------------------------------------------------------------- row 3
+#: Spec §7.1 row 3 tolerance (m) and the two distances (m) at which a point light stands in for the sun.
+TOL_CONVERGE = 1e-4
+FAR, FARTHER = 1e6, 1e7
+#: Absolute floor (m) of the tenfold-shrink comparison (rounding of world coordinates of a few metres).
+SHRINK_FLOOR = 1e-9
+
+
+def far_point_light_scene(scene, distance):
+    """``scene`` with its directional light replaced by a point light ``distance`` metres along the sun
+    direction from the world origin (spec §7.1 row 3; contract §4 (iii), DECISIONS D20)."""
+    far = copy.deepcopy(scene)
+    d = np.asarray(scene["lights"][0]["direction"], dtype=np.float64)
+    far["lights"][0] = {"id": scene["lights"][0]["id"], "type": "point", "position": (distance * d).tolist()}
+    return far
+
+
+def predicted_gap(doc_d, doc_p, name, distance, sin_e):
+    """First-order bound (m) on the distance between the directional shadow ``name`` of ``doc_d`` and the
+    point-light shadow of the same name in ``doc_p`` (DECISIONS D20).  A source point at height ``h`` whose
+    directional shadow lies ``|S_dir|`` from the origin the light recedes from has the point-light shadow
+    ``S_dir · D sin e / (D sin e − h)`` (a homothety about the origin, exact), i.e. a gap of
+    ``h · |S_dir| / (D sin e − h)``; the construction points of curved objects (tangent generators,
+    silhouette-circle quadrant points) also move by themselves at first order in ``1/D``, and the
+    directional shadow map stretches that motion by at most ``1 / sin e``."""
+    src = name.split(".shadow.")[0]
+    h = float(doc_d["points"][src]["world"][2])
+    s_dir = np.asarray(doc_d["points"][name]["world"][:2], dtype=np.float64)
+    shift = float(np.linalg.norm(np.subtract(doc_p["points"][src]["world"], doc_d["points"][src]["world"])))
+    return h * float(np.linalg.norm(s_dir)) / (distance * sin_e - h) + shift / sin_e
+
+
+def shadow_gap(doc_d, doc_p, name) -> float:
+    return float(np.linalg.norm(np.subtract(doc_p["points"][name]["world"], doc_d["points"][name]["world"])))
+
+
+def assert_shrinks_tenfold(gaps):
+    """``gaps[key] = {FAR: gap, FARTHER: gap}``: every gap at 1e7 m is at most a tenth of the one at 1e6 m."""
+    for key, g in gaps.items():
+        assert g[FARTHER] <= 0.1 * g[FAR] + SHRINK_FLOOR, (key, g)
+
+
 @pytest.mark.parametrize("seed", [100, 101, 102, 7])
 def test_point_light_converges_to_directional_light(seed):
+    """Row 3 on polyhedral scenes with the tolerance of contract §4 (iii): every named shadow point is within
+    ``max(1e-4 m, 2·δ)`` of the directional one (``δ`` the first-order bound of D20), the gap of a mesh vertex
+    is exactly the homothety of D20 (1e-9 m), the loops are identical and the gap shrinks tenfold when the
+    light recedes from 1e6 m to 1e7 m."""
     scene = load_scene(polyhedral_scene(seed, 2, "directional"))
-    far = copy.deepcopy(scene)
-    d = np.array(scene["lights"][0]["direction"])
-    far["lights"][0] = {"id": scene["lights"][0]["id"], "type": "point", "position": (1e6 * d).tolist()}
-    doc_d, doc_p = geometry(scene), geometry(far)
-    assert not any(w["code"] == "VERTEX_NOT_BELOW_LIGHT" for w in doc_p["warnings"])
+    sin_e = float(scene["lights"][0]["direction"][2])
+    doc_d = geometry(scene)
     shadow_names = [n for n in doc_d["points"] if ".shadow." in n]
-    assert shadow_names and set(shadow_names) <= set(doc_p["points"])
-    for name in shadow_names:
-        np.testing.assert_allclose(doc_d["points"][name]["world"], doc_p["points"][name]["world"], atol=1e-4)
-    assert [s["loops"] for s in doc_d["shadows"]] == [s["loops"] for s in doc_p["shadows"]]
+    assert shadow_names
+    gaps = {}
+    for D in (FAR, FARTHER):
+        doc_p = geometry(far_point_light_scene(scene, D))
+        assert not any(w["code"] == "VERTEX_NOT_BELOW_LIGHT" for w in doc_p["warnings"])
+        assert set(shadow_names) <= set(doc_p["points"])
+        assert [s["loops"] for s in doc_d["shadows"]] == [s["loops"] for s in doc_p["shadows"]]
+        for name in shadow_names:
+            s_d = np.asarray(doc_d["points"][name]["world"], dtype=np.float64)
+            s_p = np.asarray(doc_p["points"][name]["world"], dtype=np.float64)
+            h = float(doc_d["points"][name.split(".shadow.")[0]]["world"][2])
+            exact = np.array([s_d[0], s_d[1], 0.0]) * (h / (D * sin_e - h))
+            np.testing.assert_allclose(s_p - s_d, exact, rtol=0.0, atol=1e-9, err_msg=f"{name} at {D:g} m")
+            gap = shadow_gap(doc_d, doc_p, name)
+            assert gap <= max(TOL_CONVERGE, 2.0 * predicted_gap(doc_d, doc_p, name, D, sin_e)), (name, D, gap)
+            gaps.setdefault(name, {})[D] = gap
+    assert_shrinks_tenfold(gaps)
 
 
 def polyline_distance(A, B) -> float:
@@ -187,26 +242,42 @@ def polyline_distance(A, B) -> float:
 
 @pytest.mark.parametrize("seed", [300, 301, 302])
 def test_point_light_converges_to_directional_light_for_curved_objects(seed):
-    """Row 3 on mixed scenes: the named shadow points (construction points of the curved objects
-    included) agree within 1e-4 m and the sampled ground polygons of the conic shadows coincide."""
+    """Row 3 on mixed scenes (contract §4 (iii), D20): the named shadow points (construction points of the
+    curved objects included) are within ``max(1e-4 m, 2·δ)`` of the directional ones, the sampled ground
+    polygons of the conic shadows coincide within the same bound taken at the object's highest point, and
+    both gaps shrink tenfold from 1e6 m to 1e7 m."""
     scene = load_scene(mixed_scene(seed, 5, "directional"))
-    far = copy.deepcopy(scene)
-    d = np.array(scene["lights"][0]["direction"])
-    far["lights"][0] = {"id": scene["lights"][0]["id"], "type": "point", "position": (1e6 * d).tolist()}
-    doc_d, doc_p = geometry(scene), geometry(far)
-    assert not any(w["code"] == "VERTEX_NOT_BELOW_LIGHT" for w in doc_p["warnings"])
+    sin_e = float(scene["lights"][0]["direction"][2])
+    doc_d = geometry(scene)
     shadow_names = [n for n in doc_d["points"] if ".shadow." in n]
     curved = {o["id"] for o in scene["objects"] if o["type"] in CURVED}
     assert any(n.split(".")[0] in curved for n in shadow_names)
-    assert set(shadow_names) == {n for n in doc_p["points"] if ".shadow." in n}
-    for name in shadow_names:
-        np.testing.assert_allclose(doc_d["points"][name]["world"], doc_p["points"][name]["world"], atol=1e-4)
-    for s_d, s_p in zip(doc_d["shadows"], doc_p["shadows"]):
-        assert s_d["object"] == s_p["object"] and len(s_d["loops"]) == len(s_p["loops"])
-        for l_d, l_p in zip(s_d["loops"], s_p["loops"]):
-            A = np.array([doc_d["points"][n]["world"][:2] for n in l_d])
-            B = np.array([doc_p["points"][n]["world"][:2] for n in l_p])
-            assert polyline_distance(A, B) < 1e-4 and polyline_distance(B, A) < 1e-4, s_d["object"]
+    top = {o["id"]: random_scenes.highest_z(o) for o in scene["objects"]}
+    gaps = {}
+    for D in (FAR, FARTHER):
+        doc_p = geometry(far_point_light_scene(scene, D))
+        assert not any(w["code"] == "VERTEX_NOT_BELOW_LIGHT" for w in doc_p["warnings"])
+        assert set(shadow_names) == {n for n in doc_p["points"] if ".shadow." in n}
+        shift = {}                      # per object: largest motion (m) of a construction point itself
+        for name in shadow_names:
+            gap = shadow_gap(doc_d, doc_p, name)
+            assert gap <= max(TOL_CONVERGE, 2.0 * predicted_gap(doc_d, doc_p, name, D, sin_e)), (name, D, gap)
+            gaps.setdefault(name, {})[D] = gap
+            src = name.split(".shadow.")[0]
+            oid = src.split(".")[0]
+            motion = float(np.linalg.norm(np.subtract(doc_p["points"][src]["world"], doc_d["points"][src]["world"])))
+            shift[oid] = max(shift.get(oid, 0.0), motion)
+        for s_d, s_p in zip(doc_d["shadows"], doc_p["shadows"]):
+            assert s_d["object"] == s_p["object"] and len(s_d["loops"]) == len(s_p["loops"])
+            h = top[s_d["object"]]
+            for k, (l_d, l_p) in enumerate(zip(s_d["loops"], s_p["loops"])):
+                A = np.array([doc_d["points"][n]["world"][:2] for n in l_d])
+                B = np.array([doc_p["points"][n]["world"][:2] for n in l_p])
+                bound = h * float(np.max(np.linalg.norm(A, axis=1))) / (D * sin_e - h) + shift.get(s_d["object"], 0.0) / sin_e
+                dist = max(polyline_distance(A, B), polyline_distance(B, A))
+                assert dist <= max(TOL_CONVERGE, 2.0 * bound), (s_d["object"], k, D, dist, bound)
+                gaps.setdefault((s_d["object"], k), {})[D] = dist
+    assert_shrinks_tenfold(gaps)
 
 
 # --------------------------------------------------------------------------- row 4

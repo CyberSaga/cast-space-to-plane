@@ -103,6 +103,10 @@ castplane stages examples/basic.json | python3 -c "import json,sys; d=json.load(
 
 模組 docstring 記載點名規則、地面裁切與曲面物件的文件結構，是 §6.2 文件最完整的說明。
 
+#### 文件是唯讀資料：與快取的 A 段共用串列
+
+由同一個快取的 A 段（`A = shadow_geometry(scene)`）組出的每一份文件（`compose(scene, project_scene(scene, A, camera=...))`），其**與相機無關的串列是以參照共用的**：每個具名點的 `world` 座標串列、`shadows[].outline` / `loops` 的點名串列、`form_shadow[].faces` 的面名串列等，都是 A 段建好一次、直接放進每份文件的同一個 Python 物件（合約 §2.4 的 `world_lists` 等快取表；`castplane.pipeline` 模組 docstring）。與相機有關的內容（`image`、`depth`、所有可畫圖形、`back`、作圖線、自我驗證）每份文件各自新建。這是刻意的設計：只換相機重算（規格 §8 的 100 ms 路徑）靠的就是不重建這些串列。因此請把文件當成**唯讀**資料；要修改文件（例如平移世界座標、刪除迴圈）請先 `copy.deepcopy(doc)` 再改，否則會同時改到快取的 A 段與之後由它組出的每一份文件。`render()` 與命令列每次都建立新的 A 段，不受影響。
+
 ### 2.5 `castplane.camera` — 相機與裁切（規格 §5.4、合約 §2.2）
 
 | 函式 | 說明 |

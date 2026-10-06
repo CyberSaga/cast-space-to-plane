@@ -286,8 +286,9 @@ def test_usage_lists_every_public_function():
 
 def test_readme_milestone_table_reflects_the_benchmark_gate():
     """Spec §10 makes the §8 performance targets part of the M3 acceptance criteria.  The M3 row may
-    only say 完成 when benchmarks/README.md records both targets as met; otherwise it must say so
-    and point to the measurements."""
+    only say 完成 without qualification when benchmarks/README.md records both targets as met;
+    otherwise it must say that the camera-only target is missed, name the D17 waiver and point to the
+    measurements."""
     readme = (ROOT / "README.md").read_text(encoding="utf-8")
     row = next(l for l in readme.splitlines() if l.startswith("| M3 "))
     bench = (ROOT / "benchmarks" / "README.md").read_text(encoding="utf-8")
@@ -295,4 +296,4 @@ def test_readme_milestone_table_reflects_the_benchmark_gate():
     if targets_met:
         assert "尚未達標" not in row and "部分完成" not in row, row
     else:
-        assert "尚未達標" in row and "benchmarks/README.md" in row, row
+        assert "尚未達標" in row and "benchmarks/README.md" in row and "D17" in row, row
