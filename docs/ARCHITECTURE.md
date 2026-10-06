@@ -62,6 +62,10 @@ Python ≥ 3.10. Core runtime dependency: numpy only. Optional extras:
 | `receivers` | list of length exactly 1 (v1); `type == "plane"`; `normal` must be `[0,0,1]` and `offset` must be `0` (v1 ground only, §1); \|normal\| = 1 ± 1e-9 |
 | `camera` | `position` 3 numbers; exactly one of `target` (3 numbers, ≠ position) or `yaw_deg`+`pitch_deg`; `roll_deg` default 0; `focal_length_mm > 0`; `frame_mm` 2 positive; `shift_mm` default `[0,0]`; `near_m > 0` default 0.05 |
 | `output.canvas_mm` | 2 positive numbers; \|canvas_w/canvas_h − frame_w/frame_h\| ≤ 1e-9 |
+
+**[decision]** The spec's own §4 example (`canvas_mm = [257, 182]` with `frame_mm = [36, 24]`) violates the spec's
+own aspect rule (1.412 ≠ 1.5) and is rejected. `examples/basic.json` therefore uses `[273, 182]` (3:2, same height);
+users who want JIS B5 paper should set `frame_mm` to a matching aspect (e.g. `[36, 25.5]`) or the canvas to 3:2.
 | `output.layers` | subset of the six ids of §2.10 (default: all six, in table order) |
 | `output.png_dpi` | positive number, default 300 |
 
@@ -192,9 +196,12 @@ where `(e1, e2, a)` is the rotated local frame.
 - Any 3×3 projective map `H` of the circle gives conic `C' = adj(H)ᵀ · C · adj(H)` (adjugate, so singular `H`
   does not raise; classify as `degenerate` and emit `CONIC_SAMPLED`). Ground shadow conic uses `H = P·M·E`;
   image of a circle (outline / terminator / end caps) uses `H = P·E`. Conic matrices are normalised by their
-  max-|entry| (made +1) before output. Classification: `kind` = ellipse / parabola / hyperbola by the sign of
-  `det` of the upper-left 2×2 after normalisation (`|det| ≤ 1e-12` → parabola; `|det(C')| ≤ 1e-12` → degenerate).
-  `CONIC_SAMPLED` is also emitted when the normalised conic's condition number exceeds 1e8 (§11.3).
+  max-|entry| (made +1) before output. Classification must be translation-invariant **[decision]**: let `A` be the
+  upper-left 2×2 block normalised by its own max-|entry|; `kind` = ellipse / hyperbola by the sign of `det A`,
+  parabola when `|det A| ≤ 1e-12`. Degeneracy and conditioning are judged on the conic translated to its centre
+  (`C_c = Tᵀ C T`, `T = [[I, centre],[0,1]]`, centre = `−A⁻¹·(C[0:2,2])` when `A` is invertible, else on the
+  normalised conic itself) and then max-normalised: `|det C_c| ≤ 1e-12` → degenerate; condition number of `C_c`
+  `> 1e8` → `CONIC_SAMPLED` (§11.3). A 0.3 m circle 50 m from the origin must classify as a healthy ellipse.
 - The **same** silhouette routine serves the light and the camera: `curved.silhouette(obj, L)` with `L`
   the light vector OR the camera position `(C,1)`. Camera outline = that silhouette; terminator = the
   light silhouette (drawn in the image, not on the ground); cast shadow = the light silhouette mapped by `M`.

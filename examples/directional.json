@@ -1,0 +1,36 @@
+{
+  "version": "0.1",
+  "units": "m",
+  "up": "z",
+  "objects": [
+    {"id": "post", "type": "box", "size": [0.3, 0.3, 2.0],
+     "transform": {"position": [0.0, 6.0, 0.0]}},
+    {"id": "crate", "type": "box", "size": [1.0, 0.8, 0.6],
+     "transform": {"position": [2.0, 4.0, 0.0], "rotation_deg": [0, 0, 30]}},
+    {"id": "ball", "type": "sphere", "radius": 0.5,
+     "transform": {"position": [-2.0, 5.0, 0.0]}},
+    {"id": "spire", "type": "cone", "radius": 0.4, "height": 1.5,
+     "transform": {"position": [-0.5, 8.0, 0.0]}}
+  ],
+  "lights": [
+    {"id": "sun", "type": "directional", "direction": [0.5, -0.5, 0.7071067811865476]}
+  ],
+  "receivers": [
+    {"id": "ground", "type": "plane", "normal": [0, 0, 1], "offset": 0.0}
+  ],
+  "camera": {
+    "position": [0.0, 0.0, 1.6],
+    "yaw_deg": 0.0,
+    "pitch_deg": -5.0,
+    "roll_deg": 0,
+    "focal_length_mm": 35,
+    "frame_mm": [36, 24],
+    "shift_mm": [0.0, 0.0],
+    "near_m": 0.05
+  },
+  "output": {
+    "canvas_mm": [273, 182],
+    "layers": ["horizon", "objects", "form_shadow", "cast_shadow", "construction", "labels"],
+    "png_dpi": 150
+  }
+}
