@@ -458,3 +458,80 @@ def test_spec_7_1_row_2_shadows_are_camera_independent(k):
 def test_spec_7_1_row_4_rigid_equivariance(k, yaw_form):
     from tests.test_invariants import test_rigid_equivariance
     test_rigid_equivariance(mesh_invariant_scenes()[k], yaw_form)
+
+
+# --- step 7: the ray-cast reference on meshes --------------------------------------------------------
+
+from tests.reference import random_scenes, raycast  # noqa: E402
+
+
+def raycast_iou(scene, doc, lo=(-1.5, -1.5), hi=(1.5, 1.5), n=301):
+    # the grid is offset by a non-round amount so that no sample lies exactly on a shadow edge
+    # (the rasteriser's half-open edge rule and the ray caster's inclusive bounds differ there)
+    xs, ys = random_scenes.grid(np.array(lo) + 0.0037, np.array(hi) + 0.0037, n)
+    loops = raster.doc_ground_loops(doc, np.zeros(2), 1e9)
+    got = raster.rasterize_polygons(loops, xs, ys)
+    ref = raycast.shadow_mask(scene, scene["lights"][0], xs, ys)
+    assert ref.any()
+    return raster.iou(got, ref)
+
+
+def test_acceptance_2_ray_cast_iou_is_one():
+    scene = mesh_box_scene(CUBE_V, OPEN_BOTTOM_F)
+    doc = doc_of(scene)
+    # a ground ray under the box enters through the open bottom and hits the top face
+    assert raycast_iou(scene, doc) == 1.0
+    assert raycast_iou(load_scene(scene), doc) == 1.0
+
+
+def test_buried_fallback_ray_cast_iou():
+    scene = mesh_box_scene(CUBE_V, OPEN_BOTTOM_F, transform={"position": [0.0, 0.0, -0.5]})
+    assert raycast_iou(scene, doc_of(scene)) >= 0.99
+
+
+def test_hit_mesh_applies_scale_and_the_raw_up_axis():
+    y_up = [[x, z, -y] for x, y, z in CUBE_V]
+    o = np.array([[0.0, 0.0, -1.0], [3.0, 0.0, -1.0], [0.0, 0.0, 2.0]])
+    d = np.array([[0.0, 0.0, 1.0], [0.0, 0.0, 1.0], [0.0, 0.0, 1.0]])
+    obj = {"type": "mesh", "data": {"vertices": y_up, "faces": CUBE_F}, "up": "y", "scale": 2.0}
+    assert raycast.hit_mesh(obj, o, d, np.inf).tolist() == [True, False, False]
+    assert raycast.HITTERS["mesh"] is raycast.hit_mesh
+    tri = raycast.mesh_triangles(obj)
+    assert tri.shape == (12, 3, 3) and float(tri[:, :, 2].max()) == 2.0
+
+
+@pytest.mark.parametrize("seed", [0, 1, 2, 5, 8, 9])
+def test_ray_cast_iou_on_seeded_mesh_scenes(seed):
+    from tests.test_raycast import render_and_compare
+    scene = random_scenes.make_mesh_scene(seed)
+    out = render_and_compare(scene)                     # union and per object, IoU >= 0.99
+    assert out["iou"] >= 0.99 and all(v >= 0.99 for v in out["per_object"].values())
+
+
+def test_make_mesh_scene_families():
+    kinds = set()
+    fallback = 0
+    for seed in range(12):
+        scene = random_scenes.make_mesh_scene(seed)
+        assert scene == random_scenes.make_mesh_scene(seed)          # deterministic
+        validated = load_scene(scene)
+        kinds.update(o["type"] for o in validated["objects"])
+        recs = [build_object(o) for o in validated["objects"]]
+        fallback += sum(r["fallback"] for r in recs)
+        for raw, rec in zip(scene["objects"], recs):
+            assert len(raw["data"]["vertices"]) > rec["mesh"]["vertices"].shape[0] or rec["fallback"]
+    assert kinds == {"mesh"} and fallback > 0
+
+
+def test_make_scene_is_byte_identical_for_the_frozen_seeds():
+    """Adding the M5 mesh helpers to ``random_scenes`` must not change any scene of the frozen RNG
+    draw order (the conformance cases and other test modules rely on them)."""
+    import hashlib
+
+    def h(obj):
+        return hashlib.sha256(json.dumps(obj, sort_keys=True).encode()).hexdigest()[:16]
+    got = [h(random_scenes.make_scene(seed)) for seed in (0, 1, 3, 9, 14, 23, 38, 101)]
+    got += [h(random_scenes.make_scene(7, 5, "point")), h(random_scenes.make_benchmark_scene())]
+    assert got == ['47a20ab723d05faf', '075436f29bcbff67', 'a5f2bc22b03e1134', '545a2aafc0cdddb1',
+                   'abc0e0dff1ecc701', '5fa14e7a0a68466b', '3ca6efb78725a29b', '0a16a469ce154800',
+                   'f7f4155414737479', 'dbce76c756497f29']
