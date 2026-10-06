@@ -129,7 +129,8 @@ def cmd_stages(args) -> int:
     camera = load_camera(args.camera) if args.camera else None
     A = shadow_geometry(scene)
     B = project_scene(scene, A, camera=camera)
-    text = dumps({"A": A, "B": B}) + "\n"
+    # B["A"] is the stage A itself (contract §5.0.7): written once
+    text = dumps({"A": A, "B": {k: v for k, v in B.items() if k != "A"}}) + "\n"
     if args.output:
         with open(args.output, "w", encoding="utf-8") as fh:
             fh.write(text)

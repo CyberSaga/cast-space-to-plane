@@ -491,7 +491,18 @@ def _layer_construction(doc: dict, cv: _Canvas) -> list:
     if fp is not None:
         body.append(cv.diamond(fp, 1.0, 'fill="none" stroke="#36c"'))
         body.append(cv.text(fp, "F′", 'font-size="2.5" fill="#36c" font-family="sans-serif" stroke="none"', dx=1.4))
-    drawn = [seg for seg in con.get("segments", []) or []  # drawable 2-D ray segments (M1)
+    # M4 (contract §5.0.6): every other receiver's F'_r marker (labelled F′<receiver id>) and its rays go to
+    # the same three groups (no per-receiver sub-group)
+    per_receiver = con.get("per_receiver") or {}
+    segments = list(con.get("segments", []) or [])
+    for rid, blk in per_receiver.items():
+        fpr = blk.get("shadow_vp")
+        if fpr is not None:
+            body.append(cv.diamond(fpr, 1.0, 'fill="none" stroke="#36c"'))
+            body.append(cv.text(fpr, f"F′{rid}", 'font-size="2.5" fill="#36c" font-family="sans-serif" stroke="none"',
+                                dx=1.4))
+        segments.extend(blk.get("segments", []) or [])
+    drawn = [seg for seg in segments  # drawable 2-D ray segments (M1)
              if seg["kind"] in ("LP", "FQ", "PQ") and seg["points"] and len(seg["points"]) == 2]
     lines = cv.lines([seg["points"] for seg in drawn])
     kinds = np.array([seg["kind"] for seg in drawn], dtype="U2")
@@ -506,7 +517,7 @@ def _is_labelled(parts: list) -> bool:
     """Vertex ids (``v<k>``) and curved construction points (``c``, ``sil.<k>``, ``g<k>.base`` / ``.top``,
     ``apex``; contract §2.7) get labels; shadows, feet, ground points (``s<k>``) and camera outline
     generator endpoints (``og<k>``) do not."""
-    if len(parts) < 2 or "shadow" in parts or parts[-1] == "foot":
+    if len(parts) < 2 or "shadow" in parts[1:] or "foot" in parts[1:]:
         return False
     head = parts[1]
     if head.startswith("s") and head[1:].isdigit():
@@ -516,14 +527,25 @@ def _is_labelled(parts: list) -> bool:
     return True
 
 
+def _SHADOW_OR_FOOT(name: str) -> bool:
+    return ".shadow" in name or ".foot" in name
+
+
+def _has_shadow_or_foot_part(name: str) -> bool:
+    """Some part after the first of the dotted name is ``shadow`` or ``foot`` (contract §5.0.4)."""
+    parts = name.split(".")[1:]
+    return "shadow" in parts or "foot" in parts
+
+
 def _layer_labels(doc: dict, cv: _Canvas) -> list:
     points = doc.get("points", {})
     top = {}
     pts, labels = [], []
     lf_pts, lf_labels = [], []
-    # cheap pre-filter (C-level substring tests) that only removes names _is_labelled rejects anyway:
-    # shadows ("shadow" is one of the parts) and feet (last part "foot")
-    for name in sorted(n for n in points if ".shadow." not in n and not n.endswith(".foot")):
+    # contract §5.0.4: a name is unlabelled iff a part after the first is "shadow" or "foot" (the receiver
+    # suffix may follow "foot"); the C-level substring pre-filter only lets such names through to the
+    # exact part test below
+    for name in sorted(n for n in points if not (_SHADOW_OR_FOOT(n) and _has_shadow_or_foot_part(n))):
         p = points[name]
         img = p["image"]
         if img is None:
@@ -531,16 +553,16 @@ def _layer_labels(doc: dict, cv: _Canvas) -> list:
         oid, _dot, rest = name.partition(".")
         if not rest:
             continue
-        if oid in ("L", "F") and "." not in rest:
+        if oid in ("L", "F"):
+            # L.<light> and F.<light>[.<r>] go through the L/F branch and never set an object's top label
             # below the L'/F' marker text of the construction layer
             lf_pts.append(img)
             lf_labels.append(name)
             continue
-        # _is_labelled(name.split(".")) inlined for the names that passed the pre-filter: a part
-        # "shadow" can only be the first or the last one here, "foot" only the whole rest
+        # _is_labelled(name.split(".")) inlined for the names that passed the filter above (no part after
+        # the first is "shadow" / "foot"): ground points s<k> and camera outline points og<k> are unlabelled
         head = rest.partition(".")[0]
-        if (head.startswith("og") or (head[:1] == "s" and head[1:].isdigit()) or rest == "foot"
-                or oid == "shadow" or rest == "shadow" or rest.endswith(".shadow")):
+        if head.startswith("og") or (head[:1] == "s" and head[1:].isdigit()):
             continue
         pts.append(img)
         labels.append(rest)
@@ -565,8 +587,18 @@ _LAYER_BUILDERS = {
 }
 
 
-def write_svg(doc: dict, layers=None) -> str:
-    """Write the §6.1 SVG of a geometry document; ``layers`` selects a subset of the six ids (contract §2.10)."""
+#: ``hidden_style`` values of :func:`write_svg` (contract §5.1.8).
+HIDDEN_STYLES = ("dashed", "omit")
+
+
+def write_svg(doc: dict, layers=None, hidden_style: str = "dashed") -> str:
+    """Write the §6.1 SVG of a geometry document; ``layers`` selects a subset of the six ids (contract §2.10).
+
+    ``hidden_style`` (contract §5.1.8 / §5.0.6): ``"dashed"`` draws the hidden runs of a document with
+    ``hidden_lines == true`` dashed in the ``*.hidden`` sub-groups, ``"omit"`` writes those groups empty.
+    A document with ``hidden_lines`` false (or absent) is written exactly as by the v2 writer."""
+    if hidden_style not in HIDDEN_STYLES:
+        raise ValueError(f"unknown hidden_style {hidden_style!r}; expected one of {', '.join(HIDDEN_STYLES)}")
     if layers is None:
         selected = list(LAYER_ORDER)
     else:

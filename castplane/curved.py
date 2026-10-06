@@ -120,7 +120,7 @@ from .conics import (TWO_PI, circle_embedding, circle_frame, circle_record, coni
 from .errors import make_warning
 from .homogeneous import TOL_DIR
 from .light import lit
-from .shadow import ARC_STEP_DEG, foot, shadow_w
+from .shadow import ARC_STEP_DEG, clip_polygon_bounds, foot, shadow_w
 
 __all__ = [
     "silhouette",
@@ -644,7 +644,8 @@ def _clip_loop(pieces: list, f, level: float) -> tuple[list, bool]:
     return items, any_cut
 
 
-def _direction_from(S: np.ndarray, fallback_from: np.ndarray | None, finite_hint: np.ndarray | None) -> np.ndarray:
+def _direction_from(S: np.ndarray, fallback_from: np.ndarray | None, finite_hint: np.ndarray | None,
+                    frame=None) -> np.ndarray:
     """Contract §2.5 direction vertex: ``S`` is the shadow of the ``w_S = 0`` crossing;
     its ``w`` is zeroed and the ground direction normalised.  When the crossing is the
     light itself (``M L = 0``) the shadow ray from the light foot through the finite
@@ -658,6 +659,9 @@ def _direction_from(S: np.ndarray, fallback_from: np.ndarray | None, finite_hint
         norm = float(np.linalg.norm(d))
         if norm > 1e-300 and math.isfinite(norm):
             return np.array([d[0], d[1], d[2], 0.0]) / norm
+    if frame is not None:   # contract §5.1.2: the last resort is (e1, 0) of the receiver frame
+        e1 = np.asarray(frame[0], dtype=np.float64).reshape(3)
+        return np.array([e1[0], e1[1], e1[2], 0.0])
     return np.array([1.0, 0.0, 0.0, 0.0])
 
 
@@ -699,8 +703,18 @@ def _lateral_intervals(E_base: np.ndarray, rho: float, conditions: list) -> list
     return intervals
 
 
+def _plane_uv(P, frame=None) -> np.ndarray:
+    """In-plane coordinates of ``(n, 3)`` receiver points: ``P[:, :2]`` on the ground (``frame is None``,
+    the literal v2 expression), ``(P·e1, P·e2)`` in the receiver frame otherwise (contract §5.1.2)."""
+    P = np.asarray(P, dtype=np.float64).reshape(-1, 3)
+    if frame is None:
+        return P[:, :2]
+    e1, e2 = (np.asarray(e, dtype=np.float64).reshape(3) for e in frame)
+    return np.stack([P @ e1, P @ e2], axis=1)
+
+
 def _ground_section(analytic: dict, sil: dict, L: np.ndarray, pi: np.ndarray, tol_lit: float,
-                    tol: float, samples_per_circle: int = 64) -> dict | None:
+                    tol: float, samples_per_circle: int = 64, frame=None) -> dict | None:
     """Sampled boundary of the receiver cross-section of a curved primitive (the cut face
     of contract §2.3) with the lit state of the adjacent lateral surface at each sample.
 
@@ -734,7 +748,8 @@ def _ground_section(analytic: dict, sil: dict, L: np.ndarray, pi: np.ndarray, to
         th = TWO_PI * np.arange(samples_per_circle, dtype=np.float64) / samples_per_circle
         pts = centre[None, :] + rs * (np.cos(th)[:, None] * e1[None, :] + np.sin(th)[:, None] * e2[None, :])
         lit_mask = np.array([lit((p - c) / r, p, L, tol_lit) for p in pts], dtype=bool)
-        return {"points": pts, "lit": lit_mask, "centre": centre[:2].copy()}
+        return {"points": pts, "lit": lit_mask,
+                "centre": centre[:2].copy() if frame is None else _plane_uv(centre, frame)[0].copy()}
     a = _vec3(analytic["axis"])
     b = _vec3(analytic["base"])
     h = float(analytic["height"])
@@ -810,15 +825,17 @@ def _ground_section(analytic: dict, sil: dict, L: np.ndarray, pi: np.ndarray, to
     if len(pts) < 3:
         return None
     P = np.array(pts, dtype=np.float64).reshape(-1, 3)
-    centre = P[:, :2].mean(axis=0)
-    rel = P[:, :2] - centre[None, :]
+    uv = _plane_uv(P, frame)
+    centre = uv.mean(axis=0)
+    rel = uv - centre[None, :]
     size = float(np.max(np.hypot(rel[:, 0], rel[:, 1])))
     if not (size > tol):
         return None
     return {"points": P, "lit": np.array(lit_list, dtype=bool), "centre": centre}
 
 
-def _ground_chain(section: dict | None, X_exit: np.ndarray, X_entry: np.ndarray, single_gap: bool) -> list:
+def _ground_chain(section: dict | None, X_exit: np.ndarray, X_entry: np.ndarray, single_gap: bool,
+                  frame=None) -> list:
     """Interior points (homogeneous, ``w = 1``) of the cross-section boundary path replacing
     the straight chord ``X_exit -> X_entry`` of a ground-clip gap (contract §2.3, see the
     module docstring): the lit samples of :func:`_ground_section` lying on the
@@ -835,9 +852,15 @@ def _ground_chain(section: dict | None, X_exit: np.ndarray, X_entry: np.ndarray,
     P, lit_mask, I = section["points"], section["lit"], section["centre"]
     e = np.asarray(X_exit, dtype=np.float64)
     n_ = np.asarray(X_entry, dtype=np.float64)
-    e = e[:2] / e[3]
-    n_ = n_[:2] / n_[3]
-    rel = P[:, :2] - I[None, :]
+    if frame is None:
+        e = e[:2] / e[3]
+        n_ = n_[:2] / n_[3]
+        uv = P[:, :2]
+    else:     # contract §5.1.2: counter-clockwise about n in the receiver frame
+        e = _plane_uv(e[:3], frame)[0] / e[3]
+        n_ = _plane_uv(n_[:3], frame)[0] / n_[3]
+        uv = _plane_uv(P, frame)
+    rel = uv - I[None, :]
     size = float(np.max(np.hypot(rel[:, 0], rel[:, 1])))
     delta = _CHAIN_MARGIN * size
     phi_e = math.atan2(e[1] - I[1], e[0] - I[0])
@@ -851,13 +874,13 @@ def _ground_chain(section: dict | None, X_exit: np.ndarray, X_entry: np.ndarray,
             return []
         span = TWO_PI
     keys = (np.arctan2(rel[:, 1], rel[:, 0]) - phi_e) % TWO_PI
-    d_e = np.hypot(P[:, 0] - e[0], P[:, 1] - e[1])
-    d_n = np.hypot(P[:, 0] - n_[0], P[:, 1] - n_[1])
+    d_e = np.hypot(uv[:, 0] - e[0], uv[:, 1] - e[1])
+    d_n = np.hypot(uv[:, 0] - n_[0], uv[:, 1] - n_[1])
     sel = lit_mask & (keys > _CHAIN_MARGIN) & (keys < span - _CHAIN_MARGIN) & (d_e > delta) & (d_n > delta)
     if not np.any(sel):
         return []
     if not degenerate:
-        left = chord[0] * (P[sel, 1] - e[1]) - chord[1] * (P[sel, 0] - e[0])
+        left = chord[0] * (uv[sel, 1] - e[1]) - chord[1] * (uv[sel, 0] - e[0])
         if float(np.max(left)) > delta * chord_len:
             return []
     order = np.argsort(keys[sel], kind="stable")
@@ -865,7 +888,7 @@ def _ground_chain(section: dict | None, X_exit: np.ndarray, X_entry: np.ndarray,
     return [np.array([p[0], p[1], p[2], 1.0], dtype=np.float64) for p in chosen]
 
 
-def _ground_ring(section: dict | None) -> list:
+def _ground_ring(section: dict | None, frame=None) -> list:
     """The lit cross-section boundary as a closed counter-clockwise ring of homogeneous
     ground points (``w = 1``), used when the whole silhouette loop lies below the receiver
     (contract §2.3): the part above the receiver then has no silhouette of its own, so it
@@ -876,7 +899,7 @@ def _ground_ring(section: dict | None) -> list:
     P, lit_mask, I = section["points"], section["lit"], section["centre"]
     if int(np.count_nonzero(lit_mask)) < 3:
         return []
-    rel = P[lit_mask, :2] - I[None, :]
+    rel = _plane_uv(P[lit_mask], frame) - I[None, :]
     order = np.argsort(np.arctan2(rel[:, 1], rel[:, 0]), kind="stable")
     chosen = P[lit_mask][order]
     return [np.array([p[0], p[1], p[2], 1.0], dtype=np.float64) for p in chosen]
@@ -886,7 +909,7 @@ def _ground_ring(section: dict | None) -> list:
 # ground shadow outline (contract §2.6 "unbounded curved shadows")
 # ---------------------------------------------------------------------------
 
-def shadow_outline(analytic: dict, L, M, pi, tol: float = 0.0, tol_dir: float = 1e-9) -> dict:
+def shadow_outline(analytic: dict, L, M, pi, tol: float = 0.0, tol_dir: float = 1e-9, frame=None) -> dict:
     """Oriented ground shadow outline of the light silhouette loop (spec §5.6, contract
     §2.3 / §2.5 / §2.6).
 
@@ -942,11 +965,11 @@ def shadow_outline(analytic: dict, L, M, pi, tol: float = 0.0, tol_dir: float = 
         warnings.append(make_warning("OBJECT_BELOW_RECEIVER", []))
     pieces = []
     gaps = [it for it in items if "gap" in it]
-    section = _ground_section(analytic, sil, L, pi, tol_w, tol) if cut else None
+    section = _ground_section(analytic, sil, L, pi, tol_w, tol, frame=frame) if cut else None
     for it in items:
         if "gap" in it:
             X_exit, X_entry = it["gap"]
-            chain = [X_exit] + _ground_chain(section, X_exit, X_entry, len(gaps) == 1) + [X_entry]
+            chain = [X_exit] + _ground_chain(section, X_exit, X_entry, len(gaps) == 1, frame) + [X_entry]
             for A, B in zip(chain[:-1], chain[1:]):
                 pieces.append({"segment": (A, B), "which": "ground", "theta": None})
         else:
@@ -954,7 +977,7 @@ def shadow_outline(analytic: dict, L, M, pi, tol: float = 0.0, tol_dir: float = 
     if not items and cut:
         # the whole silhouette loop is below the receiver: the part above it has no silhouette
         # of its own and is wholly lit (or wholly unlit); its shadow is the lit cross-section
-        ring = _ground_ring(section)
+        ring = _ground_ring(section, frame)
         for A, B in zip(ring, ring[1:] + ring[:1]):
             pieces.append({"segment": (A, B), "which": "ground", "theta": None})
     if not pieces:
@@ -978,8 +1001,8 @@ def shadow_outline(analytic: dict, L, M, pi, tol: float = 0.0, tol_dir: float = 
             next_piece = items[(idx + 1) % len(items)]
             hint_prev = M @ _piece_start(prev_piece) if "gap" not in prev_piece else None
             hint_next = M @ _piece_end(next_piece) if "gap" not in next_piece else None
-            out.append({"direction": _direction_from(M @ X_exit, F, hint_prev), "role": "out"})
-            out.append({"direction": _direction_from(M @ X_entry, F, hint_next), "role": "in"})
+            out.append({"direction": _direction_from(M @ X_exit, F, hint_prev, frame), "role": "out"})
+            out.append({"direction": _direction_from(M @ X_entry, F, hint_next, frame), "role": "in"})
         elif "segment" in it:
             A, B = it["segment"]
             out.append({"segment": [M @ A, M @ B], "which": it["which"], "theta": it.get("theta"),
@@ -996,7 +1019,7 @@ def shadow_outline(analytic: dict, L, M, pi, tol: float = 0.0, tol_dir: float = 
     return result
 
 
-def shadow_polygon_h(outline, samples_per_circle: int = 64) -> dict:
+def shadow_polygon_h(outline, samples_per_circle: int = 64, frame=None) -> dict:
     """Oriented homogeneous ground polygon of a :func:`shadow_outline` (contract §2.5 /
     §2.6): finite samples of the conic arcs (``samples_per_circle`` segments per full
     circle, proportionally fewer per arc, minimum 8), the segment endpoints and the
@@ -1062,15 +1085,24 @@ def shadow_polygon_h(outline, samples_per_circle: int = 64) -> dict:
                 if "direction" not in nxt or nxt["role"] != "in":
                     raise AssertionError("an outgoing direction must be followed by an incoming one")
                 d_in = nxt["direction"]
-                th0 = math.atan2(D[1], D[0])
-                th1 = math.atan2(d_in[1], d_in[0])
+                if frame is None:   # the ground: literal v2 expressions (contract §5.1.2 [decision])
+                    th0 = math.atan2(D[1], D[0])
+                    th1 = math.atan2(d_in[1], d_in[0])
+                else:               # counter-clockwise about n in the receiver frame
+                    e1, e2 = (np.asarray(e, dtype=np.float64).reshape(3) for e in frame)
+                    th0 = math.atan2(float(D[:3] @ e2), float(D[:3] @ e1))
+                    th1 = math.atan2(float(np.asarray(d_in)[:3] @ e2), float(np.asarray(d_in)[:3] @ e1))
                 delta = (th1 - th0) % TWO_PI
                 if not math.isfinite(delta) or delta <= 1e-12:
                     delta = TWO_PI
                 steps = max(1, int(math.ceil(delta / math.radians(ARC_STEP_DEG) - 1e-12)))
                 for s in range(1, steps):
                     t = th0 + delta * s / steps
-                    verts.append(np.array([math.cos(t), math.sin(t), 0.0, 0.0]))
+                    if frame is None:
+                        verts.append(np.array([math.cos(t), math.sin(t), 0.0, 0.0]))
+                    else:
+                        v = math.cos(t) * e1 + math.sin(t) * e2
+                        verts.append(np.array([v[0], v[1], v[2], 0.0]))
                     sources.append(("inf", i, s - 1))
     vertices = np.array(verts, dtype=np.float64).reshape(-1, 4)
     return {"vertices": vertices, "unbounded": unbounded, "sources": sources}
@@ -1214,12 +1246,17 @@ def _empty_shadow_record(oid: str, lid: str, receiver_id: str) -> dict:
 _SIL_INDEX = {0: 0, 1: 2, 2: 1, 3: 3}   # quarter turn k (theta = k pi/2) -> <obj>.sil.<index> (+e1, +e2, -e1, -e2)
 
 
-def _loop_entries(poly: dict, pieces: list, oid: str, lid: str, keep_names: set, samples_per_circle: int) -> tuple:
+def _loop_entries(poly: dict, pieces: list, oid: str, lid: str, keep_names: set, samples_per_circle: int,
+                  suffix: str = "") -> tuple:
     """Contract §3.1 outline entries of a curved shadow polygon (see the pipeline docstring):
     direction vertices inline, the uncut shadows of generator endpoints / apex / silhouette
     quarter points by their construction-point shadow name, every other finite vertex as a
     ground point ``<obj>.s<k>.<light>`` (its own shadow and foot, no construction ray).
-    Returns ``(entries, ground_points)`` with ``ground_points = [(name, xyz), ...]``."""
+    Returns ``(entries, ground_points)`` with ``ground_points = [(name, xyz), ...]``.
+
+    M4 (contract §5.1.3.3 / §5.1.4): ``suffix`` (``".<receiver id>"`` for receivers other than
+    ``receivers[0]``) ends every shadow / ground-point name, and the ``("bounds", ...)`` rows of the
+    bounds clip are ground points of the receiver."""
     V = poly["vertices"]
     n = len(pieces)
     ground: list = []
@@ -1227,7 +1264,7 @@ def _loop_entries(poly: dict, pieces: list, oid: str, lid: str, keep_names: set,
 
     def ground_name(row):
         X = V[row]
-        name = f"{oid}.s{len(ground)}.{lid}"
+        name = f"{oid}.s{len(ground)}.{lid}{suffix}"
         ground.append((name, X[:3] / X[3]))
         return name
 
@@ -1238,10 +1275,13 @@ def _loop_entries(poly: dict, pieces: list, oid: str, lid: str, keep_names: set,
             return None
         e = piece["ends"][end]
         pname = f"{oid}.apex" if e == "apex" else f"{oid}.g{piece['gen']}.{e}"
-        return f"{pname}.shadow.{lid}" if pname in keep_names else None
+        return f"{pname}.shadow.{lid}{suffix}" if pname in keep_names else None
 
     for row, src in enumerate(poly["sources"]):
         kind = src[0]
+        if kind == "bounds":          # a bounds-clip crossing or anchor: a point of the receiver
+            entries.append(ground_name(row))
+            continue
         if kind in ("dir", "inf"):
             D = V[row]
             entries.append({"direction": [float(D[0]) + 0.0, float(D[1]) + 0.0, float(D[2]) + 0.0]})
@@ -1263,34 +1303,69 @@ def _loop_entries(poly: dict, pieces: list, oid: str, lid: str, keep_names: set,
                 if abs(q - qi) <= 1e-12:
                     pname = f"{oid}.sil.{_SIL_INDEX[qi % 4]}"
                     if pname in keep_names:
-                        name = f"{pname}.shadow.{lid}"
+                        name = f"{pname}.shadow.{lid}{suffix}"
         entries.append(name if name is not None else ground_name(row))
     return entries, ground
 
 
-def stage_a_object(obj: dict, lights: list, pi, tol: float, receiver_id: str, warnings: list) -> list:
-    """Stage A of one curved object (spec §5.6, contract §2.6 / §2.7 / §3): per light the
-    silhouette, terminator, construction points and the shadow record consumed by the
-    pipeline's ``_project_shadow`` / ``compose`` exactly like a polyhedral record.
+def _bounds_clip_pieces(pieces: list, psi, tol: float) -> list:
+    """Contract §5.1.4: the ``conic_arc`` pieces of a shadow outline restricted, in closed form, to the
+    bounds of a receiver: each row ``psi_k`` gives ``psi_k . X(theta) = A cos theta + B sin theta + C``
+    (``functional_coeffs(psi_k, T E, rho)``) and the surviving sub-arcs are those where every row is
+    non-negative (``sub_arcs_where_nonnegative(A, B, C, theta0, theta1, tol)``); a piece may split into
+    several pieces, each with its own arc (stored counter-clockwise, ``theta0 < theta1``).  Only the
+    arc pieces are returned: they are what stage B draws as ``shadows[].conics`` (the filled polygon is
+    the bounds-clipped ``shadow_polygon_h``)."""
+    out = []
+    Psi = np.asarray(psi, dtype=np.float64).reshape(-1, 4)
+    for piece in pieces:
+        if "conic_arc" not in piece:
+            continue
+        ca = piece["conic_arc"]
+        TE = np.asarray(ca["T"], dtype=np.float64) @ ca["E"]
+        intervals = [list(_ccw_range(float(ca["theta0"]), float(ca["theta1"])))]
+        for row in Psi:
+            A, B, C = functional_coeffs(row, TE, ca["rho"])
+            intervals = _intersect_arcs(intervals, A, B, C, tol)
+            if not intervals:
+                break
+        for a, b in intervals:
+            out.append({"conic_arc": dict(ca, theta0=float(a), theta1=float(b))})
+    return out
 
-    ``lights`` are the pipeline's light records (``{id, L, M, active, tol_lit, tol_w}``),
-    ``pi`` the receiver plane, ``tol`` the stage-A length tolerance.  Camera-independent
-    per-light data is stored on the object as ``obj["curved"][<light id>]``::
+
+def stage_a_object(obj: dict, lights: list, receiver: dict, tol: float, warnings: list) -> list:
+    """Stage A of one curved object on one receiver (spec §5.6, contract §2.6 / §2.7 / §3 / §5.1.4): per
+    light the silhouette, terminator, construction points and the shadow record consumed by the
+    pipeline's ``_project_shadow`` / ``compose`` exactly like a polyhedral record.  Called once per
+    receiver, in receiver order.
+
+    ``lights`` are the pipeline's light records of that receiver (``{id, L, M, F, active, tol_lit,
+    tol_w}``), ``receiver`` the stage-A receiver record (``{id, pi, bounded, frame, bounds, psi,
+    suffix}``), ``tol`` the stage-A length tolerance.  Camera-independent per-(receiver, light) data is
+    stored on the object as ``obj["curved"][<receiver id>][<light id>]``::
 
         {"silhouette": silhouette(...), "terminator": terminator(...),
          "points": {name: X4} (construction_points), "outline": shadow_outline(...) | None,
-         "polygon": shadow_polygon_h(...) | None}
+         "polygon": shadow_polygon_h(...) | None (bounds-clipped on a bounded receiver),
+         "conic_pieces": the outline's conic arcs (bounds-clipped on a bounded receiver) | None}
 
     so that :func:`stage_b_object` can build the image maps ``H = P E`` / ``H = P M E``.
     Warnings (``LIGHT_INSIDE_OBJECT``, ``VERTEX_NOT_BELOW_LIGHT``, ``OBJECT_BELOW_RECEIVER``,
-    ``FACE_PARALLEL_TO_LIGHT``) are appended with ``ids == [obj id]``.  Returns the list of
-    shadow records (one per light)."""
+    ``FACE_PARALLEL_TO_LIGHT``) are appended with ``ids == [obj id]``; on a bounded receiver the two
+    ground codes are dropped (the clip to the receiver's half-space is silent, contract §5.1.3).
+    Returns the list of shadow records (one per light)."""
     an = obj["analytic"]
     oid = obj["id"]
-    pi = np.asarray(pi, dtype=np.float64).reshape(4)
-    obj["curved"] = {}
+    rid = receiver["id"]
+    pi = np.asarray(receiver["pi"], dtype=np.float64).reshape(4)
+    frame = receiver.get("frame")
+    bounded = bool(receiver.get("bounded"))
+    sfx = receiver.get("suffix", "")
+    store = obj.setdefault("curved", {})
+    per = store.setdefault(rid, {})
     records = []
-    if plane_min(an, pi) < -tol:
+    if not bounded and plane_min(an, pi) < -tol:
         warnings.append(make_warning("OBJECT_BELOW_RECEIVER", [oid]))
     for lt in lights:
         lid = lt["id"]
@@ -1303,24 +1378,35 @@ def stage_a_object(obj: dict, lights: list, pi, tol: float, receiver_id: str, wa
             warnings.append(make_warning("FACE_PARALLEL_TO_LIGHT", [oid]))
         for w in sil["warnings"]:
             warnings.append(make_warning(w["code"], [oid], w["message"]))
-        cd = {"silhouette": sil, "terminator": term, "points": pts, "outline": None, "polygon": None}
-        obj["curved"][lid] = cd
-        rec = _empty_shadow_record(oid, lid, receiver_id)
+        cd = {"silhouette": sil, "terminator": term, "points": pts, "outline": None, "polygon": None,
+              "conic_pieces": None}
+        per[lid] = cd
+        rec = _empty_shadow_record(oid, lid, rid)
         records.append(rec)
         if not lt["active"]:
             continue
-        out = shadow_outline(an, L, lt["M"], pi, tol, TOL_DIR)
-        for w in out["warnings"]:
-            warnings.append(make_warning(w["code"], [oid], w["message"]))
-        poly = shadow_polygon_h(out)
-        cd["outline"], cd["polygon"] = out, poly
+        out = shadow_outline(an, L, lt["M"], pi, tol, TOL_DIR, frame=frame)
+        if not bounded:
+            for w in out["warnings"]:
+                warnings.append(make_warning(w["code"], [oid], w["message"]))
+        else:
+            for w in out["warnings"]:
+                if w["code"] not in ("OBJECT_BELOW_RECEIVER", "VERTEX_NOT_BELOW_LIGHT"):
+                    warnings.append(make_warning(w["code"], [oid], w["message"]))
+        poly = shadow_polygon_h(out, frame=frame)
+        conic_pieces = out["pieces"]
+        if bounded:
+            V, src = clip_polygon_bounds(poly["vertices"], poly["sources"], receiver["psi"], receiver["bounds"], tol)
+            poly = {"vertices": V, "unbounded": False, "sources": src}
+            conic_pieces = _bounds_clip_pieces(out["pieces"], receiver["psi"], tol)
+        cd["outline"], cd["polygon"], cd["conic_pieces"] = out, poly, conic_pieces
         names = list(pts)
         P4 = np.array([pts[nm] for nm in names], dtype=np.float64).reshape(-1, 4)
         w_S = np.asarray(shadow_w(pi, L, P4), dtype=np.float64).reshape(-1)
         finite = w_S > lt["tol_w"]
         above = (P4 @ pi) >= -tol
         keep = finite & above
-        if names and not bool(np.all(finite)):
+        if not bounded and names and not bool(np.all(finite)):
             warnings.append(make_warning("VERTEX_NOT_BELOW_LIGHT", [oid]))
         S4 = P4 @ np.asarray(lt["M"], dtype=np.float64).T                 # S = M P, spec §5.2
         w_safe = np.where(keep, w_S, 1.0)
@@ -1331,7 +1417,7 @@ def stage_a_object(obj: dict, lights: list, pi, tol: float, receiver_id: str, wa
         loops = []
         ground: list = []
         if poly["vertices"].shape[0] >= 3:
-            entries, ground = _loop_entries(poly, out["pieces"], oid, lid, keep_names, 64)
+            entries, ground = _loop_entries(poly, out["pieces"], oid, lid, keep_names, 64, suffix=sfx)
             loops.append({"vertices": poly["vertices"], "sources": poly["sources"], "entries": entries,
                           "unbounded": bool(poly["unbounded"])})
         rec.update({
@@ -1340,14 +1426,18 @@ def stage_a_object(obj: dict, lights: list, pi, tol: float, receiver_id: str, wa
             "S_world": S_world,
             "Q_world": Q_world,
             "w_S": w_S,
-            "shadow_names": [f"{nm}.shadow.{lid}" for nm in names],
-            "foot_names": [f"{nm}.foot" for nm in names],
+            "shadow_names": [f"{nm}.shadow.{lid}{sfx}" for nm in names],
+            "foot_names": [f"{nm}.foot{sfx}" for nm in names],
             "vertex_names": names,
             "ground_points": ground,
             "loops": loops,
             "unbounded": bool(poly["unbounded"]) if loops else False,
             "pieces": out["pieces"],
         })
+        if bounded:   # rays / checks only for shadow points inside the bounds (contract §5.1.3.3)
+            inside = np.all(S4 @ np.asarray(receiver["psi"]).T >= -tol * np.abs(S4[:, 3:4]), axis=1) \
+                if names else np.zeros(0, dtype=bool)
+            rec["ray_keep"] = keep & inside
     return records
 
 
@@ -1480,10 +1570,13 @@ def _stage_b_prepare(obj: dict, cam: dict, tol: float) -> dict:
             behind_any = True
         else:
             outline_arcs.append(a)
-    # --- per light: construction points, terminator, cast-shadow conics
+    # --- per light: construction points, terminator (receiver independent: taken from the first
+    # receiver's records); per (light, receiver): cast-shadow conics (contract §5.1.4)
     terminator_out: dict = {}
     shadow_arcs: dict = {}
-    for lid, cd in obj.get("curved", {}).items():
+    curved = obj.get("curved", {})
+    rids = list(curved)
+    for lid, cd in (curved[rids[0]].items() if rids else ()):
         for nm, X in cd["points"].items():
             add_point(nm, X)
         items = []
@@ -1504,10 +1597,12 @@ def _stage_b_prepare(obj: dict, cam: dict, tol: float) -> dict:
                 else:
                     items.append(a)
         terminator_out[lid] = items
+    for rid, lid, cd in ((rid, lid, cd) for rid in rids for lid, cd in curved[rid].items()):
         arcs = []
         out = cd["outline"]
         if out is not None:
-            for piece in out["pieces"]:
+            pieces = cd.get("conic_pieces")
+            for piece in (out["pieces"] if pieces is None else pieces):
                 if "conic_arc" not in piece:
                     continue
                 ca = piece["conic_arc"]
@@ -1518,7 +1613,7 @@ def _stage_b_prepare(obj: dict, cam: dict, tol: float) -> dict:
                     behind_any = True
                 else:
                     arcs.append(a)
-        shadow_arcs[lid] = arcs
+        shadow_arcs[(lid, rid)] = arcs
     for group in ([outline_arcs] + list(terminator_out.values()) + list(shadow_arcs.values())):
         for a in group:
             if "segment" in a:

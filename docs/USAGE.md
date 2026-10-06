@@ -102,8 +102,8 @@ castplane stages examples/basic.json | python3 -c "import json,sys; d=json.load(
 | --- | --- |
 | `shadow_geometry(scene) -> dict` | A 段（見 2.1）。回傳 `{objects, vertices, bbox, scene_scale, tol, receiver, lights, shadows, warnings}` |
 | `project_scene(scene, A, camera=None) -> dict` | B 段（見 2.1）。回傳 `{camera, scene_scale, tol, objects, lights, horizon, shadows, construction, warnings}` |
-| `compose(scene, B) -> dict` | C 段（見 2.1） |
-| `render(scene, camera=None) -> dict` | 見 2.1 |
+| `compose(scene, B, hidden_lines=None) -> dict` | C 段（見 2.1）；M4：`hidden_lines=None` 取場景 `output.hidden_lines`，文件頂層 `hidden_lines` 記錄實際值；另有 `receivers`、`construction.per_receiver` 等 M4 鍵（合約 §5.0.3） |
+| `render(scene, camera=None, hidden_lines=None, hidden_style=None) -> dict` | 見 2.1；M4：兩個關鍵字覆寫場景的 `output` 值（場景本身不改） |
 
 模組 docstring 記載點名規則、地面裁切與曲面物件的文件結構，是 §6.2 文件最完整的說明。
 
@@ -193,8 +193,12 @@ castplane stages examples/basic.json | python3 -c "import json,sys; d=json.load(
 | `shadow_w(pi, L, P)` | M·P 的 w 分量（≤ tol 表示頂點不低於光源） |
 | `clip_loop_to_plane(points4, pi, tol=0.0, sources=None)` | 封閉齊次迴圈對 πᵀX ≥ 0 的 Sutherland–Hodgman 裁切（地面裁切的退路） |
 | `clip_mesh_to_plane(mesh, pi, tol=0.0) -> (mesh, origins)` | 封閉網格被平面切成實體：平面正側的部分加上切面；`origins` 對應新頂點到原頂點或交點 |
-| `shadow_loop(points4, M, pi, tol=0.0, tol_clip=None) -> dict` | 一個光輪廓迴圈的影子多邊形：`{vertices (齊次，含方向頂點), sources, unbounded}` |
+| `shadow_loop(points4, M, pi, tol=0.0, tol_clip=None, frame=None, F=None) -> dict` | 一個光輪廓迴圈的影子多邊形：`{vertices (齊次，含方向頂點), sources, unbounded}`；M4：非地面受影面傳入 `frame` 與光源垂足 `F`（無窮遠弧在受影面座標系中繞 n 逆時針；地面 `frame=None` 保留 v2 算式） |
 | `ARC_STEP_DEG` | 無窮遠弧每段最大角度 60° |
+| `receiver_frame(n) -> (e1, e2)` | M4：受影面座標系，`e1 = normalize(z × n)`、`e2 = n × e1`（n 平行 z 時 `e1 = x`）；地面即 (x, y)（合約 §5.1.2） |
+| `bounds_functionals(bounds, n) -> ndarray` | M4：有界面 bounds 的邊泛函 `ψ_k = (m_k, −m_k·b_k)`，`m_k` 為單位向內法線（合約 §5.1.2） |
+| `clip_polygon_bounds(points4, sources, psi, bounds, tol) -> (points4, sources)` | M4：齊次影子多邊形（含方向頂點與無窮遠弧）對 bounds 的 Sutherland–Hodgman 裁切：帶狀容差、錨點規則、合併相鄰相等頂點、薄片視為空（合約 §5.1.3.3） |
+| `plate_loop(bounds, pi, L, tol)` | M4：有界面當成施影板時的輪廓迴圈 `(loop4, vertex_ids)`：光在正側用儲存順序、負側反轉、側對光源（`|πᵀL| ≤ tol`）回傳 None |
 
 ### 2.11 `castplane.conics` — 圓錐曲線（規格 §5.6、合約 §2.6）
 
@@ -283,7 +287,7 @@ castplane stages examples/basic.json | python3 -c "import json,sys; d=json.load(
 | `geometry_json.canonical(obj)` | 遞迴轉成 JSON 原生型別、浮點數 `x + 0.0`（去 −0.0）、numpy → Python |
 | `geometry_json.dumps(doc) -> str` | 確定性的序列化：`json.dumps(canonical(doc), sort_keys=True, indent=1, ensure_ascii=False, allow_nan=False)`；文件裡出現 NaN / Infinity 是合約違規（規格 §7.1 第 6 列），`dumps` 會丟出 `ValueError`，不會寫出 `NaN`（合約 §5.4.5，與 TypeScript 寫出器相同的失敗方式） |
 | `geometry_json.write_geometry_json(doc, path)` | 寫檔（UTF-8、結尾換行） |
-| `svg.write_svg(doc, layers=None) -> str` | 規格 §6.1 分圖層 SVG；`layers` 選子集，順序固定；未知 id 拋 `ValueError` |
+| `svg.write_svg(doc, layers=None, hidden_style="dashed") -> str` | 規格 §6.1 分圖層 SVG；`layers` 選子集，順序固定；未知 id 拋 `ValueError`；M4：`hidden_style`（`dashed` / `omit`）決定隱藏線子群組的畫法，`hidden_lines` 關閉的文件與 v2 輸出位元相同 |
 | `svg.LAYER_ORDER`、`svg.STYLE` | 圖層順序與預設樣式屬性字串 |
 | `png.write_png(svg_str, dpi=300) -> bytes` | 以 cairosvg（或 resvg）柵格化；沒有後端時拋 `ImportError` |
 | `png.png_size(svg_str, dpi) -> (w_px, h_px)` | round(canvas_mm · dpi / 25.4) |

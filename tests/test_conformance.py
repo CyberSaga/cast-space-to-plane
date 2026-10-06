@@ -233,7 +233,14 @@ def test_set_covers_the_required_sources():
 
 @pytest.mark.parametrize("name", case_names())
 def test_render_matches_expected(name):
-    mismatches = compare_documents(load_expected(name), render_case(name), name)
+    expected, actual = load_expected(name), render_case(name)
+    if "hidden_lines" not in expected:
+        # a v2/v3 expected file inside the M4 worktree (the key-additive v4 regeneration runs once, on the
+        # merged branch; contract §5.0.8 rule 2): the M4 keys must carry their switch-off values and are
+        # compared after tools/regen_conformance.py's strip_new_keys
+        actual, problems = _regen_module().strip_new_keys(actual)
+        assert not problems, problems
+    mismatches = compare_documents(expected, actual, name)
     if mismatches:
         shown = mismatches[:MAX_REPORTED]
         more = f"\n... ({len(mismatches) - MAX_REPORTED} more)" if len(mismatches) > MAX_REPORTED else ""
@@ -338,10 +345,18 @@ def test_regen_tool_exit_codes_match_its_docstring(tmp_path):
     assert m and int(m.group(2)) == len(case_names()), r.stdout
     drifted = m.group(3).split(", ") if m.group(3) else []
     assert len(drifted) == int(m.group(1))
+    # inside the M4 worktree the pre-v4 expected files drift key-additively (the M4 keys are added at the
+    # v4 regeneration on the merged branch, contract §5.0.8 rule 2): such drift is checked after
+    # strip_new_keys, any other drift fails as before
+    pre_v4 = {name for name in drifted if "hidden_lines" not in load_expected(name)}
     if recorded_numpy_version() == numpy.__version__:
-        assert not drifted, f"expected files drift on the recorded NumPy build: {r.stdout}"
+        assert not set(drifted) - pre_v4, f"expected files drift on the recorded NumPy build: {r.stdout}"
     for name in drifted:
-        assert compare_documents(load_expected(name), render_case(name), name) == [], name
+        actual = render_case(name)
+        if name in pre_v4:
+            actual, problems = _regen_module().strip_new_keys(actual)
+            assert not problems, (name, problems)
+        assert compare_documents(load_expected(name), actual, name) == [], name
     assert {p.name: p.read_bytes() for p in EXPECTED.glob("*.json")} == before
     assert (CONFORMANCE / "CHANGELOG.md").read_bytes() == changelog
 
@@ -358,7 +373,8 @@ def test_curved_shadow_polygon_is_sampled_in_stage_a_as_the_contract_says():
     curved = [o for o in stage_a["objects"] if o.get("curved")]
     assert curved
     for obj in curved:
-        for lid, cd in obj["curved"].items():
+        # contract §5.1.4 (M4): per-(receiver, light) records live in obj["curved"][<receiver id>][<light id>]
+        for lid, cd in ((lid, cd) for per in obj["curved"].values() for lid, cd in per.items()):
             if cd["polygon"] is None:
                 continue
             verts = cd["polygon"]["vertices"]

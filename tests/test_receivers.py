@@ -30,11 +30,55 @@ def test_golden_hashes_cover_the_34_v2_cases():
     assert set(GOLDEN["sha256"]) <= {p.stem for p in CASES.glob("*.json")}
 
 
+def _regen():
+    import importlib.util
+    spec = importlib.util.spec_from_file_location("regen_conformance_m4", ROOT / "tools" / "regen_conformance.py")
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
 @pytest.mark.parametrize("name", v2_case_names())
-def test_switch_off_svg_is_byte_identical_to_v2(name):
+def test_switch_off_svg_and_stripped_json_are_byte_identical_to_v2(name):
+    from castplane.output.geometry_json import dumps
     scene = castplane.load_scene(CASES / f"{name}.json")
-    svg = castplane.render(scene)["svg"]
-    assert hashlib.sha256(svg.encode("utf-8")).hexdigest() == GOLDEN["sha256"][name]
+    result = castplane.render(scene)
+    assert hashlib.sha256(result["svg"].encode("utf-8")).hexdigest() == GOLDEN["sha256"][name]
+    doc = json.loads(dumps(result["geometry"]))
+    assert doc["hidden_lines"] is False and len(doc["receivers"]) == 1
+    stripped, problems = _regen().strip_new_keys(doc)
+    assert problems == []
+    expected_text = (ROOT / "tests" / "conformance" / "expected" / f"{name}.json").read_text(encoding="utf-8")
+    if GOLDEN["build"].endswith(f"numpy {__import__('numpy').__version__}"):
+        assert dumps(stripped) + "\n" == expected_text
+    else:   # another libm: the spec §7.5 tolerances (contract §4)
+        from tests.test_conformance import compare_documents
+        assert compare_documents(json.loads(expected_text), stripped, name) == []
+
+
+def test_strip_new_keys_mode_of_the_regen_tool():
+    import subprocess
+    import sys
+    r = subprocess.run([sys.executable, str(ROOT / "tools" / "regen_conformance.py"), "--reason", "check",
+                        "--strip-new-keys", "--case", "example_basic", "--case", "example_curved_demo"],
+                       capture_output=True, text=True, cwd=ROOT)
+    assert r.returncode == 0, r.stderr
+    assert "2 of 2 case(s) with zero mismatches" in r.stdout
+    r = subprocess.run([sys.executable, str(ROOT / "tools" / "regen_conformance.py"), "--reason", "check",
+                        "--strip-new-keys", "--rules-only"], capture_output=True, text=True, cwd=ROOT)
+    assert r.returncode == 2
+
+
+def test_strip_new_keys_reports_non_switch_off_values():
+    regen = _regen()
+    doc = {"hidden_lines": True, "receivers": [], "construction": {"per_receiver": {"wall": {}}},
+           "edges": [{"runs": [{"s": [0, 1]}], "visibility": "partial"}], "outlines": [], "form_shadow": [],
+           "shadows": [{"polygon_edges": [], "conics": [{"visibility": "visible", "runs": []}]}]}
+    _doc, problems = regen.strip_new_keys(doc)
+    joined = "\n".join(problems)
+    for needle in ("hidden_lines", "receivers", "per_receiver", "edges[0].runs", "edges[0].visibility",
+                   "shadows[0].conics[0]: missing hidden_polylines"):
+        assert needle in joined, (needle, problems)
 
 
 # --------------------------------------------------------------------------- shadow.py unit tests (§5.1.2, §5.1.3.3)
@@ -154,3 +198,456 @@ def test_plate_loop_orientation_and_edge_on():
     loop4, ids = plate_loop(WALL_BOUNDS, WALL_PI, np.array([0.0, 9.0, 3.0, 1.0]), 1e-9)
     assert ids == [3, 2, 1, 0]
     assert plate_loop(WALL_BOUNDS, WALL_PI, np.array([0.0, 6.0, 3.0, 1.0]), 1e-9) is None
+
+
+# --------------------------------------------------------------------------- wall_and_ground (§5.1.11 hand values)
+import copy
+
+from castplane.errors import warning_codes
+from castplane.output.geometry_json import dumps
+
+
+def wall_and_ground_scene() -> dict:
+    """The hand-computed acceptance case of contract §5.1.11 (spec §10 M4)."""
+    return {
+        "version": "0.1", "units": "m", "up": "z",
+        "objects": [{"id": "crate", "type": "box", "size": [1, 1, 1], "transform": {"position": [0, 4.5, 0]}}],
+        "lights": [{"id": "lamp", "type": "point", "position": [0, 2, 3]}],
+        "receivers": [{"id": "ground", "type": "plane", "normal": [0, 0, 1], "offset": 0},
+                      {"id": "wall", "type": "plane", "normal": [0, -1, 0], "offset": 6,
+                       "bounds": [[-3, 6, 0], [3, 6, 0], [3, 6, 2.5], [-3, 6, 2.5]]}],
+        "camera": {"position": [0, -1, 1.6], "target": [0, 6, 0.8], "focal_length_mm": 35, "frame_mm": [36, 24]},
+        "output": {"canvas_mm": [273, 182]},
+    }
+
+
+def fold_curved_cylinder_scene() -> dict:
+    """A cylinder whose shadow folds from the ground onto the wall (conic bounds clip, §5.1.4)."""
+    scene = wall_and_ground_scene()
+    scene["objects"] = [{"id": "pillar", "type": "cylinder", "radius": 0.4, "height": 1.5,
+                         "transform": {"position": [0, 5, 0]}}]
+    return scene
+
+
+def render(scene, **kw):
+    return castplane.render(castplane.load_scene(scene), **kw)
+
+
+def world(doc, name):
+    return np.asarray(doc["points"][name]["world"], dtype=np.float64)
+
+
+def shadow_of(doc, receiver, obj):
+    found = [s for s in doc["shadows"] if s["receiver"] == receiver and s["object"] == obj]
+    assert len(found) == 1, (receiver, obj)
+    return found[0]
+
+
+def test_wall_and_ground_hand_values():
+    result = render(wall_and_ground_scene())
+    doc = result["geometry"]
+    assert doc["warnings"] == []
+    assert doc["hidden_lines"] is False
+    assert doc["receivers"] == [
+        {"id": "ground", "plane": [0.0, 0.0, 1.0, 0.0], "bounds": None, "lit": {"lamp": True}, "casts": {"lamp": False}},
+        {"id": "wall", "plane": [0.0, -1.0, 0.0, 6.0],
+         "bounds": [[-3.0, 6.0, 0.0], [3.0, 6.0, 0.0], [3.0, 6.0, 2.5], [-3.0, 6.0, 2.5]],
+         "lit": {"lamp": True}, "casts": {"lamp": True}}]
+    # F.lamp, F.lamp.wall (exact)
+    assert doc["points"]["F.lamp"]["world"] == [0.0, 2.0, 0.0]
+    assert doc["points"]["F.lamp.wall"]["world"] == [0.0, 6.0, 3.0]
+    # the crate: lit faces front (-y) and top; silhouette loop v0 v1 v5 v6 v7 v4
+    A = castplane.shadow_geometry(castplane.load_scene(wall_and_ground_scene()))
+    crate = A["objects"][0]
+    normals = crate["mesh"]["face_normals"][crate["lights"]["lamp"]["lit"]]
+    assert sorted(map(tuple, np.round(normals, 12).tolist())) == [(0.0, -1.0, 0.0), (0.0, 0.0, 1.0)]
+    ground = shadow_of(doc, "ground", "crate")
+    assert ground["outline"] == [f"crate.v{k}.shadow.lamp" for k in (0, 1, 5, 6, 7, 4)]
+    expected_ground = {5: (0.75, 5, 0), 6: (0.75, 6.5, 0), 7: (-0.75, 6.5, 0), 4: (-0.75, 5, 0),
+                       0: (-0.5, 4, 0), 1: (0.5, 4, 0)}
+    for k, p in expected_ground.items():
+        np.testing.assert_allclose(world(doc, f"crate.v{k}.shadow.lamp"), p, atol=1e-12)
+    # wall shadow points (also outside the plate: genuine points of the plane)
+    expected_wall = {6: (2 / 3, 6, 1 / 3), 7: (-2 / 3, 6, 1 / 3), 5: (1, 6, -1), 4: (-1, 6, -1),
+                     0: (-1, 6, -3), 1: (1, 6, -3)}
+    for k, p in expected_wall.items():
+        np.testing.assert_allclose(world(doc, f"crate.v{k}.shadow.lamp.wall"), p, atol=1e-12)
+    # the wall polygon after the bounds clip: (0.75,6,0) s0, (2/3,6,1/3), (-2/3,6,1/3), (-0.75,6,0) s1
+    wall = shadow_of(doc, "wall", "crate")
+    assert wall["outline"] == ["crate.s0.lamp.wall", "crate.v6.shadow.lamp.wall", "crate.v7.shadow.lamp.wall",
+                               "crate.s1.lamp.wall"]
+    assert wall["unbounded"] is False and len(wall["polygons"]) == 1 and len(wall["polygons"][0]) == 4
+    np.testing.assert_allclose(world(doc, "crate.s0.lamp.wall"), (0.75, 6, 0), atol=1e-12)
+    np.testing.assert_allclose(world(doc, "crate.s1.lamp.wall"), (-0.75, 6, 0), atol=1e-12)
+    # the wall's own ground shadow: (-3,6,0), (3,6,0) band-kept, (18,26,0), (-18,26,0)
+    plate = shadow_of(doc, "ground", "wall")
+    assert plate["outline"] == [f"wall.b{k}.shadow.lamp" for k in range(4)]
+    for k, p in enumerate([(-3, 6, 0), (3, 6, 0), (18, 26, 0), (-18, 26, 0)]):
+        np.testing.assert_allclose(world(doc, f"wall.b{k}.shadow.lamp"), p, atol=1e-12)
+    assert "OBJECT_BELOW_RECEIVER" not in warning_codes(doc["warnings"])
+    # images (1e-6 mm)
+    images = {"wall.b0": (-111.5758137, -29.5611244), "wall.b1": (111.5758137, -29.5611244),
+              "wall.b2": (116.1978441, 65.4196009), "wall.b3": (-116.1978441, 65.4196009),
+              "crate.s0.lamp.wall": (27.8939534, -29.5611244), "crate.s1.lamp.wall": (-27.8939534, -29.5611244),
+              "crate.v6.shadow.lamp.wall": (24.9268280, -17.3359326),
+              "crate.v7.shadow.lamp.wall": (-24.9268280, -17.3359326),
+              "L.lamp": (0.0, 162.8814554), "F.lamp.wall": (0.0, 85.3679337), "F.lamp": (0.0, -104.8324357)}
+    for name, uv in images.items():
+        np.testing.assert_allclose(doc["points"][name]["image"], uv, atol=1e-6, err_msg=name)
+    con = doc["construction"]
+    np.testing.assert_allclose(con["light_point"], images["L.lamp"], atol=1e-6)
+    np.testing.assert_allclose(con["shadow_vp"], images["F.lamp"], atol=1e-6)
+    np.testing.assert_allclose(con["per_receiver"]["wall"]["shadow_vp"], images["F.lamp.wall"], atol=1e-6)
+
+
+def _crossing_y(a, b, y):
+    """Point of the segment a -> b at the given y."""
+    t = (y - a[1]) / (b[1] - a[1])
+    return a + t * (b - a)
+
+
+def test_wall_and_ground_fold_points_agree_both_ways():
+    """§5.1.3.4: the bounds-clip crossings of the wall polygon equal the crossings of the ground polygon's
+    edges (0.75,5)->(0.75,6.5) and (-0.75,6.5)->(-0.75,5) with y = 6, and the literals (+-3/4, 6, 0)."""
+    doc = render(wall_and_ground_scene())["geometry"]
+    g = {k: world(doc, f"crate.v{k}.shadow.lamp") for k in (5, 6, 7, 4)}
+    fold_right = _crossing_y(g[5], g[6], 6.0)
+    fold_left = _crossing_y(g[7], g[4], 6.0)
+    s0, s1 = world(doc, "crate.s0.lamp.wall"), world(doc, "crate.s1.lamp.wall")
+    np.testing.assert_allclose(s0, fold_right, atol=1e-9)
+    np.testing.assert_allclose(fold_right, s0, atol=1e-9)
+    np.testing.assert_allclose(s1, fold_left, atol=1e-9)
+    np.testing.assert_allclose(s0, (0.75, 6.0, 0.0), atol=1e-9)
+    np.testing.assert_allclose(s1, (-0.75, 6.0, 0.0), atol=1e-9)
+    # and the other way: the wall loop's edges through the fold lie on the ground plane's trace z = 0
+    assert abs(s0[2]) <= 1e-9 and abs(s1[2]) <= 1e-9
+
+
+def test_wall_and_ground_rays_only_inside_the_plate_and_construction_checks():
+    doc = render(wall_and_ground_scene())["geometry"]
+    pr = doc["construction"]["per_receiver"]["wall"]
+    # only v6 and v7 have their wall shadow inside the plate
+    assert pr["rays"] == [["L", "crate.v6"], ["F", "crate.v6.foot.wall"], ["L", "crate.v7"], ["F", "crate.v7.foot.wall"]]
+    assert [c["point"] for c in pr["checks"]] == ["crate.v6.shadow.lamp.wall", "crate.v7.shadow.lamp.wall"]
+    assert max(c["max_error_mm"] for c in pr["checks"]) <= 1e-6
+    assert {s["kind"] for s in pr["segments"]} == {"LP", "FQ", "PQ"}
+    # the flat block is the default receiver's (ground) only
+    assert all(not r[1].endswith(".wall") for r in doc["construction"]["rays"])
+    assert any(r[1].startswith("wall.b") for r in doc["construction"]["rays"])   # the plate's own rays
+    # the SVG draws F'_wall and the wall's rays in the same three groups
+    svg = render(wall_and_ground_scene())["svg"]
+    assert "F′wall" in svg and 'id="construction.wall' not in svg
+
+
+def test_wall_and_ground_svg_and_labels():
+    svg = render(wall_and_ground_scene())["svg"]
+    assert '<g id="objects.wall">' in svg and '<g id="objects.wall.front"' in svg
+    assert ">b0</text>" in svg and 'font-weight="bold">wall</text>' in svg
+    # no label for feet / shadows on the wall (a part "foot" / "shadow" after the first)
+    assert ">v6.shadow.lamp.wall<" not in svg and ">v0.foot.wall<" not in svg and ">s0.lamp.wall<" not in svg
+    # F.lamp.wall goes through the L/F branch and never becomes an object's top label
+    assert ">F.lamp.wall</text>" in svg and 'font-weight="bold">F</text>' not in svg
+
+
+def test_render_twice_is_byte_identical():
+    for scene in (wall_and_ground_scene(), fold_curved_cylinder_scene()):
+        r1, r2 = render(scene), render(scene)
+        assert dumps(r1["geometry"]) == dumps(r2["geometry"]) and r1["svg"] == r2["svg"]
+
+
+def test_fold_curved_cylinder():
+    doc = render(fold_curved_cylinder_scene())["geometry"]
+    assert doc["warnings"] == []
+    wall = shadow_of(doc, "wall", "pillar")
+    ground = shadow_of(doc, "ground", "pillar")
+    assert wall["polygons"] and ground["polygons"] and not wall["unbounded"]
+    # every vertex of the wall polygon lies on the wall plate
+    names = [e for e in wall["outline"] if isinstance(e, str)]
+    assert len(names) == len(wall["outline"])
+    for n in names:
+        assert n.endswith(".lamp.wall"), n
+        p = world(doc, n)
+        assert abs(p[1] - 6.0) <= 1e-9 and -3 - 1e-9 <= p[0] <= 3 + 1e-9 and -1e-9 <= p[2] <= 2.5 + 1e-9
+    # the conic of the top cap on the wall is bounds-clipped in closed form: its arc lies on the plate
+    assert wall["conics"] and all(c["map"] == "shadow" for c in wall["conics"])
+    A = castplane.shadow_geometry(castplane.load_scene(fold_curved_cylinder_scene()))
+    cd = A["objects"][0]["curved"]["wall"]["lamp"]
+    assert set(A["objects"][0]["curved"]) == {"ground", "wall"}
+    for piece in cd["conic_pieces"]:
+        ca = piece["conic_arc"]
+        th = np.linspace(ca["theta0"], ca["theta1"], 33)
+        from castplane.conics import conic_point
+        X = conic_point(ca["E"], th, ca["rho"]) @ np.asarray(ca["T"]).T
+        Xw = X[:, :3] / X[:, 3:4]
+        assert np.all(np.abs(Xw[:, 1] - 6.0) <= 1e-9) and np.all(Xw[:, 2] >= -1e-9) and np.all(Xw[:, 2] <= 2.5 + 1e-9)
+    # fold: the ground polygon's crossing of y = 6 at the base line z = 0 agrees with the wall's s-points at z = 0
+    on_base = sorted(world(doc, n)[0] for n in names if abs(world(doc, n)[2]) <= 1e-12)
+    assert len(on_base) == 2
+    G = np.array([world(doc, n) for n in ground["outline"] if isinstance(n, str)])
+    xs = []
+    for a, b in zip(G, np.roll(G, -1, axis=0)):
+        if (a[1] - 6.0) * (b[1] - 6.0) < 0:
+            xs.append(_crossing_y(a, b, 6.0)[0])
+    assert len(xs) == 2
+    # the ground polygon is the 64-gon sample of the same conic: the fold x agree to the sampling chord error
+    np.testing.assert_allclose(sorted(xs), on_base, atol=5e-3)
+
+
+# --------------------------------------------------------------------------- RECEIVER_UNLIT and other degenerate cases
+def unlit_codes(doc):
+    return {tuple(w["ids"]): w["message"] for w in doc["warnings"] if w["code"] == "RECEIVER_UNLIT"}
+
+
+@pytest.mark.parametrize("case, light, message", [
+    ("point behind", {"id": "lamp", "type": "point", "position": [0, 8, 3]}, "point light is behind"),
+    ("point in plane", {"id": "lamp", "type": "point", "position": [0, 6, 3]}, "point light is behind"),
+    ("directional parallel", {"id": "lamp", "type": "directional", "direction": [0.6, 0.0, 0.8]}, "parallel"),
+    ("directional behind", {"id": "lamp", "type": "directional", "direction": [0.0, 0.6, 0.8]}, "behind"),
+    ("below the ground", {"id": "lamp", "type": "point", "position": [0, 2, -1]}, "light below the ground"),
+    ("sun below the ground", {"id": "lamp", "type": "directional", "direction": [0.0, -0.6, -0.8]},
+     "light below the ground"),
+])
+def test_receiver_unlit_predicates(case, light, message):
+    scene = wall_and_ground_scene()
+    scene["lights"] = [light]
+    doc = render(scene)["geometry"]
+    codes = unlit_codes(doc)
+    assert set(codes) == {("lamp", "wall")}, (case, doc["warnings"])
+    assert message in codes[("lamp", "wall")]
+    wall = shadow_of(doc, "wall", "crate")
+    assert wall["loops"] == [] and wall["polygons"] == [] and not wall["unbounded"]
+    receivers = {r["id"]: r for r in doc["receivers"]}
+    assert receivers["wall"]["lit"] == {"lamp": False}
+    assert doc["construction"]["per_receiver"]["wall"]["rays"] == []
+    if "ground" in message:
+        # the ground is opaque: no plate casts
+        assert receivers["wall"]["casts"] == {"lamp": False}
+        assert "LIGHT_BELOW_RECEIVER" in warning_codes(doc["warnings"])
+        assert shadow_of(doc, "ground", "wall")["loops"] == []
+
+
+def test_horizontal_sun_lights_the_wall():
+    """DIRECTIONAL_HORIZONTAL on the ground does not propagate (a horizontal sun lights walls)."""
+    scene = wall_and_ground_scene()
+    scene["lights"] = [{"id": "sun", "type": "directional", "direction": [0.0, -1.0, 0.0]}]
+    doc = render(scene)["geometry"]
+    assert ("DIRECTIONAL_HORIZONTAL", ("sun",)) in {(w["code"], tuple(w["ids"])) for w in doc["warnings"]}
+    assert not unlit_codes(doc)
+    wall = shadow_of(doc, "wall", "crate")
+    assert len(wall["polygons"]) == 1 and len(wall["polygons"][0]) == 4
+    # light along the wall normal: the foot on the wall is undefined (F.sun.wall absent, shadow_vp null)
+    assert "F.sun.wall" not in doc["points"]
+    pr = doc["construction"]["per_receiver"]["wall"]
+    assert pr["shadow_vp"] is None and pr["shadow_vp_at_infinity"] is None
+    assert all(kind == "L" for kind, _n in pr["rays"]) and pr["rays"]
+
+
+def test_directional_wall_shadow_vp_at_infinity_ids():
+    scene = wall_and_ground_scene()
+    d = np.array([0.3, -0.5, 0.8]) / math.sqrt(0.98)
+    scene["lights"] = [{"id": "sun", "type": "directional", "direction": d.tolist()}]
+    scene["camera"] = {"position": [0, -1, 1.6], "target": [0, 6, 1.6], "focal_length_mm": 35, "frame_mm": [36, 24]}
+    doc = render(scene)["geometry"]
+    pairs = {(w["code"], tuple(w["ids"])) for w in doc["warnings"]}
+    assert ("SHADOW_VP_AT_INFINITY", ("sun", "wall")) in pairs
+    assert ("SHADOW_VP_AT_INFINITY", ("sun",)) not in pairs
+    pr = doc["construction"]["per_receiver"]["wall"]
+    assert pr["shadow_vp"] is None and pr["shadow_vp_at_infinity"] is not None
+    assert doc["points"]["F.sun.wall"]["at_infinity"] is True
+    assert doc["construction"]["shadow_vp"] is not None
+
+
+def test_plate_edge_on_to_the_light_and_seen_edge_on():
+    scene = wall_and_ground_scene()
+    scene["lights"] = [{"id": "lamp", "type": "point", "position": [0, 6, 3]}]        # in the wall plane
+    doc = render(scene)["geometry"]
+    assert {r["id"]: r["casts"] for r in doc["receivers"]}["wall"] == {"lamp": False}
+    assert shadow_of(doc, "ground", "wall")["loops"] == []
+    scene = wall_and_ground_scene()
+    scene["camera"] = {"position": [-6, 6, 1.6], "target": [0, 6, 1.0], "focal_length_mm": 35, "frame_mm": [36, 24]}
+    result = render(scene)                                                          # camera in the wall plane
+    doc = result["geometry"]
+    assert all(math.isfinite(x) for x in _numbers(doc))
+    assert not any(f["object"] == "wall" for f in doc["form_shadow"])
+
+
+def _numbers(obj):
+    if isinstance(obj, dict):
+        for v in obj.values():
+            yield from _numbers(v)
+    elif isinstance(obj, list):
+        for v in obj:
+            yield from _numbers(v)
+    elif isinstance(obj, float):
+        yield obj
+
+
+def test_plate_form_shadow_when_the_camera_sees_the_unlit_face():
+    scene = wall_and_ground_scene()
+    scene["camera"] = {"position": [1, 12, 1.6], "target": [0, 4, 0.8], "focal_length_mm": 35, "frame_mm": [36, 24]}
+    doc = render(scene)["geometry"]
+    plates = [f for f in doc["form_shadow"] if f["object"] == "wall"]
+    assert len(plates) == 1 and plates[0]["faces"] == [["wall.b0", "wall.b1", "wall.b2", "wall.b3"]]
+    assert plates[0]["terminator"] == [] and len(plates[0]["polygons"]) == 1
+    # entries are in document order: objects first, then the plates
+    assert doc["form_shadow"][-1]["object"] == "wall"
+
+
+def test_crate_straddling_the_wall_is_clipped_silently():
+    scene = wall_and_ground_scene()
+    scene["objects"][0]["transform"]["position"] = [0, 6.0, 0]       # half of the crate behind the wall
+    doc = render(scene)["geometry"]
+    codes = warning_codes(doc["warnings"])
+    assert "OBJECT_BELOW_RECEIVER" not in codes and "VERTEX_NOT_BELOW_LIGHT" not in codes
+    wall = shadow_of(doc, "wall", "crate")
+    names = [n for loop in wall["loops"] for n in loop]
+    assert names and all(isinstance(n, str) for n in names)
+    assert len(names) == len(set(names))                              # no duplicate s<k> at the plate edge
+    s_points = [n for n in names if ".s" in n]
+    assert s_points and all(n.endswith(".lamp.wall") for n in s_points)
+    for n in names:
+        p = world(doc, n)
+        assert abs(p[1] - 6.0) <= 1e-9 and p[2] >= -1e-9
+
+
+def test_coplanar_caster_casts_nothing():
+    scene = wall_and_ground_scene()
+    scene["receivers"].append({"id": "tile", "type": "plane", "normal": [0, -1, 0], "offset": 6,
+                               "bounds": [[3, 6, 0], [5, 6, 0], [5, 6, 2.5], [3, 6, 2.5]]})
+    doc = render(scene)["geometry"]
+    assert shadow_of(doc, "wall", "tile")["loops"] == [] and shadow_of(doc, "tile", "wall")["loops"] == []
+    # ... while each still casts on the ground
+    assert shadow_of(doc, "ground", "tile")["loops"] and shadow_of(doc, "ground", "wall")["loops"]
+    assert doc["warnings"] == []
+    order = [(s["receiver"], s["object"]) for s in doc["shadows"]]
+    assert order == [("ground", "crate"), ("ground", "wall"), ("ground", "tile"),
+                     ("wall", "crate"), ("wall", "tile"), ("tile", "crate"), ("tile", "wall")]
+
+
+def test_bounded_default_receiver():
+    """No ground: receivers[0] is a floor plate; it owns the short names and the flat construction keys."""
+    scene = wall_and_ground_scene()
+    scene["receivers"] = [{"id": "floor", "type": "plane", "normal": [0, 0, 1], "offset": 0,
+                           "bounds": [[-2, 2, 0], [2, 2, 0], [2, 5.5, 0], [-2, 5.5, 0]]}]
+    doc = render(scene)["geometry"]
+    assert doc["warnings"] == []
+    floor = shadow_of(doc, "floor", "crate")
+    assert floor["unbounded"] is False and floor["polygons"]
+    assert all(isinstance(n, str) and not n.endswith(".floor") for n in floor["outline"])
+    assert "crate.s0.lamp" in floor["outline"]                     # clipped at y = 5.5 by the bounds
+    for n in floor["outline"]:
+        assert world(doc, n)[1] <= 5.5 + 1e-9
+    assert doc["construction"]["per_receiver"] == {}
+    assert doc["construction"]["rays"]
+    assert doc["receivers"][0]["bounds"] is not None
+
+
+def test_concave_prism_on_plate_anchor_rule():
+    """U-prism with the lamp in the notch on a bounded floor plate: the arc at infinity spans more than
+    180 degrees and the anchor rule gives the whole plate (§5.1.3.3, the counter-example of D22)."""
+    scene = wall_and_ground_scene()
+    scene["objects"] = [{"id": "u", "type": "prism", "height": 1.0,
+                         "polygon": [[-1, -1], [1, -1], [1, 1], [0.5, 1], [0.5, -0.5], [-0.5, -0.5], [-0.5, 1],
+                                     [-1, 1]],
+                         "transform": {"position": [0, 0, 0]}}]
+    scene["lights"] = [{"id": "lamp", "type": "point", "position": [0, 0.2, 0.7]}]
+    # the plate lies behind the back arm of the U, wholly in its shadow (the lamp is below the arms' tops)
+    scene["receivers"] = [{"id": "plate", "type": "plane", "normal": [0, 0, 1], "offset": 0,
+                           "bounds": [[-3, -4.5, 0], [3, -4.5, 0], [3, -2, 0], [-3, -2, 0]]}]
+    scene["camera"] = {"position": [0, 4, 4], "target": [0, -3, 0], "focal_length_mm": 35, "frame_mm": [36, 24]}
+    doc = render(scene)["geometry"]
+    sh = shadow_of(doc, "plate", "u")
+    assert not sh["unbounded"] and sh["polygons"]
+    pts = [world(doc, n)[:2] for loop in sh["loops"] for n in loop]
+    area = sum(0.5 * abs(_shoelace(np.array([world(doc, n)[:2] for n in loop]))) for loop in sh["loops"])
+    assert abs(area - 15.0) <= 1e-9, (sh["loops"], area)
+    assert all(-3 - 1e-9 <= p[0] <= 3 + 1e-9 and -4.5 - 1e-9 <= p[1] <= -2 + 1e-9 for p in pts)
+    # the unclipped shadow polygon is unbounded with an arc at infinity spanning more than 180 degrees
+    A = castplane.shadow_geometry(castplane.load_scene(scene))
+    rec = next(r for r in A["shadows"] if r["object"] == "u")
+    assert any(isinstance(s, tuple) and s[-1] == "anchor" for loop in rec["loops"] for s in loop["sources"])
+
+
+def _shoelace(uv):
+    x, y = uv[:, 0], uv[:, 1]
+    return float(np.sum(x * np.roll(y, -1) - np.roll(x, -1) * y))
+
+
+# --------------------------------------------------------------------------- frame equivalence (§5.1.2)
+def _rx90(p):
+    """Rotation by +90 degrees about x: (x, y, z) -> (x, -z, y); maps the floor z = 0 (normal +z) onto
+    the wall y = 0 with normal (0, -1, 0), and the floor frame (x, y) onto the wall frame (x, z)."""
+    x, y, z = p
+    return [x, -z, y]
+
+
+def _floor_and_wall_scenes(obj: dict, lamp):
+    floor_bounds = [[-3, -3, 0], [3, -3, 0], [3, 3, 0], [-3, 3, 0]]
+    cam = {"position": [0, -8, 6], "target": [0, 0, 0], "focal_length_mm": 35, "frame_mm": [36, 24]}
+    floor = {"version": "0.1", "objects": [obj], "lights": [{"id": "lamp", "type": "point", "position": lamp}],
+             "receivers": [{"id": "plate", "type": "plane", "normal": [0, 0, 1], "offset": 0, "bounds": floor_bounds}],
+             "camera": cam, "output": {"canvas_mm": [36, 24]}}
+    wall = copy.deepcopy(floor)
+    wobj = wall["objects"][0]
+    wobj["transform"] = {"position": _rx90(obj["transform"]["position"]), "rotation_deg": [90, 0, 0]}
+    wall["lights"][0]["position"] = _rx90(lamp)
+    wall["receivers"][0].update({"normal": [0, -1, 0], "bounds": [_rx90(p) for p in floor_bounds]})
+    wall["camera"] = {"position": _rx90(cam["position"]), "target": _rx90(cam["target"]),
+                      "focal_length_mm": 35, "frame_mm": [36, 24]}
+    return floor, wall
+
+
+@pytest.mark.parametrize("obj, lamp", [
+    ({"id": "c", "type": "cylinder", "radius": 0.5, "height": 1.5, "transform": {"position": [0.3, -0.2, 0]}},
+     [1.4, 0.3, 1.0]),                                        # lamp below the top: unbounded before the clip
+    ({"id": "s", "type": "sphere", "radius": 0.6, "transform": {"position": [-0.4, 0.2, 0]}}, [0.9, -0.6, 0.8]),
+    ({"id": "b", "type": "box", "size": [0.8, 0.6, 1.4], "transform": {"position": [0.2, 0.1, 0]}}, [1.2, 0.9, 1.0]),
+])
+def test_frame_equivalence_wall_rotated_to_ground(obj, lamp):
+    """A cylinder / sphere / box on a wall, lamp below the top, against the scene rotated so that the wall
+    becomes the floor: the shadow polygons agree within 1e-9 m and carry the same names."""
+    floor, wall = _floor_and_wall_scenes(obj, lamp)
+    df = render(floor)["geometry"]
+    dw = render(wall)["geometry"]
+    sf, sw = shadow_of(df, "plate", obj["id"]), shadow_of(dw, "plate", obj["id"])
+    assert sf["loops"] and len(sf["loops"]) == len(sw["loops"])
+    if obj["type"] == "sphere":
+        # the sphere's silhouette-circle frame is e1 = normalize(n × z) with the world z (contract §2.6), which a
+        # rotation about x does not carry along: the 64 samples start at a different point of the same exact
+        # curve, so the polygons are compared as curves (implementation note of §5.1.11)
+        for lf, lw in zip(sf["loops"], sw["loops"]):
+            Pf = np.array([_rx90(world(df, n)) for n in lf])
+            Pw = np.array([world(dw, n) for n in lw])
+            assert abs(len(Pf) - len(Pw)) <= 2
+            sagitta = 2.0 * float(np.max(np.linalg.norm(Pf - Pf.mean(axis=0), axis=1))) * (1 - math.cos(math.pi / 64))
+            for P, Q in ((Pf, Pw), (Pw, Pf)):
+                for p in P:
+                    assert _distance_to_polygon(p, Q) <= sagitta + 1e-9
+            assert abs(_shoelace(Pf[:, [0, 2]]) - _shoelace(Pw[:, [0, 2]])) <= 1e-3 * abs(_shoelace(Pf[:, [0, 2]]))
+        return
+    assert sf["loops"] == sw["loops"]
+    for loop in sf["loops"]:
+        for n in loop:
+            np.testing.assert_allclose(_rx90(world(df, n)), world(dw, n), atol=1e-9, err_msg=n)
+    A_f = castplane.shadow_geometry(castplane.load_scene(floor))
+    A_w = castplane.shadow_geometry(castplane.load_scene(wall))
+    for rf, rw in zip(A_f["shadows"], A_w["shadows"]):
+        for lf, lw in zip(rf["loops"], rw["loops"]):
+            Vf, Vw = np.asarray(lf["vertices"]), np.asarray(lw["vertices"])
+            assert Vf.shape == Vw.shape
+            Xf = Vf[:, :3] / Vf[:, 3:4]
+            Xw = Vw[:, :3] / Vw[:, 3:4]
+            np.testing.assert_allclose(np.array([_rx90(p) for p in Xf]), Xw, atol=1e-9)
+    # the unclipped curved polygon (built in the receiver frame) is unbounded and rotates exactly as well
+    if obj["type"] == "cylinder":
+        cf = A_f["objects"][0]["curved"]["plate"]["lamp"]["outline"]
+        assert cf["unbounded"]
+
+
+def _distance_to_polygon(p, Q) -> float:
+    best = math.inf
+    for a, b in zip(Q, np.roll(Q, -1, axis=0)):
+        ab = b - a
+        t = 0.0 if not float(ab @ ab) else min(1.0, max(0.0, float((p - a) @ ab) / float(ab @ ab)))
+        best = min(best, float(np.linalg.norm(a + t * ab - p)))
+    return best

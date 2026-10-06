@@ -136,7 +136,8 @@ from .output.geometry_json import canonical
 from .output.svg import write_svg
 from .primitives import build_object, point_inside_solid
 from .scene import validate_camera
-from .shadow import clip_mesh_to_plane, foot, shadow_loop, shadow_matrix, shadow_w
+from .shadow import (bounds_functionals, clip_mesh_to_plane, clip_polygon_bounds, foot, plate_loop, receiver_frame,
+                     shadow_loop, shadow_matrix, shadow_w)
 
 _ORIGIN_H = np.array([0.0, 0.0, 1.0])
 
@@ -224,7 +225,8 @@ def _object_light_data(obj: dict, lt: dict) -> tuple[dict, list]:
     }, warnings
 
 
-def _loop_entries(sh: dict, loop_vertex_ids, origins, oid: str, lid: str, ground: dict):
+def _loop_entries(sh: dict, loop_vertex_ids, origins, oid: str, lid: str, ground: dict, suffix: str = "",
+                  vertex_prefix: str = "v"):
     """Outline entries of one shadow loop from its ``sources`` (contract §3.1 naming, see module docstring).
 
     ``origins`` maps a vertex of the (ground-clipped) loop mesh to its original
@@ -232,18 +234,22 @@ def _loop_entries(sh: dict, loop_vertex_ids, origins, oid: str, lid: str, ground
     object's own mesh.  ``ground`` accumulates ``{key: (name, xyz)}`` of the
     ground-crossing points in order of first appearance (``key`` is the clipped
     vertex index, or ``("clip", k)`` for a crossing inserted by ``shadow_loop``).
+
+    M4 (contract §5.1.2 / §5.1.3.3): ``suffix`` is ``".<receiver id>"`` for every receiver other than
+    ``receivers[0]``; the ``("bounds", ...)`` rows of the bounds clip (crossings and anchors) are named
+    as ground points of the receiver; ``vertex_prefix`` is ``"b"`` for a plate caster (``<r'>.b<k>``).
     """
     entries = []
     V = sh["vertices"]
 
     def ground_name(key, xyz):
         if key not in ground:
-            ground[key] = (f"{oid}.s{len(ground)}.{lid}", xyz)
+            ground[key] = (f"{oid}.s{len(ground)}.{lid}{suffix}", xyz)
         return ground[key][0]
 
     for row, src in enumerate(sh["sources"]):
         if isinstance(src, tuple):
-            if src[0] == "ground":
+            if src[0] in ("ground", "bounds"):
                 X = V[row]
                 entries.append(ground_name(("clip", len(ground)), X[:3] / X[3]))
             else:  # ("dir", i, j) or ("arc", k): a direction vertex (w = 0)
@@ -256,7 +262,7 @@ def _loop_entries(sh: dict, loop_vertex_ids, origins, oid: str, lid: str, ground
                 X = V[row]
                 entries.append(ground_name(vid, X[:3] / X[3]))
             else:
-                entries.append(f"{oid}.v{int(origin)}.shadow.{lid}")
+                entries.append(f"{oid}.{vertex_prefix}{int(origin)}.shadow.{lid}{suffix}")
     return entries
 
 
@@ -324,48 +330,86 @@ def _shadow_record(obj: dict, ol: dict, lt: dict, pi: np.ndarray, tol: float, re
 def shadow_geometry(scene: dict) -> dict:
     """Stage A: camera-independent geometry (contract §3).  Never touches ``scene["camera"]``.
 
-    Returns ``{objects, vertices, bbox, scene_scale, tol, receiver, lights,
-    shadows, warnings}``; per object ``lights[<light id>]`` holds the lit flags,
-    silhouette edges / vertices / loops (polyhedral objects only).
+    Returns ``{objects, vertices, bbox, scene_scale, tol, receiver, receivers, lights, shadows,
+    warnings}``; per object ``lights[<light id>]`` holds the lit flags, silhouette edges / vertices /
+    loops (polyhedral objects only).  ``lights`` are the light records of the default receiver
+    ``receivers[0]`` (``receiver``); ``receivers`` holds one record per receiver (contract §5.1.2:
+    plane, frame, bounds functionals, per-light records, ``lit`` / ``casts``).  ``shadows`` is ordered
+    receiver (scene order) -> light (scene order) -> caster (objects in scene order, then the other
+    bounded receivers), contract §5.1.3.1.
     """
     objects = [build_object(o) for o in scene["objects"]]
-    vertices = np.concatenate([o["mesh"]["vertices"] for o in objects], axis=0)
+    receivers = [_receiver_record(r, i) for i, r in enumerate(scene["receivers"])]
+    # contract §5.1.2: bounds vertices are scene geometry (the ground has none: v2 scales unchanged)
+    vertices = np.concatenate([o["mesh"]["vertices"] for o in objects]
+                              + [r["bounds"] for r in receivers if r["bounded"]], axis=0)
     scale = scene_scale(vertices)
     tol = tolerance(scale)
     receiver = scene["receivers"][0]
-    pi = _receiver_plane(receiver)
-    lights = [_light_record(lt, pi, tol) for lt in scene["lights"]]
-    warnings = [w for lt in lights for w in lt["warnings"]]
-    shadows = []
+    default = receivers[0]
+    pi = default["pi"]
+    if default["bounded"]:
+        lights = _receiver_light_records(default, scene["lights"], tol, set())
+        ground_unlit = set()
+    else:
+        lights = [_light_record(lt, pi, tol) for lt in scene["lights"]]
+        # contract §5.1.2: the unbounded ground is opaque to light
+        ground_unlit = {lt["id"] for lt in lights if any(w["code"] == "LIGHT_BELOW_RECEIVER" for w in lt["warnings"])}
+        for lt in lights:
+            lt["receiver"], lt["suffix"] = default["id"], ""
+    default["lights"] = lights
+    for rcv in receivers[1:]:
+        rcv["lights"] = _receiver_light_records(rcv, scene["lights"], tol, ground_unlit)
+    _receiver_lit_casts(receivers, ground_unlit)
+    warnings = [w for rcv in receivers for lt in rcv["lights"] for w in lt["warnings"]]
+    light_index = {lt["id"]: k for k, lt in enumerate(scene["lights"])}
+    buckets: dict = {}       # (receiver index, light index) -> records in caster order
     for obj in objects:
         obj["lights"] = {}
+        obj["clipped"] = {}
         if obj["analytic"] is not None:
-            # curved primitives: silhouette / terminator / shadow conics from castplane.curved (§5.6)
-            shadows.extend(_curved.stage_a_object(obj, lights, pi, tol, receiver["id"], warnings))
+            if not default["bounded"]:
+                # curved primitives: silhouette / terminator / shadow conics from castplane.curved (§5.6)
+                for rec in _curved.stage_a_object(obj, lights, default, tol, warnings):
+                    buckets.setdefault((0, light_index[rec["light"]]), []).append(rec)
             continue
-        below = (to_homogeneous(obj["mesh"]["vertices"]) @ pi) < -tol
-        obj["ground_mesh"] = None
-        if bool(np.any(below)):
-            warnings.append(make_warning("OBJECT_BELOW_RECEIVER", [obj["id"]]))
-            try:
-                obj["ground_mesh"] = clip_mesh_to_plane(obj["mesh"], pi, tol)
-            except ValueError:  # degenerate contact: fall back to clipping the silhouette loops
-                obj["ground_mesh"] = None
+        if not default["bounded"]:
+            below = (to_homogeneous(obj["mesh"]["vertices"]) @ pi) < -tol
+            obj["ground_mesh"] = None
+            if bool(np.any(below)):
+                warnings.append(make_warning("OBJECT_BELOW_RECEIVER", [obj["id"]]))
+                try:
+                    obj["ground_mesh"] = clip_mesh_to_plane(obj["mesh"], pi, tol)
+                except ValueError:  # degenerate contact: fall back to clipping the silhouette loops
+                    obj["ground_mesh"] = None
+            obj["clipped"][default["id"]] = obj["ground_mesh"]
+        for rcv in receivers:
+            if rcv["bounded"]:
+                obj["clipped"][rcv["id"]] = _clip_object(obj, rcv, tol)
+        if default["bounded"]:
+            obj["ground_mesh"] = obj["clipped"][default["id"]]
         for lt in lights:
             ol, w = _object_light_data(obj, lt)
             warnings.extend(w)
             obj["lights"][lt["id"]] = ol
+            if default["bounded"]:
+                continue  # the records of a bounded default receiver come from _shadow_records_for_receiver
+            bucket = buckets.setdefault((0, light_index[lt["id"]]), [])
             if not lt["active"] or ol["light_inside"]:
-                shadows.append({"light": lt["id"], "receiver": receiver["id"], "object": obj["id"],
-                                "vertex_ids": np.zeros(0, dtype=np.int64), "keep": np.zeros(0, dtype=bool),
-                                "P_world": np.zeros((0, 3)), "S_world": np.zeros((0, 3)),
-                                "Q_world": np.zeros((0, 3)), "w_S": np.zeros(0),
-                                "shadow_names": [], "foot_names": [], "vertex_names": [],
-                                "ground_points": [], "loops": [], "unbounded": False})
+                bucket.append({"light": lt["id"], "receiver": receiver["id"], "object": obj["id"],
+                               "vertex_ids": np.zeros(0, dtype=np.int64), "keep": np.zeros(0, dtype=bool),
+                               "P_world": np.zeros((0, 3)), "S_world": np.zeros((0, 3)),
+                               "Q_world": np.zeros((0, 3)), "w_S": np.zeros(0),
+                               "shadow_names": [], "foot_names": [], "vertex_names": [],
+                               "ground_points": [], "loops": [], "unbounded": False})
                 continue
             rec, w = _shadow_record(obj, ol, lt, pi, tol, receiver["id"])
             warnings.extend(w)
-            shadows.append(rec)
+            bucket.append(rec)
+    for rcv in receivers:
+        for li, recs in _shadow_records_for_receiver(rcv, objects, receivers, tol, warnings).items():
+            buckets.setdefault((rcv["index"], li), []).extend(recs)
+    shadows = [rec for key in sorted(buckets) for rec in buckets[key]]
     for rec in shadows:
         # canonical Python lists of the camera-independent world coordinates (shadow points, feet and
         # ground points of the finite silhouette vertices): built once here and shared by reference with
@@ -382,10 +426,239 @@ def shadow_geometry(scene: dict) -> dict:
         "scene_scale": scale,
         "tol": tol,
         "receiver": {"id": receiver["id"], "pi": pi},
+        "receivers": receivers,
         "lights": lights,
         "shadows": shadows,
         "warnings": merge_warnings(warnings),
     }
+
+
+# ---------------------------------------------------------------------------
+# stage A, M4: receivers other than the unbounded ground (contract §5.1.2, §5.1.3)
+# ---------------------------------------------------------------------------
+
+def _receiver_record(receiver: dict, index: int) -> dict:
+    """Stage-A record of one validated receiver (contract §5.1.2): ``pi``, ``bounded``, the name
+    ``suffix`` (``""`` for ``receivers[0]``, ``".<id>"`` otherwise), and for a bounded receiver its
+    frame ``(e1, e2)``, ``bounds`` ``(k, 3)``, ``bounds4`` and the bounds functionals ``psi``.  The
+    unbounded ground has ``frame None`` (the literal v2 ground code).  ``lights`` / ``lit`` / ``casts``
+    are filled by :func:`shadow_geometry`."""
+    pi = _receiver_plane(receiver)
+    rec = {"id": receiver["id"], "index": index, "pi": pi, "bounded": receiver.get("bounds") is not None,
+           "suffix": "" if index == 0 else f".{receiver['id']}", "frame": None, "bounds": None,
+           "bounds4": None, "psi": None, "lights": [], "lit": {}, "casts": {}}
+    if rec["bounded"]:
+        B = np.asarray(receiver["bounds"], dtype=np.float64).reshape(-1, 3)
+        rec.update({"frame": receiver_frame(pi[:3]), "bounds": B, "bounds4": to_homogeneous(B),
+                    "psi": bounds_functionals(B, pi[:3])})
+    return rec
+
+
+#: ``RECEIVER_UNLIT`` messages per case (contract §5.1.2, §5.0.5).
+_UNLIT_MESSAGES = {
+    "ground": "light below the ground; the bounded receiver receives no shadow from it",
+    "point": "point light is behind the bounded receiver or in its plane; it receives no shadow",
+    "parallel": "directional light is parallel to the bounded receiver; it receives no shadow",
+    "behind": "directional light is behind the bounded receiver; it receives no shadow",
+}
+
+
+def _receiver_light_records(rcv: dict, scene_lights: list, tol: float, ground_unlit: set) -> list:
+    """Per-light records of one receiver (``L``, ``M_r``, ``F_r``, ``active`` ...; the §2.3 formulas with
+    ``pi_r``).  A bounded receiver replaces the ground codes by ``RECEIVER_UNLIT`` (ids ``[light,
+    receiver]``) in the three band cases and when the unbounded ground is unlit by that light
+    (contract §5.1.2)."""
+    out = []
+    for light in scene_lights:
+        lt = _light_record(light, rcv["pi"], tol)
+        lt["receiver"], lt["suffix"] = rcv["id"], rcv["suffix"]
+        if rcv["bounded"]:
+            case = None
+            if light["id"] in ground_unlit:
+                case = "ground"
+            elif light["type"] == "point":
+                case = "point" if lt["pi_L"] <= tol else None
+            elif abs(lt["pi_L"]) <= TOL_DIR:
+                case = "parallel"
+            elif lt["pi_L"] < -TOL_DIR:
+                case = "behind"
+            lt["active"] = case is None
+            lt["warnings"] = [] if case is None else [
+                make_warning("RECEIVER_UNLIT", [light["id"], rcv["id"]], _UNLIT_MESSAGES[case])]
+        out.append(lt)
+    return out
+
+
+def _receiver_lit_casts(receivers: list, ground_unlit: set) -> None:
+    """``lit[<light>]`` (the receiver receives shadows from that light) and ``casts[<light>]`` (a bounded
+    receiver is an opaque plate casting on the other receivers: ``|pi_r^T L| > tol``, never when the
+    ground is unlit; the unbounded ground never casts) of every receiver (contract §5.1.2)."""
+    for rcv in receivers:
+        for lt in rcv["lights"]:
+            rcv["lit"][lt["id"]] = bool(lt["active"])
+            rcv["casts"][lt["id"]] = bool(rcv["bounded"] and lt["id"] not in ground_unlit
+                                          and abs(lt["pi_L"]) > lt["tol_w"])
+
+
+def _clip_object(obj: dict, rcv: dict, tol: float):
+    """``obj["clipped"][r]`` (contract §5.1.2): the part of the solid in front of ``pi_r`` as a closed mesh
+    (``clip_mesh_to_plane``), ``None`` when no vertex is behind ``pi_r`` or the cut surface is not a
+    closed manifold (the silhouette loops are then clipped edge by edge, silently)."""
+    below = (to_homogeneous(obj["mesh"]["vertices"]) @ rcv["pi"]) < -tol
+    if not bool(np.any(below)):
+        return None
+    try:
+        return clip_mesh_to_plane(obj["mesh"], rcv["pi"], tol)
+    except ValueError:
+        return None
+
+
+def _empty_shadow_record(lid: str, rid: str, oid: str) -> dict:
+    return {"light": lid, "receiver": rid, "object": oid,
+            "vertex_ids": np.zeros(0, dtype=np.int64), "keep": np.zeros(0, dtype=bool),
+            "P_world": np.zeros((0, 3)), "S_world": np.zeros((0, 3)),
+            "Q_world": np.zeros((0, 3)), "w_S": np.zeros(0),
+            "shadow_names": [], "foot_names": [], "vertex_names": [],
+            "ground_points": [], "loops": [], "unbounded": False}
+
+
+def _caster_record(oid: str, lt: dict, rcv: dict, tol: float, sil, P4, vertex_names: list, loops: list, origins,
+                   vertex_prefix: str) -> tuple[dict, list]:
+    """Shadow record of one caster (an object part or a plate) on one receiver under one active light
+    (contract §5.1.3).  ``sil`` are the original vertex indices of the silhouette vertices and ``P4``
+    their homogeneous points; ``loops`` lists ``(loop4, loop_vertex_ids)`` (the ids index ``origins``
+    when given).  On a bounded receiver every loop goes through :func:`shadow.clip_polygon_bounds`
+    (empty results are dropped), ``unbounded`` is false, ``VERTEX_NOT_BELOW_LIGHT`` is not emitted and
+    rays / checks exist only for shadow points inside the bounds (``ray_keep``)."""
+    lid, rid, sfx = lt["id"], rcv["id"], rcv["suffix"]
+    pi = rcv["pi"]
+    sil = np.asarray(sil, dtype=np.int64).reshape(-1)
+    P4 = np.asarray(P4, dtype=np.float64).reshape(-1, 4)
+    w_S = np.asarray(shadow_w(pi, lt["L"], P4), dtype=np.float64).reshape(-1)
+    finite = w_S > lt["tol_w"]
+    above = (P4 @ pi) >= -tol
+    keep = finite & above
+    warnings = []
+    if not rcv["bounded"] and sil.shape[0] and not bool(np.all(finite)):
+        warnings.append(make_warning("VERTEX_NOT_BELOW_LIGHT", [oid]))
+    S4 = P4 @ lt["M"].T                                           # S = M·P, spec §5.2
+    w_safe = np.where(keep, w_S, 1.0)
+    S_world = np.where(keep[:, None], S4[:, :3] / w_safe[:, None], 0.0)
+    Q4 = foot(pi, P4)                                             # Q, spec §5.3
+    Q_world = Q4[:, :3] / Q4[:, 3:4] if Q4.shape[0] else np.zeros((0, 3))
+    ray_keep = keep
+    if rcv["bounded"]:
+        inside = np.all(S4 @ rcv["psi"].T >= -tol * np.abs(S4[:, 3:4]), axis=1)
+        ray_keep = keep & inside
+    out_loops, ground = [], {}
+    unbounded = False
+    for loop4, loop_ids in loops:
+        sh = shadow_loop(loop4, lt["M"], pi, lt["tol_w"], tol_clip=tol, frame=rcv["frame"], F=lt["F"])
+        if rcv["bounded"]:
+            V, src = clip_polygon_bounds(sh["vertices"], sh["sources"], rcv["psi"], rcv["bounds"], tol)
+            if V.shape[0] == 0:
+                continue
+            sh = {"vertices": V, "sources": src, "unbounded": False}
+        entries = _loop_entries(sh, loop_ids, origins, oid, lid, ground, suffix=sfx, vertex_prefix=vertex_prefix)
+        unbounded = unbounded or bool(sh["unbounded"])
+        out_loops.append({"vertices": sh["vertices"], "sources": sh["sources"], "entries": entries,
+                          "unbounded": bool(sh["unbounded"])})
+    return {
+        "light": lid,
+        "receiver": rid,
+        "object": oid,
+        "vertex_ids": sil,
+        "keep": keep,
+        "ray_keep": ray_keep,
+        "P_world": P4[:, :3] / P4[:, 3:4] if P4.shape[0] else np.zeros((0, 3)),
+        "S_world": S_world,
+        "Q_world": Q_world,
+        "w_S": w_S,
+        "shadow_names": [f"{oid}.{vertex_prefix}{int(k)}.shadow.{lid}{sfx}" for k in sil],
+        "foot_names": [f"{oid}.{vertex_prefix}{int(k)}.foot{sfx}" for k in sil],
+        "vertex_names": list(vertex_names),
+        "ground_points": list(ground.values()),
+        "loops": out_loops,
+        "unbounded": unbounded,
+    }, warnings
+
+
+def _bounded_object_record(obj: dict, ol: dict, lt: dict, rcv: dict, tol: float) -> tuple[dict, list]:
+    """Shadow record of a polyhedral object on a bounded receiver (contract §5.1.3.2): the solid cut to
+    ``pi_r^T X >= 0`` (``obj["clipped"][r]``, silent; crossings ``<obj>.s<k>.<light>.<r>``), the loops
+    shadowed with ``M_r`` and clipped to the bounds."""
+    oid, lid, rid = obj["id"], lt["id"], rcv["id"]
+    if not lt["active"] or ol["light_inside"]:
+        return _empty_shadow_record(lid, rid, oid), []
+    mesh = obj["mesh"]
+    V4 = to_homogeneous(mesh["vertices"])
+    clipped = obj["clipped"].get(rid)
+    if clipped is None:
+        loop_mesh, origins, sil_loops = mesh, None, ol["loops"]
+        sil = ol["silhouette_vertices"]
+    else:
+        loop_mesh, origins = clipped
+        if not loop_mesh["faces"]:     # the whole solid is behind the receiver plane
+            return _empty_shadow_record(lid, rid, oid), []
+        lit_c, _parallel = face_lit_flags(loop_mesh, lt["L"], lt["tol_lit"])
+        sil_loops = silhouette_loops(loop_mesh, lit_c)
+        ef = loop_mesh["edge_faces"]
+        edge_sil = lit_c[ef[:, 0]] != lit_c[ef[:, 1]]
+        sil = np.array(sorted({origins[int(v)] for v in np.unique(loop_mesh["edges"][edge_sil])
+                               if isinstance(origins[int(v)], int)}), dtype=np.int64)
+    V4c = to_homogeneous(loop_mesh["vertices"])
+    loops = [(V4c[loop], loop) for loop in sil_loops]
+    return _caster_record(oid, lt, rcv, tol, sil, V4[sil], [obj["point_names"][int(k)] for k in sil], loops,
+                          origins, "v")
+
+
+def _plate_shadow_record(plate: dict, lt: dict, rcv: dict, tol: float) -> tuple[dict, list]:
+    """Shadow record of the bounded receiver ``plate`` (an opaque plate) on the receiver ``rcv``
+    (contract §5.1.3.2): nothing when the light is inactive on ``rcv``, when the plate does not cast
+    (edge-on, or the ground is unlit) or when the plate is coplanar with ``rcv``; otherwise the plate
+    boundary (stored order with the light on its positive side, reversed otherwise) cut to
+    ``pi_r^T X >= 0`` and shadowed like an object loop.  Vertices ``<r'>.b<k>``."""
+    pid, lid, rid = plate["id"], lt["id"], rcv["id"]
+    if not lt["active"] or not plate["casts"].get(lid, False):
+        return _empty_shadow_record(lid, rid, pid), []
+    B4 = plate["bounds4"]
+    if bool(np.all(np.abs(B4 @ rcv["pi"]) <= tol)):  # coplanar with the receiver: casts nothing on it
+        return _empty_shadow_record(lid, rid, pid), []
+    plate_light = next(p for p in plate["lights"] if p["id"] == lid)
+    loop = plate_loop(plate["bounds"], plate["pi"], lt["L"], plate_light["tol_w"])
+    if loop is None:
+        return _empty_shadow_record(lid, rid, pid), []
+    loop4, ids = loop
+    k = B4.shape[0]
+    return _caster_record(pid, lt, rcv, tol, np.arange(k), B4, [f"{pid}.b{j}" for j in range(k)],
+                          [(loop4, ids)], None, "b")
+
+
+def _shadow_records_for_receiver(rcv: dict, objects: list, receivers: list, tol: float, warnings: list) -> dict:
+    """The records of one receiver not produced by the v2 ground code: on a bounded receiver every object
+    (polyhedral through :func:`_bounded_object_record`, curved through ``curved.stage_a_object``), and on
+    every receiver the other bounded receivers as plates (contract §5.1.3.1).  Returns ``{light index:
+    [records in caster order]}``."""
+    out: dict = {}
+    if rcv["bounded"]:
+        for obj in objects:
+            if obj["analytic"] is not None:
+                for rec in _curved.stage_a_object(obj, rcv["lights"], rcv, tol, warnings):
+                    li = next(k for k, lt in enumerate(rcv["lights"]) if lt["id"] == rec["light"])
+                    out.setdefault(li, []).append(rec)
+                continue
+            for li, lt in enumerate(rcv["lights"]):
+                rec, w = _bounded_object_record(obj, obj["lights"][lt["id"]], lt, rcv, tol)
+                warnings.extend(w)
+                out.setdefault(li, []).append(rec)
+    for plate in receivers:
+        if not plate["bounded"] or plate["id"] == rcv["id"]:
+            continue
+        for li, lt in enumerate(rcv["lights"]):
+            rec, w = _plate_shadow_record(plate, lt, rcv, tol)
+            warnings.extend(w)
+            out.setdefault(li, []).append(rec)
+    return out
 
 
 # ---------------------------------------------------------------------------
@@ -589,6 +862,16 @@ def _ray_kinds(light: dict, P_uv, S_uv, Q_uv) -> list:
     return kinds
 
 
+def _ray_keep(rec: dict) -> np.ndarray:
+    """Rows of a shadow record whose vertices may get construction rays: ``ray_keep`` (bounded receivers,
+    contract §5.1.3.3) or ``keep``."""
+    keep = np.asarray(rec["keep"], dtype=bool)
+    rk = rec.get("ray_keep")
+    if rk is None or np.asarray(rk).shape != keep.shape:
+        return keep
+    return np.asarray(rk, dtype=bool)
+
+
 def _project_shadows(records: list, cam: dict, tol: float, by_id: dict) -> tuple[list, list]:
     """Stage B of all (light, object) shadow records at once (spec §8): points, drawable polygons,
     construction rays and self-checks are computed in batched numpy calls and sliced per record;
@@ -622,6 +905,8 @@ def _project_shadows(records: list, cam: dict, tol: float, by_id: dict) -> tuple
         per_rec_polys[k].append(poly)
     # construction rays (contract §2.7): only rows with P, S, Q all in front
     ok = keep & (nuP >= 0.0) & (nuS >= 0.0) & (nuQ >= 0.0)
+    # M4 (contract §5.1.3.3): on a bounded receiver only shadow points inside the bounds get rays / checks
+    ok &= np.concatenate([_ray_keep(rec) for rec in records])
     P_uv = divide(np.where(ok[:, None], xP, _ORIGIN_H))
     S_uv = divide(np.where(ok[:, None], xS, _ORIGIN_H))
     Q_uv = divide(np.where(ok[:, None], xQ, _ORIGIN_H))
@@ -634,13 +919,16 @@ def _project_shadows(records: list, cam: dict, tol: float, by_id: dict) -> tuple
     # per light: rays and self-checks over the concatenated rows of that light's records
     light_recs: dict = {}
     for k, rec in enumerate(records):
-        light_recs.setdefault(rec["light"], []).append(k)
+        light_recs.setdefault((rec["light"], rec["receiver"]), []).append(k)
     segments = [[] for _ in records]
     checks = [[] for _ in records]
     rays = [[] for _ in records]
     out, warnings = [], []
-    for lid, rec_idx in light_recs.items():
-        light = by_id[lid]
+    for (lid, rid), rec_idx in light_recs.items():
+        # the light projected for that receiver (its F'_r), keyed (light, receiver); a {light id: record}
+        # map is accepted for single-receiver callers
+        light = by_id[(lid, rid)] if (lid, rid) in by_id else by_id[lid]
+        foot_sfx = light.get("suffix", "")
         whole = len(rec_idx) == len(records)
         rows_ok = np.nonzero(ok)[0] if whole else \
             np.nonzero(np.concatenate([ok[offs[k]:offs[k + 1]] for k in rec_idx]))[0]
@@ -667,7 +955,8 @@ def _project_shadows(records: list, cam: dict, tol: float, by_id: dict) -> tuple
             seg_cum = np.concatenate([[0], np.cumsum(per_vertex)])
             # the §3.1 ``rays`` list: one ["L", name] / ["F", name.foot] pair per ok vertex
             names_ok_list = names_ok.tolist()
-            ray_flat = [[kind, nm if kind == "L" else f"{nm}.foot"] for nm in names_ok_list for kind in ray_kinds]
+            ray_flat = [[kind, nm if kind == "L" else f"{nm}.foot{foot_sfx}"] for nm in names_ok_list
+                        for kind in ray_kinds]
             pos = 0
             for k in rec_idx:
                 n_rows = int(n_ok_rec[k])
@@ -731,7 +1020,13 @@ def _project_shadow(rec: dict, cam: dict, tol: float, light: dict) -> tuple[dict
 
 
 def project_scene(scene: dict, A: dict, camera=None) -> dict:
-    """Stage B: project stage-A geometry with the scene camera or an override (contract §3)."""
+    """Stage B: project stage-A geometry with the scene camera or an override (contract §3).
+
+    M4 (contract §5.1.5, §5.0.7): ``B["A"] = A`` (stage C reaches the camera-free geometry through it);
+    ``lights`` are the projections for the default receiver, ``receiver_lights[<r>]`` those of every
+    other receiver (``F'_r``); ``plates`` the projected bounded receivers (bounds points, edges, the
+    unlit camera-facing face); ``construction.per_receiver[<r>]`` the rays / checks / segments of the
+    records on receiver ``r``.  ``A`` is never mutated."""
     cam_dict = _resolve_camera(scene, camera)
     canvas = scene["output"]["canvas_mm"]
     cam = camera_matrix(cam_dict, canvas)
@@ -760,32 +1055,126 @@ def project_scene(scene: dict, A: dict, camera=None) -> dict:
         lrec, w = _project_light(lt, cam, tol)
         warnings.extend(w)
         lights.append(lrec)
-    by_id = {lt["id"]: lt for lt in lights}
+    receivers = A.get("receivers", [])
+    default_id = receivers[0]["id"] if receivers else A.get("receiver", {}).get("id")
+    by_id = {(lt["id"], default_id): lt for lt in lights}
+    receiver_lights = {}
+    for rcv in receivers[1:]:
+        recs = []
+        for lt in rcv["lights"]:
+            lrec, w = _project_receiver_light(lt, rcv, cam, tol)
+            warnings.extend(w)
+            recs.append(lrec)
+            by_id[(lt["id"], rcv["id"])] = lrec
+        receiver_lights[rcv["id"]] = recs
     shadows, w = _project_shadows(list(A.get("shadows", [])), cam, tol, by_id)
     warnings.extend(w)
+    plates = []
+    for rcv in receivers:
+        if rcv["bounded"]:
+            prec, w = _plate_record(rcv, cam, tol)
+            warnings.extend(w)
+            plates.append(prec)
     construction = None
     if lights:
         lt = lights[0]
+        default_shadows = [s for s in shadows if s["receiver"] == default_id]
         construction = {
             "light_point": lt["light_point"]["point"],
             "light_point_at_infinity": lt["light_point"]["at_infinity"],
             "shadow_vp": lt["shadow_vp"]["point"],
             "shadow_vp_at_infinity": lt["shadow_vp"]["at_infinity"],
-            "rays": list(chain.from_iterable(s["rays"] for s in shadows)),
-            "checks": list(chain.from_iterable(s["checks"] for s in shadows)),
-            "segments": list(chain.from_iterable(s["segments"] for s in shadows)),
+            "rays": list(chain.from_iterable(s["rays"] for s in default_shadows)),
+            "checks": list(chain.from_iterable(s["checks"] for s in default_shadows)),
+            "segments": list(chain.from_iterable(s["segments"] for s in default_shadows)),
+            "per_receiver": {},
         }
+        for rid, recs in receiver_lights.items():
+            lt_r = recs[0]
+            own = [s for s in shadows if s["receiver"] == rid and s["light"] == lt_r["id"]]
+            construction["per_receiver"][rid] = {
+                "shadow_vp": lt_r["shadow_vp"]["point"],
+                "shadow_vp_at_infinity": lt_r["shadow_vp"]["at_infinity"],
+                "rays": list(chain.from_iterable(s["rays"] for s in own)),
+                "checks": list(chain.from_iterable(s["checks"] for s in own)),
+                "segments": list(chain.from_iterable(s["segments"] for s in own)),
+            }
     return {
+        "A": A,
         "camera": cam,
         "scene_scale": scale,
         "tol": tol,
         "objects": objects,
         "lights": lights,
+        "receiver_lights": receiver_lights,
+        "receivers": [_receiver_doc_entry(rcv) for rcv in receivers],
+        "plates": plates,
         "horizon": camera_horizon(cam, TOL_DIR),
         "shadows": shadows,
         "construction": construction,
         "warnings": merge_warnings(warnings),
     }
+
+
+def _project_receiver_light(lt: dict, rcv: dict, cam: dict, tol: float) -> tuple[dict, list]:
+    """``_project_light`` of a light record of a receiver other than ``receivers[0]`` (contract §5.1.5):
+    ``F'_r = P·F_r``; ``SHADOW_VP_AT_INFINITY`` carries the ids ``[light, receiver]``."""
+    lrec, w = _project_light(lt, cam, tol)
+    w = [x for x in w if x["code"] != "SHADOW_VP_AT_INFINITY"]
+    if lrec["shadow_vp"]["at_infinity"] is not None:
+        w.append(make_warning("SHADOW_VP_AT_INFINITY", [lt["id"], rcv["id"]]))
+    lrec["receiver"], lrec["suffix"] = rcv["id"], rcv["suffix"]
+    return lrec, w
+
+
+def _receiver_doc_entry(rcv: dict) -> dict:
+    """The camera-free §5.1.7 ``receivers[]`` entry ``{id, plane, bounds, lit, casts}``."""
+    return {
+        "id": rcv["id"],
+        "plane": [float(v) + 0.0 for v in rcv["pi"]],
+        "bounds": None if not rcv["bounded"] else (np.asarray(rcv["bounds"], dtype=np.float64) + 0.0).tolist(),
+        "lit": {lid: bool(v) for lid, v in rcv["lit"].items()},
+        "casts": {lid: bool(v) for lid, v in rcv["casts"].items()},
+    }
+
+
+def _plate_record(rcv: dict, cam: dict, tol: float) -> tuple[dict, list]:
+    """Stage B of a bounded receiver drawn as an opaque plate (contract §5.1.7 / §5.1.8): its bounds
+    points ``<r>.b<k>``, its bounds edges (``edges[]`` entries with ``object == <r>``, ``silhouette`` =
+    casts by some light, ``back: false``) through the §2.2 drawing pipeline, and its unlit camera-facing
+    face as a ``form_shadow`` entry iff ``sign(pi^T L) != sign(n·(C - b0))`` with both strictly beyond the
+    tolerance (the light-side sign is stage A; the camera side is decided here, like ``back``).
+    ``POINT_BEHIND_CAMERA`` (ids ``[<r>]``) when a bounds point is behind the near plane."""
+    rid = rcv["id"]
+    B4 = rcv["bounds4"]
+    k = B4.shape[0]
+    names = [f"{rid}.b{j}" for j in range(k)]
+    x_h = project(cam, B4)
+    behind = nu(cam, B4) < 0.0
+    nxt = np.roll(np.arange(k), -1)
+    A_, B_, keep = clip_segments_near(cam, B4, B4[nxt])
+    A2, B2 = project(cam, A_), project(cam, B_)
+    A3, B3, keep_rect = clip_segments_rect_h(A2, B2, cam["rect"])
+    keep = keep & keep_rect
+    silhouette = any(rcv["casts"].values())
+    edges = []
+    seg_uv = (divide(np.where(keep[:, None, None], np.stack([A3, B3], axis=1), _ORIGIN_H)) + 0.0).tolist()
+    for j in range(k):
+        edges.append({"object": rid, "from": names[j], "to": names[(j + 1) % k], "silhouette": silhouette,
+                      "back": False, "visibility": "visible", "runs": [],
+                      "segment": seg_uv[j] if bool(keep[j]) else None})
+    form = None
+    if rcv["lights"]:
+        lt = rcv["lights"][0]
+        light_side = lt["pi_L"]
+        cam_side = float(rcv["pi"][:3] @ (np.asarray(cam["C"], dtype=np.float64) - rcv["bounds"][0]))
+        if abs(light_side) > lt["tol_w"] and abs(cam_side) > tol and (light_side > 0.0) != (cam_side > 0.0):
+            poly = _project_polygon(cam, B4)
+            form = {"object": rid, "faces": [list(names)], "terminator": [],
+                    "polygons": [(np.asarray(poly) + 0.0).tolist()] if len(poly) >= 3 else []}
+    warnings = [make_warning("POINT_BEHIND_CAMERA", [rid])] if bool(np.any(behind)) else []
+    return {"id": rid, "point_names": names, "world": (rcv["bounds"] + 0.0).tolist(), "image_h": x_h,
+            "behind": behind, "edges": edges, "form_shadow": form}, warnings
 
 
 # ---------------------------------------------------------------------------
@@ -872,6 +1261,11 @@ def _conic_doc_entry(a: dict, with_back: bool = False) -> dict:
     if with_back:
         entry["back"] = bool(a["back"])
     entry.update(_arc_drawables(a))
+    # M4 (contract §5.1.7): hidden-line fields with their switch-off values (hidden.classify_document
+    # replaces them, always with fresh lists, when hidden lines are on)
+    entry["visibility"] = "visible"
+    entry["runs"] = []
+    entry["hidden_polylines"] = []
     return entry
 
 
@@ -881,10 +1275,11 @@ def _segment_uv(seg_h, keep: bool):
 
 def _compose_curved(rec: dict, points: dict, edges: list, form_shadow: list, outlines: list) -> dict:
     """Stage C of a curved object: named points, outline generators / conics, terminator entries.
-    Returns ``{light id: [shadow conic entries]}`` for the ``shadows`` block."""
+    Returns ``{(light id, receiver id): [shadow conic entries]}`` for the ``shadows`` block."""
     oid = rec["id"]
     _finite_points(points, rec["point_names"], rec["world"], rec["image_h"], rec["behind"])
-    generators = [{"from": e["from"], "to": e["to"], "back": False, "segment": _segment_uv(e["segment_h"], e["keep"])}
+    generators = [{"from": e["from"], "to": e["to"], "back": False, "segment": _segment_uv(e["segment_h"], e["keep"]),
+                   "visibility": "visible", "runs": []}
                   for e in rec["gen_edges"]]
     outlines.append({"object": oid, "generators": generators,
                      "conics": [_conic_doc_entry(a, with_back=True) for a in rec["outline_arcs"]]})
@@ -893,16 +1288,24 @@ def _compose_curved(rec: dict, points: dict, edges: list, form_shadow: list, out
         for it in items:
             if "segment" in it:
                 seg = _segment_uv(it["segment_h"], it["keep"])
-                term.append({"segment": list(it["segment"]), "polylines": [seg] if seg is not None else []})
+                term.append({"segment": list(it["segment"]), "polylines": [seg] if seg is not None else [],
+                             "visibility": "visible", "runs": []})
             else:
                 term.append(_conic_doc_entry(it))
     if term:
         form_shadow.append({"object": oid, "faces": [], "terminator": term, "polygons": []})
-    return {lid: [_conic_doc_entry(a) for a in arcs] for lid, arcs in rec["shadow_arcs"].items()}
+    return {key: [_conic_doc_entry(a) for a in arcs] for key, arcs in rec["shadow_arcs"].items()}
 
 
-def compose(scene: dict, B: dict) -> dict:
-    """Stage C: the §6.2 geometry document (contract §3.1), canonical floats, sorted point names."""
+def compose(scene: dict, B: dict, hidden_lines=None) -> dict:
+    """Stage C: the §6.2 geometry document (contract §3.1, full key listing §5.0.3), canonical floats,
+    sorted point names.
+
+    ``hidden_lines`` (contract §5.1.6.5 / §5.0.7): ``None`` = ``scene["output"]["hidden_lines"]``; the
+    effective switch is the document's top-level ``hidden_lines``.  When it is on,
+    ``castplane.hidden.classify_document(doc, B["A"], B)`` fills ``visibility`` / ``runs`` /
+    ``polygon_edges`` / ``hidden_polylines``; when it is off every ``visibility`` is ``"visible"`` and every
+    ``runs`` / ``hidden_polylines`` / ``polygon_edges`` is ``[]``."""
     cam = B["camera"]
     points, edges, outlines = {}, [], []
     form_entries = []        # (object index, form_shadow entry): the block keeps the object order
@@ -912,8 +1315,8 @@ def compose(scene: dict, B: dict) -> dict:
             # contract §2.4 / §2.10: a curved primitive contributes its outline generators, cap conics,
             # terminator and construction points, never its approximate mesh
             curved_form = []
-            for lid, entries in _compose_curved(rec, points, edges, curved_form, outlines).items():
-                conics_by[(rec["id"], lid)] = entries
+            for (lid, rid), entries in _compose_curved(rec, points, edges, curved_form, outlines).items():
+                conics_by[(rec["id"], lid, rid)] = entries
             form_entries.extend((k, e) for e in curved_form)
     # polyhedral objects: bulk conversion to Python floats (+ 0.0 canonicalises -0.0) over all objects at
     # once keeps the per-edge / per-point work to one dict literal each (§8 performance)
@@ -941,14 +1344,26 @@ def compose(scene: dict, B: dict) -> dict:
                 e["silhouette"] = s
                 e["back"] = b
                 e["segment"] = seg if kp else None
+                e["runs"] = []
                 edges.append(e)
             if rec["form_faces"]:
                 form_entries.append((k, {"object": rec["id"], "faces": rec["form_faces"], "terminator": [],
                                          "polygons": rec["form_polygons"]}))
+    # M4 (contract §5.1.7 / §5.1.8): bounded receivers as plates -- their bounds points, bounds edges and
+    # unlit camera-facing face, after the objects (document order: objects, then receivers)
+    n_obj = len(B["objects"])
+    for j, prec in enumerate(B.get("plates", [])):
+        _finite_points(points, prec["point_names"], prec["world"], prec["image_h"], prec["behind"])
+        edges.extend(prec["edges"])
+        if prec["form_shadow"] is not None:
+            form_entries.append((n_obj + j, prec["form_shadow"]))
     form_entries.sort(key=lambda t: t[0])
     form_shadow = [e for _k, e in form_entries]
     for lt in B.get("lights", []):
         _light_points(points, lt)
+    for rid, lts in B.get("receiver_lights", {}).items():
+        for lt in lts:
+            _receiver_light_points(points, lt, rid)
     shadows = []
     recs = B.get("shadows", [])
     if recs:
@@ -979,16 +1394,20 @@ def compose(scene: dict, B: dict) -> dict:
             "object": s["object"],
             "outline": s["loops"][0] if s["loops"] else [],
             "loops": list(s["loops"]),
-            "conics": conics_by.get((s["object"], s["light"]), []),
+            "conics": conics_by.get((s["object"], s["light"], s["receiver"]), []),
             "unbounded": bool(s["unbounded"]),
             "polygons": s["polygons"],
+            "polygon_edges": [],
         })
     hz = B["horizon"]
     construction = B["construction"] or {
         "light_point": None, "light_point_at_infinity": None,
         "shadow_vp": None, "shadow_vp_at_infinity": None,
-        "rays": [], "checks": [], "segments": [],
+        "rays": [], "checks": [], "segments": [], "per_receiver": {},
     }
+    per_receiver = construction.get("per_receiver", {})
+    if hidden_lines is None:
+        hidden_lines = bool(scene["output"].get("hidden_lines", False))
     # points, edges, shadows, form_shadow, outlines and the construction lists (rays, checks, segments)
     # are canonical by construction (every float went through ``+ 0.0`` in bulk, contract §2.8);
     # only the small blocks go through canonical()
@@ -1000,7 +1419,12 @@ def compose(scene: dict, B: dict) -> dict:
             "horizon_line": list(hz["line"]),
             "principal_point": [cam["u0"], cam["v0"]],
         },
-        "construction": {k: v for k, v in construction.items() if k not in ("rays", "checks", "segments")},
+        "construction": {k: v for k, v in construction.items() if k not in ("rays", "checks", "segments",
+                                                                             "per_receiver")},
+        "per_receiver": {rid: {k: v for k, v in blk.items() if k not in ("rays", "checks", "segments")}
+                         for rid, blk in per_receiver.items()},
+        "hidden_lines": bool(hidden_lines),
+        "receivers": list(B.get("receivers", [])),
         "horizon": {
             "v_mm": hz["v_mm"],
             "line": list(hz["line"]),
@@ -1010,17 +1434,51 @@ def compose(scene: dict, B: dict) -> dict:
         "warnings": list(B["warnings"]),
     })
     doc["construction"].update({k: list(construction[k]) for k in ("rays", "checks", "segments")})
+    blocks = doc.pop("per_receiver")
+    for rid, blk in blocks.items():
+        blk.update({k: list(per_receiver[rid][k]) for k in ("rays", "checks", "segments")})
+    doc["construction"]["per_receiver"] = blocks
     doc["points"] = points
     doc["edges"] = edges
     doc["shadows"] = shadows
     doc["form_shadow"] = form_shadow
     doc["outlines"] = outlines
+    if doc["hidden_lines"]:
+        _classify_hidden(doc, B)
     return doc
 
 
-def render(scene: dict, camera=None) -> dict:
-    """Run stages A, B, C and write the SVG with the scene's layer subset (contract §3)."""
+def _classify_hidden(doc: dict, B: dict) -> None:
+    """Contract §5.1.6.5: the sampled hidden-line removal of stage C (``castplane.hidden``, the M4
+    H-track).  Until that module exists the document keeps the switch-off values."""
+    try:
+        from . import hidden
+    except ImportError:
+        return
+    hidden.classify_document(doc, B["A"], B)
+
+
+def _receiver_light_points(points: dict, lt: dict, rid: str):
+    """``F.<light>.<r>`` of a receiver other than ``receivers[0]`` (contract §5.0.4): the light foot on that
+    receiver, a direction point for a directional light, absent when undefined (light along ``n_r``)."""
+    if not lt.get("F_defined", True):
+        return
+    X, img = lt["F"], lt["shadow_vp"]
+    name = f"F.{lt['id']}.{rid}"
+    if lt["type"] == "point":
+        points[name] = {"world": [float(X[0] / X[3]) + 0.0, float(X[1] / X[3]) + 0.0, float(X[2] / X[3]) + 0.0],
+                        "image": img["point"], "depth": float(lt["F_depth"]) + 0.0}
+    else:
+        points[name] = {"direction": [float(X[0]) + 0.0, float(X[1]) + 0.0, float(X[2]) + 0.0],
+                        "at_infinity": True, "image": img["point"]}
+
+
+def render(scene: dict, camera=None, hidden_lines=None, hidden_style=None) -> dict:
+    """Run stages A, B, C and write the SVG with the scene's layer subset (contract §3, §5.0.7):
+    ``hidden_lines`` / ``hidden_style`` override ``scene["output"]`` (``None`` = the scene's values; the
+    scene itself is not rewritten)."""
     A = shadow_geometry(scene)
     B = project_scene(scene, A, camera=camera)
-    doc = compose(scene, B)
-    return {"geometry": doc, "svg": write_svg(doc, layers=scene["output"]["layers"])}
+    doc = compose(scene, B, hidden_lines=hidden_lines)
+    style = scene["output"].get("hidden_style", "dashed") if hidden_style is None else hidden_style
+    return {"geometry": doc, "svg": write_svg(doc, layers=scene["output"]["layers"], hidden_style=style)}

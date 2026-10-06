@@ -50,8 +50,9 @@ def test_render_basic_has_six_layers_in_order_and_finite_json(basic):
     assert "NaN" not in text and "Infinity" not in text
     assert not re.search(r"-0\.0(?![0-9])", text)  # no negative zero
     assert all(math.isfinite(x) for x in walk_numbers(doc))
+    # contract §5.0.3 (M4): hidden_lines and receivers are unconditional top-level keys
     assert set(doc) == {"canvas_mm", "camera", "points", "edges", "shadows", "form_shadow", "outlines",
-                        "construction", "horizon", "warnings"}
+                        "construction", "horizon", "warnings", "hidden_lines", "receivers"}
     # the crate casts a shadow and has unlit faces; the pillar (cylinder, M2) casts a conic shadow and
     # has a terminator
     assert [s["object"] for s in doc["shadows"]] == ["crate", "pillar"]

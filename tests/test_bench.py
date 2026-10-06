@@ -264,7 +264,8 @@ def test_cached_stage_a_documents_are_stable_and_serialisable():
                 assert type(p[key]) is list and all(type(v) is float for v in p[key])
                 assert all(not (v == 0.0 and math.copysign(1.0, v) < 0) for v in p[key])
     for e in doc1["edges"]:
-        assert set(e) == {"object", "from", "to", "silhouette", "back", "visibility", "segment"}
+        # contract §5.0.3 (M4): every edge carries runs (empty with hidden lines off)
+        assert set(e) == {"object", "from", "to", "silhouette", "back", "visibility", "segment", "runs"}
     # the documents are independent of each other where the camera matters
     e1 = next(e for e in doc1["edges"] if e["segment"] is not None)
     e1["segment"][0][0] += 1.0

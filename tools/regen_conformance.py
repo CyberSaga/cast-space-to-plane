@@ -24,6 +24,16 @@ and ``expected/`` is not touched.  It cannot be combined with ``--case``; with `
 prints the diff and writes nothing.  ``tests/test_conformance.py`` checks that the rules recorded
 by the last such entry equal ``rules.json``, so the comparator cannot change silently.
 
+``--strip-new-keys`` is the key-additivity check of contract §5.1.11 / §5.0.8 (M4, run before the v4
+regeneration): every selected case is rendered, the keys M4 adds to every document (``hidden_lines``,
+``receivers``, ``construction.per_receiver``, ``edges[].runs``, generator / terminator-segment
+``visibility`` + ``runs``, conic-entry ``visibility`` / ``runs`` / ``hidden_polylines``,
+``shadows[].polygon_edges``) are checked to carry their switch-off values and deleted, and the result is
+compared with the committed expected file by the spec §7.5 comparator (``tests/test_conformance.py``);
+it reports the cases whose stripped JSON is also byte-identical to the expected file.  Nothing is
+written; ``--reason`` is still required (it is the reason the v4 entry will record).  Exit 0 when every
+case passes with zero mismatches, 1 otherwise.
+
 Exit status: 0 on success; 2 for a command-line usage error (argparse: missing or empty
 ``--reason``, unknown option, ``--rules-only`` with ``--case``); 1 for an unknown ``--case`` name
 or a rendering error, and for ``--rules-only`` when ``rules.json`` is missing, is not a JSON
@@ -180,6 +190,90 @@ def rules_only(reason: str, dry_run: bool) -> int:
     return 0
 
 
+# --------------------------------------------------------------------------- M4: --strip-new-keys
+def _strip_keys(entry: dict, values: dict, where: str, problems: list) -> None:
+    for key, expected in values.items():
+        if key not in entry:
+            problems.append(f"{where}: missing {key}")
+            continue
+        value = entry.pop(key)
+        if value != expected:
+            problems.append(f"{where}.{key}: {value!r} is not the switch-off value {expected!r}")
+
+
+_CONIC_KEYS = {"visibility": "visible", "runs": [], "hidden_polylines": []}
+_STRAIGHT_KEYS = {"visibility": "visible", "runs": []}
+
+
+def strip_new_keys(doc: dict) -> tuple[dict, list[str]]:
+    """Delete, in place, exactly the keys M4 adds to a document with the switch-off values (contract
+    §5.1.11): ``hidden_lines``, ``receivers``, ``construction.per_receiver``, ``edges[].runs``,
+    ``outlines[].generators[]`` ``visibility`` / ``runs``, ``form_shadow[].terminator[]`` segment entries'
+    ``visibility`` / ``runs``, the conic entries' (``shadows[].conics``, ``outlines[].conics``, terminator
+    conics) ``visibility`` / ``runs`` / ``hidden_polylines`` and ``shadows[].polygon_edges``.  Returns
+    ``(doc, problems)``: ``problems`` lists every key that was missing or did not carry its switch-off
+    value (``hidden_lines`` false, ``receivers`` the single unbounded ground, ``per_receiver`` empty,
+    ``visibility`` "visible", empty lists)."""
+    problems: list[str] = []
+    if doc.pop("hidden_lines", None) is not False:
+        problems.append("hidden_lines: missing or not false")
+    receivers = doc.pop("receivers", None)
+    if not (isinstance(receivers, list) and len(receivers) == 1 and receivers[0].get("bounds") is None):
+        problems.append(f"receivers: {receivers!r} is not the single unbounded ground")
+    construction = doc.get("construction") or {}
+    if construction.pop("per_receiver", None) != {}:
+        problems.append("construction.per_receiver: missing or not {}")
+    for i, e in enumerate(doc.get("edges", [])):
+        _strip_keys(e, {"runs": []}, f"edges[{i}]", problems)
+        if e.get("visibility") != "visible":
+            problems.append(f"edges[{i}].visibility: {e.get('visibility')!r}")
+    for i, o in enumerate(doc.get("outlines", [])):
+        for j, g in enumerate(o.get("generators", [])):
+            _strip_keys(g, _STRAIGHT_KEYS, f"outlines[{i}].generators[{j}]", problems)
+        for j, c in enumerate(o.get("conics", [])):
+            _strip_keys(c, _CONIC_KEYS, f"outlines[{i}].conics[{j}]", problems)
+    for i, f in enumerate(doc.get("form_shadow", [])):
+        for j, t in enumerate(f.get("terminator", [])):
+            keys = _STRAIGHT_KEYS if "segment" in t else _CONIC_KEYS
+            _strip_keys(t, keys, f"form_shadow[{i}].terminator[{j}]", problems)
+    for i, sh in enumerate(doc.get("shadows", [])):
+        _strip_keys(sh, {"polygon_edges": []}, f"shadows[{i}]", problems)
+        for j, c in enumerate(sh.get("conics", [])):
+            _strip_keys(c, _CONIC_KEYS, f"shadows[{i}].conics[{j}]", problems)
+    return doc, problems
+
+
+def strip_new_keys_check(selected: list[str]) -> int:
+    """``--strip-new-keys``: render, strip, compare with the committed expected files (see the module
+    docstring).  Writes nothing."""
+    from tests.test_conformance import compare_documents   # the spec §7.5 comparator (one implementation)
+    failed, identical = [], []
+    for name in selected:
+        path = EXPECTED / f"{name}.json"
+        if not path.exists():
+            print(f"{name}: no expected file", file=sys.stderr)
+            failed.append(name)
+            continue
+        try:
+            doc = json.loads(render_case(name))
+        except Exception as exc:  # noqa: BLE001 - report the case
+            print(f"error: case {name!r} failed to render: {exc}", file=sys.stderr)
+            return 1
+        doc, problems = strip_new_keys(doc)
+        expected_text = path.read_text(encoding="utf-8")
+        mismatches = problems + compare_documents(json.loads(expected_text), doc, name)
+        if mismatches:
+            failed.append(name)
+            print(f"{name}: {len(mismatches)} mismatch(es)", file=sys.stderr)
+            for m in mismatches[:10]:
+                print(f"  {m}", file=sys.stderr)
+        elif dumps(doc) + "\n" == expected_text:
+            identical.append(name)
+    print(f"strip-new-keys: {len(selected) - len(failed)} of {len(selected)} case(s) with zero mismatches; "
+          f"{len(identical)} byte-identical after stripping")
+    return 1 if failed else 0
+
+
 def main(argv=None) -> int:
     parser = argparse.ArgumentParser(description="Regenerate tests/conformance/expected/*.json (spec §7.5).")
     parser.add_argument("--reason", required=True, help="why the expected files change (recorded in CHANGELOG.md)")
@@ -189,10 +283,15 @@ def main(argv=None) -> int:
     parser.add_argument("--rules-only", action="store_true",
                         help="record a change of tests/conformance/rules.json (comparator amendment): no rendering, "
                              "no expected file touched, a new version entry with the rules diff")
+    parser.add_argument("--strip-new-keys", action="store_true",
+                        help="M4 key-additivity check: render, delete the M4 switch-off keys, compare with the "
+                             "committed expected files (zero mismatches required); writes nothing")
     args = parser.parse_args(argv)
     reason = args.reason.strip()
     if not reason:
         parser.error("--reason must not be empty")
+    if args.rules_only and args.strip_new_keys:
+        parser.error("--strip-new-keys cannot be combined with --rules-only")
     if args.rules_only:
         if args.case:
             parser.error("--rules-only cannot be combined with --case")
@@ -201,6 +300,13 @@ def main(argv=None) -> int:
     if not available:
         print(f"error: no case files in {CASES}", file=sys.stderr)
         return 1
+    if args.strip_new_keys:
+        names = available if not args.case else [c for c in available if c in set(args.case)]
+        missing = [c for c in (args.case or []) if c not in available]
+        if missing:
+            print(f"error: unknown case(s): {', '.join(missing)}", file=sys.stderr)
+            return 1
+        return strip_new_keys_check(names)
     if args.case:
         missing = [c for c in args.case if c not in available]
         if missing:
