@@ -363,49 +363,44 @@ def shadow_geometry(scene: dict) -> dict:
     _receiver_lit_casts(receivers, ground_unlit)
     warnings = [w for rcv in receivers for lt in rcv["lights"] for w in lt["warnings"]]
     light_index = {lt["id"]: k for k, lt in enumerate(scene["lights"])}
-    buckets: dict = {}       # (receiver index, light index) -> records in caster order
+    shadows = []
     for obj in objects:
         obj["lights"] = {}
         obj["clipped"] = {}
-        if obj["analytic"] is not None:
-            if not default["bounded"]:
-                # curved primitives: silhouette / terminator / shadow conics from castplane.curved (§5.6)
-                for rec in _curved.stage_a_object(obj, lights, default, tol, warnings):
-                    buckets.setdefault((0, light_index[rec["light"]]), []).append(rec)
-            continue
-        if not default["bounded"]:
-            below = (to_homogeneous(obj["mesh"]["vertices"]) @ pi) < -tol
-            obj["ground_mesh"] = None
-            if bool(np.any(below)):
-                warnings.append(make_warning("OBJECT_BELOW_RECEIVER", [obj["id"]]))
-                try:
-                    obj["ground_mesh"] = clip_mesh_to_plane(obj["mesh"], pi, tol)
-                except ValueError:  # degenerate contact: fall back to clipping the silhouette loops
-                    obj["ground_mesh"] = None
-            obj["clipped"][default["id"]] = obj["ground_mesh"]
-        for rcv in receivers:
-            if rcv["bounded"]:
-                obj["clipped"][rcv["id"]] = _clip_object(obj, rcv, tol)
         if default["bounded"]:
-            obj["ground_mesh"] = obj["clipped"][default["id"]]
+            _bounded_default_object(obj, receivers, lights, tol, warnings)
+            continue
+        if obj["analytic"] is not None:
+            # curved primitives: silhouette / terminator / shadow conics from castplane.curved (§5.6)
+            shadows.extend(_curved.stage_a_object(obj, lights, default, tol, warnings))
+            continue
+        below = (to_homogeneous(obj["mesh"]["vertices"]) @ pi) < -tol
+        obj["ground_mesh"] = None
+        if bool(np.any(below)):
+            warnings.append(make_warning("OBJECT_BELOW_RECEIVER", [obj["id"]]))
+            try:
+                obj["ground_mesh"] = clip_mesh_to_plane(obj["mesh"], pi, tol)
+            except ValueError:  # degenerate contact: fall back to clipping the silhouette loops
+                obj["ground_mesh"] = None
+        _clip_object_to_receivers(obj, receivers, tol)
         for lt in lights:
             ol, w = _object_light_data(obj, lt)
             warnings.extend(w)
             obj["lights"][lt["id"]] = ol
-            if default["bounded"]:
-                continue  # the records of a bounded default receiver come from _shadow_records_for_receiver
-            bucket = buckets.setdefault((0, light_index[lt["id"]]), [])
             if not lt["active"] or ol["light_inside"]:
-                bucket.append({"light": lt["id"], "receiver": receiver["id"], "object": obj["id"],
-                               "vertex_ids": np.zeros(0, dtype=np.int64), "keep": np.zeros(0, dtype=bool),
-                               "P_world": np.zeros((0, 3)), "S_world": np.zeros((0, 3)),
-                               "Q_world": np.zeros((0, 3)), "w_S": np.zeros(0),
-                               "shadow_names": [], "foot_names": [], "vertex_names": [],
-                               "ground_points": [], "loops": [], "unbounded": False})
+                shadows.append({"light": lt["id"], "receiver": receiver["id"], "object": obj["id"],
+                                "vertex_ids": np.zeros(0, dtype=np.int64), "keep": np.zeros(0, dtype=bool),
+                                "P_world": np.zeros((0, 3)), "S_world": np.zeros((0, 3)),
+                                "Q_world": np.zeros((0, 3)), "w_S": np.zeros(0),
+                                "shadow_names": [], "foot_names": [], "vertex_names": [],
+                                "ground_points": [], "loops": [], "unbounded": False})
                 continue
             rec, w = _shadow_record(obj, ol, lt, pi, tol, receiver["id"])
             warnings.extend(w)
-            bucket.append(rec)
+            shadows.append(rec)
+    buckets: dict = {}       # (receiver index, light index) -> records in caster order (§5.1.3.1)
+    for rec in shadows:      # the unbounded default receiver's records, object-major above: regroup by light
+        buckets.setdefault((0, light_index[rec["light"]]), []).append(rec)
     for rcv in receivers:
         for li, recs in _shadow_records_for_receiver(rcv, objects, receivers, tol, warnings).items():
             buckets.setdefault((rcv["index"], li), []).extend(recs)
@@ -511,6 +506,31 @@ def _clip_object(obj: dict, rcv: dict, tol: float):
         return clip_mesh_to_plane(obj["mesh"], rcv["pi"], tol)
     except ValueError:
         return None
+
+
+def _clip_object_to_receivers(obj: dict, receivers: list, tol: float) -> None:
+    """Stage A, unbounded default receiver: ``obj["clipped"]`` for the ground (``obj["ground_mesh"]``) and
+    for every bounded receiver (contract §5.1.2)."""
+    obj["clipped"][receivers[0]["id"]] = obj["ground_mesh"]
+    for rcv in receivers:
+        if rcv["bounded"]:
+            obj["clipped"][rcv["id"]] = _clip_object(obj, rcv, tol)
+
+
+def _bounded_default_object(obj: dict, receivers: list, lights: list, tol: float, warnings: list) -> None:
+    """Stage A, bounded default receiver (contract §5.1.2): clipped meshes and per-light data of a polyhedral
+    object; its shadow records come from ``_shadow_records_for_receiver`` like any plate's (curved objects:
+    ``_shadow_records_for_receiver`` as well)."""
+    if obj["analytic"] is not None:
+        return
+    for rcv in receivers:
+        if rcv["bounded"]:
+            obj["clipped"][rcv["id"]] = _clip_object(obj, rcv, tol)
+    obj["ground_mesh"] = obj["clipped"][receivers[0]["id"]]
+    for lt in lights:
+        ol, w = _object_light_data(obj, lt)
+        warnings.extend(w)
+        obj["lights"][lt["id"]] = ol
 
 
 def _empty_shadow_record(lid: str, rid: str, oid: str) -> dict:
@@ -865,11 +885,7 @@ def _ray_kinds(light: dict, P_uv, S_uv, Q_uv) -> list:
 def _ray_keep(rec: dict) -> np.ndarray:
     """Rows of a shadow record whose vertices may get construction rays: ``ray_keep`` (bounded receivers,
     contract §5.1.3.3) or ``keep``."""
-    keep = np.asarray(rec["keep"], dtype=bool)
-    rk = rec.get("ray_keep")
-    if rk is None or np.asarray(rk).shape != keep.shape:
-        return keep
-    return np.asarray(rk, dtype=bool)
+    return np.asarray(rec.get("ray_keep", rec["keep"]), dtype=bool)
 
 
 def _project_shadows(records: list, cam: dict, tol: float, by_id: dict) -> tuple[list, list]:
@@ -1450,10 +1466,14 @@ def compose(scene: dict, B: dict, hidden_lines=None) -> dict:
 
 def _classify_hidden(doc: dict, B: dict) -> None:
     """Contract §5.1.6.5: the sampled hidden-line removal of stage C (``castplane.hidden``, the M4
-    H-track).  Until that module exists the document keeps the switch-off values."""
+    H-track).  Until that module exists the document keeps the switch-off values; any other import error
+    (one raised inside ``castplane.hidden``) propagates.  The H-track replaces this bridge by a plain import."""
+    import importlib
     try:
-        from . import hidden
-    except ImportError:
+        hidden = importlib.import_module(f"{__package__}.hidden")
+    except ModuleNotFoundError as exc:
+        if exc.name != f"{__package__}.hidden":
+            raise
         return
     hidden.classify_document(doc, B["A"], B)
 

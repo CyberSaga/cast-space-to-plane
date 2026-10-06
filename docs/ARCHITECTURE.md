@@ -1350,6 +1350,21 @@ worktree and the merge rule are in `docs/PLAN-v2.md`.
   `example_three_point`) have object ids out of sorted order: following the wording would break the byte-identity gate
   of §5.0.6 / §5.1.8. The writer keeps the v2 rule (sorted by id; a receiver's group sorts with the objects), which is
   what the golden hashes require. `form_shadow` entries keep document order (objects, then plates), as in v2.
+- **[decision, implementation] (M4 review) `cast_shadow.<light>.<object>.conics` ids with several receivers.** §5.0.6 /
+  §2.10 name the sub-group by (light, object) only, but M4 has one shadow record per (light, receiver, object): a curved
+  object casting conics on two receivers (`fold_curved_cylinder`) wrote two `<g>` with the same id, which XML forbids.
+  The record on `receivers[0]` (and every record of a v2 document, which has no `receivers` block) keeps the v2 id
+  `cast_shadow.<light>.<object>.conics` (golden hashes unchanged); a record on any other receiver `r` writes
+  `cast_shadow.<light>.<object>.<r>.conics`. The H-track `cast_shadow.<light>.<object>.outline` groups use the same
+  rule (`svg._shadow_subgroup_id(record, receivers[0] id, "outline")`); the TypeScript port must follow it.
+- **[decision, implementation] (M4 review) Geometry of the `concave_prism_on_plate` case (step 10).** "Expected
+  polygon = the whole plate" holds when the plate lies beyond the closed arm of the U with the lamp in the notch below
+  the arms' tops (U `[[−1,−1],[1,−1],[1,1],[0.5,1],[0.5,−0.5],[−0.5,−0.5],[−0.5,1],[−1,1]]`, height 1, at the origin;
+  lamp `(0, 0.2, 0.7)`; plate `[−3,3]×[−4.5,−2]`: area 15 = the plate, the anchor rule fires). It does **not** hold for a
+  plate under the prism: the notch floor under the lamp and the wedge through the opening are lit (U ±1.5 with the same
+  notch at `(0,4,0)`, lamp `(0, 4.5, 0.5)`, plate `[−3,3]×[1,7]`: area 36 − 2 − 2.625 = 31.375). The conformance case
+  uses the first geometry; both agree with `raycast.occluded_on_receiver` at IoU ≥ 0.99
+  (`test_concave_prism_on_plate_geometries_against_the_raycast`).
 
 ### 5.2 M5 — mesh import (spec §9 rows 網格匯入 / 匯入格式, spec §10 M5, spec §11.3)
 

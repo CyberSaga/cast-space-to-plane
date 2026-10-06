@@ -43,17 +43,36 @@ def test_switch_off_svg_and_stripped_json_are_byte_identical_to_v2(name):
     from castplane.output.geometry_json import dumps
     scene = castplane.load_scene(CASES / f"{name}.json")
     result = castplane.render(scene)
-    assert hashlib.sha256(result["svg"].encode("utf-8")).hexdigest() == GOLDEN["sha256"][name]
+    recorded_build = GOLDEN["build"].endswith(f"numpy {__import__('numpy').__version__}")
+    if recorded_build:
+        assert hashlib.sha256(result["svg"].encode("utf-8")).hexdigest() == GOLDEN["sha256"][name]
     doc = json.loads(dumps(result["geometry"]))
     assert doc["hidden_lines"] is False and len(doc["receivers"]) == 1
     stripped, problems = _regen().strip_new_keys(doc)
     assert problems == []
     expected_text = (ROOT / "tests" / "conformance" / "expected" / f"{name}.json").read_text(encoding="utf-8")
-    if GOLDEN["build"].endswith(f"numpy {__import__('numpy').__version__}"):
+    if recorded_build:
         assert dumps(stripped) + "\n" == expected_text
-    else:   # another libm: the spec §7.5 tolerances (contract §4)
+    else:   # another libm: the spec §7.5 tolerances (contract §4) and the SVG structure of the v2 document
         from tests.test_conformance import compare_documents
         assert compare_documents(json.loads(expected_text), stripped, name) == []
+        from castplane.output.svg import write_svg
+        v2_svg = write_svg(json.loads(expected_text), layers=scene["output"]["layers"])
+        assert svg_structure(result["svg"]) == svg_structure(v2_svg)
+
+
+def svg_structure(svg: str) -> list:
+    """The element sequence of an SVG with its ids and every attribute except the coordinates (numbers that
+    may differ by an ulp on another libm): tags, ids, styles and group nesting."""
+    import re
+    return [re.sub(r"-?\d+(\.\d+)?(e-?\d+)?", "#", m) for m in re.findall(r"</?[a-z]+[^>]*>", svg)]
+
+
+def test_svg_structure_ignores_numbers_only():
+    a = '<g id="x.v1"><path d="M1.25 2 L3 4Z" fill-opacity="0.3"/></g>'
+    assert svg_structure(a) == svg_structure(a.replace("1.25", "1.2500000001").replace("0.3", "0.3"))
+    assert svg_structure(a) != svg_structure(a.replace('id="x.v1"', 'id="y.v1"'))
+    assert svg_structure(a) != svg_structure(a.replace("<path", "<polyline"))
 
 
 def test_strip_new_keys_mode_of_the_regen_tool():
@@ -890,3 +909,145 @@ def test_row6_no_nan_or_inf(label, make):
     assert all(math.isfinite(x) for x in _numbers(result["geometry"]))
     low = result["svg"].lower().replace("infinity", "")
     assert "nan" not in low and "inf" not in low
+
+
+# --------------------------------------------------------------------------- review fixes: unique SVG ids
+def curved_on_wall_scene() -> dict:
+    """A sphere, a cylinder and a cone in front of the wall: each casts conics on the ground and on the wall."""
+    scene = wall_and_ground_scene()
+    scene["objects"] = [
+        {"id": "ball", "type": "sphere", "radius": 0.35, "transform": {"position": [-1.2, 5.0, 0.35]}},
+        {"id": "pillar", "type": "cylinder", "radius": 0.3, "height": 1.2, "transform": {"position": [0.0, 5.1, 0]}},
+        {"id": "spire", "type": "cone", "radius": 0.35, "height": 1.0, "transform": {"position": [1.2, 5.0, 0]}},
+    ]
+    return scene
+
+
+@pytest.mark.parametrize("label, make", [("wall_and_ground", wall_and_ground_scene),
+                                         ("fold_curved_cylinder", fold_curved_cylinder_scene),
+                                         ("curved_on_wall", curved_on_wall_scene)])
+def test_svg_ids_are_unique_with_several_receivers(label, make):
+    """XML ids are unique (§2.10 'exact ids'): an object casting conics on several receivers gets one
+    ``cast_shadow.<light>.<object>.conics`` group on receivers[0] and ``.<receiver>.conics`` on every other one."""
+    import collections
+    import re
+    result = render(make())
+    ids = re.findall(r'\sid="([^"]*)"', result["svg"])
+    dup = [k for k, n in collections.Counter(ids).items() if n > 1]
+    assert dup == [], (label, dup)
+    receivers = {s["receiver"] for s in result["geometry"]["shadows"] if s.get("conics")}
+    if label != "wall_and_ground":
+        assert receivers == {"ground", "wall"}
+        assert "cast_shadow.lamp.pillar.conics" in ids and "cast_shadow.lamp.pillar.wall.conics" in ids
+
+
+def test_hidden_bridge_only_tolerates_the_missing_module(monkeypatch):
+    """``_classify_hidden`` returns the switch-off document only when ``castplane.hidden`` itself does not
+    exist; an import error raised inside that module propagates instead of being swallowed."""
+    import importlib
+    import importlib.util
+    from castplane import pipeline
+
+    doc = {"hidden_lines": True}
+    real_import = importlib.import_module
+    if importlib.util.find_spec("castplane.hidden") is None:
+        pipeline._classify_hidden(doc, {"A": {}})            # module absent: a no-op
+        assert doc == {"hidden_lines": True}
+
+    def broken(name, *a, **k):
+        if name == "castplane.hidden":
+            raise ModuleNotFoundError("No module named 'castplane._no_such_helper'", name="castplane._no_such_helper")
+        return real_import(name, *a, **k)
+
+    monkeypatch.setattr(importlib, "import_module", broken)
+    with pytest.raises(ModuleNotFoundError):
+        pipeline._classify_hidden(doc, {"A": {}})
+
+    def bad_symbol(name, *a, **k):
+        if name == "castplane.hidden":
+            raise ImportError("cannot import name 'x' from 'castplane.geometry'")
+        return real_import(name, *a, **k)
+
+    monkeypatch.setattr(importlib, "import_module", bad_symbol)
+    with pytest.raises(ImportError):
+        pipeline._classify_hidden(doc, {"A": {}})
+
+
+@pytest.mark.parametrize("name", ["example_basic", "example_curved_demo", "random_seed3_3objects"])
+def test_byte_identity_gate_on_another_numpy_build(name, monkeypatch):
+    """The other-build branch of the byte-identity gate (§7.5 tolerances + SVG structure, no hash) passes,
+    and the writer gives a v2 document (no ``receivers`` block) its v2 sub-group ids."""
+    monkeypatch.setitem(GOLDEN, "build", "Python 0.0, numpy 0.0.0")
+    test_switch_off_svg_and_stripped_json_are_byte_identical_to_v2(name)
+
+
+@pytest.mark.parametrize("label, make", [("wall_and_ground", wall_and_ground_scene),
+                                         ("fold_curved_cylinder", fold_curved_cylinder_scene),
+                                         ("curved_on_wall", curved_on_wall_scene)])
+def test_labels_follow_the_single_is_labelled_rule(label, make):
+    """``_layer_labels`` (with its substring prefilter) writes exactly the names ``svg._is_labelled`` accepts
+    (contract §5.1.7): one labelling rule."""
+    import collections
+    import re
+    from castplane.output.svg import _is_labelled
+    result = render(make())
+    svg = result["svg"]
+    layer = svg[svg.index('<g id="labels"'):]
+    written = collections.Counter(re.findall(r'<text [^>]*?(?<!bold")>([^<]*)</text>', layer))
+    expected = collections.Counter()
+    for name, p in result["geometry"]["points"].items():
+        oid, _dot, rest = name.partition(".")
+        if p["image"] is None or not rest:
+            continue
+        if oid in ("L", "F"):
+            expected[name] += 1
+        elif _is_labelled(name.split(".")):
+            expected[rest] += 1
+    assert written == expected, label
+
+
+def _concave_prism_scene(plate_bounds, position, polygon, lamp) -> dict:
+    scene = wall_and_ground_scene()
+    scene["objects"] = [{"id": "u", "type": "prism", "height": 1.0, "polygon": polygon,
+                         "transform": {"position": position}}]
+    scene["lights"] = [{"id": "lamp", "type": "point", "position": lamp}]
+    scene["receivers"] = [{"id": "plate", "type": "plane", "normal": [0, 0, 1], "offset": 0, "bounds": plate_bounds}]
+    scene["camera"] = {"position": [0, 4, 4], "target": [0, -3, 0], "focal_length_mm": 35, "frame_mm": [36, 24]}
+    return scene
+
+
+def test_concave_prism_on_plate_geometries_against_the_raycast():
+    """§5.1.11 ``concave_prism_on_plate`` (review): with the plate beyond the closed arm of the U the expected
+    region is the whole plate (the contract literal; the ray cast agrees); with a plate under the prism the
+    notch floor and the wedge through the opening are lit, so the expected region is the plate minus them
+    (area 36 - 2 - 2.625 = 31.375), not the whole plate. Both agree with the ray cast at IoU >= 0.99."""
+    u_small = [[-1, -1], [1, -1], [1, 1], [0.5, 1], [0.5, -0.5], [-0.5, -0.5], [-0.5, 1], [-1, 1]]
+    beyond = _concave_prism_scene([[-3, -4.5, 0], [3, -4.5, 0], [3, -2, 0], [-3, -2, 0]], [0, 0, 0], u_small,
+                                  [0, 0.2, 0.7])
+    u_big = [[-1.5, -1.5], [1.5, -1.5], [1.5, 1.5], [0.5, 1.5], [0.5, -0.5], [-0.5, -0.5], [-0.5, 1.5], [-1.5, 1.5]]
+    under = _concave_prism_scene([[-3, 1, 0], [3, 1, 0], [3, 7, 0], [-3, 7, 0]], [0, 4, 0], u_big, [0, 4.5, 0.5])
+    for label, scene, area in (("beyond the arm", beyond, 15.0), ("under the prism", under, 31.375)):
+        validated = castplane.load_scene(scene)
+        doc = castplane.render(validated)["geometry"]
+        sh = shadow_of(doc, "plate", "u")
+        got = sum(0.5 * abs(_shoelace(np.array([world(doc, n)[:2] for n in loop]))) for loop in sh["loops"])
+        assert abs(got - area) <= 1e-9, (label, got)
+        mask_doc, mask_ref = plate_masks(validated, doc, "plate")
+        assert raster.iou(mask_doc, mask_ref) >= 0.99, (label, raster.iou(mask_doc, mask_ref))
+
+
+def test_stages_cli_writes_a_once_and_receiver_frames_as_lists(tmp_path):
+    """``castplane stages`` (contract §5.1.7): B is written without its ``A`` (``B["A"]`` is stage A itself),
+    ``A["receivers"]`` frames and bounds functionals are serialised as lists."""
+    from castplane.cli import EXIT_OK, main
+    scene_path = tmp_path / "wall.json"
+    scene_path.write_text(json.dumps(wall_and_ground_scene()), encoding="utf-8")
+    out = tmp_path / "stages.json"
+    assert main(["stages", str(scene_path), "-o", str(out), "--quiet"]) == EXIT_OK
+    data = json.loads(out.read_text(encoding="utf-8"))
+    assert "A" not in data["B"]
+    ground, wall = data["A"]["receivers"]
+    assert ground["frame"] is None and ground["psi"] is None
+    assert isinstance(wall["frame"], list) and len(wall["frame"]) == 2
+    assert all(isinstance(e, list) and len(e) == 3 for e in wall["frame"])
+    assert isinstance(wall["psi"], list) and len(wall["psi"]) == 4 and all(len(row) == 4 for row in wall["psi"])

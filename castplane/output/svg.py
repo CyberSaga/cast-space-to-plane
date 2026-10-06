@@ -455,6 +455,7 @@ def _layer_cast_shadow(doc: dict, cv: _Canvas) -> list:
     points = doc.get("points", {})
     shadows = doc.get("shadows", [])
     loop_sets = []
+    first_receiver = doc["receivers"][0]["id"] if doc.get("receivers") else None   # None: a v2 document
     for sh in shadows:
         polygons = sh.get("polygons")
         if polygons is None:  # documents without drawables: fall back to the named outline points
@@ -474,10 +475,20 @@ def _layer_cast_shadow(doc: dict, cv: _Canvas) -> list:
         for entry in sh.get("conics", []) or []:
             conics.extend(_drawables(entry, cv))
         if conics:  # the exact conic outline on top of the filled polygon, stroke only (§2.6)
-            items.append(_group(f"cast_shadow.{sh.get('light', '')}.{sh.get('object', '')}.conics",
+            items.append(_group(_shadow_subgroup_id(sh, first_receiver, "conics"),
                                 STYLE["cast_shadow_conics"], conics))
         per_light.setdefault(sh.get("light", ""), []).extend(items)
     return [_group(f"cast_shadow.{light}", "", items) for light, items in sorted(per_light.items())]
+
+
+def _shadow_subgroup_id(sh: dict, first_receiver, suffix: str) -> str:
+    """``cast_shadow.<light>.<object>.<suffix>`` for a record on ``receivers[0]`` and for every record of a v2
+    document (no ``receivers`` block: one receiver; the v2 id, golden hashes),
+    ``cast_shadow.<light>.<object>.<receiver>.<suffix>`` for a record on any other receiver, so that an object
+    casting on several receivers keeps unique ids (M4 implementation note, §5.1)."""
+    rid = sh.get("receiver")
+    infix = "" if first_receiver is None or rid is None or rid == first_receiver else f".{rid}"
+    return f"cast_shadow.{sh.get('light', '')}.{sh.get('object', '')}{infix}.{suffix}"
 
 
 def _layer_construction(doc: dict, cv: _Canvas) -> list:
@@ -527,10 +538,6 @@ def _is_labelled(parts: list) -> bool:
     return True
 
 
-def _SHADOW_OR_FOOT(name: str) -> bool:
-    return ".shadow" in name or ".foot" in name
-
-
 def _has_shadow_or_foot_part(name: str) -> bool:
     """Some part after the first of the dotted name is ``shadow`` or ``foot`` (contract §5.0.4)."""
     parts = name.split(".")[1:]
@@ -545,7 +552,8 @@ def _layer_labels(doc: dict, cv: _Canvas) -> list:
     # contract §5.0.4: a name is unlabelled iff a part after the first is "shadow" or "foot" (the receiver
     # suffix may follow "foot"); the C-level substring pre-filter only lets such names through to the
     # exact part test below
-    for name in sorted(n for n in points if not (_SHADOW_OR_FOOT(n) and _has_shadow_or_foot_part(n))):
+    for name in sorted(n for n in points
+                       if not ((".shadow" in n or ".foot" in n) and _has_shadow_or_foot_part(n))):
         p = points[name]
         img = p["image"]
         if img is None:
