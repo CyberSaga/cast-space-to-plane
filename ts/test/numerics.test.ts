@@ -61,7 +61,7 @@ test("% rule (contract §5.4.4 (4b)): every % outside pyfloat.ts has a provably 
         const left = line.slice(0, m.index).trimEnd();
         let ok = false;
         const paren = /\(([^()]*)\)$/.exec(left);
-        if (paren) ok = /^\s*(\w+|start \+ k)\s*\+\s*\d+\s*$/.test(paren[1] as string);
+        if (paren) ok = /^\s*(?:\w+\s*\+\s*\d+|start \+ k)\s*$/.test(paren[1] as string);
         else ok = /(^|[^\w.])(k|s|idx)$/.test(left);
         if (!ok && /\/\/ pyimod-free: \S/.test(raw[i] as string)) ok = true;
         if (!ok) offenders.push(`${file}:${i + 1}: ${(raw[i] as string).trim()}`);
