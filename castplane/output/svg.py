@@ -25,6 +25,7 @@ STYLE = {
     "form_shadow": 'fill="#335" fill-opacity="0.18" stroke="none"',
     "terminator": 'fill="none" stroke="#335" stroke-width="0.2"',
     "cast_shadow": 'fill="#000" fill-opacity="0.3" stroke="#000" stroke-width="0.25" fill-rule="nonzero"',
+    "cast_shadow_conics": 'fill="none"',
     "construction": 'stroke-width="0.15" fill="none"',
     "ray_LP": 'stroke="#d33"',
     "ray_FQ": 'stroke="#36c"',
@@ -82,6 +83,27 @@ class _Canvas:
         sep = " " if attrs else ""
         return f'<polyline points="{coords}"{sep}{attrs}/>'
 
+    def ellipse(self, e: dict, attrs: str = "") -> str:
+        """``<ellipse>`` of a conic drawable ``{centre, rx, ry, rotation_deg}`` given in the ``v``-up
+        frame: the rotation angle changes sign in SVG's ``y``-down frame (contract §2.6)."""
+        cx, cy = self.xy(e["centre"])
+        sep = " " if attrs else ""
+        rot = -float(e["rotation_deg"])
+        transform = f' transform="rotate({_f(rot)} {cx} {cy})"' if abs(rot) > 1e-12 else ""
+        return f'<ellipse cx="{cx}" cy="{cy}" rx="{_f(e["rx"])}" ry="{_f(e["ry"])}"{transform}{sep}{attrs}/>'
+
+    def arc(self, a: dict, attrs: str = "") -> str:
+        """``<path d="M … A rx ry rot large sweep …">`` of an ellipse arc drawable
+        ``{start, end, rx, ry, rotation_deg, large_arc, sweep}``; ``sweep`` is given in the ``v``-up
+        frame and is flipped for SVG's ``y``-down frame, the rotation changes sign (contract §2.6)."""
+        x1, y1 = self.xy(a["start"])
+        x2, y2 = self.xy(a["end"])
+        sweep = 0 if int(a["sweep"]) else 1
+        d = (f"M {x1} {y1} A {_f(a['rx'])} {_f(a['ry'])} {_f(-float(a['rotation_deg']))} "
+             f"{int(a['large_arc'])} {sweep} {x2} {y2}")
+        sep = " " if attrs else ""
+        return f'<path d="{d}"{sep}{attrs}/>'
+
     def diamond(self, c, r: float, attrs: str) -> str:
         pts = [(c[0] + r, c[1]), (c[0], c[1] + r), (c[0] - r, c[1]), (c[0], c[1] - r)]
         return self.polygon(pts, attrs)
@@ -123,33 +145,43 @@ def _layer_horizon(doc: dict, cv: _Canvas) -> list:
 
 
 def _layer_objects(doc: dict, cv: _Canvas) -> list:
+    """Edges (front solid / back dashed) and, for curved objects, the outline conics of ``doc["outlines"]``
+    (cap arcs split at the outline generators, far arcs dashed; contract §2.10)."""
     per_object = {}
     for e in doc.get("edges", []):
         if e.get("segment") is None:
             continue
-        per_object.setdefault(e["object"], ([], []))[1 if e.get("back") else 0].append(e["segment"])
+        per_object.setdefault(e["object"], ([], []))[1 if e.get("back") else 0].append(cv.line(*e["segment"]))
+    for entry in doc.get("outlines", []):
+        front, back = per_object.setdefault(entry["object"], ([], []))
+        for g in entry.get("generators", []) or []:
+            if g.get("segment") is not None:
+                (back if g.get("back") else front).append(cv.line(*g["segment"]))
+        for c in entry.get("conics", []) or []:
+            (back if c.get("back") else front).extend(_drawables(c, cv))
     body = []
     for oid in sorted(per_object):
         front, back = per_object[oid]
         sub = []
         if front:
-            sub.append(_group(f"objects.{oid}.front", STYLE["objects"], [cv.line(s[0], s[1]) for s in front]))
+            sub.append(_group(f"objects.{oid}.front", STYLE["objects"], front))
         if back:
-            sub.append(_group(f"objects.{oid}.back", STYLE["objects_back"], [cv.line(s[0], s[1]) for s in back]))
+            sub.append(_group(f"objects.{oid}.back", STYLE["objects_back"], back))
         body.append(_group(f"objects.{oid}", "", sub))
-    for entry in doc.get("outlines", []):  # curved outlines (M2): pre-sampled polylines / ellipse paths
-        body.extend(_drawables(entry, cv))
     return body
 
 
 def _drawables(entry: dict, cv: _Canvas) -> list:
-    """Generic drawables used by later milestones: ``polylines`` and ``paths`` already in image mm."""
+    """Drawables of a conic / terminator entry, already in canvas mm (contract §2.6): sampled
+    ``polylines``, elliptical ``arcs`` (``<path … A …>``) and whole ``ellipses``."""
     out = []
     for pl in entry.get("polylines", []) or []:
         if len(pl) >= 2:
             out.append(cv.polyline(pl))
-    for d in entry.get("paths", []) or []:
-        out.append(f'<path d="{_attr(d)}"/>')
+    for a in entry.get("arcs", []) or []:
+        out.append(cv.arc(a))
+    for e in entry.get("ellipses", []) or []:
+        out.append(cv.ellipse(e))
     return out
 
 
@@ -170,7 +202,7 @@ def _layer_form_shadow(doc: dict, cv: _Canvas) -> list:
                     sub.append(cv.polygon(pts))
         term = []
         for t in entry.get("terminator", []) or []:
-            if "segment" in t:
+            if "segment" in t and "polylines" not in t:  # no drawable: fall back to the named points' images
                 a, b = (points.get(n, {}).get("image") for n in t["segment"])
                 if a is not None and b is not None:
                     term.append(cv.line(a, b))
@@ -199,8 +231,12 @@ def _layer_cast_shadow(doc: dict, cv: _Canvas) -> list:
         loops = [poly for poly in polygons if len(poly) >= 3]  # clipped drawable polygons in image mm (§2.5)
         if loops:
             items.append(cv.path(loops))
+        conics = []
         for entry in sh.get("conics", []) or []:
-            items.extend(_drawables(entry, cv))
+            conics.extend(_drawables(entry, cv))
+        if conics:  # the exact conic outline on top of the filled polygon, stroke only (§2.6)
+            items.append(_group(f"cast_shadow.{sh.get('light', '')}.{sh.get('object', '')}.conics",
+                                STYLE["cast_shadow_conics"], conics))
         per_light.setdefault(sh.get("light", ""), []).extend(items)
     return [_group(f"cast_shadow.{light}", "", items) for light, items in sorted(per_light.items())]
 
@@ -228,6 +264,20 @@ def _layer_construction(doc: dict, cv: _Canvas) -> list:
     return body
 
 
+def _is_labelled(parts: list) -> bool:
+    """Vertex ids (``v<k>``) and curved construction points (``c``, ``sil.<k>``, ``g<k>.base`` / ``.top``,
+    ``apex``; contract §2.7) get labels; shadows, feet, ground points (``s<k>``) and camera outline
+    generator endpoints (``og<k>``) do not."""
+    if len(parts) < 2 or "shadow" in parts or parts[-1] == "foot":
+        return False
+    head = parts[1]
+    if head.startswith("s") and head[1:].isdigit():
+        return False
+    if head.startswith("og"):
+        return False
+    return True
+
+
 def _layer_labels(doc: dict, cv: _Canvas) -> list:
     body = []
     points = doc.get("points", {})
@@ -239,14 +289,13 @@ def _layer_labels(doc: dict, cv: _Canvas) -> list:
             continue
         parts = name.split(".")
         oid = parts[0]
-        label = parts[-1] if len(parts) > 1 else name
-        if len(parts) == 2 and label.startswith("v") and label[1:].isdigit():
-            body.append(cv.text(img, label))
+        if len(parts) == 2 and oid in ("L", "F"):
+            body.append(cv.text(img, name, dx=1.4, dy=2.4))  # below the L'/F' marker text of the construction layer
+        elif _is_labelled(parts):
+            body.append(cv.text(img, ".".join(parts[1:])))
             z = p.get("world", [0.0, 0.0, 0.0])[2]
             if oid not in top or z > top[oid][0]:
                 top[oid] = (z, img)
-        elif len(parts) == 2 and oid in ("L", "F"):
-            body.append(cv.text(img, name, dx=1.4, dy=2.4))  # below the L'/F' marker text of the construction layer
     for oid in sorted(top):
         z, img = top[oid]
         body.append(cv.text(img, oid, 'font-weight="bold"', dx=0.8, dy=-3.2))

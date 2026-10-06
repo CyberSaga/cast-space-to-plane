@@ -11,7 +11,7 @@ the solid iff it crosses its boundary surface (the light is assumed outside ever
 object, the segment's far end is then outside; its near end may lie inside a buried
 part).
 
-All tests are vectorised over the sample grid with numpy.
+All tests are vectorised over the sample grid with numpy (in chunks of ``CHUNK`` rays).
 """
 
 from __future__ import annotations
@@ -248,22 +248,29 @@ def rays_to_light(light: dict, origins: np.ndarray) -> tuple[np.ndarray, np.ndar
     raise ValueError("unknown light type %r" % (light["type"],))
 
 
-def occluded(scene: dict, light: dict, origins: np.ndarray) -> np.ndarray:
+#: Origins are processed in chunks of this many rays so that the vectorised hit tests keep
+#: their temporaries small (a 1024 x 1024 grid is 1M rays).
+CHUNK = 1 << 17
+
+
+def occluded(scene: dict, light: dict, origins: np.ndarray, chunk: int = CHUNK) -> np.ndarray:
     """Bool per origin: the segment/ray from the origin towards the light meets any object."""
     origins = np.asarray(origins, dtype=np.float64).reshape(-1, 3)
-    dirs, tmax = rays_to_light(light, origins)
     hit = np.zeros(origins.shape[0], dtype=bool)
-    for obj in scene["objects"]:
-        o, d = to_local(obj, origins, dirs)
-        hit |= HITTERS[obj["type"]](obj, o, d, tmax)
+    for start in range(0, origins.shape[0], max(1, int(chunk))):
+        o_chunk = origins[start:start + chunk]
+        dirs, tmax = rays_to_light(light, o_chunk)
+        for obj in scene["objects"]:
+            o, d = to_local(obj, o_chunk, dirs)
+            hit[start:start + chunk] |= HITTERS[obj["type"]](obj, o, d, tmax)
     return hit
 
 
-def shadow_mask(scene: dict, light: dict, xs, ys) -> np.ndarray:
+def shadow_mask(scene: dict, light: dict, xs, ys, chunk: int = CHUNK) -> np.ndarray:
     """Shadow mask of the ground ``z = 0`` on the grid ``xs x ys``: ``mask[iy, ix]`` is True
     when the ground point ``(xs[ix], ys[iy], 0)`` is shadowed by some object."""
     xs = np.asarray(xs, dtype=np.float64).reshape(-1)
     ys = np.asarray(ys, dtype=np.float64).reshape(-1)
     X, Y = np.meshgrid(xs, ys)
     origins = np.stack([X.ravel(), Y.ravel(), np.zeros(X.size)], axis=1)
-    return occluded(scene, light, origins).reshape(len(ys), len(xs))
+    return occluded(scene, light, origins, chunk).reshape(len(ys), len(xs))

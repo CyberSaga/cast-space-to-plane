@@ -77,8 +77,9 @@ def test_basic_example_shadows_construction_and_svg_subgroup(basic):
     assert crate[0]["outline"] == crate[0]["loops"][0] and len(crate[0]["outline"]) == 6
     assert all(name in doc["points"] for name in crate[0]["outline"])
     assert all(abs(doc["points"][n]["world"][2]) < 1e-12 for n in crate[0]["outline"])  # on the ground
-    # the pillar (cylinder) keeps the M0 behaviour in M1: edges only, no shadow entry
-    assert not any(s["object"] == "pillar" for s in doc["shadows"])
+    # M2: the pillar (cylinder) casts a conic shadow too (details in tests/test_curved_pipeline.py)
+    pillar = [s for s in doc["shadows"] if s["object"] == "pillar"]
+    assert len(pillar) == 1 and pillar[0]["conics"] and pillar[0]["outline"] and not pillar[0]["unbounded"]
     con = doc["construction"]
     assert con["light_point"] is not None and con["shadow_vp"] is not None
     assert con["light_point_at_infinity"] is None and con["shadow_vp_at_infinity"] is None
@@ -86,7 +87,8 @@ def test_basic_example_shadows_construction_and_svg_subgroup(basic):
     assert con["light_point"][1] > doc["horizon"]["v_mm"] > con["shadow_vp"][1]
     assert con["rays"] and all(r[0] in ("L", "F") for r in con["rays"])
     assert {r[1] for r in con["rays"] if r[0] == "L"} == {"crate.v0", "crate.v3", "crate.v4", "crate.v5",
-                                                           "crate.v6", "crate.v7"}
+                                                           "crate.v6", "crate.v7", "pillar.g0.base",
+                                                           "pillar.g0.top", "pillar.g1.base", "pillar.g1.top"}
     assert all(r[1].endswith(".foot") for r in con["rays"] if r[0] == "F")
     assert con["checks"] and max(c["max_error_mm"] for c in con["checks"]) < 1e-6
     assert any(e["silhouette"] for e in doc["edges"] if e["object"] == "crate")
@@ -117,9 +119,9 @@ def test_directional_example(directional):
     assert con["light_point"] is not None and con["light_point"][1] < doc["horizon"]["v_mm"]
     assert not any(w["code"] == "LIGHT_BEHIND_CAMERA" for w in doc["warnings"])
     for s in doc["shadows"]:
-        assert s["light"] == "sun" and s["object"] in ("post", "crate")
+        assert s["light"] == "sun" and s["object"] in ("post", "crate", "ball", "spire")
         assert s["unbounded"] is False and s["polygons"] and len(s["polygons"][0]) >= 3
-    assert len(doc["form_shadow"]) == 2
+    assert [f["object"] for f in doc["form_shadow"]] == ["post", "crate", "ball", "spire"]
     assert con["checks"] and max(c["max_error_mm"] for c in con["checks"]) < 1e-6
     assert all(math.isfinite(x) for x in walk_numbers(doc))
 
@@ -165,7 +167,7 @@ def test_stage_b_caching_and_camera_independence_of_stage_a(basic):
     d1 = castplane.compose(scene, castplane.project_scene(scene, A))
     d2 = castplane.compose(scene, castplane.project_scene(scene, A, camera=override))
     for name in d1["points"]:
-        if "world" in d1["points"][name]:
+        if "world" in d1["points"][name] and ".og" not in name:   # camera outline generators move with the camera
             assert d1["points"][name]["world"] == d2["points"][name]["world"]
     assert d1["shadows"][0]["outline"] == d2["shadows"][0]["outline"]
     assert d1["construction"]["light_point"] != d2["construction"]["light_point"]

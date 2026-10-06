@@ -1,4 +1,5 @@
-"""The six invariants of spec §7.1 (contract §4) on the examples and random polyhedral scenes.
+"""The six invariants of spec §7.1 (contract §4) on the examples and random polyhedral and mixed scenes
+(mixed scenes contain cylinders, spheres and cones; M2).
 
 | row | invariant                         | tolerance |
 | 1   | construction = direct             | 1e-6 mm   |
@@ -21,16 +22,20 @@ import pytest
 
 import castplane
 from castplane.camera import camera_matrix, divide, project
+from castplane.conics import conic_entry, circle_record
 from castplane.construction import self_check, special_point_image
+from castplane.curved import shadow_outline, shadow_polygon_h
 from castplane.light import light_vector
 from castplane.output.geometry_json import dumps
+from castplane.primitives import build_object
 from castplane.scene import load_scene, validate_camera
 from castplane.shadow import foot, shadow_loop, shadow_matrix
 from tests.reference import random_scenes
 
 EXAMPLES = pathlib.Path(__file__).resolve().parents[1] / "examples"
-EXAMPLE_NAMES = ("basic.json", "directional.json", "three_point.json", "construction_demo.json")
+EXAMPLE_NAMES = ("basic.json", "directional.json", "three_point.json", "construction_demo.json", "curved_demo.json")
 GROUND = np.array([0.0, 0.0, 1.0, 0.0])
+CURVED = ("cylinder", "sphere", "cone")
 
 
 def walk_numbers(obj):
@@ -51,14 +56,25 @@ def polyhedral_scene(seed: int, n: int = 3, light_type=None) -> dict:
     return random_scenes.assemble_scene(objects, light, random_scenes.random_camera(rng, objects))
 
 
+def mixed_scene(seed: int, n: int = 5, light_type=None) -> dict:
+    """Random scene with all five primitive kinds (``n >= 5``: one of each first), tilted objects allowed."""
+    return random_scenes.make_scene(seed, n, light_type)
+
+
 def all_scenes():
     out = [load_scene(EXAMPLES / name) for name in EXAMPLE_NAMES]
-    rolled = copy.deepcopy(out[-1])
+    rolled = copy.deepcopy(out[3])
     rolled["camera"]["roll_deg"] = 90.0                     # vertical horizon: v_mm is null
     out.append(load_scene(rolled))
     out += [load_scene(polyhedral_scene(seed, 1 + seed % 4)) for seed in range(6)]
     out += [load_scene(polyhedral_scene(100 + seed, 2, "directional")) for seed in range(3)]
+    out += [load_scene(mixed_scene(200 + seed, 5 + seed % 2)) for seed in range(3)]            # M2: curved objects
+    out += [load_scene(mixed_scene(300 + seed, 5, "directional")) for seed in range(2)]
     return out
+
+
+def polyhedral_ids(scene) -> set:
+    return {o["id"] for o in scene["objects"] if o["type"] not in CURVED}
 
 
 SCENES = all_scenes()
@@ -117,8 +133,11 @@ def test_shadows_are_camera_independent(scene):
             "frame_mm": list(scene["camera"]["frame_mm"]), "shift_mm": [1.0, -2.0], "near_m": 0.1}
     doc2 = geometry(scene, camera=cam2)
     assert doc1["camera"]["P"] != doc2["camera"]["P"]
-    assert set(doc1["points"]) == set(doc2["points"])
-    for name, p in doc1["points"].items():
+    # camera outline generator endpoints of curved objects (<obj>.og<k>.*) legitimately move with the camera
+    names1 = {n for n in doc1["points"] if ".og" not in n}
+    assert names1 == {n for n in doc2["points"] if ".og" not in n}
+    for name in names1:
+        p = doc1["points"][name]
         if "world" in p:
             np.testing.assert_allclose(p["world"], doc2["points"][name]["world"], atol=1e-9)
         else:
@@ -126,7 +145,14 @@ def test_shadows_are_camera_independent(scene):
     assert [s["loops"] for s in doc1["shadows"]] == [s["loops"] for s in doc2["shadows"]]
     assert [s["unbounded"] for s in doc1["shadows"]] == [s["unbounded"] for s in doc2["shadows"]]
     assert [f["faces"] for f in doc1["form_shadow"]] == [f["faces"] for f in doc2["form_shadow"]]
-    assert [e["silhouette"] for e in doc1["edges"]] == [e["silhouette"] for e in doc2["edges"]]
+    assert [[t["segment"] for t in f["terminator"] if "segment" in t] for f in doc1["form_shadow"]] == \
+        [[t["segment"] for t in f["terminator"] if "segment" in t] for f in doc2["form_shadow"]]
+    poly = polyhedral_ids(scene)
+    assert [e["silhouette"] for e in doc1["edges"] if e["object"] in poly] == \
+        [e["silhouette"] for e in doc2["edges"] if e["object"] in poly]
+    # the world circles and arcs of the shadow conics are camera free; their image conics are not
+    for s1, s2 in zip(doc1["shadows"], doc2["shadows"]):
+        assert [(c["circle"], c["arc"]) for c in s1["conics"]] == [(c["circle"], c["arc"]) for c in s2["conics"]]
 
 
 # --------------------------------------------------------------------------- row 3
@@ -143,6 +169,44 @@ def test_point_light_converges_to_directional_light(seed):
     for name in shadow_names:
         np.testing.assert_allclose(doc_d["points"][name]["world"], doc_p["points"][name]["world"], atol=1e-4)
     assert [s["loops"] for s in doc_d["shadows"]] == [s["loops"] for s in doc_p["shadows"]]
+
+
+def polyline_distance(A, B) -> float:
+    """Largest distance from a vertex of the closed polygon ``A`` to the closed polygon ``B`` (2-D)."""
+    A, B = np.asarray(A, dtype=np.float64), np.asarray(B, dtype=np.float64)
+    P0, P1 = B, np.roll(B, -1, axis=0)
+    d = P1 - P0
+    dd = np.einsum("ij,ij->i", d, d)
+    worst = 0.0
+    for a in A:
+        t = np.clip(np.einsum("ij,ij->i", a[None, :] - P0, d) / np.where(dd == 0.0, 1.0, dd), 0.0, 1.0)
+        q = P0 + t[:, None] * d
+        worst = max(worst, float(np.min(np.linalg.norm(q - a[None, :], axis=1))))
+    return worst
+
+
+@pytest.mark.parametrize("seed", [300, 301, 302])
+def test_point_light_converges_to_directional_light_for_curved_objects(seed):
+    """Row 3 on mixed scenes: the named shadow points (construction points of the curved objects
+    included) agree within 1e-4 m and the sampled ground polygons of the conic shadows coincide."""
+    scene = load_scene(mixed_scene(seed, 5, "directional"))
+    far = copy.deepcopy(scene)
+    d = np.array(scene["lights"][0]["direction"])
+    far["lights"][0] = {"id": scene["lights"][0]["id"], "type": "point", "position": (1e6 * d).tolist()}
+    doc_d, doc_p = geometry(scene), geometry(far)
+    assert not any(w["code"] == "VERTEX_NOT_BELOW_LIGHT" for w in doc_p["warnings"])
+    shadow_names = [n for n in doc_d["points"] if ".shadow." in n]
+    curved = {o["id"] for o in scene["objects"] if o["type"] in CURVED}
+    assert any(n.split(".")[0] in curved for n in shadow_names)
+    assert set(shadow_names) == {n for n in doc_p["points"] if ".shadow." in n}
+    for name in shadow_names:
+        np.testing.assert_allclose(doc_d["points"][name]["world"], doc_p["points"][name]["world"], atol=1e-4)
+    for s_d, s_p in zip(doc_d["shadows"], doc_p["shadows"]):
+        assert s_d["object"] == s_p["object"] and len(s_d["loops"]) == len(s_p["loops"])
+        for l_d, l_p in zip(s_d["loops"], s_p["loops"]):
+            A = np.array([doc_d["points"][n]["world"][:2] for n in l_d])
+            B = np.array([doc_p["points"][n]["world"][:2] for n in l_p])
+            assert polyline_distance(A, B) < 1e-4 and polyline_distance(B, A) < 1e-4, s_d["object"]
 
 
 # --------------------------------------------------------------------------- row 4
@@ -190,6 +254,27 @@ def transform_scene(scene, angle_deg, shift, yaw_form):
     return out
 
 
+def assert_drawables_equal(entries1, entries2, atol):
+    """Conic entries of two documents draw the same curves: same kinds and parameter ranges, sampled
+    polylines and arc endpoints within ``atol`` mm, same arc flags, ellipse centres and axes within
+    ``atol`` (the rotation of a nearly circular ellipse is numerically arbitrary and is not compared)."""
+    assert len(entries1) == len(entries2)
+    for c1, c2 in zip(entries1, entries2):
+        assert c1["kind"] == c2["kind"] and c1["which"] == c2["which"] and c1["sampled"] == c2["sampled"]
+        assert (c1["arc"] is None) == (c2["arc"] is None)
+        assert len(c1["polylines"]) == len(c2["polylines"]) and len(c1["arcs"]) == len(c2["arcs"])
+        assert len(c1["ellipses"]) == len(c2["ellipses"])
+        for p1, p2 in zip(c1["polylines"], c2["polylines"]):
+            np.testing.assert_allclose(p1, p2, atol=atol)
+        for a1, a2 in zip(c1["arcs"], c2["arcs"]):
+            np.testing.assert_allclose([a1["start"], a1["end"]], [a2["start"], a2["end"]], atol=atol)
+            assert a1["large_arc"] == a2["large_arc"] and a1["sweep"] == a2["sweep"]
+            np.testing.assert_allclose([a1["rx"], a1["ry"]], [a2["rx"], a2["ry"]], atol=atol, rtol=1e-9)
+        for e1, e2 in zip(c1["ellipses"], c2["ellipses"]):
+            np.testing.assert_allclose(e1["centre"], e2["centre"], atol=atol)
+            np.testing.assert_allclose([e1["rx"], e1["ry"]], [e2["rx"], e2["ry"]], atol=atol, rtol=1e-9)
+
+
 def assert_images_equal(doc1, doc2, atol):
     assert set(doc1["points"]) == set(doc2["points"])
     for name, p in doc1["points"].items():
@@ -210,6 +295,18 @@ def assert_images_equal(doc1, doc2, atol):
         assert f1["faces"] == f2["faces"]
         for p1, p2 in zip(f1["polygons"], f2["polygons"]):
             np.testing.assert_allclose(p1, p2, atol=atol)
+        assert_drawables_equal([t for t in f1["terminator"] if "segment" not in t],
+                               [t for t in f2["terminator"] if "segment" not in t], atol)
+        for t1, t2 in zip(f1["terminator"], f2["terminator"]):
+            if "segment" in t1:
+                assert t1["segment"] == t2["segment"]
+                np.testing.assert_allclose(t1["polylines"], t2["polylines"], atol=atol)
+    for s1, s2 in zip(doc1["shadows"], doc2["shadows"]):
+        assert_drawables_equal(s1["conics"], s2["conics"], atol)
+    for o1, o2 in zip(doc1["outlines"], doc2["outlines"]):
+        assert o1["object"] == o2["object"]
+        assert [c["back"] for c in o1["conics"]] == [c["back"] for c in o2["conics"]]
+        assert_drawables_equal(o1["conics"], o2["conics"], atol)
     c1, c2 = doc1["construction"], doc2["construction"]
     for key in ("light_point", "shadow_vp"):
         assert (c1[key] is None) == (c2[key] is None)
@@ -280,6 +377,49 @@ def test_homogeneous_scale_invariance_positive_scalars(k_pi, k_L, k_P):
                                project(cam, S2), 1e-9)
         assert not sk1.any() and not sk2.any()
         assert np.max(err1) < 1e-9 and np.max(err2) < 1e-9
+
+
+@pytest.mark.parametrize("k_pi, k_L, k_P", [(2.0, 3.0, 0.5), (1e-3, 1e3, 7.0), (5.0, 0.25, 1e2)])
+@pytest.mark.parametrize("kind", CURVED)
+def test_homogeneous_scale_invariance_curved_objects(k_pi, k_L, k_P, kind):
+    """Row 5 for curved objects: the silhouette / shadow outline of contract §2.6 under positively scaled
+    ``pi`` and ``L`` (and the matching ``M``) gives the same divided ground polygon and the same conic
+    entries; the conic entry of a circle is invariant under any non-zero scaling of its map ``H``."""
+    o = {"id": "o", "type": kind, "radius": 0.4, "transform": {"position": [1.0, 2.0, 0.0],
+                                                                "rotation_deg": [10.0, -5.0, 30.0]}}
+    if kind != "sphere":
+        o["height"] = 1.3
+    an = build_object(o)["analytic"]
+    cam = _cam()
+    for Lv in (light_vector({"type": "point", "position": [-1.0, 0.5, 3.0]}),
+               light_vector({"type": "directional", "direction": [0.6, 0.0, 0.8]})):
+        M1, M2 = shadow_matrix(GROUND, Lv), shadow_matrix(k_pi * GROUND, k_L * Lv)
+        # the plane functional (ground clip) and w_S scale with k_pi: so do the length-valued tolerances
+        out1 = shadow_outline(an, Lv, M1, GROUND, 1e-9, 1e-9)
+        out2 = shadow_outline(an, k_L * Lv, M2, k_pi * GROUND, k_pi * 1e-9, k_pi * 1e-9)
+        V1, V2 = shadow_polygon_h(out1)["vertices"], shadow_polygon_h(out2)["vertices"]
+        assert V1.shape == V2.shape and V1.shape[0] >= 3
+        np.testing.assert_allclose(V1[:, :3] / V1[:, 3:4], V2[:, :3] / V2[:, 3:4], rtol=1e-9, atol=1e-9)
+        pieces1 = [p["conic_arc"] for p in out1["pieces"] if "conic_arc" in p]
+        pieces2 = [p["conic_arc"] for p in out2["pieces"] if "conic_arc" in p]
+        assert len(pieces1) == len(pieces2) >= 1
+        for a1, a2 in zip(pieces1, pieces2):
+            H1, H2 = cam["P"] @ a1["T"] @ a1["E"], cam["P"] @ a2["T"] @ a2["E"]
+            e1 = conic_entry(a1["circle"], H1, (a1["theta0"], a1["theta1"]), "shadow")
+            e2 = conic_entry(a2["circle"], H2, (a2["theta0"], a2["theta1"]), "shadow")
+            np.testing.assert_allclose(e1["conic"], e2["conic"], rtol=1e-9, atol=1e-9)
+            assert e1["kind"] == e2["kind"] and e1["arc"] == pytest.approx(e2["arc"], rel=1e-9)
+            for k in (-1.0, 2.0, -1e-3):   # sign-free: the conic matrix up to sign (contract §2.1)
+                e3 = conic_entry(a1["circle"], k * H1, (a1["theta0"], a1["theta1"]), "shadow")
+                np.testing.assert_allclose(e3["conic"], e1["conic"], rtol=1e-9, atol=1e-9)
+                assert e3["kind"] == e1["kind"]
+    circle = circle_record([0.3, 0.4, 0.5], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0], 0.25)
+    E = np.array([[1.0, 0, 0.3], [0, 1.0, 0.4], [0, 0, 0.5], [0, 0, 1.0]])          # the circle's embedding
+    base = conic_entry(circle, cam["P"] @ E, None)
+    for k in (k_pi, -k_L, 1e-3):
+        scaled = conic_entry(circle, k * (cam["P"] @ E), None)
+        np.testing.assert_allclose(scaled["conic"], base["conic"], rtol=1e-9, atol=1e-9)
+        assert scaled["kind"] == base["kind"] == "ellipse"
 
 
 @pytest.mark.parametrize("k", [-1.0, -3.0, 2.0, -1e-3])

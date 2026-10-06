@@ -50,10 +50,13 @@ def test_render_basic_has_six_layers_in_order_and_finite_json(basic):
     assert "NaN" not in text and "Infinity" not in text
     assert not re.search(r"-0\.0(?![0-9])", text)  # no negative zero
     assert all(math.isfinite(x) for x in walk_numbers(doc))
-    assert set(doc) == {"canvas_mm", "camera", "points", "edges", "shadows", "form_shadow", "construction",
-                        "horizon", "warnings"}
-    # M1: the crate casts a shadow and has unlit faces; the pillar (cylinder) is left to M2
-    assert [s["object"] for s in doc["shadows"]] == ["crate"] and [f["object"] for f in doc["form_shadow"]] == ["crate"]
+    assert set(doc) == {"canvas_mm", "camera", "points", "edges", "shadows", "form_shadow", "outlines",
+                        "construction", "horizon", "warnings"}
+    # the crate casts a shadow and has unlit faces; the pillar (cylinder, M2) casts a conic shadow and
+    # has a terminator
+    assert [s["object"] for s in doc["shadows"]] == ["crate", "pillar"]
+    assert [f["object"] for f in doc["form_shadow"]] == ["crate", "pillar"]
+    assert [o["object"] for o in doc["outlines"]] == ["pillar"]
     assert doc["construction"]["light_point"] is not None and doc["construction"]["rays"]
     assert doc["warnings"] == []
     assert doc["canvas_mm"] == [273.0, 182.0]
@@ -161,9 +164,15 @@ def test_segment_endpoints_equal_point_images(basic):
         if _inside(a, rect) and _inside(b, rect):
             np.testing.assert_allclose(e["segment"], [a, b], atol=1e-12)
             checked += 1
-    # the box only: the approximate mesh of the cylinder is not part of the document (contract §2.4)
+    # the box's 12 edges only; the pillar's camera outline generators live in outlines[] (they depend on
+    # the camera) and the approximate mesh of the cylinder is not part of the document (contract §2.4)
     assert checked == len(doc["edges"]) == 12
-    assert not any(n.startswith("pillar.") for n in doc["points"])
+    assert not any(n.startswith("pillar.v") for n in doc["points"])
+    gens = doc["outlines"][0]["generators"]
+    assert [g["from"] for g in gens] == ["pillar.og0.base", "pillar.og1.base"]
+    for g in gens:
+        np.testing.assert_allclose(g["segment"], [doc["points"][g["from"]]["image"], doc["points"][g["to"]]["image"]],
+                                   atol=1e-12)
 
 
 def test_rect_clipped_segment_ends_on_rect_boundary_and_on_the_edge_line():
@@ -430,14 +439,17 @@ def test_multi_loop_shadow_is_one_path_filled_with_the_nonzero_rule():
 
 def test_curved_objects_contribute_no_mesh_edges_or_vertex_labels(basic):
     """Contract §2.4: the 32-segment mesh of a curved primitive exists only for bounding boxes; its
-    vertices are neither points, edges nor labels of the document (M2 adds outline generators and conics)."""
+    vertices are neither points, edges nor labels of the document (M2 adds outline generators, conics
+    and the §2.7 construction points instead)."""
     scene, result = basic
     doc, svg = result["geometry"], result["svg"]
     assert {e["object"] for e in doc["edges"]} == {"crate"}
-    assert not any(n.startswith("pillar.") for n in doc["points"])
+    assert all(g["from"].startswith("pillar.og") for g in doc["outlines"][0]["generators"])
+    assert not any(n.startswith("pillar.v") for n in doc["points"])
     labels = re.findall(r">v(\d+)<", svg)
     assert sorted(int(v) for v in labels) == list(range(8))
-    assert ">crate<" in svg and ">pillar<" not in svg
+    assert ">crate<" in svg and ">pillar<" in svg
+    assert ">g0.base<" in svg and ">g1.top<" in svg and ">og0.base<" not in svg
     # scene scale still includes the curved mesh (stage A)
     A = castplane.shadow_geometry(scene)
     assert [o["id"] for o in A["objects"]] == ["crate", "pillar"]

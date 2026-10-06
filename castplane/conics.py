@@ -25,6 +25,7 @@ __all__ = [
     "normalize_conic",
     "centred_conic",
     "classify",
+    "classify_and_condition",
     "condition_number",
     "is_sampled",
     "ellipse_params",
@@ -230,6 +231,30 @@ def classify(C, tol: float = CLASSIFY_TOL) -> str:
     return "ellipse" if det2 > 0.0 else "hyperbola"
 
 
+def classify_and_condition(C, tol: float = CLASSIFY_TOL) -> tuple[str, float]:
+    """:func:`classify` and :func:`condition_number` from a single centred conic (same results)."""
+    N = normalize_conic(C)
+    if not np.all(np.isfinite(N)):
+        return "degenerate", math.inf
+    A = N[:2, :2]
+    amax = float(np.max(np.abs(A)))
+    if amax == 0.0:
+        return "degenerate", condition_number(N)
+    An = A / amax
+    det2 = float(An[0, 0] * An[1, 1] - An[0, 1] * An[1, 0])
+    Cc, _centre = centred_conic(N)
+    if not np.all(np.isfinite(Cc)):
+        return "degenerate", math.inf
+    det3 = float(np.linalg.det(Cc))
+    sv = np.linalg.svd(Cc, compute_uv=False)
+    cond = math.inf if sv[-1] <= 0.0 else float(sv[0] / sv[-1])
+    if not math.isfinite(det3) or abs(det3) <= tol:
+        return "degenerate", cond
+    if abs(det2) <= tol:
+        return "parabola", cond
+    return ("ellipse" if det2 > 0.0 else "hyperbola"), cond
+
+
 def condition_number(C) -> float:
     """2-norm condition number of the conic translated to its centre (vertex for a
     parabola; contract §2.6: ``> 1e8`` -> ``CONIC_SAMPLED``, spec §11.3).  Returns ``inf``
@@ -327,9 +352,14 @@ def sample_arc(H, rho: float, theta0: float, theta1: float, n: int) -> np.ndarra
 def sample_count(theta0: float, theta1: float, per_circle: int = SAMPLES_PER_CIRCLE,
                  minimum: int = MIN_ARC_SAMPLES) -> int:
     """Contract §2.6 sampling rule: number of segments for the arc ``[theta0, theta1]``,
-    ``max(minimum, ceil(per_circle * |theta1 - theta0| / (2 pi)))``."""
+    ``max(minimum, round(per_circle * |theta1 - theta0| / (2 pi)))`` (proportionally fewer
+    segments for arcs).  Rounding to the nearest integer (instead of ``ceil``) keeps the count
+    stable when an arc span sits at an exact fraction of the circle -- a half circle under a
+    directional light stays 32 segments when the same scene is lit by a point light 10^6 m
+    away (spec §7.1 row 3) or rotated rigidly (row 4), where ``ceil`` would flip on rounding
+    noise."""
     span = abs(float(theta1) - float(theta0))
-    return max(int(minimum), int(math.ceil(per_circle * span / TWO_PI - 1e-12)))
+    return max(int(minimum), int(math.floor(per_circle * span / TWO_PI + 0.5)))
 
 
 def functional_coeffs(f, H, rho: float = 1.0) -> tuple[float, float, float]:
@@ -443,15 +473,25 @@ def arc_svg_flags(centre, axes, rotation: float, p_start, p_mid, p_end) -> tuple
 # circle records (contract §2.6) and output-stage helpers
 # ---------------------------------------------------------------------------
 
-def circle_frame(normal, tol: float = 1e-9) -> tuple[np.ndarray, np.ndarray]:
+def circle_frame(normal, tol: float = 1e-9, fallback=None) -> tuple[np.ndarray, np.ndarray]:
     """Contract §2.6 frame of a silhouette circle with unit normal ``n``:
     ``e1 = normalize(n x z)`` (fallback ``n x x`` when ``|n x z| <= tol``), ``e2 = n x e1``.
-    ``(e1, e2, n)`` is right-handed, so ``theta`` increasing is counter-clockwise about ``n``."""
+    ``(e1, e2, n)`` is right-handed, so ``theta`` increasing is counter-clockwise about ``n``.
+
+    ``fallback`` optionally replaces the world ``x`` axis of the fallback by a sequence of
+    directions tried in order (the first one not parallel to ``n`` wins): the sphere
+    silhouette passes the object's rotated local axes ``(e1, e2)`` so that the frame of a
+    horizontal circle rotates with the scene (spec §7.1 row 4) instead of being pinned to
+    world ``x``; for an unrotated object this is exactly the contract's ``n x x``."""
     n = np.asarray(normal, dtype=np.float64).reshape(3)
     n = n / float(np.linalg.norm(n))
     e1 = np.cross(n, np.array([0.0, 0.0, 1.0]))
     if float(np.linalg.norm(e1)) <= tol:
-        e1 = np.cross(n, np.array([1.0, 0.0, 0.0]))
+        candidates = [np.array([1.0, 0.0, 0.0])] if fallback is None else list(fallback)
+        for cand in candidates:
+            e1 = np.cross(n, np.asarray(cand, dtype=np.float64).reshape(3))
+            if float(np.linalg.norm(e1)) > tol:
+                break
     e1 = e1 / float(np.linalg.norm(e1))
     e2 = np.cross(n, e1)
     return e1, e2
@@ -503,8 +543,7 @@ def conic_entry(circle: dict, H, arc=None, map: str = "image") -> dict:
     ``CONIC_SAMPLED`` predicate (degenerate or condition number ``> 1e8``); the caller
     emits the warning with the object id.  Every float is canonical (``+ 0.0``)."""
     C = normalize_conic(transform_conic(circle_matrix(circle["radius"]), H))
-    kind = classify(C)
-    cond = condition_number(C)
+    kind, cond = classify_and_condition(C)
     if arc is not None:
         a, b = float(arc[0]) if not isinstance(arc, dict) else float(arc["theta0"]), \
             float(arc[1]) if not isinstance(arc, dict) else float(arc["theta1"])

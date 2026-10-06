@@ -10,9 +10,10 @@ import numpy as np
 import pytest
 
 from castplane.conics import (circle_embedding, circle_matrix, circle_point, classify, conic_entry,
-                              conic_point, ellipse_params, transform_conic)
-from castplane.curved import (camera_outline, canonical_light, construction_points, loop_pieces_4d,
-                              shadow_outline, shadow_polygon_h, silhouette, terminator)
+                              conic_point, ellipse_params, functional_coeffs, sub_arcs_where_nonnegative,
+                              transform_conic)
+from castplane.curved import (ASYMPTOTE_REFINE, camera_outline, canonical_light, construction_points,
+                              loop_pieces_4d, shadow_outline, shadow_polygon_h, silhouette, terminator)
 from castplane.light import light_vector, lit
 from castplane.primitives import build_object
 from castplane.shadow import shadow_matrix, shadow_w
@@ -638,22 +639,173 @@ def test_ground_clip_of_a_half_buried_sphere_and_a_tilted_base_circle():
     out = shadow_outline(sph, L, M, GROUND, TOL, TOL)
     assert out["below_ground"] and [w["code"] for w in out["warnings"]] == ["OBJECT_BELOW_RECEIVER"]
     kinds = [list(p)[0] for p in out["pieces"]]
-    assert kinds == ["conic_arc", "segment"]
-    chord = out["pieces"][1]["segment"]
-    for S in chord:
-        assert abs(S[2] / S[3]) < 1e-8          # the chord lies on the ground
+    # the kept arc, then the ground chain (contract §2.3 cut face): a polyline of ground segments
+    # along the lit half of the ground cross-section circle (radius 1 about the origin)
+    assert kinds[0] == "conic_arc" and set(kinds[1:]) == {"segment"} and len(kinds) > 10
+    ground = [p["segment"] for p in out["pieces"][1:]]
+    assert all(p["which"] == "ground" for p in out["pieces"][1:])
+    for A, B in ground:
+        for S in (A, B):
+            assert abs(S[2] / S[3]) < 1e-8          # the chain lies on the ground
+    interior = [B for A, B in ground[:-1]]
+    for S in interior:
+        p = S[:3] / S[3]
+        assert math.hypot(p[0], p[1]) == pytest.approx(1.0, abs=1e-9)   # on the cross-section circle
+        assert lit(p, p, L, TOL)                                        # on the lit side of the sphere
+    assert 20 <= len(interior) <= 30            # the lit arc p.l > r^2 spans 141 deg: 25 of 64 samples
+    # consecutive chain segments share their end points (a connected polyline)
+    for (_a, b), (c, _d) in zip(ground[:-1], ground[1:]):
+        assert np.allclose(b, c)
     poly = shadow_polygon_h(out)
     V = poly["vertices"]
     assert np.all(V[:, 3] > 0) and signed_area(V[:, :2] / V[:, 3:4]) > 0
+    # the lit half disc (towards the light, +x) is inside the shadow, the far half is not inside it
+    # on its own merits: the chain bulges towards the light beyond the straight chord
+    xy = V[:, :2] / V[:, 3:4]
+    assert point_in_polygon(xy, (0.9, 0.0)) and point_in_polygon(xy, (0.5, 0.5))
+    assert not point_in_polygon(xy, (1.05, 0.0))
     # a cylinder whose tilted base circle dips below the ground
     cyl = obj("cylinder", position=(0.0, 0.0, 0.1), rotation=(30.0, 0.0, 0.0), radius=0.5, height=1.0)["analytic"]
     out = shadow_outline(cyl, L, M, GROUND, TOL, TOL)
     assert out["below_ground"]
-    assert any("segment" in p and p["which"] == "ground" for p in out["pieces"])
+    ground = [p for p in out["pieces"] if "segment" in p and p["which"] == "ground"]
+    assert len(ground) > 1
+    a, b = cyl["axis"], cyl["base"]
+    for p in ground:
+        for S in p["segment"]:
+            X = S[:3] / S[3]
+            assert abs(X[2]) < 1e-8
+            d = X - b
+            s = float(d @ a)
+            assert -1e-9 <= s <= 1.0 + 1e-9                                 # between the two caps
+            assert np.linalg.norm(d - s * a) == pytest.approx(0.5, abs=1e-9)  # on the lateral surface
     poly = shadow_polygon_h(out)
     V = poly["vertices"]
     assert np.all(np.isfinite(V)) and np.all(V[:, 3] > 0)
     assert signed_area(V[:, :2] / V[:, 3:4]) > 0
+
+
+def test_ground_chain_of_a_lit_cap_is_the_straight_cap_chord():
+    """A cylinder standing on its (lit) top: the base cap faces up and dips below the ground on one
+    side; the removed part of the loop is a cap arc and the boundary of the cut face there is the
+    cap's own ground chord, so the chain is a single straight segment with both ends on the cap."""
+    # axis tilted 10 deg from straight down: the base cap (z = 0.04 at its centre) dips below the ground
+    # on the side where the lateral surface is unlit; the top cap is wholly buried, so both generators
+    # also cross the ground and that second gap gets a lateral chain
+    cyl = obj("cylinder", position=(0.0, 0.0, 0.04), rotation=(170.0, 0.0, 0.0), radius=0.5, height=1.0)["analytic"]
+    L = point_light(0.0, 0.0, 6.0)
+    M = shadow_matrix(GROUND, L)
+    sil = silhouette(cyl, L, TOL)
+    assert sil["cap_lit"]["base"] and not sil["cap_lit"]["top"]
+    out = shadow_outline(cyl, L, M, GROUND, TOL, TOL)
+    assert out["below_ground"]
+    ground = [p for p in out["pieces"] if "segment" in p and p["which"] == "ground"]
+    a, b = cyl["axis"], cyl["base"]
+
+    def on_base_circle(S):
+        X = S[:3] / S[3]
+        return abs(float((X - b) @ a)) < 1e-9 and abs(np.linalg.norm(X - b) - 0.5) < 1e-9
+
+    chords = [p for p in ground if all(on_base_circle(S) for S in p["segment"])]
+    assert len(chords) == 1                                       # the lit cap's chord, straight
+    A, B = chords[0]["segment"]
+    assert abs(A[2] / A[3]) < 1e-8 and abs(B[2] / B[3]) < 1e-8 and np.linalg.norm(A[:3] / A[3] - B[:3] / B[3]) > 0.3
+    lateral = [p for p in ground if p is not chords[0]]
+    assert len(lateral) > 5
+    for p in lateral:
+        for S in p["segment"]:
+            X = S[:3] / S[3]
+            s = float((X - b) @ a)
+            assert -1e-9 <= s <= 1.0 + 1e-9 and abs(np.linalg.norm(X - b - s * a) - 0.5) < 1e-9
+
+
+def test_loop_wholly_below_the_ground_gives_the_lit_footprint():
+    """A sphere buried past its centre under a steep directional light: the silhouette great circle
+    is entirely below the receiver, the cap above it is wholly lit and its shadow is the footprint
+    disc (contract §2.3 cut face).  A low point light sees part of that cap: its silhouette circle
+    crosses the ground and the ordinary arc + chain outline results."""
+    sph = obj("sphere", position=(0.0, 0.0, -1.3), radius=0.8)["analytic"]      # centre z = -0.5, top z = 0.3
+    L = directional(70.0, 20.0)
+    M = shadow_matrix(GROUND, L)
+    out = shadow_outline(sph, L, M, GROUND, TOL, TOL)
+    assert out["below_ground"] and not out["empty"] and not out["unbounded"]
+    assert all("segment" in p and p["which"] == "ground" for p in out["pieces"])
+    rs = math.sqrt(0.8 ** 2 - 0.5 ** 2)
+    for p in out["pieces"]:
+        for S in p["segment"]:
+            X = S[:3] / S[3]
+            assert abs(X[2]) < 1e-9 and math.hypot(X[0], X[1]) == pytest.approx(rs, abs=1e-9)
+    V = shadow_polygon_h(out)["vertices"]
+    assert len(V) == 64 and signed_area(V[:, :2] / V[:, 3:4]) == pytest.approx(math.pi * rs * rs, rel=0.01)
+    L2 = point_light(5.0, 0.0, 0.1)
+    out2 = shadow_outline(sph, L2, shadow_matrix(GROUND, L2), GROUND, TOL, TOL)
+    kinds = [list(p)[0] for p in out2["pieces"]]
+    assert out2["below_ground"] and out2["unbounded"]            # the light is below the top of the sphere
+    assert kinds.count("conic_arc") >= 1 and kinds.count("segment") > 1
+    V2 = shadow_polygon_h(out2)["vertices"]
+    assert np.all(np.isfinite(V2)) and signed_area(truncate(V2, 1e4)) > 0
+
+
+def test_direction_vertices_sit_at_the_exact_w_zero_crossing():
+    """Contract §2.5: the direction vertex is the ``w_S = 0`` point of the piece (``t* = w_a /
+    (w_a - w_b)`` on a segment, the closed-form zero crossing on an arc), not the ``w_S = tol``
+    point where the kept part ends."""
+    # arc: sphere whose top is above the light (see test_unbounded_sphere_shadow_...)
+    sph = obj("sphere", position=(2.0, 5.0, 0.0), radius=1.0)["analytic"]
+    L = point_light(-1.0, 5.0, 1.5)
+    M = shadow_matrix(GROUND, L)
+    big = 1e-3                                                   # a coarse tolerance makes the drift visible
+    out = shadow_outline(sph, L, M, GROUND, big, big)
+    arc = out["pieces"][0]["conic_arc"]
+    A, B, C = functional_coeffs(M[3], arc["E"], arc["rho"])
+    zeros = sub_arcs_where_nonnegative(A, B, C, 0.0, 2 * math.pi, 0.0)
+    assert len(zeros) == 1
+    z0, z1 = zeros[0]
+    lo, hi = sorted((arc["theta0"], arc["theta1"]))
+    assert z0 < lo and hi < z1                                    # the kept part ends at w_S = tol, inside
+    d_out = [p for p in out["pieces"] if "direction" in p and p["role"] == "out"][0]["direction"]
+    d_in = [p for p in out["pieces"] if "direction" in p and p["role"] == "in"][0]["direction"]
+    for th, D in ((z1, d_out), (z0, d_in)):
+        S = M @ conic_point(arc["E"], th, arc["rho"])
+        assert abs(S[3]) < 1e-12
+        assert np.allclose(S[:3] / np.linalg.norm(S[:3]), D[:3], atol=1e-12)
+    # segment: cylinder generators crossing the light height
+    cyl = obj("cylinder", position=(2.0, 0.0, 0.0), radius=0.4, height=3.0)["analytic"]
+    L = point_light(0.0, 0.0, 1.5)
+    M = shadow_matrix(GROUND, L)
+    out = shadow_outline(cyl, L, M, GROUND, big, big)
+    g1 = out["silhouette"]["generators"][1]
+    S_a, S_b = M @ np.append(g1["base"], 1.0), M @ np.append(g1["top"], 1.0)
+    t = S_a[3] / (S_a[3] - S_b[3])
+    D = (1 - t) * S_a + t * S_b
+    d_out = [p for p in out["pieces"] if "direction" in p and p["role"] == "out"][0]["direction"]
+    assert np.allclose(d_out[:3], D[:3] / np.linalg.norm(D[:3]), atol=1e-12)
+
+
+def test_polygon_refines_the_arc_towards_its_direction_vertices():
+    """The samples next to a direction vertex approach the ``w_S = 0`` crossing geometrically
+    (``w`` halves from one to the next) and their ground directions converge to the direction vertex."""
+    sph = obj("sphere", position=(2.0, 5.0, 0.0), radius=1.0)["analytic"]
+    L = point_light(-1.0, 5.0, 1.5)
+    M = shadow_matrix(GROUND, L)
+    out = shadow_outline(sph, L, M, GROUND, TOL, TOL)
+    poly = shadow_polygon_h(out)
+    V, src = poly["vertices"], poly["sources"]
+    i_out = [k for k, s in enumerate(src) if s[0] == "dir" and s[2] == "out"][0]
+    i_in = [k for k, s in enumerate(src) if s[0] == "dir" and s[2] == "in"][0]
+    before = [k for k in range(i_out - ASYMPTOTE_REFINE, i_out)]
+    after = [(i_in + 1 + j) % len(V) for j in range(ASYMPTOTE_REFINE)]
+    assert all(isinstance(src[k][2], float) and src[k][2] != int(src[k][2]) for k in before + after)
+    w_before = [V[k, 3] for k in before]
+    assert all(0.4 < b / a < 0.6 for a, b in zip(w_before[:-1], w_before[1:]))
+    w_after = [V[k, 3] for k in after]
+    assert all(0.4 < a / b < 0.6 for a, b in zip(w_after[:-1], w_after[1:]))   # w doubles away from the crossing
+    D_out, D_in = V[i_out, :2], V[i_in, :2]
+    dev_out = [np.linalg.norm(V[k, :2] / np.linalg.norm(V[k, :2]) - D_out) for k in before]
+    dev_in = [np.linalg.norm(V[k, :2] / np.linalg.norm(V[k, :2]) - D_in) for k in after]
+    assert dev_out == sorted(dev_out, reverse=True) and dev_out[-1] < 0.01   # O(step / 2**K) away
+    assert dev_in == sorted(dev_in) and dev_in[0] < 0.01
+    assert signed_area(truncate(V, 1e6)) > 0
 
 
 # --------------------------------------------------------------------------- raycast cross-check (§7.3)

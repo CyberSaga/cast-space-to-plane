@@ -48,27 +48,65 @@ Tolerances (contract §2.8): stage A uses ``scene_scale`` of the object vertices
 only (it must not touch the camera); stage B uses the full scale including the
 camera position.
 
-Curved objects (cylinder / sphere / cone): M1 keeps the M0 behaviour (mesh
-edges only, no shadows, no form shadow).  The hooks marked ``M2 HOOK`` below
-call ``castplane.curved`` when it provides these stage functions (the other
-track owns their bodies; until they exist the objects are skipped)::
+Curved objects (cylinder / sphere / cone; spec §5.6, contract §2.6 / §2.7 / §2.10)
+are handled analytically by ``castplane.curved`` through two hooks::
 
     curved.stage_a_object(obj, lights, pi, tol, receiver_id, warnings) -> list of shadow records
-    curved.stage_b_object(obj, rec, cam, tol, warnings) -> None (adds drawables to ``rec`` in place)
+    curved.stage_b_object(obj, rec, cam, tol, warnings) -> None (fills the stage-B object record)
 
-A shadow record returned by ``stage_a_object`` must carry the same keys as the
-polyhedral ones built by ``_shadow_record`` (``loops`` with ``vertices`` /
-``entries``, ``S_world`` / ``Q_world`` / names, ``ground_points``,
-``unbounded``) so that ``_project_shadow`` and ``compose`` can consume it; conic
-entries are appended by ``stage_b_object``.
+A curved shadow record carries the same keys as a polyhedral one (``loops`` with
+``vertices`` / ``entries``, ``S_world`` / ``Q_world`` / names, ``ground_points``,
+``unbounded``) plus the world-space conic ``pieces`` (``E``, ``rho``, ``T = M``, arcs),
+so ``_project_shadow`` and ``compose`` consume it unchanged.  Its approximate mesh
+(contract §2.4) never reaches the document.  Names of curved points:
+
+* construction points (contract §2.7): sphere ``<obj>.c`` and ``<obj>.sil.0..3``
+  (silhouette circle centre ``+e1, -e1, +e2, -e2``); cylinder ``<obj>.g0.base`` /
+  ``.top``, ``<obj>.g1.base`` / ``.top`` (the tangent generators, ordered
+  ``theta_l - alpha``, ``theta_l + alpha``); cone ``<obj>.g0.base``, ``<obj>.g1.base``,
+  ``<obj>.apex``; with the usual ``.shadow.<light>`` / ``.foot`` suffixes and
+  construction rays;
+* camera outline generators (objects layer, contract §2.10): ``<obj>.og0.base`` /
+  ``.top`` and ``<obj>.og1.*`` (a cone's ``.top`` is its apex).  These points and the
+  generator segments exist only for the current camera (a flat cone seen from above has
+  none), so they are **not** ``edges[]`` entries (whose list is camera independent): the
+  segments are ``outlines[].generators`` (``{from, to, back: false, segment}``), drawn in
+  the objects layer, and the points get no construction rays;
+* the drawn shadow polygon of a curved object (``shadows[].loops[0]``) is the sampled
+  outline of ``curved.shadow_polygon_h`` (64 samples per full circle); a vertex that is
+  the uncut shadow of a construction point is named by that point
+  (``<obj>.g1.base.shadow.<light>``, ``<obj>.apex.shadow.<light>``,
+  ``<obj>.sil.k.shadow.<light>`` at the quarter points of an unclipped sphere circle),
+  every other finite vertex is a ground point ``<obj>.s<k>.<light>`` (``k`` counted in
+  loop order from 0; its own shadow and foot, no construction ray) and direction
+  vertices are inline ``{"direction": ...}`` entries.  The exact boundary is in
+  ``shadows[].conics`` (contract §2.6 / §3.1 entries with ``map == "shadow"``).
+
+Document additions for curved objects: ``outlines[]`` (``{object, generators: [...],
+conics: [...]}``: the objects-layer generator segments and conic entries with
+``map == "image"``, a ``back`` flag and drawables),
+``form_shadow[].terminator`` (conic entries with ``map == "image"`` and
+``{"segment": [name, name], "polylines": [...]}`` generator entries),
+``shadows[].conics``.  Every conic entry carries its drawables in canvas mm:
+``polylines`` (sampled, for parabola / hyperbola / degenerate / ill-conditioned conics),
+``arcs`` (``{start, end, rx, ry, rotation_deg, large_arc, sweep, theta}``, ``sweep`` in the
+``v``-up frame; the SVG writer flips it) and ``ellipses`` (``{centre, rx, ry,
+rotation_deg}``, only when the whole circle is in front of the near plane and some part of
+it lies inside the extended canvas); ``visible`` lists the circle-parameter intervals inside
+the extended canvas (empty: nothing is drawn).  Arcs are near-clipped and clipped to the
+extended canvas in closed form (contract §2.6); sampling happens in stage C only.
 """
 
 from __future__ import annotations
 
 import numpy as np
 
+import math
+
+from . import curved as _curved
 from .camera import (camera_matrix, clip_polygon_near, clip_polygon_rect_h, clip_segments_near,
                      clip_segments_rect_h, divide, horizon as camera_horizon, nu, project)
+from .conics import ellipse_arc_params, ellipse_params, sample_arc, sample_count
 from .construction import (clip_segments_uv, coincidence_check, covering_segments, extended_segments,
                            self_check, special_point_image)
 from .errors import make_warning, merge_warnings
@@ -79,11 +117,6 @@ from .output.svg import write_svg
 from .primitives import build_object
 from .scene import validate_camera
 from .shadow import clip_mesh_to_plane, foot, shadow_loop, shadow_matrix, shadow_w
-
-try:  # M2 HOOK: curved primitives (other track); absent until M2 lands
-    from . import curved as _curved  # noqa: F401
-except ImportError:  # pragma: no cover - depends on the other track
-    _curved = None
 
 _ORIGIN_H = np.array([0.0, 0.0, 1.0])
 
@@ -179,7 +212,7 @@ def _loop_entries(sh: dict, loop_vertex_ids, origins, oid: str, lid: str, ground
                 entries.append(ground_name(("clip", len(ground)), X[:3] / X[3]))
             else:  # ("dir", i, j) or ("arc", k): a direction vertex (w = 0)
                 d = V[row]
-                entries.append({"direction": [float(d[0]), float(d[1]), float(d[2])]})
+                entries.append({"direction": [float(d[0]) + 0.0, float(d[1]) + 0.0, float(d[2]) + 0.0]})
         else:
             vid = int(loop_vertex_ids[src])
             origin = vid if origins is None else origins[vid]
@@ -271,10 +304,8 @@ def shadow_geometry(scene: dict) -> dict:
     for obj in objects:
         obj["lights"] = {}
         if obj["analytic"] is not None:
-            # M2 HOOK: curved primitives get their silhouette / terminator / shadow conics from
-            # castplane.curved (other track).  Until then they keep the M0 behaviour (edges only).
-            if _curved is not None and hasattr(_curved, "stage_a_object"):
-                shadows.extend(_curved.stage_a_object(obj, lights, pi, tol, receiver["id"], warnings))
+            # curved primitives: silhouette / terminator / shadow conics from castplane.curved (§5.6)
+            shadows.extend(_curved.stage_a_object(obj, lights, pi, tol, receiver["id"], warnings))
             continue
         below = (to_homogeneous(obj["mesh"]["vertices"]) @ pi) < -tol
         obj["ground_mesh"] = None
@@ -434,13 +465,16 @@ def _rays(rec: dict, cam: dict, light: dict, ok, P_uv, S_uv, Q_uv) -> list:
     elif fp["at_infinity"] is not None:
         kinds.append(("FQ", extended_segments(Q_uv, S_uv)))
     kinds.append(("PQ", np.stack([P_uv, Q_uv], axis=1)))
+    # one clip call for all kinds (fixed operand order: kind-major, then vertex), contract §2.8
+    clipped, keep = clip_segments_uv(np.concatenate([seg for _k, seg in kinds], axis=0), cam["rect"])
+    pts = (clipped + 0.0).tolist()
+    keep = keep.tolist()
     per_vertex = {nm: [] for nm in names}
-    for kind, seg in kinds:
-        clipped, keep = clip_segments_uv(seg, cam["rect"])
-        pts = (clipped + 0.0).tolist()
+    for k, (kind, _seg) in enumerate(kinds):
+        base = k * n
         for i, nm in enumerate(names):
-            if keep[i]:
-                per_vertex[nm].append({"kind": kind, "point": nm, "points": pts[i]})
+            if keep[base + i]:
+                per_vertex[nm].append({"kind": kind, "point": nm, "points": pts[base + i]})
     for nm in names:
         out.extend(per_vertex[nm])
     return out
@@ -526,13 +560,16 @@ def project_scene(scene: dict, A: dict, camera=None) -> dict:
     light_id = A["lights"][0]["id"] if A.get("lights") else None
     objects = []
     for obj in A["objects"]:
-        rec = _project_object(obj, cam, tol, light_id)
-        if bool(np.any(rec["behind"])):
-            warnings.append(make_warning("POINT_BEHIND_CAMERA", [obj["id"]]))
-        objects.append(rec)
-        # M2 HOOK: curved outlines / terminators / shadow conics are projected by castplane.curved
-        if obj["analytic"] is not None and _curved is not None and hasattr(_curved, "stage_b_object"):
+        if obj["analytic"] is not None:
+            # curved object: outline / terminator / shadow conics and named points from castplane.curved;
+            # its approximate mesh is never projected (contract §2.4)
+            rec = {"id": obj["id"], "type": obj["type"], "analytic": True}
             _curved.stage_b_object(obj, rec, cam, tol, warnings)
+        else:
+            rec = _project_object(obj, cam, tol, light_id)
+            if bool(np.any(rec["behind"])):
+                warnings.append(make_warning("POINT_BEHIND_CAMERA", [obj["id"]]))
+        objects.append(rec)
     lights = []
     for lt in A.get("lights", []):
         lrec, w = _project_light(lt, cam, tol)
@@ -600,14 +637,88 @@ def _light_points(points: dict, lt: dict):
                             "at_infinity": True, "image": img["point"]}
 
 
+def _arc_drawables(a: dict) -> dict:
+    """Drawables (canvas mm) of a stage-B arc record (contract §2.6 output rules): ``ellipses`` for a
+    whole circle in front of the near plane whose image is a healthy ellipse and of which some part
+    lies inside the extended canvas (``visible`` non-empty; the whole ``<ellipse>`` is then written and
+    overflows the canvas harmlessly, contract §2.2), ``arcs`` (SVG ``A`` parameters, flags decided by
+    the arc midpoint) for visible ellipse arcs, sampled ``polylines`` (64 segments per full circle,
+    proportionally fewer, minimum 8) otherwise.  Nothing is drawn when ``visible`` is empty."""
+    out = {"polylines": [], "arcs": [], "ellipses": []}
+    H, rho = a["H"], a["rho"]
+    healthy = a["kind"] == "ellipse" and not a["sampled"]
+    if a["whole_circle"] and healthy and a["visible"]:
+        params = ellipse_params(np.array(a["conic"]))
+        if params is not None:
+            centre, (major, minor), rot = params
+            out["ellipses"].append({"centre": [float(centre[0]) + 0.0, float(centre[1]) + 0.0],
+                                    "rx": float(major) + 0.0, "ry": float(minor) + 0.0,
+                                    "rotation_deg": math.degrees(rot) + 0.0})
+            return out
+    for lo, hi in a["visible"]:
+        if healthy:
+            p = ellipse_arc_params(H, rho, lo, hi)
+            if p is not None:
+                out["arcs"].append({"start": (p["start"] + 0.0).tolist(), "end": (p["end"] + 0.0).tolist(),
+                                    "rx": p["axes"][0] + 0.0, "ry": p["axes"][1] + 0.0,
+                                    "rotation_deg": math.degrees(p["rotation"]) + 0.0,
+                                    "large_arc": p["large_arc"], "sweep": p["sweep"],
+                                    "theta": [lo + 0.0, hi + 0.0]})
+                continue
+        pts = sample_arc(H, rho, lo, hi, sample_count(lo, hi))          # (n + 1, 3), all x3 > 0
+        out["polylines"].append((divide(pts) + 0.0).tolist())
+    return out
+
+
+def _conic_doc_entry(a: dict, with_back: bool = False) -> dict:
+    """Contract §3.1 conic entry ``{conic, kind, arc, circle, map}`` (+ ``sampled``, ``which`` and the
+    drawables of :func:`_arc_drawables`; ``back`` for objects-layer arcs)."""
+    entry = {"conic": a["conic"], "kind": a["kind"], "arc": a["arc"], "circle": a["circle"], "map": a["map"],
+             "sampled": bool(a["sampled"]), "which": a["which"],
+             "visible": [[lo + 0.0, hi + 0.0] for lo, hi in a["visible"]]}
+    if with_back:
+        entry["back"] = bool(a["back"])
+    entry.update(_arc_drawables(a))
+    return entry
+
+
+def _segment_uv(seg_h, keep: bool):
+    return (divide(np.asarray(seg_h)) + 0.0).tolist() if keep else None
+
+
+def _compose_curved(rec: dict, points: dict, edges: list, form_shadow: list, outlines: list) -> dict:
+    """Stage C of a curved object: named points, outline generators / conics, terminator entries.
+    Returns ``{light id: [shadow conic entries]}`` for the ``shadows`` block."""
+    oid = rec["id"]
+    _finite_points(points, rec["point_names"], rec["world"], rec["image_h"], rec["behind"])
+    generators = [{"from": e["from"], "to": e["to"], "back": False, "segment": _segment_uv(e["segment_h"], e["keep"])}
+                  for e in rec["gen_edges"]]
+    outlines.append({"object": oid, "generators": generators,
+                     "conics": [_conic_doc_entry(a, with_back=True) for a in rec["outline_arcs"]]})
+    term = []
+    for items in rec["terminator"].values():
+        for it in items:
+            if "segment" in it:
+                seg = _segment_uv(it["segment_h"], it["keep"])
+                term.append({"segment": list(it["segment"]), "polylines": [seg] if seg is not None else []})
+            else:
+                term.append(_conic_doc_entry(it))
+    if term:
+        form_shadow.append({"object": oid, "faces": [], "terminator": term, "polygons": []})
+    return {lid: [_conic_doc_entry(a) for a in arcs] for lid, arcs in rec["shadow_arcs"].items()}
+
+
 def compose(scene: dict, B: dict) -> dict:
     """Stage C: the §6.2 geometry document (contract §3.1), canonical floats, sorted point names."""
     cam = B["camera"]
-    points, edges, form_shadow = {}, [], []
+    points, edges, form_shadow, outlines = {}, [], [], []
+    conics_by = {}
     for rec in B["objects"]:
         if rec.get("analytic"):
-            # contract §2.4: the mesh of a curved primitive exists only for bounding boxes; its
-            # outline generators / cap conics (§2.10) come from the curved track (M2), not from the mesh
+            # contract §2.4 / §2.10: a curved primitive contributes its outline generators, cap conics,
+            # terminator and construction points, never its approximate mesh
+            for lid, entries in _compose_curved(rec, points, edges, form_shadow, outlines).items():
+                conics_by[(rec["id"], lid)] = entries
             continue
         # bulk conversion to Python floats (+ 0.0 canonicalises -0.0) keeps this loop cheap (§8 performance)
         _finite_points(points, rec["point_names"], rec["world"], rec["image_h"], rec["behind"])
@@ -645,8 +756,8 @@ def compose(scene: dict, B: dict) -> dict:
             "receiver": s["receiver"],
             "object": s["object"],
             "outline": s["loops"][0] if s["loops"] else [],
-            "loops": s["loops"],
-            "conics": [],
+            "loops": list(s["loops"]),
+            "conics": conics_by.get((s["object"], s["light"]), []),
             "unbounded": bool(s["unbounded"]),
             "polygons": s["polygons"],
         })
@@ -656,7 +767,8 @@ def compose(scene: dict, B: dict) -> dict:
         "shadow_vp": None, "shadow_vp_at_infinity": None,
         "rays": [], "checks": [], "segments": [],
     }
-    # points / edges are canonical by construction (bulk + 0.0 above); the small blocks go through canonical()
+    # points, edges, shadows, form_shadow and outlines are canonical by construction (every float went
+    # through ``+ 0.0`` in bulk, contract §2.8); only the small blocks go through canonical()
     doc = canonical({
         "canvas_mm": [float(c) for c in cam["canvas_mm"]],
         "camera": {
@@ -665,8 +777,6 @@ def compose(scene: dict, B: dict) -> dict:
             "horizon_line": list(hz["line"]),
             "principal_point": [cam["u0"], cam["v0"]],
         },
-        "shadows": shadows,
-        "form_shadow": form_shadow,
         "construction": construction,
         "horizon": {
             "v_mm": hz["v_mm"],
@@ -678,6 +788,9 @@ def compose(scene: dict, B: dict) -> dict:
     })
     doc["points"] = points
     doc["edges"] = edges
+    doc["shadows"] = shadows
+    doc["form_shadow"] = form_shadow
+    doc["outlines"] = outlines
     return doc
 
 

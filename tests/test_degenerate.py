@@ -402,6 +402,53 @@ def test_point_light_at_the_camera_centre_has_undefined_light_point():
     finite_and_drawable(doc)
 
 
+# --------------------------------------------------------------------------- M2: curved degeneracies
+def test_point_light_inside_a_sphere_only_warns():
+    """Contract §2.6 / §2.9 ``LIGHT_INSIDE_OBJECT``: no shadow, no terminator and no construction points for
+    that sphere; everything else (its outline, the other objects' shadows) is drawn."""
+    ball = {"id": "ball", "type": "sphere", "radius": 0.8, "transform": {"position": [0.0, 5.0, 0.0]}}
+    crate = {"id": "crate", "type": "box", "size": [1.0, 1.0, 1.0], "transform": {"position": [2.5, 5.0, 0.0]}}
+    lamp = {"id": "lamp", "type": "point", "position": [0.2, 5.1, 0.9]}         # inside the ball
+    scene = scene_with([ball, crate], lamp, {"position": [3.0, -2.0, 2.0], "target": [0.0, 5.0, 0.5]})
+    doc = castplane.render(scene)["geometry"]
+    inside = [w for w in doc["warnings"] if w["code"] == "LIGHT_INSIDE_OBJECT"]
+    assert [w["ids"] for w in inside] == [["ball"]] and "sphere" in inside[0]["message"]
+    sh = [s for s in doc["shadows"] if s["object"] == "ball"][0]
+    assert sh["outline"] == [] and sh["loops"] == [] and sh["conics"] == [] and sh["polygons"] == []
+    assert not sh["unbounded"]
+    assert not any(n.startswith("ball.") and ".og" not in n for n in doc["points"])
+    assert not any(f["object"] == "ball" for f in doc["form_shadow"])
+    assert all(r[1].split(".")[0] == "crate" for r in doc["construction"]["rays"])
+    assert [s for s in doc["shadows"] if s["object"] == "crate"][0]["outline"]
+    assert [o["object"] for o in doc["outlines"]] == ["ball"] and doc["outlines"][0]["conics"]
+    svg = finite_and_drawable(doc)
+    assert '<g id="objects.ball"' in svg and '<g id="form_shadow.ball"' not in svg
+
+
+def test_point_light_exactly_at_a_cylinder_cap_height():
+    """Spec §5.7 rows 4 and 6 at once: the top cap is parallel to the light (``FACE_PARALLEL_TO_LIGHT``,
+    unlit) and the top generator endpoints are at the light's height (``VERTEX_NOT_BELOW_LIGHT``): the top
+    arc has no shadow, the generators end in direction vertices and the drawn region is the unbounded wedge
+    checked against the ray caster in image space."""
+    cyl = {"id": "drum", "type": "cylinder", "radius": 0.4, "height": 1.5, "transform": {"position": [0.0, 5.0, 0.0]}}
+    lamp = {"id": "lamp", "type": "point", "position": [2.5, 4.0, 1.5]}
+    scene = scene_with([cyl], lamp, {"position": [-1.0, -3.0, 3.0], "target": [0.0, 5.0, 1.0]})
+    doc = castplane.render(scene)["geometry"]
+    codes = warning_codes(doc["warnings"])
+    assert "VERTEX_NOT_BELOW_LIGHT" in codes and "FACE_PARALLEL_TO_LIGHT" in codes
+    assert all(w["ids"] == ["drum"] for w in doc["warnings"] if w["code"] in ("VERTEX_NOT_BELOW_LIGHT",
+                                                                               "FACE_PARALLEL_TO_LIGHT"))
+    sh = doc["shadows"][0]
+    assert sh["unbounded"] and any(isinstance(e, dict) for e in sh["outline"])
+    assert "drum.g0.base.shadow.lamp" in doc["points"] and "drum.g0.top.shadow.lamp" not in doc["points"]
+    assert [c["which"] for c in sh["conics"]] == ["base"]             # the top arc (w_S = 0) casts nothing
+    assert {r[1] for r in doc["construction"]["rays"]} <= {"drum.g0.base", "drum.g1.base", "drum.g0.base.foot",
+                                                            "drum.g1.base.foot"}
+    iou, outside, horizon_ok = image_space_reference(scene, doc)
+    assert iou >= 0.99 and outside == 0 and horizon_ok
+    finite_and_drawable(doc)
+
+
 def unbounded_scenes():
     base = load_scene(EXAMPLES / "construction_demo.json")
     tower = {"id": "tower", "type": "box", "size": [1.0, 1.0, 3.0], "transform": {"position": [0.0, 5.0, 0.0]}}

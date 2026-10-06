@@ -1,5 +1,8 @@
 """Nonzero-winding polygon rasterizer and IoU for the ray-casting comparison (spec §7.3,
-contract §1).  Shares no code with ``castplane``.  Vectorised with numpy."""
+contract §1), plus the reconstruction of ground polygons from the §6.2 shadow loops of a
+geometry document (named points -> their world coordinates; direction entries of unbounded
+outlines -> a point far away along the direction).  Shares no code with ``castplane``.
+Vectorised with numpy."""
 
 from __future__ import annotations
 
@@ -47,3 +50,45 @@ def iou(a, b) -> float:
     if union == 0:
         return 1.0
     return float(np.count_nonzero(a & b)) / union
+
+
+# --------------------------------------------------------------------------- §6.2 loops -> ground polygons
+def loop_entries_to_ground(doc: dict, loop, centre, far: float) -> np.ndarray:
+    """World ground ``(x, y)`` polygon of one §6.2 loop: named points are looked up in
+    ``doc["points"]`` (they must lie on the receiver), direction entries become the point
+    ``centre + far · d`` (``far`` large against the compared window: the chord then deviates
+    from the true ray by ``O(window / far)`` inside the window)."""
+    out = []
+    for entry in loop:
+        if isinstance(entry, str):
+            p = doc["points"][entry]
+            assert "world" in p, f"{entry} is not a finite point"
+            w = p["world"]
+            assert abs(w[2]) <= 1e-9, f"shadow point {entry} is not on the ground: z = {w[2]}"
+            out.append([w[0], w[1]])
+        elif isinstance(entry, dict) and "direction" in entry:
+            d = np.asarray(entry["direction"], dtype=np.float64)
+            assert abs(d[2]) <= 1e-9, f"direction entry {entry} is not in the ground plane"
+            n = float(np.hypot(d[0], d[1]))
+            assert n > 0.0
+            out.append([centre[0] + far * d[0] / n, centre[1] + far * d[1] / n])
+        elif isinstance(entry, dict) and "world" in entry:
+            w = entry["world"]
+            out.append([w[0], w[1]])
+        else:  # pragma: no cover - an entry kind this harness does not know
+            raise AssertionError(f"unknown §6.2 loop entry {entry!r}")
+    return np.asarray(out, dtype=np.float64).reshape(-1, 2)
+
+
+def doc_ground_loops(doc: dict, centre, far: float, objects=None) -> list:
+    """Every §6.2 shadow loop of the document (of the given ``objects`` when not None) as a ground
+    polygon; loops with fewer than three vertices are skipped."""
+    loops = []
+    for sh in doc["shadows"]:
+        if objects is not None and sh["object"] not in objects:
+            continue
+        for loop in sh["loops"]:
+            poly = loop_entries_to_ground(doc, loop, centre, far)
+            if poly.shape[0] >= 3:
+                loops.append(poly)
+    return loops
