@@ -1,0 +1,136 @@
+{
+ "description": "tests.reference.random_scenes.make_scene(3, n_objects=3): prism, cylinder, cone; directional light (passes the spec 7.3 ray-cast gate)",
+ "version": "0.1",
+ "units": "m",
+ "up": "z",
+ "objects": [
+  {
+   "id": "obj0",
+   "type": "prism",
+   "polygon": [
+    [
+     0.736028,
+     0.494335
+    ],
+    [
+     -0.895808,
+     0.002198
+    ],
+    [
+     0.465747,
+     -0.689359
+    ]
+   ],
+   "height": 1.5488,
+   "transform": {
+    "position": [
+     0.6944,
+     1.9027,
+     0.161049
+    ],
+    "rotation_deg": [
+     1.1718,
+     -4.856,
+     40.9219
+    ]
+   }
+  },
+  {
+   "id": "obj1",
+   "type": "cylinder",
+   "radius": 0.6177,
+   "height": 0.7976,
+   "transform": {
+    "position": [
+     -1.6128,
+     -1.4881,
+     0.17555
+    ],
+    "rotation_deg": [
+     0.0,
+     0.0,
+     0.5364
+    ]
+   }
+  },
+  {
+   "id": "obj2",
+   "type": "cone",
+   "radius": 0.4828,
+   "height": 1.6146,
+   "transform": {
+    "position": [
+     -1.006,
+     -3.2732,
+     1e-06
+    ],
+    "rotation_deg": [
+     0.0,
+     0.0,
+     10.9246
+    ]
+   }
+  }
+ ],
+ "lights": [
+  {
+   "id": "light",
+   "type": "directional",
+   "direction": [
+    0.14877195530691262,
+    0.539701837984106,
+    0.8286065600698174
+   ]
+  }
+ ],
+ "receivers": [
+  {
+   "id": "ground",
+   "type": "plane",
+   "normal": [
+    0,
+    0,
+    1
+   ],
+   "offset": 0.0
+  }
+ ],
+ "camera": {
+  "position": [
+   -3.2532,
+   8.746,
+   7.5877
+  ],
+  "target": [
+   -0.6478,
+   -0.1701,
+   1.0458
+  ],
+  "roll_deg": 0.0,
+  "focal_length_mm": 55.41,
+  "frame_mm": [
+   36.0,
+   24.0
+  ],
+  "shift_mm": [
+   0.0,
+   0.0
+  ],
+  "near_m": 0.05
+ },
+ "output": {
+  "canvas_mm": [
+   360.0,
+   240.0
+  ],
+  "layers": [
+   "horizon",
+   "objects",
+   "form_shadow",
+   "cast_shadow",
+   "construction",
+   "labels"
+  ],
+  "png_dpi": 150
+ }
+}

@@ -1,0 +1,138 @@
+{
+ "description": "tests.reference.random_scenes.make_scene(9, n_objects=3): sphere, prism, box; point light (passes the spec 7.3 ray-cast gate)",
+ "version": "0.1",
+ "units": "m",
+ "up": "z",
+ "objects": [
+  {
+   "id": "obj0",
+   "type": "sphere",
+   "radius": 0.4008,
+   "transform": {
+    "position": [
+     1.7286,
+     3.323,
+     0.275473
+    ],
+    "rotation_deg": [
+     0.0,
+     0.0,
+     217.1333
+    ]
+   }
+  },
+  {
+   "id": "obj1",
+   "type": "prism",
+   "polygon": [
+    [
+     0.965521,
+     0.034145
+    ],
+    [
+     -0.772401,
+     0.629864
+    ],
+    [
+     -0.627866,
+     -0.722138
+    ]
+   ],
+   "height": 0.8365,
+   "transform": {
+    "position": [
+     2.2607,
+     3.9019,
+     0.6336
+    ],
+    "rotation_deg": [
+     16.8524,
+     -15.4177,
+     253.9201
+    ]
+   }
+  },
+  {
+   "id": "obj2",
+   "type": "box",
+   "size": [
+    1.4867,
+    1.2207,
+    1.0208
+   ],
+   "transform": {
+    "position": [
+     -0.1782,
+     2.3429,
+     0.191572
+    ],
+    "rotation_deg": [
+     -9.0908,
+     7.4157,
+     332.3658
+    ]
+   }
+  }
+ ],
+ "lights": [
+  {
+   "id": "light",
+   "type": "point",
+   "position": [
+    -5.2287,
+    6.4789,
+    2.9682
+   ]
+  }
+ ],
+ "receivers": [
+  {
+   "id": "ground",
+   "type": "plane",
+   "normal": [
+    0,
+    0,
+    1
+   ],
+   "offset": 0.0
+  }
+ ],
+ "camera": {
+  "position": [
+   2.5239,
+   13.3804,
+   4.6085
+  ],
+  "target": [
+   1.262,
+   2.7559,
+   1.267
+  ],
+  "roll_deg": 0.0,
+  "focal_length_mm": 59.09,
+  "frame_mm": [
+   36.0,
+   24.0
+  ],
+  "shift_mm": [
+   0.0,
+   0.0
+  ],
+  "near_m": 0.05
+ },
+ "output": {
+  "canvas_mm": [
+   360.0,
+   240.0
+  ],
+  "layers": [
+   "horizon",
+   "objects",
+   "form_shadow",
+   "cast_shadow",
+   "construction",
+   "labels"
+  ],
+  "png_dpi": 150
+ }
+}

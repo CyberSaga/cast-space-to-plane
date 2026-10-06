@@ -167,7 +167,7 @@ def _parabola_vertex(A: np.ndarray, b: np.ndarray, c: float):
     return alpha * n + beta * m
 
 
-def centred_conic(C):
+def centred_conic(C, normalized: bool = False):
     """Contract §2.6: the conic translated to its own centre, ``C_c = T^T C T`` with
     ``T = [[I, centre], [0, 1]]`` and ``centre = -A^{-1} C[0:2, 2]`` (``A`` the upper-left
     2x2 block), then max-normalised.  When ``A`` is singular within ``CLASSIFY_TOL``
@@ -182,8 +182,10 @@ def centred_conic(C):
     Returns ``(C_c (3x3), point (2,) | None)`` with ``point`` the centre (ellipse /
     hyperbola), the vertex (parabola) or ``None`` when no translation was applied.
     Degeneracy and conditioning are judged on ``C_c`` so that the verdict is translation
-    invariant (a 0.3 m circle 50 m from the origin is a healthy ellipse)."""
-    N = normalize_conic(C)
+    invariant (a 0.3 m circle 50 m from the origin is a healthy ellipse).  ``normalized``
+    says that ``C`` already is the output of :func:`normalize_conic` (idempotent, so the
+    flag only saves the call)."""
+    N = C if normalized else normalize_conic(C)
     if not np.all(np.isfinite(N)):
         return N, None
     A = N[:2, :2]
@@ -231,9 +233,10 @@ def classify(C, tol: float = CLASSIFY_TOL) -> str:
     return "ellipse" if det2 > 0.0 else "hyperbola"
 
 
-def classify_and_condition(C, tol: float = CLASSIFY_TOL) -> tuple[str, float]:
-    """:func:`classify` and :func:`condition_number` from a single centred conic (same results)."""
-    N = normalize_conic(C)
+def classify_and_condition(C, tol: float = CLASSIFY_TOL, normalized: bool = False) -> tuple[str, float]:
+    """:func:`classify` and :func:`condition_number` from a single centred conic (same results);
+    ``normalized`` as in :func:`centred_conic`."""
+    N = C if normalized else normalize_conic(C)
     if not np.all(np.isfinite(N)):
         return "degenerate", math.inf
     A = N[:2, :2]
@@ -242,7 +245,7 @@ def classify_and_condition(C, tol: float = CLASSIFY_TOL) -> tuple[str, float]:
         return "degenerate", condition_number(N)
     An = A / amax
     det2 = float(An[0, 0] * An[1, 1] - An[0, 1] * An[1, 0])
-    Cc, _centre = centred_conic(N)
+    Cc, _centre = centred_conic(N, normalized=True)
     if not np.all(np.isfinite(Cc)):
         return "degenerate", math.inf
     det3 = float(np.linalg.det(Cc))
@@ -522,9 +525,9 @@ def circle_point(circle: dict, theta) -> np.ndarray:
 
 def _circle_lists(circle: dict) -> dict:
     return {
-        "centre": [float(v) + 0.0 for v in np.asarray(circle["centre"], dtype=np.float64).reshape(3)],
-        "e1": [float(v) + 0.0 for v in np.asarray(circle["e1"], dtype=np.float64).reshape(3)],
-        "e2": [float(v) + 0.0 for v in np.asarray(circle["e2"], dtype=np.float64).reshape(3)],
+        "centre": (np.asarray(circle["centre"], dtype=np.float64).reshape(3) + 0.0).tolist(),
+        "e1": (np.asarray(circle["e1"], dtype=np.float64).reshape(3) + 0.0).tolist(),
+        "e2": (np.asarray(circle["e2"], dtype=np.float64).reshape(3) + 0.0).tolist(),
         "radius": float(circle["radius"]) + 0.0,
     }
 
@@ -543,7 +546,7 @@ def conic_entry(circle: dict, H, arc=None, map: str = "image") -> dict:
     ``CONIC_SAMPLED`` predicate (degenerate or condition number ``> 1e8``); the caller
     emits the warning with the object id.  Every float is canonical (``+ 0.0``)."""
     C = normalize_conic(transform_conic(circle_matrix(circle["radius"]), H))
-    kind, cond = classify_and_condition(C)
+    kind, cond = classify_and_condition(C, normalized=True)
     if arc is not None:
         a, b = float(arc[0]) if not isinstance(arc, dict) else float(arc["theta0"]), \
             float(arc[1]) if not isinstance(arc, dict) else float(arc["theta1"])
@@ -552,7 +555,7 @@ def conic_entry(circle: dict, H, arc=None, map: str = "image") -> dict:
     else:
         arc_out = None
     return {
-        "conic": [[float(v) + 0.0 for v in row] for row in C.tolist()],
+        "conic": (C + 0.0).tolist(),
         "kind": kind,
         "arc": arc_out,
         "circle": _circle_lists(circle),

@@ -5,7 +5,12 @@ build/
 dist/
 .pytest_cache/
 .hypothesis/
+.venv/
+venv/
+.DS_Store
 out/
+*.svg
+!docs/**/*.svg
 *.png
 !docs/**/*.png
 !tests/**/*.png

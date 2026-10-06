@@ -10,6 +10,34 @@ readme = "README.md"
 license = {text = "GPL-3.0-or-later"}
 requires-python = ">=3.10"
 dependencies = ["numpy>=1.24"]
+keywords = [
+    "perspective", "shadow", "cast-shadow", "construction-lines", "vanishing-point",
+    "projective-geometry", "drawing", "illustration", "svg",
+]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Environment :: Console",
+    "Intended Audience :: End Users/Desktop",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: GNU General Public License v3 or later (GPLv3+)",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3 :: Only",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Artistic Software",
+    "Topic :: Multimedia :: Graphics",
+    "Topic :: Scientific/Engineering :: Mathematics",
+]
+
+[project.urls]
+Homepage = "https://github.com/CyberSaga/cast-space-to-plane"
+Repository = "https://github.com/CyberSaga/cast-space-to-plane"
+Issues = "https://github.com/CyberSaga/cast-space-to-plane/issues"
+Documentation = "https://github.com/CyberSaga/cast-space-to-plane/blob/main/docs/USAGE.md"
+Specification = "https://github.com/CyberSaga/cast-space-to-plane/blob/main/docs/spec/spec-v0.1.md"
 
 [project.optional-dependencies]
 png = ["cairosvg>=2.5"]

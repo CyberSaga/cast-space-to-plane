@@ -1,0 +1,212 @@
+# 透視陰影作圖系統（cast-space-to-plane / `castplane`）
+
+在 3D 裡擺好物件、光源與受影面，任選相機位置、角度與焦距，系統輸出**數學正確**的透視線稿、投射陰影，以及畫家能照著畫的**作圖線**：光源點 L′、陰影消失點 F′、每個頂點的 L′P′ 與 F′Q′ 輔助線。作圖線是必要輸出，不是附加功能——引擎能算影子不稀奇，缺的是讓人看懂「影子為什麼落在那裡」的作圖法。
+
+用途：畫漫畫與插畫背景時的透視與陰影底稿。輸出的 SVG 分圖層，可直接疊進繪圖軟體描繪；JSON 記錄畫面上每個點的 3D 來源；PNG 供不吃 SVG 的軟體使用。
+
+v1 範圍（規格 §1）：五種參數化基元（方塊、圓柱、球、圓錐、任意多邊形稜柱）、單一光源（點光或平行光）、單一受影面（無界地面 z = 0）、直線透視相機（含俯仰的三點透視、焦距、主點偏移）、投射陰影與受光／背光判定、SVG / JSON / PNG 輸出，純 Python 函式庫加命令列。多受影面、隱藏線消除、網格匯入、多光源、曲線透視、軟陰影、互動 UI 列入後續版本。
+
+- 規格文件：[`docs/spec/spec-v0.1.md`](docs/spec/spec-v0.1.md)
+- 實作合約（規範性，英文）：[`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md)
+- 命令列與 API 參考：[`docs/USAGE.md`](docs/USAGE.md)
+- 決策紀錄：[`docs/DECISIONS.md`](docs/DECISIONS.md)
+- 一致性測試集：[`tests/conformance/README.md`](tests/conformance/README.md)
+- 效能基準：[`benchmarks/README.md`](benchmarks/README.md)
+
+## 安裝
+
+需要 Python ≥ 3.10；核心只依賴 numpy。
+
+```sh
+git clone https://github.com/CyberSaga/cast-space-to-plane
+cd cast-space-to-plane
+pip install -e .            # 函式庫與 castplane 命令列（SVG + JSON 輸出）
+pip install -e '.[png]'     # 另加 cairosvg，可輸出 PNG（或在 PATH 上放 resvg 也可以）
+pip install -e '.[dev]'     # 開發：pytest、hypothesis、pillow、cairosvg
+```
+
+## 快速開始
+
+### 命令列
+
+```sh
+castplane validate examples/basic.json              # 檢查場景檔；錯誤會指出欄位路徑
+castplane info examples/basic.json                  # 地平線、消失點、L′、F′ 與警告表
+castplane render examples/basic.json -o out         # out/basic.svg 與 out/basic.json
+castplane render examples/basic.json -o out --formats svg,json,png --layers objects,cast_shadow,construction
+castplane render examples/basic.json -o out --camera my_camera.json   # 只換相機（相機 JSON 或另一個場景檔）
+castplane stages examples/basic.json -o stages.json # A 段 / B 段中間結果（除錯與移植用）
+```
+
+`render` 預設只寫 SVG 與 JSON；PNG 要明確以 `--formats` 要求，沒有 cairosvg / resvg 時以結束碼 3 回報。結束碼：0 成功、1 檔案錯誤、2 輸入無效（訊息含欄位路徑，例如 `error: objects[1].radius: must be > 0`）、3 缺少選用相依套件。完整選項見 [`docs/USAGE.md`](docs/USAGE.md)。
+
+### Python API
+
+計算分三段（規格 §3）：A 段只看物件、光源與受影面，B 段才用到相機，C 段整理成文件。換相機只需重跑 B、C。
+
+```python
+import castplane
+from castplane.output.svg import write_svg
+from castplane.output.geometry_json import dumps
+
+scene = castplane.load_scene("examples/basic.json")   # 驗證並補上預設值；錯誤拋 SceneError(field=...)
+A = castplane.shadow_geometry(scene)                   # A 段：世界座標的影子、光輪廓、垂足（與相機無關）
+B = castplane.project_scene(scene, A)                  # B 段：相機投影、近平面裁切、作圖線與自我驗證
+doc = castplane.compose(scene, B)                      # C 段：規格 §6.2 的幾何文件（純 JSON 資料）
+svg = write_svg(doc, layers=["objects", "cast_shadow", "construction"])
+open("out.svg", "w", encoding="utf-8").write(svg)
+open("out.json", "w", encoding="utf-8").write(dumps(doc))
+
+# 只換相機：A 段快取，重算 B、C
+camera = {"position": [0, 0, 3], "target": [0, 5, 0], "focal_length_mm": 50, "frame_mm": [36, 24]}
+doc2 = castplane.compose(scene, castplane.project_scene(scene, A, camera=camera))
+
+# 一次做完：render() = A + B + C + SVG
+result = castplane.render(scene)        # {"geometry": doc, "svg": "<svg …>"}
+```
+
+## 作圖線是什麼
+
+![construction_demo 的輸出：三個物件、點光源，紅線 L′P′、藍線 F′Q′、綠線 P′Q′](docs/images/construction_demo.png)
+
+上圖由 `castplane render examples/construction_demo.json -o out --formats png --dpi 120` 產生（為了閱讀把透明背景改成白色）。畫家在紙上重建影子只需要兩個點和兩條線（規格 §2、§5.5）：
+
+| 記號 | 意義 | 圖中位置 |
+| --- | --- | --- |
+| **L′（光源點）** | 光源 L 在畫面上的投影。點光源時是有限點；光源在觀者後方時仍是有限點，但落在地平線下方，稱**反光點**；平行光時 L′ 是一個消失點，可能在畫面外甚至無窮遠（此時作圖線互相平行）。 | 左上角紅色圓圈 `L′`，標籤 `L.lamp` |
+| **F′（陰影消失點）** | 光源垂足 F（光源沿地面法線投到地面的點）在畫面上的投影。平行光時 F′ 落在地平線上。 | 左下角藍色菱形 `F′`，標籤 `F.lamp` |
+| **P′、Q′** | 物件頂點 P 與其垂足 Q（P 正下方的地面點）的投影。 | 頂點標籤 `v0`…`v7` |
+| **L′P′（紅線）** | 光線：從光源點經過頂點。影子點一定在這條線上。 | 紅色細線 |
+| **F′Q′（藍線）** | 影線：從陰影消失點經過垂足。影子點也一定在這條線上。 | 藍色細線 |
+| **S′** | 兩線交點就是頂點影子 S 的投影。系統同時直接算 S = M·P 再投影，兩者必須在 1e-6 mm 內相同——這是每次輸出都做的自我驗證（`construction.checks`）。 | 影子多邊形的角 |
+| **P′Q′（綠線）** | 頂點垂線，連接頂點與其垂足，是畫家找 Q′ 的工具。 | 綠色細線 |
+
+只有**光輪廓邊**（相鄰兩面一受光、一背光）的頂點需要作圖線，它們的影子連起來就是影子輪廓。曲面基元的作圖點是切線母線端點（圓柱 `g0/g1.base/top`、圓錐 `g0/g1.base` 與 `apex`）與球的輪廓圓四個象限點（`sil.0..3`）及球心 `c`；影子邊界以圓錐曲線精確輸出。
+
+退化情況（光源在觀者後方、光源方向與畫面平行、頂點高於點光源、頂點在相機後方……）不會中斷輸出，而是回報結構化警告（代碼 + 相關 id），見規格 §5.7 與 [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) §2.9。
+
+## 輸出格式（規格 §6）
+
+三種輸出用同一套畫面座標：單位 mm、原點在畫幅中心、u 向右、v 向上（主點在 `shift_mm` 處）；寫 SVG 時翻轉 v 並平移到左上角，`viewBox` 等於 `canvas_mm`。
+
+### SVG 圖層（由下而上）
+
+| `<g id>` | 內容 | 預設樣式 |
+| --- | --- | --- |
+| `horizon` | 地平線、x/y/z 消失點（VPx、VPy、VPz）、主點 PP | 細灰線、小圓點與名稱 |
+| `objects` | 物件所有邊；曲面基元為相機輪廓母線與端面圓錐曲線。背面邊虛線（子群組 `objects.<id>.front` / `.back`） | 實線 0.3 mm；背面虛線 0.2 mm |
+| `form_shadow` | 背光面（陰）填色；曲面為明暗交界線（`form_shadow.<id>.terminator`） | 半透明藍灰填色、細線 |
+| `cast_shadow` | 影子多邊形，每個光源一個子群組 `cast_shadow.<light>`；曲面另附精確圓錐曲線輪廓 | 半透明黑填色加輪廓，`fill-rule="nonzero"` |
+| `construction` | L′、F′ 標記，作圖線 L′P′（紅 `#d33`）、F′Q′（藍 `#36c`）、頂點垂線 P′Q′（綠 `#3a3`） | 0.15 mm |
+| `labels` | 頂點編號、作圖點名稱、`L.<light>` / `F.<light>`、物件 id | 2.2 mm 小字 |
+
+`output.layers` 或 `--layers` 選擇子集，順序固定。v1 不消隱，所有邊都畫。
+
+### JSON 幾何（規格 §6.2）
+
+每個 2D 點都記錄來源 3D 點：`points[name] = {world, image, depth}`（`image` 為 `[u, v]`，在相機後方時為 `null`）；方向點（平行光的 L、F）為 `{direction, at_infinity: true, image}`。點名規則：
+
+| 名稱 | 意義 |
+| --- | --- |
+| `<物件>.v<k>` | 網格頂點 k（方塊 v0–v3 底面、v4–v7 頂面；稜柱 v0..n−1 底面、vn..2n−1 頂面） |
+| `<物件>.v<k>.shadow.<光源>` | 該頂點在受影面上的影子 S（只有光輪廓頂點、且影子有限時） |
+| `<物件>.v<k>.foot` | 該頂點的垂足 Q |
+| `L.<光源>`、`F.<光源>` | 光源與其垂足 |
+| `<物件>.s<k>.<光源>` | 地面交點：物件被地面切開時插入的點，以及曲面影子多邊形的取樣點（本身就是自己的影子與垂足，無作圖線） |
+| `<物件>.c`、`<物件>.sil.<k>`、`<物件>.g<k>.base/.top`、`<物件>.apex` | 曲面基元的作圖點（球心、輪廓圓象限點、切線母線端點、圓錐頂點），同樣可加 `.shadow.<光源>` / `.foot` |
+| `<物件>.og<k>.base/.top` | 相機輪廓母線端點（隨相機改變，不在 `edges[]` 中，無作圖線） |
+
+其他區塊：`edges[]`（`from`、`to`、`silhouette`、`back`、`segment` 畫面線段）、`shadows[]`（`outline` / `loops` 點名或 `{"direction": …}` 方向頂點、`polygons` 裁切後的可畫多邊形、`conics` 圓錐曲線、`unbounded`）、`form_shadow[]`、`outlines[]`（曲面物件的相機輪廓）、`construction`（`light_point`、`shadow_vp`、`rays`、`segments`、`checks`）、`horizon`（`v_mm`、`line`、`vanishing_points`）、`warnings[]`（`{code, ids, message}`）。浮點數以最短往返表示寫出、鍵排序，相同輸入產生位元相同的檔案。完整鍵表在 [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) §3.1。
+
+### PNG
+
+由 SVG 柵格化（cairosvg，或 PATH 上的 resvg），解析度 `png_dpi`（或 `--dpi`），像素尺寸 `round(canvas_mm · dpi / 25.4)`，背景透明。
+
+## 場景 JSON 參考（規格 §4）
+
+座標系右手系、Z 向上、單位公尺、地面 z = 0；物件錨點在**底面中心**，放在地面上時 `position[2] = 0`。完整範例見 [`examples/basic.json`](examples/basic.json)，各範例說明見 [`examples/README.md`](examples/README.md)。未知鍵會被忽略。
+
+| 區塊 | 欄位 | 規則與預設 |
+| --- | --- | --- |
+| 頂層 | `version` | 必填，必須是 `"0.1"` |
+| | `units`、`up` | 預設 `"m"`、`"z"`，目前只接受這兩個值 |
+| `objects[]` | `id` | 必填、唯一、非空、不含 `.` |
+| | `type` | `box`（`size` 三個正數）、`cylinder` / `cone`（`radius`、`height` 正數）、`sphere`（`radius`）、`prism`（`polygon` 至少 3 個 `[x, y]`、不共線、不自交；順時針輸入會自動反向；`height`） |
+| | `transform` | 選填；`position` 預設 `[0, 0, 0]`，`rotation_deg` 預設 `[0, 0, 0]`（Z-Y-X 順序的歐拉角，`R = Rz·Ry·Rx`）；`scale` 不允許（用 size 參數） |
+| `lights[]` | | v1 恰好一個；`id` 唯一 |
+| | `type` | `point`（`position`）或 `directional`（`direction` 指向光源，長度必須為 1，容差 1e-9） |
+| `receivers[]` | | v1 恰好一個；`type: "plane"`、`normal` 必須是 `[0, 0, 1]`、`offset` 必須是 0（預設 0） |
+| `camera` | 姿態 | `position` + `target`（≠ position）**或** `position` + `yaw_deg` + `pitch_deg`，二擇一；`roll_deg` 預設 0 |
+| | 鏡頭 | `focal_length_mm` > 0；`frame_mm` 兩個正數；`shift_mm` 主點偏移，預設 `[0, 0]`；`near_m` > 0，預設 0.05 |
+| `output` | `canvas_mm` | 兩個正數，長寬比必須等於 `frame_mm` 的長寬比（容差 1e-9） |
+| | `layers` | 六個圖層 id 的子集，預設全部；輸出順序固定 |
+| | `png_dpi` | 正數，預設 300 |
+
+違反任一規則時 `load_scene` 拋出 `SceneError`，`field` 屬性是 JSON 路徑（例如 `camera.target`、`objects[2].polygon`、`output.canvas_mm`），命令列以結束碼 2 回報。幾何退化（光源在地面下、頂點高於點光源……）**不是**錯誤，只產生警告。
+
+## 數學模型摘要（規格 §5）
+
+全程用齊次座標 X = (x, y, z, w)，w = 0 為無窮遠點；點光與平行光、有限點與消失點共用同一套 4×4 公式。
+
+| 步驟 | 公式 |
+| --- | --- |
+| 受影面與光源 | π = (n, d)，n·x + d = 0；點光 L = (l, 1)，平行光 L = (l, 0)（l 指向光源，單位長） |
+| 受光判定 | lit(f) ⇔ n_f · (l − w·p) > 0，p 為面上一點；兩種光源同式 |
+| 光輪廓邊 | 相鄰兩面 lit 值不同的邊；只有其頂點需要投影 |
+| 平面投影矩陣 | M = (πᵀL)·I₄ − L·πᵀ，影子點 S = M·P；S 的 w ≤ 0 表示頂點不低於點光源（影子無界） |
+| 垂足 | Q = (n·n)·P − (n·p + w_P·d)·(n, 0)，光源垂足 F 同式（平行光時 F 自動成為無窮遠點） |
+| 相機投影 | x̃ = K·[R \| t]·X，K = [[f, 0, u₀], [0, f, v₀], [0, 0, 1]]，(u, v) = (x̃₁/x̃₃, x̃₂/x̃₃)；先在齊次空間裁切近平面（x̃₃ ≥ near），最後才除以 w |
+| 作圖線與自我驗證 | S′ ∼ (L′ × P′) × (F′ × Q′) ∼ K[R \| t]·M·P；地平線為受影面無窮遠線的投影，消失點為 (d, 0) 的投影 |
+| 曲面基元 | 圓以 3×3 矩陣 C 表示，E 為圓平面到世界齊次座標的 4×3 嵌入；H = K[R \| t]·M·E，影子圓錐曲線 C′ = H⁻ᵀ·C·H⁻¹（實作用伴隨矩陣，奇異時不會拋例外）。球的光輪廓圓心 c + (r²/\|l − c\|²)(l − c)、半徑 r·√(1 − r²/\|l − c\|²)；圓柱與圓錐的光輪廓為兩條切線母線加端面圓弧 |
+| 數值 | float64；容差 ε = 1e-9 × 場景尺度；齊次向量以最大分量正規化；所有判定用內積符號加容差 |
+
+## 測試策略（規格 §7）
+
+四層測試，從數學不變量到獨立對照組，最後固定成一致性測試集：
+
+| 層 | 內容 | 執行 |
+| --- | --- | --- |
+| 單元與不變量（§7.1） | 作圖法 = 直接計算（1e-6 mm）、影子與相機無關（1e-9 m）、點光趨近平行光（1e-4 m）、剛體等變（1e-6 mm）、齊次尺度不變（1e-9）、無 NaN / Inf | `python3 -m pytest -q`（全套約 800 個測試，1.5–2 分鐘） |
+| 解析案例（§7.2） | 單位方塊 h/(h−1)、太陽 45° / 30° 影長、球影橢圓閉式解、平視與俯仰相機 | `python3 -m pytest tests/test_analytic.py tests/test_curved.py -q` |
+| 退化情況（§5.7） | 每列至少一個測試，檢查警告代碼與輸出有限 | `python3 -m pytest tests/test_degenerate.py -q` |
+| 光線投射對照組（§7.3） | 亂數場景（1–10 個基元，含凹稜柱與光源垂足在凹口內的案例），地面取樣網格逐點射線測試，影子多邊形柵格化後 IoU ≥ 0.99（另逐物件比對）；與幾何法零程式碼共用 | `python3 -m pytest tests/test_raycast.py -q`（較慢） |
+| 屬性測試（§7.4） | hypothesis 生成隨機場景與相機，驗證全部不變量，並針對退化情況生成專門分佈 | `python3 -m pytest tests/test_property.py -q`（較慢） |
+| 一致性測試集（§7.5） | 34 個案例的輸入與 §6.2 輸出，畫面座標容差 1e-6 mm、警告代碼集合相同；TypeScript 移植的合約 | `python3 -m pytest tests/test_conformance.py -q`；重新產生：`python3 tools/regen_conformance.py --reason "…"` |
+| 效能基準（§8） | 100 個基元、約 1 萬條邊：完整渲染 < 1 s、只換相機 < 100 ms | `python3 benchmarks/bench.py`（不在預設測試內；目前量測狀態見 `benchmarks/README.md`） |
+
+## 里程碑（規格 §10）
+
+| 里程碑 | 交付物 | 狀態 |
+| --- | --- | --- |
+| M0 骨架與相機 | 場景 JSON 讀取與驗證、相機矩陣、近平面裁切、方塊線框 SVG、地平線與消失點 | 完成 |
+| M1 多面體投射陰影與作圖線 | 平面投影矩陣、受光判定、光輪廓邊、影子多邊形、L′ F′ 與作圖線、六個 SVG 圖層、JSON 輸出 | 完成 |
+| M2 曲面基元與形體陰影 | 圓柱、球、圓錐的圓錐曲線影子、明暗交界線、SVG ellipse 輸出 | 完成 |
+| M3 核心穩定（閘門） | 光線投射對照組、屬性測試、一致性測試集 v1、效能基準 | **部分完成**：光線投射對照（IoU ≥ 0.99）、屬性測試、一致性測試集 v1 與效能基準腳本皆已交付；§8 的「完整渲染 < 1 s」已達標，但「只換相機 < 100 ms」**尚未達標**（目前約 110–130 ms，關閉循環 GC 約 100 ms；量測結果見 `benchmarks/README.md`）。規格 §8 將數字定為目標值，合約 §4 已記錄決策：v1 以 `--gate full` 作為 CI 閘門，只換相機一項列為已知未達標、留待 M7 互動介面時收斂 |
+| M4 多受影面與隱藏線 | 有界受影面、逐面裁切、轉折影、取樣式隱藏線、visibility 欄位 | 未排程／預留（`receivers` 為陣列、`edges[].visibility` 已存在） |
+| M5 網格匯入 | OBJ、glTF/GLB 載入、前處理管線 | 未排程／預留（內部網格表示即 M5 格式） |
+| M6 多光源 | 多光源影子分組、疊影規則、SVG 子圖層 | 未排程／預留（`lights` 為陣列、影子帶 light id、`cast_shadow.<light>` 子圖層） |
+| M7 TypeScript 移植與網頁 UI | 核心移植、three.js 場景顯示、相機拖曳 | 未排程／預留（一致性測試集即合約） |
+| M8 STEP 評估 | 可行性報告、原型解析器 | 未排程／預留 |
+
+## 與規格文件的差異
+
+實作過程中規格有幾處互相矛盾或留白，決定如下（完整理由見 [`docs/DECISIONS.md`](docs/DECISIONS.md)，合約原文見 `docs/ARCHITECTURE.md` 中標記 **[decision]** 的條目）：
+
+1. **畫布 257×182 改為 273×182。** 規格 §4 範例的 `canvas_mm = [257, 182]` 與 `frame_mm = [36, 24]` 長寬比不符（1.412 ≠ 1.5），違反規格自己的規則，因此驗證會拒絕它；`examples/basic.json` 改用 273×182（3:2，高度不變）。要用 JIS B5 紙請改片幅（例如 `[36, 25.5]`）或把畫布改成 3:2。
+2. **畫面座標原點在畫幅中心，主點在 `shift_mm` 處。** 規格 §2 說「原點在主點」，§5.4 的 K 矩陣卻把主點放在 (u₀, v₀)；兩者只在無移軸時一致。採 K 公式：原點在畫幅中心，主點標記畫在 (u₀, v₀) = shift_mm × 放大倍率；所有 `image` 座標與容差都是畫布 mm（畫幅依 `canvas_mm / frame_mm` 放大）。
+3. **有向射影幾何與 §7.1 第 5 列的測試範圍。** 所有齊次向量都有方向（有限點 w = +1、方向向量指向射線前進方向、平行光指向光源、受影面以光源為正側），符號判定依此；因此「齊次尺度不變」只以正純量測試輸入，正負純量測試與符號無關的輸出，而且因為場景文件只含標準形輸入，這條不變量在輔助函式層級驗證，無法透過 `render` 端到端驗證。
+4. **光源在觀者後方時作圖線畫成 2D 線段。** 規格 §5.7 第 1 列說「作圖線經近平面裁切後繪製」，但 3D 線段 LP 的影像是 2D 線段 L′P′ 的補集，而 S′ 可證明落在 L′ 與 P′ 之間；畫家畫的是 2D 線段，所以作圖線一律是涵蓋 L′、P′、S′（及 F′、Q′、S′）的 2D 線段，只做畫布矩形裁切。
+5. **場景尺度的定義。** 容差 ε = 1e-9 × 場景尺度；A 段的尺度只取物件網格頂點包圍盒（不含相機，確保影子與相機無關），B、C 段再加入相機位置；光源位置一律排除，否則 10⁶ m 外的點光源會讓容差失效。
+6. **L′ / F′ 未定義的情況。** 平行光沿受影面法線時 F = 0，不輸出 `F.<light>`、`shadow_vp` 與 F′Q′ 線，自我驗證退化為 S′ = Q′；點光源在相機中心時 L′ = 0，不輸出 `light_point` 與 L′P′ 線，自我驗證退化為 S′ = P′。兩者都不發警告（並非退化，只是量不存在）。
+7. **無界影子的無窮遠弧。** 影子多邊形在無窮遠處的兩個方向頂點之間，區域取「在地面 (x, y) 中由出射方向逆時針掃到入射方向」的弧，並插入中間方向頂點使每段小於 90°；畫出來的多邊形以放大 25% 的畫布矩形在齊次座標裁切後才除以 w。
+8. **繪圖管線順序。** 每條線段與多邊形固定：4D 近平面裁切 → 乘 P → 2D 齊次矩形裁切（畫布外擴 25%）→ 最後除以 x̃₃。L、F 與消失點永遠不被近平面裁切或設為 null（反光點必須存在）。
+9. **部分埋入地面的物件。** 多面體先被受影面切成實體，切面的受光側邊成為光輪廓邊，影子正是地面以上部分的影子（含足印）；曲面基元把輪廓迴圈在地面下的部分換成地面截面的受光邊界折線，而不是直線弦。
+10. **圓錐曲線的分類與取樣。** 分類必須平移不變（以中心化後的矩陣判定橢圓／拋物線／雙曲線、退化與條件數 > 1e8 → 取樣折線並回報 `CONIC_SAMPLED`）；取樣只在輸出階段，每整圓 64 段、弧按比例、最少 8 段，段數四捨五入而非無條件進位。
+11. **受影面限制。** v1 驗證只接受 `normal = [0, 0, 1]`、`offset = 0`（規格 §1「v1 只有地面」），雖然 §4 表格的寫法看似允許任意平面。
+12. **規格 §5.7 第 6 列的「容差內取等號為負」** 實作為：內積絕對值 ≤ 容差的面視為「平行」，不受光並回報 `FACE_PARALLEL_TO_LIGHT`（圓柱、圓錐的端面也適用）。
+13. **SVG 不依賴 svgwrite。** 規格 §8 列 svgwrite 為選用相依；實作以標準函式庫字串輸出，核心真正只依賴 numpy。
+14. **相機滾轉方向、yaw/pitch 形式、`det R = −1`** 等慣例在規格中未定義，見 `docs/ARCHITECTURE.md` §2.2（含測試向量）。
+
+## 授權
+
+GPL-3.0-or-later，見 [`LICENSE`](LICENSE)。

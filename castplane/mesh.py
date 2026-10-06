@@ -7,6 +7,8 @@ A mesh is a plain dict::
     faces        : list of int lists, counter-clockwise seen from outside, planar
     face_normals : (k, 3) outward unit normals
     edge_faces   : (m, 2) int, the two faces adjacent to each edge
+    edge_flipped : (m, 2) bool, whether that face traverses the edge as j -> i (derived, optional:
+                   lets the silhouette walk orient edges without scanning the face cycles)
     vertex_names : ["v0", "v1", ...]
 
 Builders produce local coordinates (contract §2.1): box spans
@@ -40,9 +42,14 @@ def _group_faces(faces):
 
 def face_normals_newell(vertices, faces):
     """Outward unit normals by Newell's method, vectorised per face length (contract §2.4)."""
+    return _face_normals_grouped(vertices, faces, _group_faces(faces))
+
+
+def _face_normals_grouped(vertices, faces, groups: dict):
+    """:func:`face_normals_newell` with the face groups of :func:`_group_faces` already built."""
     verts = np.asarray(vertices, dtype=np.float64)
     normals = np.zeros((len(faces), 3), dtype=np.float64)
-    for length, (idx, arr) in _group_faces(faces).items():
+    for length, (idx, arr) in groups.items():
         p = verts[arr]                                   # (k, L, 3)
         q = np.roll(p, -1, axis=1)                       # next vertex
         n = np.einsum("klj,klm->kjm", p, q)              # (k, 3, 3) pairwise products
@@ -66,30 +73,41 @@ def mesh_from_faces(vertices, faces, vertex_names=None) -> dict:
     is raised.
     """
     verts = np.asarray(vertices, dtype=np.float64).reshape(-1, 3)
-    faces = [list(int(v) for v in f) for f in faces]
-    pair_list, owner_list = [], []
-    for length, (idx, arr) in _group_faces(faces).items():
+    faces = [list(map(int, f)) for f in faces]
+    n_v = int(verts.shape[0])
+    groups = _group_faces(faces)
+    pair_list, owner_list, flip_list = [], [], []
+    for length, (idx, arr) in groups.items():
         nxt = np.roll(arr, -1, axis=1)
+        flipped = arr > nxt                              # the face traverses this edge as j -> i
         pairs = np.stack([arr, nxt], axis=2).reshape(-1, 2)
         pairs.sort(axis=1)
         pair_list.append(pairs)
         owner_list.append(np.repeat(idx, length))
+        flip_list.append(flipped.reshape(-1))
     pairs = np.concatenate(pair_list, axis=0)
     owners = np.concatenate(owner_list, axis=0)
-    edges, inverse, counts = np.unique(pairs, axis=0, return_inverse=True, return_counts=True)
+    flips = np.concatenate(flip_list, axis=0)
+    # one integer key per sorted pair (i < j < n_v): a 1-D unique is much faster than the row-wise one
+    # and yields the same lexicographic edge order
+    keys = pairs[:, 0].astype(np.int64) * max(n_v, 1) + pairs[:, 1].astype(np.int64)
+    uniq, inverse, counts = np.unique(keys, return_inverse=True, return_counts=True)
     inverse = inverse.reshape(-1)
     if np.any(counts != 2):
         raise ValueError("mesh is not a closed manifold: every edge must have exactly two faces")
+    edges = np.stack([uniq // max(n_v, 1), uniq % max(n_v, 1)], axis=1)
     order = np.lexsort((owners, inverse))
     edge_faces = owners[order].reshape(-1, 2)
+    edge_flipped = flips[order].reshape(-1, 2)
     if vertex_names is None:
         vertex_names = [f"v{i}" for i in range(verts.shape[0])]
     return {
         "vertices": verts,
         "edges": edges.astype(np.int64),
         "faces": faces,
-        "face_normals": face_normals_newell(verts, faces),
+        "face_normals": _face_normals_grouped(verts, faces, groups),
         "edge_faces": edge_faces.astype(np.int64),
+        "edge_flipped": edge_flipped,
         "vertex_names": list(vertex_names),
     }
 

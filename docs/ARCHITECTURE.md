@@ -27,17 +27,19 @@ castplane/                  pure library, depends only on numpy (stdlib otherwis
   output/geometry_json.py   §6.2 JSON geometry document (deterministic, sorted keys, canonical floats)
   output/svg.py             §6.1 layered SVG written with stdlib string building (NO svgwrite dependency)
   output/png.py             §6.3 rasterize via cairosvg (optional extra), resvg CLI fallback if present on PATH
-  cli.py                    `castplane` CLI (argparse): render / validate / stages
+  cli.py                    `castplane` CLI (argparse): render / validate / stages / info; exit codes 0 ok, 1 I/O,
+                            2 invalid input (SceneError with field path / usage), 3 missing optional dependency (PNG)
 tests/
   reference/raycast.py      independent ray-casting reference (shares NO code with castplane except reading scene dicts)
   reference/raster.py       nonzero-winding polygon rasterizer for IoU
   reference/random_scenes.py random scene generator (seeded)
   test_*.py                 unit / invariant / analytic / degenerate / property / raycast tests
   conformance/cases/*.json  inputs ; conformance/expected/*.json outputs (§6.2 format) ; test_conformance.py ; README.md ; CHANGELOG.md
-tools/regen_conformance.py  regenerates expected files; requires --reason, appends to CHANGELOG.md
-benchmarks/bench.py         §8 performance targets
-examples/*.json             example scenes (the §4 scene is examples/basic.json)
-docs/                       spec + this document + user docs
+tools/regen_conformance.py  regenerates expected files; requires --reason, appends a versioned entry to CHANGELOG.md
+benchmarks/bench.py         §8 performance targets (benchmarks/README.md records the measured status)
+examples/*.json             example scenes (the §4 scene is examples/basic.json); examples/README.md
+docs/                       spec + this document + user docs: README.md (root), docs/USAGE.md (CLI + API reference),
+                            docs/DECISIONS.md (the [decision] list in Traditional Chinese), docs/images/
 ```
 
 Package name on PyPI/import: `castplane`. CLI entry point: `castplane`.
@@ -153,7 +155,18 @@ Unknown keys are ignored. `load_scene` returns a new plain dict with all default
   solid and its lit-side edges become silhouette edges), so the drawn shadow is exactly that of the part above the
   ground. Ground-crossing vertices are named `<obj>.s<k>.<light>` in order of first appearance; they are their own
   shadow and foot and get no construction ray. Clipping the loop edge-by-edge to `πᵀX ≥ 0` is only the fallback when
-  the cut surface is not a closed manifold. Curved objects use the loop clip (straight chord) — see §2.6.
+  the cut surface is not a closed manifold.
+- **Buried curved objects [decision]** (`curved._ground_chain`): the `OBJECT_BELOW_RECEIVER` predicate is evaluated on
+  the exact surface (`curved.plane_min`: lowest point of the sphere / rim circles / apex), never on the approximate mesh.
+  The part of the silhouette loop below the receiver is removed exactly like the Sutherland–Hodgman clip above, and each
+  removed part is replaced by the **lit boundary of the object's ground cross-section** between the exit and the entry
+  crossing (the counter-clockwise boundary path of the convex cross-section, i.e. the part adjacent to the lit lateral
+  surface), **not** by a straight chord: the cut face is unlit, so its lit-side boundary is a silhouette edge and the
+  drawn shadow is exactly that of the part above the ground (footprint included, §7.3). The chain is emitted as ground
+  `segment` pieces (`which == "ground"`) between sampled points of the cross-section curve (64 per full turn of the
+  base-circle parameter), so it is a polyline in `loops` / `polygons` and does **not** appear in `shadows[].conics`.
+  The straight chord remains the fallback when the cross-section is degenerate (no area) or when no cross-section point
+  is on the lit side (a lit cap chord, which the chord reproduces exactly).
 
 ### 2.4 Mesh representation (also the M5 future mesh format)
 ```
@@ -163,7 +176,12 @@ faces    : list of int lists (CCW seen from outside), planar
 face_normals : (k,3) outward unit normals
 edge_faces : (m,2) int  the two faces adjacent to each edge (closed manifold ⇒ always 2)
 vertex_names : ["v0", "v1", ...]   (names are "<object id>.v<k>")
+edge_flipped : (m,2) bool  DERIVED, optional: whether each edge runs against the orientation of its two faces
 ```
+Derived, optional tables that the batched stage B uses and that `build_object` adds to the object record:
+`face_first`, `faces_padded`, `face_lens`, `face_point_names` (padded face index tables, `primitives.face_tables`),
+`edge_templates` and `world_lists` (camera-free §3.1 record templates cached by stage A and shared by reference
+with every document composed from it). Every slow scalar path still works when they are absent.
 Builders: `box_mesh(size)`, `prism_mesh(polygon, height)`; cylinder/cone/sphere also produce a mesh
 (caps as n-gons / lateral quads, sphere as UV-sphere, 32 segments) ONLY for bounding boxes / scene scale and
 the M5-shaped representation; their shadows and outlines are computed analytically (§5.6), never from that mesh.
@@ -194,8 +212,10 @@ where `(e1, e2, a)` is the rotated local frame.
 ### 2.6 Curved primitives (§5.6)
 - Circle in its own plane: `C = diag(1,1,−ρ²)` in local coordinates `(x,y,1)`; embedding
   `E = [e1 e2 c ; 0 0 1]` (4×3) with `e1,e2` an orthonormal basis of the plane and `c` the centre.
-  Circle frame for silhouette circles (sphere): `e1 = normalize(n × z)` (fallback `n × x` when `|n × z| ≤ 1e-9`),
-  `e2 = n × e1`. Cap circles of cylinders/cones use the object's rotated local `(e1, e2)`.
+  Circle frame for silhouette circles (sphere): `e1 = normalize(n × z)`, `e2 = n × e1`; when `|n × z| ≤ 1e-9`
+  (light along world z) the fallback is `n × e1_obj`, then `n × e2_obj`, the sphere's **rotated local axes**
+  (`conics.circle_frame(n, fallback=(e1, e2))`), so that the sampled outline rotates with the scene (§7.1 row 4);
+  for an unrotated sphere this is exactly `n × x`. Cap circles of cylinders/cones use the object's rotated local `(e1, e2)`.
 - Any 3×3 projective map `H` of the circle gives conic `C' = adj(H)ᵀ · C · adj(H)` (adjugate, so singular `H`
   does not raise; classify as `degenerate` and emit `CONIC_SAMPLED`). Ground shadow conic uses `H = P·M·E`;
   image of a circle (outline / terminator / end caps) uses `H = P·E`. Conic matrices are normalised by their
@@ -210,7 +230,11 @@ where `(e1, e2, a)` is the rotated local frame.
   light silhouette (drawn in the image, not on the ground); cast shadow = the light silhouette mapped by `M`.
 - Sphere: silhouette circle centre `c + (r²/|v|²)·v`, radius `r·√(1 − r²/|v|²)`, normal `v/|v|`
   with `v = l − c` (point); directional: great circle through `c`, normal `l`. Light inside the sphere (`|v| ≤ r`) →
-  warning `LIGHT_INSIDE_OBJECT`, no shadow.
+  warning `LIGHT_INSIDE_OBJECT`, no shadow. A point light inside a cylinder / cone (lateral surface wholly unlit and
+  no lit cap) gives the same code with a message naming the kind ("inside the cylinder" / "inside the cone").
+- Caps of cylinders / cones are faces for §5.7 row 6: `|n·(l − w·p)| ≤ tol_lit` for the base (normal `−a`) or the
+  top (normal `+a`, cylinder only) cap → `FACE_PARALLEL_TO_LIGHT` (ids `[object]`), the cap counts as unlit
+  (`curved._cap_parallel`).
 - Cylinder (base `b`, axis `a`, radius `r`, height `h`, frame `e1,e2`): `q = l − w·b`, `q_⊥ = q − (q·a)·a`,
   `θ_l = atan2(q_⊥·e2, q_⊥·e1)`, `d = |q_⊥|`. Lit angular interval of the lateral surface is centred on `θ_l`
   with half-width `α = acos(r/d)` for a point light (`d ≤ r + tol` ⇒ nothing lit), `α = π/2` for a directional
@@ -227,7 +251,9 @@ where `(e1, e2, a)` is the rotated local frame.
   else none. This is the "tangent from the apex" condition of §5.6 (tangents from the central projection of `L`
   through the apex onto the base plane, `l_a = v − (h/(q·a))·q`; the formula already covers the `q·a > 0`
   complement case). Loop = base arc + generator + apex + generator.
-- Output of curved outlines: `conics` entries `{conic: 3x3, kind, arc: {theta0, theta1} | null, circle: {centre, e1, e2, radius}, map: "shadow"|"image"}`;
+- Output of curved outlines: `conics` entries (full field list in §3.1)
+  `{conic: 3x3, kind, arc: {theta0, theta1} | null, circle: {centre, e1, e2, radius}, map: "shadow"|"image", sampled,
+  which, visible, polylines, arcs, ellipses}` (+ `back` in `outlines[]`);
   `arc` is the circle-parameter range (radians, CCW in the circle's `(e1,e2)` frame, `theta1 > theta0`);
   `null` = full conic. The 4-D parametrisation `X(θ) = T·E·(ρ cos θ, ρ sin θ, 1)` (`T = M` for shadows, `I` for
   image circles) is kept so that:
@@ -238,7 +264,17 @@ where `(e1, e2, a)` is the rotated local frame.
     direction vertices are inserted at the exact `w_S = 0` crossings with the §2.5 rule, and the arc samples + the
     generator/segment shadows are joined into one oriented homogeneous polygon that goes through the full
     drawing pipeline; `unbounded=true`. A hyperbola/parabola polyline must never cross `w = 0`.
-  * Sampling (64 segments per full circle, proportionally fewer for arcs, minimum 8) happens only in `output/`.
+  * Sampling (64 segments per full circle, proportionally fewer for arcs, minimum 8; the count is
+    `max(8, round(64·|θ1 − θ0| / 2π))` — **rounded to the nearest integer, not `ceil`**, so that an arc at an exact
+    fraction of the circle keeps its count under the rounding noise of §7.1 rows 3–4; `conics.sample_count`) is used
+    in two places and nowhere else: (a) the conic **drawables** (`polylines` / `arcs` / `ellipses` of §3.1) are sampled
+    only at the output stage (stage C / `output/`); the exact conics and their 4-D parametrisation are never sampled in
+    stage A/B — near clipping, canvas clipping and the `w_S = 0` crossings are solved in closed form on them; (b) the
+    **filled shadow polygon** of a curved object (`shadows[].polygons[0]`, `curved.shadow_polygon_h`) and the lit
+    boundary of the **ground cross-section** of a partly buried curved object (`curved._ground_section`, §2.3) are
+    sampled with the same rule in stage A (64 per full circle, minimum 8), because they are part of the
+    camera-independent outline (its finite vertices are the named ground points `<obj>.s<k>.<light>` with world
+    coordinates in the document); the exact boundary is kept beside them in `shadows[].conics` (`map == "shadow"`).
 - Ellipses are written as `<ellipse>` (full) or `<path d="M … A rx ry rot large sweep x y">` (arc, flags decided
   by checking the arc's midpoint); parabola/hyperbola/degenerate are sampled polylines.
 
@@ -267,8 +303,13 @@ where `(e1, e2, a)` is the rotated local frame.
   what a painter draws and overrides the wording of spec §5.7 row 1.
 - Only silhouette vertices get construction rays (§5.1); for curved objects: sphere → centre `<obj>.c` and
   silhouette-circle points `<obj>.sil.0..3 = centre ± r_s·e1, ± r_s·e2` (frame of §2.6); cylinder → generator
-  endpoints `<obj>.g0.base/top`, `<obj>.g1.base/top`; cone → `<obj>.g0.base`, `<obj>.g1.base`, `<obj>.apex`.
-  The sphere centre's shadow is a construction aid, not the centre of the shadow ellipse.
+  endpoints `<obj>.g0.base/top`, `<obj>.g1.base/top` (ordered `θ_l − α`, `θ_l + α`); cone → `<obj>.g0.base`,
+  `<obj>.g1.base`, `<obj>.apex`. The sphere centre's shadow is a construction aid, not the centre of the shadow ellipse.
+- **Camera outline points**: the tangent generators of the camera silhouette of a cylinder / cone end in the named
+  points `<obj>.og<k>.base` / `<obj>.og<k>.top` (`k ∈ {0, 1}`; a cone's `.top` is its apex). They exist only for the
+  current camera (a flat cone seen from above has none), so they are **camera dependent**: they are `points` entries
+  and the segments are `outlines[].generators` (drawn in the objects layer), never `edges[]` entries (whose list is
+  camera independent); they get no construction rays, no shadow / foot points and no labels.
 
 ### 2.8 Numerics (§5.8)
 - float64 everywhere. Stage A uses `scene_scale_A = max(1, extent of the bounding box of all object mesh vertices)`
@@ -298,10 +339,10 @@ where `(e1, e2, a)` is the rotated local frame.
 | `LIGHT_BELOW_RECEIVER` | point `πᵀL ≤ tol`, or directional `n·l < −tol_dir` | `[light]` | no shadows / rays |
 | `VERTEX_NOT_BELOW_LIGHT` | some silhouette vertex `w_S ≤ tol` | `[object]` | unbounded outline (§2.5/2.6) |
 | `OBJECT_BELOW_RECEIVER` | some vertex `πᵀP < −tol` | `[object]` | loop clipped to the ground (§2.3) |
-| `POINT_BEHIND_CAMERA` | some drawn point `ν < 0` | `[object]` or `[light]` | image null / segment clipped / ray omitted |
-| `FACE_PARALLEL_TO_LIGHT` | some face \|n_f·(l − w·p)\| ≤ tol | `[object]` | face unlit |
-| `LIGHT_INSIDE_OBJECT` | sphere \|l − c\| ≤ r (point light) | `[object]` | no shadow / terminator for that object |
-| `CONIC_SAMPLED` | conic degenerate or cond > 1e8 | `[object]` | polyline instead of ellipse |
+| `POINT_BEHIND_CAMERA` | some drawn point of the object (vertex, shadow, foot, ground point, curved point, part of a drawn circle) `ν < 0` | `[object]` (never `[light]`: `L` / `F` are not nulled) | image null / segment clipped / ray omitted |
+| `FACE_PARALLEL_TO_LIGHT` | some face (incl. a cylinder / cone cap) \|n_f·(l − w·p)\| ≤ tol | `[object]` | face unlit |
+| `LIGHT_INSIDE_OBJECT` | sphere \|l − c\| ≤ r; cylinder / cone with nothing lit (point light) | `[object]` | no shadow / terminator / construction points for that object; message names the kind |
+| `CONIC_SAMPLED` | some conic of the object degenerate or cond > 1e8 | `[object]` | polyline instead of ellipse / arc |
 | `CONSTRUCTION_CHECK_SKIPPED` | §2.7 skip conditions | `[point name]` | check entry absent |
 
 ### 2.10 SVG layers (§6.1) — exact ids, order (bottom → top) and default styles (lengths in mm)
@@ -313,10 +354,17 @@ where `(e1, e2, a)` is the rotated local frame.
 | 4 | `cast_shadow` | one sub-group `<g id="cast_shadow.<light id>">` per light; outlines as paths (`fill-rule="nonzero"`) | `fill="#000" fill-opacity="0.3" stroke="#000" stroke-width="0.25"` |
 | 5 | `construction` | `L'` (marker: circle r=1 + "L′"), `F'` (marker: diamond + "F′"), rays `L'P'` (`stroke="#d33"`), `F'Q'` (`stroke="#36c"`), verticals `P'Q'` (`stroke="#3a3"`) | `stroke-width="0.15"` |
 | 6 | `labels` | vertex ids (`v0`…), point names, object ids at the object's top vertex | `font-size="2.2"` `fill="#444"` font-family `sans-serif` |
-`write_svg(doc, layers)` emits only the requested subset, preserving this order. Back edge: both adjacent faces
-have `lit(n_f, p, (C,1)) == False` (camera as light). Cap-circle arcs of curved objects are split at the camera
-outline generators; the arc on the far side is back. PNG (§6.3): transparent background, size =
-`round(canvas_mm · dpi / 25.4)` px.
+`write_svg(doc, layers)` emits only the requested subset, preserving this order; a layer without content is still
+written as an empty `<g>`. Sub-groups: `objects.<id>` with `objects.<id>.front` / `.back`, `form_shadow.<id>` with
+`form_shadow.<id>.terminator`, `cast_shadow.<light>` with `cast_shadow.<light>.<object>.conics` (stroke-only exact
+conic outline on top of the filled polygon), `construction.LP` / `.FQ` / `.PQ`. The writer draws the document's
+drawables (`edges[].segment`, `shadows[].polygons`, `form_shadow[].polygons`, `outlines[].generators[].segment`, the
+`polylines` / `arcs` / `ellipses` of conic entries, `construction.segments`, `horizon.segment`), all already in canvas mm.
+Back edge: both adjacent faces have `lit(n_f, p, (C,1)) == False` (camera as light). Cap-circle arcs of curved objects
+are split at the camera outline generators; the arc on the far side is back. Labels: vertex ids (`v<k>`) and curved
+construction points (`c`, `sil.<k>`, `g<k>.base/.top`, `apex`), `L.<light>` / `F.<light>`, and the object id at its
+highest labelled point; shadows, feet, ground points (`s<k>`) and camera outline points (`og<k>`) get no label.
+PNG (§6.3): transparent background, size = `round(canvas_mm · dpi / 25.4)` px.
 
 ## 3. Public API (pure functions on JSON-serialisable data + numpy)
 ```python
@@ -333,30 +381,65 @@ Stage A content: per object the mesh, lit flags, silhouette loops, homogeneous s
 vertices), feet `Q`, curved silhouette/terminator circles and shadow parametrisations, `F`, `L`, warnings.
 Stage B content: the camera matrices and every projected point/segment/polygon in homogeneous 2-D form plus
 the near-clipped drawables; stage C turns B into the §6.2 document (with division and canonical floats).
+Also public: `castplane.scene.load_camera(path_or_dict)` (a camera block or a scene holding one; used by the CLI
+`--camera`), `castplane.output.geometry_json.dumps(doc)` / `write_geometry_json(doc, path)` (the deterministic
+serialisation of §3.1), `castplane.errors.warning_codes(warnings)`; the full list is in `docs/USAGE.md`.
 
 ### 3.1 §6.2 geometry document (keys, deterministic)
 ```
-canvas_mm, camera {P: 3x4, C: [x,y,z], horizon_line: [a,b,c]},
+canvas_mm, camera {P: 3x4, C: [x,y,z], horizon_line: [a,b,c], principal_point: [u0,v0]},
 points {name: {world: [x,y,z], image: [u,v] | null, depth: float}   -- finite points
         name: {direction: [dx,dy,dz], at_infinity: true, image: [u,v] | null}},
-edges [{object, from, to, silhouette: bool (w.r.t. light), back: bool (w.r.t. camera), visibility: "visible"}],
-shadows [{light, receiver, object, outline: [point name | {"direction": [dx,dy,dz]}], loops: [[...]], conics: [...], unbounded: bool}],
-form_shadow [{object, faces: [[point names]], terminator: [{conic entry} | {"segment": [name, name]}]}],
+edges [{object, from, to, silhouette: bool (w.r.t. light), back: bool (w.r.t. camera), visibility: "visible",
+        segment: [[u,v],[u,v]] | null}],                             -- polyhedral objects only (camera independent list)
+shadows [{light, receiver, object, outline: [point name | {"direction": [dx,dy,dz]}], loops: [[...]], conics: [...],
+          unbounded: bool, polygons: [[[u,v], ...], ...]}],
+form_shadow [{object, faces: [[point names]], polygons: [[[u,v], ...], ...],
+              terminator: [{conic entry} | {"segment": [name, name], "polylines": [[[u,v],[u,v]]] | []}]}],
+outlines [{object, generators: [{from, to, back: false, segment: [[u,v],[u,v]] | null}], conics: [{conic entry + back}]}],
 construction {light_point: [u,v] | null, light_point_at_infinity: [a,b] | null, shadow_vp: [u,v] | null,
-              shadow_vp_at_infinity: [a,b] | null, rays: [["L", name], ["F", name]], checks: [{point, max_error_mm}]},
-horizon {v_mm: float | null, line: [a,b,c], vanishing_points: {x: [u,v] | null, y: ..., z: ...}},
+              shadow_vp_at_infinity: [a,b] | null, rays: [["L", name], ["F", name]], checks: [{point, max_error_mm}],
+              segments: [{kind: "LP"|"FQ"|"PQ", point: name, points: [[u,v],[u,v]]}]},
+horizon {v_mm: float | null, line: [a,b,c], segment: [[u,v],[u,v]] | null, vanishing_points: {x: [u,v] | null, y: ..., z: ...}},
 warnings [{code, ids, message}]
 ```
-`outline` is the first loop (for compatibility with the spec example), `loops` has all loops. Point names:
-`"<obj>.v<k>"`, `"<obj>.v<k>.shadow.<light>"`, `"<obj>.v<k>.foot"`, `"L.<light>"`, `"F.<light>"`, curved names
-per §2.7 with the same `.shadow.<light>` / `.foot` suffixes. Floats are written with `repr`-style shortest
-round-trip formatting after `+ 0.0`; `json.dumps(doc, sort_keys=True, indent=1, ensure_ascii=False)`.
+`outline` is the first loop (for compatibility with the spec example), `loops` has all loops. Everything named
+`segment`, `segments[].points`, `polygons`, `polylines`, `arcs`, `ellipses` is a **drawable**: canvas mm after the
+full drawing pipeline of §2.2 (near clip, `P`, extended-rectangle clip, division); `null` / empty when nothing is in
+front of the near plane or inside the extended canvas. The SVG writer draws drawables only.
+
+Conic entry (`shadows[].conics`, `outlines[].conics`, `form_shadow[].terminator`):
+```
+{conic: 3x3 (max-normalised, +1 max entry), kind: "ellipse"|"parabola"|"hyperbola"|"degenerate",
+ arc: {theta0, theta1} | null (null = the whole circle), circle: {centre, e1, e2, radius} (world, the 4-D parametrisation),
+ map: "shadow"|"image", sampled: bool (CONIC_SAMPLED predicate), which: "base"|"top"|"silhouette",
+ visible: [[a, b], ...] (circle-parameter intervals in front of the near plane AND inside the extended canvas; empty = nothing drawn),
+ polylines: [[[u,v], ...], ...] (sampled, for parabola / hyperbola / degenerate / sampled conics),
+ arcs: [{start, end, rx, ry, rotation_deg, large_arc, sweep, theta: [a, b]}] (SVG A parameters, sweep in the v-up frame),
+ ellipses: [{centre, rx, ry, rotation_deg}] (only for a whole circle in front of the near plane, healthy ellipse, partly visible),
+ back: bool (outlines[] only; dashed when true)}
+```
+The `cond` of `conics.conic_entry` is dropped from the document. The drawn shadow polygon of a curved object
+(`shadows[].polygons[0]`) is the sampled outline of `curved.shadow_polygon_h` (64 samples per full circle, rule above);
+the exact boundary is in `conics` with `map == "shadow"`.
+
+Point names: `"<obj>.v<k>"`, `"<obj>.v<k>.shadow.<light>"`, `"<obj>.v<k>.foot"`, `"L.<light>"`, `"F.<light>"`
+(direction points with `at_infinity: true` for a directional light; `F.<light>` absent when `F` is undefined, §2.7),
+`"<obj>.s<k>.<light>"` ground-crossing / ground-polyline points (§2.3: their own shadow and foot, no ray), curved
+construction names per §2.7 with the same `.shadow.<light>` / `.foot` suffixes (a curved shadow-polygon vertex that is
+the uncut shadow of a construction point is named by it, e.g. `<obj>.g1.base.shadow.<light>`, `<obj>.sil.k.shadow.<light>`
+at the quarter points of an unclipped sphere circle; every other finite vertex is a ground point), and the camera
+outline points `"<obj>.og<k>.base/.top"`. Floats are written with `repr`-style shortest round-trip formatting after
+`+ 0.0`; `json.dumps(doc, sort_keys=True, indent=1, ensure_ascii=False)`.
 
 ## 4. Testing contract (§7)
 - `tests/test_invariants.py` covers all six §7.1 rows with the stated tolerances. Row 4 (rigid equivariance) uses
   the symmetry group of the ground: rotations about +Z and translations in XY applied to objects, light and
   camera (position + target, roll unchanged; a second variant uses the yaw/pitch form with `yaw += angle`).
-  Row 5 per §2.1 (positive scalars on inputs; either sign on sign-free outputs).
+  Row 5 per §2.1 (positive scalars on inputs; either sign on sign-free outputs). **Limitation**: the scene document
+  only carries canonical inputs (finite positions, unit directions, `w = 1`), so row 5 cannot be exercised through
+  `render`; it is tested at the helper level (`shadow_matrix`, `foot`, `project`, `self_check`, `conic_entry`,
+  `curved.silhouette` / `shadow_outline` with scaled `L`, `π`, `P`, `M`), which is where homogeneous vectors exist.
 - `tests/test_analytic.py` covers all four §7.2 bullets plus the roll test vector of §2.2, the §4 pillar/lamp
   tangent-generator boundaries (`θ_l = −63.43°`, boundaries `−148.30°` and `21.43°`), and the box `h/(h−1)` case.
 - `tests/test_degenerate.py` has at least one test per §5.7 row (six rows) asserting warning codes and finite output.
@@ -364,6 +447,23 @@ round-trip formatting after `+ 0.0`; `json.dumps(doc, sort_keys=True, indent=1, 
   light foot inside a concavity), grid sampling on the ground, IoU ≥ 0.99.
 - `tests/test_property.py` (§7.4): hypothesis strategies for scenes/cameras incl. degenerate distributions
   (light behind camera, light direction parallel to the picture plane, vertices above the light).
-- `tests/conformance/` (§7.5): cases + expected, 1e-6 mm on all `image` coordinates, warning code sets equal;
-  `tools/regen_conformance.py --reason "..."` appends to `tests/conformance/CHANGELOG.md`.
+- `tests/conformance/` (§7.5): `cases/*.json` (spec §4 scenes + a `description` key) and `expected/*.json`
+  (`geometry_json.dumps` of `render(...)["geometry"]`), compared by `tests/test_conformance.py`: every image
+  coordinate / drawable within 1e-6 mm (absolute), every other number within 1e-9 relative (absolute floor 1e-9),
+  every non-number exactly, warning **code sets** equal (and the `(code, ids)` sets). v1 holds 34 cases: the four §7.2
+  analytic cases, every §5.7 row (+ the undefined-`F`/`L'`, light-below-receiver, light-inside-object and cap-at-light-height
+  corner cases), the five example scenes, the concavity case, two partly buried objects, roll + shift and yaw/pitch
+  cameras and six random §7.3 scenes that pass the ray-cast gate. Expected files are regenerated only with
+  `tools/regen_conformance.py --reason "..."` (optionally `--case NAME`), which appends `## v<N> — <date>` to
+  `tests/conformance/CHANGELOG.md`; the set is versioned by `N`. Rules in `tests/conformance/README.md`.
+- `tests/test_cli.py`: render / validate / info / stages, `--camera` (camera-only JSON and scene file), `--layers`,
+  `--formats`, `--quiet`, the warning table and the exit codes (2 for a `SceneError` with the field path).
 - `benchmarks/bench.py`: 100 primitives / ~10k edges < 1 s full render incl. SVG; camera-only re-render < 100 ms.
+  **[decision]** Spec §8 calls these numbers 目標值 (targets). After two vectorisation passes the full render measures
+  ≈ 0.35–0.45 s (PASS) and the camera-only re-render ≈ 110–130 ms with the default cyclic GC (≈ 100 ms with it
+  disabled) on the 4-CPU CI container; the remaining cost is the Python-object floor of the §6.2 document (≈ 15k point
+  dicts, 9k edge dicts, 12.8k ray dicts) plus ≈ 128k SVG coordinates, which numpy-only code cannot remove without
+  changing the document's Python representation. For v1 the camera-only row is therefore recorded as a target
+  that is missed by ≈ 10–30 % on this container, `benchmarks/README.md` carries the measured numbers, the CI gate
+  is `python3 benchmarks/bench.py --gate full`, and closing the gap (a leaner record shape or a compiled
+  formatting path) is deferred to the M7 interactive-UI work, which is where the 100 ms budget matters.

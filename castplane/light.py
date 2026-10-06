@@ -121,8 +121,20 @@ def _directed_silhouette_edges(mesh: dict, lit_flags: np.ndarray) -> list[tuple[
     edges = np.asarray(mesh["edges"], dtype=np.int64)
     edge_faces = np.asarray(mesh["edge_faces"], dtype=np.int64)
     faces = mesh["faces"]
+    sil = silhouette_edges(mesh, lit_flags)
+    flipped = mesh.get("edge_flipped")
+    if flipped is not None and sil.shape[0]:
+        # vectorised form: the orientation of every edge in each adjacent face was recorded by
+        # mesh_from_faces, so the lit face's traversal direction is a table lookup
+        ef = edge_faces[sil]
+        slot = np.where(lit_flags[ef[:, 0]], 0, 1)
+        rev = np.asarray(flipped, dtype=bool)[sil, slot]
+        i, j = edges[sil, 0], edges[sil, 1]
+        a = np.where(rev, j, i)
+        b = np.where(rev, i, j)
+        return list(zip(a.tolist(), b.tolist()))
     out: list[tuple[int, int]] = []
-    for e in silhouette_edges(mesh, lit_flags):
+    for e in sil:
         f0, f1 = int(edge_faces[e, 0]), int(edge_faces[e, 1])
         lit_face = f0 if lit_flags[f0] else f1
         cycle = [int(v) for v in faces[lit_face]]

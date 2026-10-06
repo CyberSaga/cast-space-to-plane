@@ -13,6 +13,16 @@ import numpy as np
 TOL_DIR = 1e-9
 
 
+def row_max_abs(x):
+    """``max |x|`` along the last axis, computed column by column (an order of magnitude faster
+    than a reduction over short rows; the maximum does not depend on the order)."""
+    ax = np.abs(np.asarray(x, dtype=np.float64))
+    m = ax[..., 0]
+    for j in range(1, ax.shape[-1]):
+        m = np.maximum(m, ax[..., j])
+    return m
+
+
 def normalize_max(v):
     """Divide a homogeneous vector by its max-|component|, preserving sign (§5.8, contract §2.8).
 
@@ -20,7 +30,7 @@ def normalize_max(v):
     vector is returned unchanged.
     """
     v = np.asarray(v, dtype=np.float64)
-    m = np.max(np.abs(v), axis=-1, keepdims=True)
+    m = row_max_abs(v)[..., None]
     safe = np.where(m == 0.0, 1.0, m)
     return v / safe
 
@@ -69,7 +79,7 @@ ZERO_REL = 1e-12
 
 def _nonzero_rows(pts, scale):
     """Mask of rows that are not (numerically) the zero vector, relative to ``scale``."""
-    return np.max(np.abs(pts), axis=-1) > ZERO_REL * scale
+    return row_max_abs(pts) > ZERO_REL * scale
 
 
 def clip_segments_halfspace(a, b, fa, fb):
@@ -89,12 +99,15 @@ def clip_segments_halfspace(a, b, fa, fb):
     b_in = fb >= 0.0
     keep = a_in | b_in
     cross = a_in != b_in
+    scale = np.maximum(row_max_abs(a), row_max_abs(b))
+    if not np.any(cross):  # nothing to interpolate: the endpoints are kept or dropped as they are
+        keep &= _nonzero_rows(a, scale) & _nonzero_rows(b, scale)
+        return a, b, keep
     denom = np.where(cross, fa - fb, 1.0)
     x = (fa[:, None] * b - fb[:, None] * a) / denom[:, None]
     a2 = np.where((~a_in & cross)[:, None], x, a)
     b2 = np.where((~b_in & cross)[:, None], x, b)
     # the interpolation of two antipodal directions is the zero vector (no projective point): drop it
-    scale = np.maximum(np.max(np.abs(a), axis=-1), np.max(np.abs(b), axis=-1))
     keep &= _nonzero_rows(a2, scale) & _nonzero_rows(b2, scale)
     return a2, b2, keep
 
@@ -142,3 +155,67 @@ def clip_polygon_halfspace(points, values):
     out = np.array(out, dtype=np.float64).reshape(-1, pts.shape[1])
     # interpolating two antipodal directions gives the zero vector (no projective point): drop it
     return out[_nonzero_rows(out, float(np.max(np.abs(pts))))]
+
+
+def clip_polygons_halfspace(pts, lens, vals):
+    """Batched :func:`clip_polygon_halfspace` on padded polygons (spec §8 performance).
+
+    ``pts`` is ``(N, L, k)`` with the first ``lens[i]`` rows of polygon ``i`` valid and the
+    padding rows zero, ``vals`` ``(N, L)`` the functional at every vertex.  Returns
+    ``(pts2, lens2)`` in the same layout (width = largest surviving polygon, zero padding).
+    Row by row this is exactly :func:`clip_polygon_halfspace` (same interpolation
+    formula, same zero-row filter applied only to polygons that were actually cut),
+    so the two give identical floats; polygons left with fewer than three vertices
+    are kept as they are -- the caller decides what "degenerate" means.
+    """
+    pts = np.asarray(pts, dtype=np.float64)
+    lens = np.asarray(lens, dtype=np.int64)
+    vals = np.asarray(vals, dtype=np.float64)
+    N, L, k = pts.shape
+    if N == 0 or L == 0:
+        return pts, lens
+    idx = np.arange(L)
+    valid = idx[None, :] < lens[:, None]
+    a_in = vals >= 0.0
+    all_in = np.all(a_in | ~valid, axis=1)
+    all_out = np.all(~a_in | ~valid, axis=1)
+    mixed = ~(all_in | all_out)
+    lens2 = np.where(all_out, 0, lens)
+    if not np.any(mixed):
+        return pts, lens2
+    # the polygons that are actually cut: the generic Sutherland-Hodgman step on that subset only
+    sub = np.nonzero(mixed)[0]
+    p = pts[sub]
+    v = vals[sub]
+    ln = lens[sub]
+    vd = valid[sub]
+    nxt = np.where(idx[None, :] + 1 < ln[:, None], idx[None, :] + 1, 0)
+    b = np.take_along_axis(p, nxt[:, :, None], axis=1)
+    fb = np.take_along_axis(v, nxt, axis=1)
+    ain = v >= 0.0
+    bin_ = fb >= 0.0
+    emit_a = vd & ain
+    cross = vd & (ain != bin_)
+    denom = np.where(cross, v - fb, 1.0)
+    x = (v[:, :, None] * b - fb[:, :, None] * p) / denom[:, :, None]
+    out = np.zeros((sub.shape[0], 2 * L, k), dtype=np.float64)
+    out[:, 0::2] = p
+    out[:, 1::2] = x
+    mask = np.zeros((sub.shape[0], 2 * L), dtype=bool)
+    mask[:, 0::2] = emit_a
+    mask[:, 1::2] = cross
+    # interpolating two antipodal directions gives the zero vector (no projective point): drop it
+    scale = np.max(np.abs(p), axis=(1, 2))
+    mask &= row_max_abs(out) > ZERO_REL * scale[:, None]
+    n2 = np.sum(mask, axis=1)
+    order = np.argsort(~mask, axis=1, kind="stable")
+    out = np.take_along_axis(out, order[:, :, None], axis=1)
+    W = int(max(L, int(n2.max())))
+    out = out[:, :W]
+    out[~(np.arange(out.shape[1])[None, :] < n2[:, None])] = 0.0
+    result = np.zeros((N, W, k), dtype=np.float64)
+    result[:, :L] = pts
+    result[sub] = out
+    lens2[sub] = n2
+    return result, lens2
+

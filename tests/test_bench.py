@@ -1,0 +1,278 @@
+"""Regression tests of the spec §8 performance pass (benchmarks/bench.py and the batched kernels).
+
+The benchmark itself is not part of the suite (its timings depend on the machine); these
+tests pin down what the performance work must not change: the benchmark script runs and
+reports its gate, the bulk number formatting of the SVG writer equals the scalar
+:func:`_f` on every kind of value, the SVG writer only uses NumPy APIs that exist in the
+declared ``numpy>=1.24`` floor, the byte-string element assembly equals the scalar element
+writers, the compressed polygon conversion equals the scalar drawing pipeline, the
+per-light ray / check lists equal the per-record ones, and the lists a document shares
+with the cached stage A are canonical and never mutated by a second render.
+"""
+
+import json
+import math
+import pathlib
+import re
+import sys
+
+import numpy as np
+import pytest
+from hypothesis import given, settings
+from hypothesis import strategies as st
+
+import castplane
+from castplane import pipeline as P
+from castplane.camera import camera_matrix
+from castplane.construction import clip_segments_uv, covering_segments
+from castplane.homogeneous import scene_scale, tolerance
+from castplane.output import svg as svg_mod
+from castplane.output.geometry_json import dumps
+from castplane.output.svg import _Canvas, _chunk, _f, _fmt_bytes, _fmt_many, write_svg
+from castplane.scene import load_scene
+from tests.reference import random_scenes
+
+ROOT = pathlib.Path(__file__).resolve().parents[1]
+if str(ROOT / "benchmarks") not in sys.path:
+    sys.path.insert(0, str(ROOT / "benchmarks"))
+import bench  # noqa: E402  (benchmarks/bench.py)
+
+
+# ---------------------------------------------------------------------------
+# benchmark script
+# ---------------------------------------------------------------------------
+
+def test_bench_runs_and_reports_gate(capsys):
+    status = bench.main(["--objects", "6", "-n", "1", "--json", "--gate", "none"])
+    out = json.loads(capsys.readouterr().out)
+    assert status == 0 and out["gate"] == "none"
+    assert out["objects"] == 6 and out["mesh_edges"] > 0 and out["document_edges"] > 0
+    for key in ("full_render_s", "camera_only_s", "camera_only_no_gc_s", "stage_a_s", "svg_s", "json_s"):
+        assert out[key]["min"] > 0.0 and out[key]["median"] >= out[key]["min"]
+    assert out["full_render_s"]["target"] == bench.TARGET_FULL_S
+    assert out["camera_only_s"]["target"] == bench.TARGET_CAMERA_S
+    assert set(out["pass"]) == {"full_render", "camera_only"}
+
+
+def test_bench_text_output_names_the_gate(capsys):
+    status = bench.main(["--objects", "4", "-n", "1", "--gate", "full"])
+    text = capsys.readouterr().out
+    assert "RESULT:" in text and "(gate: full)" in text
+    assert "cyclic GC disabled" in text
+    assert status in (0, 1)
+
+
+@pytest.mark.parametrize("ok_full, ok_cam, gate, expected", [
+    (True, True, "both", 0), (True, False, "both", 1), (False, True, "both", 1),
+    (True, False, "full", 0), (False, True, "full", 1), (False, False, "none", 0),
+])
+def test_exit_status_follows_gate(ok_full, ok_cam, gate, expected):
+    assert bench.exit_status(ok_full, ok_cam, gate) == expected
+
+
+def test_exit_status_rejects_unknown_gate():
+    with pytest.raises(ValueError):
+        bench.exit_status(True, True, "camera")
+
+
+# ---------------------------------------------------------------------------
+# SVG number formatting (bulk == scalar) and the NumPy 1.x API floor
+# ---------------------------------------------------------------------------
+
+def _special_values():
+    halves = [k / 2e4 for k in range(-25, 26)]                      # exact 4-decimal half-ways
+    near = [v + d for v in halves for d in (-1e-9, 1e-9, -1e-13, 1e-13)]
+    big = [1e6, -1e6, 123456.78915, 2.0 ** 31 / 1e4, 2.0 ** 31 / 1e4 + 1.0, 1e15, -1e15, 1e20]
+    odd = [0.0, -0.0, 5e-5, -5e-5, 4.99995e-5, 0.00005, 0.00015, 0.99995, -0.99995, 999.99995,
+           math.nan, math.inf, -math.inf, 1e-300, -1e-300]
+    return halves + near + big + odd
+
+
+def test_fmt_bytes_equals_scalar_f_on_special_values():
+    values = _special_values()
+    assert _fmt_many(values) == [_f(v) for v in values]
+    assert [b.decode() for b in _fmt_bytes(values).tolist()] == [_f(v) for v in values]
+    assert _fmt_many([]) == [] and _fmt_bytes([]).shape == (0,)
+
+
+@settings(max_examples=200, deadline=None)
+@given(st.lists(st.floats(allow_nan=True, allow_infinity=True, width=64), min_size=1, max_size=300))
+def test_fmt_many_equals_scalar_f_property(values):
+    assert _fmt_many(values) == [_f(v) for v in values]
+
+
+def test_fmt_many_random_bulk():
+    rng = np.random.default_rng(20261006)
+    x = np.concatenate([rng.uniform(-500, 500, 20000), rng.uniform(-5e5, 5e5, 2000),
+                        rng.normal(0, 1e-3, 2000), np.round(rng.uniform(-100, 100, 2000), 4)])
+    assert _fmt_many(x) == [_f(v) for v in x.tolist()]
+
+
+def test_svg_writer_uses_only_numpy_1x_string_apis():
+    """pyproject declares ``numpy>=1.24``; ``numpy.strings`` exists only in NumPy >= 2.0 and
+    ``np.char`` in both, so the library must not reference ``np.strings`` anywhere."""
+    pattern = re.compile(r"\bnp\.strings\b|numpy\.strings\b")
+    offenders = [p for p in (ROOT / "castplane").rglob("*.py") if pattern.search(p.read_text(encoding="utf-8"))]
+    assert offenders == []
+    assert hasattr(np.char, "add")
+
+
+# ---------------------------------------------------------------------------
+# byte-string element assembly == scalar element writers
+# ---------------------------------------------------------------------------
+
+def _rng_points(rng, n):
+    return rng.uniform(-300, 400, (n, 2)).tolist()
+
+
+def test_lines_polygons_paths_equal_scalar_writers():
+    rng = np.random.default_rng(7)
+    cv = _Canvas(273.0, 182.0)
+    segments = [[p, q] for p, q in zip(_rng_points(rng, 500), _rng_points(rng, 500))]
+    lines = cv.lines(segments)
+    assert lines.shape == (500,) and lines.dtype.kind == "S"
+    assert _chunk(lines) == ["\n".join(cv.line(a, b) for a, b in segments)]
+    mask = rng.uniform(size=500) < 0.3
+    assert _chunk(lines[mask]) == ["\n".join(cv.line(a, b) for (a, b), m in zip(segments, mask) if m)]
+    assert _chunk(lines[:0]) == [] and cv.lines([]).shape == (0,)
+    polys = [_rng_points(rng, int(k)) for k in rng.integers(3, 12, 60)]
+    records, offsets = cv.polygons(polys)
+    assert offsets.tolist() == np.concatenate([[0], np.cumsum([len(p) for p in polys])]).tolist()
+    assert _chunk(records) == ["\n".join(cv.polygon(p) for p in polys)]
+    a, b = int(offsets[10]), int(offsets[25])
+    assert _chunk(records[a:b]) == ["\n".join(cv.polygon(p) for p in polys[10:25])]
+    entries = [[_rng_points(rng, int(k)) for k in rng.integers(3, 9, int(m))] for m in rng.integers(0, 4, 40)]
+    paths = cv.paths(entries)
+    assert len(paths) == len(entries)
+    for entry, path in zip(entries, paths):
+        if entry:
+            assert path == cv.path(entry)
+    assert cv.pairs(polys[0]) == [f"{_f(u + 136.5)},{_f(91.0 - v)}" for u, v in polys[0]]
+
+
+def test_texts_scalar_offsets_and_attrs():
+    cv = _Canvas(100.0, 80.0)
+    pts = [[1.0, 2.0], [-3.5, 4.25], [10.0, -10.0]]
+    labels = ["a.v0", "b<c", "d&e"]
+    assert cv.texts(pts, labels, None, 0.8, -0.8) == [cv.text(p, s) for p, s in zip(pts, labels)]
+    assert cv.texts(pts, labels, ['x="1"'] * 3, 1.4, 2.4) == [cv.text(p, s, 'x="1"', dx=1.4, dy=2.4)
+                                                             for p, s in zip(pts, labels)]
+    assert cv.texts([], [], None, 0.0, 0.0) == []
+
+
+# ---------------------------------------------------------------------------
+# batched stage-B kernels == scalar kernels
+# ---------------------------------------------------------------------------
+
+@pytest.fixture(scope="module")
+def basic_cam():
+    scene = load_scene(ROOT / "examples" / "basic.json")
+    cam = camera_matrix(scene["camera"], scene["output"]["canvas_mm"])
+    return scene, cam
+
+
+def test_project_polygons_compressed_rows_equal_scalar(basic_cam):
+    scene, cam = basic_cam
+    rng = np.random.default_rng(3)
+    polys = []
+    for _ in range(300):
+        n = int(rng.integers(1, 40))
+        p = np.ones((n, 4))
+        p[:, :3] = rng.uniform(-6, 6, (n, 3)) + np.array([0.0, 3.0, 0.5])
+        if rng.uniform() < 0.3:                       # a few direction vertices (unbounded shadows)
+            k = int(rng.integers(0, n))
+            p[k] = [rng.normal(), rng.normal(), 0.0, 0.0]
+        polys.append(p)
+    pts, lens = P._pad_polygons(polys)
+    batched = P._project_polygons(cam, pts, lens)
+    for p, poly in zip(polys, batched):
+        expected = (P._project_polygon(cam, p) + 0.0).tolist()
+        assert poly == expected
+
+
+def test_project_shadows_batched_equals_per_record(basic_cam):
+    scene, cam = basic_cam
+    A = castplane.shadow_geometry(scene)
+    tol = tolerance(scene_scale(A["vertices"], cam["C"]))
+    lights = [P._project_light(lt, cam, tol)[0] for lt in A["lights"]]
+    by_id = {lt["id"]: lt for lt in lights}
+    recs = list(A["shadows"])
+    empty = dict(recs[0], object="ghost", vertex_ids=np.zeros(0, dtype=np.int64), keep=np.zeros(0, dtype=bool),
+                 P_world=np.zeros((0, 3)), S_world=np.zeros((0, 3)), Q_world=np.zeros((0, 3)), w_S=np.zeros(0),
+                 shadow_names=[], foot_names=[], vertex_names=[], ground_points=[], loops=[], unbounded=False,
+                 S_lists=[], Q_lists=[], G_world=np.zeros((0, 3)), G_lists=[])
+    for order in ([empty] + recs, recs + [empty], [recs[0], empty] + recs[1:]):
+        out, warnings = P._project_shadows(order, cam, tol, by_id)
+        assert len(out) == len(order)
+        for rec, o in zip(order, out):
+            single, w1 = P._project_shadow(rec, cam, tol, lights[0])
+            assert o["rays"] == single["rays"]
+            assert o["checks"] == single["checks"]
+            assert json.dumps(o["segments"]) == json.dumps(single["segments"])
+            assert [p for p in o["polygons"]] == [p for p in single["polygons"]]
+
+
+def test_covering_segments_and_clip_segments_uv_reference():
+    rng = np.random.default_rng(11)
+    n = 400
+    A = rng.uniform(-50, 50, 2)
+    B = rng.uniform(-50, 50, (n, 2))
+    C = rng.uniform(-50, 50, (n, 2))
+    C[:5] = B[:5]                                                   # degenerate rows: B == C
+    seg = covering_segments(A, B, C)
+    assert seg.shape == (n, 2, 2)
+    for k in range(n):
+        d = C[k] - B[k] if np.max(np.abs(C[k] - B[k])) > 1e-12 * max(1.0, np.max(np.abs(B[k]))) else A - B[k]
+        d = d / np.linalg.norm(d)
+        t = [float((A - B[k]) @ d), 0.0, float((C[k] - B[k]) @ d)]
+        lo, hi = min(t), max(t)
+        assert np.allclose(seg[k, 0], B[k] + lo * d, atol=1e-9) and np.allclose(seg[k, 1], B[k] + hi * d, atol=1e-9)
+        # the three points lie on the segment
+        for p in (A, B[k], C[k]):
+            s = float((p - seg[k, 0]) @ d)
+            assert -1e-9 <= s <= hi - lo + 1e-9
+    rect = (-170.0, 170.0, -115.0, 115.0)
+    segs = np.concatenate([seg, np.stack([B, B], axis=1)], axis=0)  # plus zero-length segments
+    out, keep = clip_segments_uv(segs, rect)
+    assert out.shape == (2 * n, 2, 2) and not keep[n:].any()
+    inside = (out[:n][..., 0] >= rect[0] - 1e-9) & (out[:n][..., 0] <= rect[1] + 1e-9) & \
+        (out[:n][..., 1] >= rect[2] - 1e-9) & (out[:n][..., 1] <= rect[3] + 1e-9)
+    assert inside[keep[:n]].all()
+
+
+# ---------------------------------------------------------------------------
+# documents from a cached stage A: shared camera-free lists stay canonical and unchanged
+# ---------------------------------------------------------------------------
+
+def test_cached_stage_a_documents_are_stable_and_serialisable():
+    scene = load_scene(random_scenes.make_benchmark_scene(12, include_curved=True))
+    A = castplane.shadow_geometry(scene)
+    other = dict(scene["camera"], position=[6.0, -28.0, 12.0], target=[0.0, 0.0, 0.5], roll_deg=3.0)
+    doc1 = castplane.compose(scene, castplane.project_scene(scene, A, camera=other))
+    text1 = dumps(doc1)
+    svg1 = write_svg(doc1, layers=scene["output"]["layers"])
+    # a second camera and a second render from the same stage A leave the first document unchanged
+    doc_other = castplane.compose(scene, castplane.project_scene(scene, A))
+    doc2 = castplane.compose(scene, castplane.project_scene(scene, A, camera=other))
+    assert dumps(doc1) == text1 == dumps(doc2)
+    assert write_svg(doc1, layers=scene["output"]["layers"]) == svg1
+    assert dumps(doc_other) != text1
+    # every shared list is a plain, canonical list of Python floats (no numpy, no -0.0)
+    for name, p in doc1["points"].items():
+        for key in ("world", "direction"):
+            if key in p:
+                assert type(p[key]) is list and all(type(v) is float for v in p[key])
+                assert all(not (v == 0.0 and math.copysign(1.0, v) < 0) for v in p[key])
+    for e in doc1["edges"]:
+        assert set(e) == {"object", "from", "to", "silhouette", "back", "visibility", "segment"}
+    # the documents are independent of each other where the camera matters
+    e1 = next(e for e in doc1["edges"] if e["segment"] is not None)
+    e1["segment"][0][0] += 1.0
+    assert dumps(doc2) == text1
+    # and the same scene through render() equals the cached path
+    assert dumps(castplane.render(scene, camera=other)["geometry"]) == text1
+
+
+def test_svg_module_exports():
+    assert svg_mod.LAYER_ORDER == ("horizon", "objects", "form_shadow", "cast_shadow", "construction", "labels")
+    assert callable(svg_mod._fmt_many) and callable(svg_mod._fmt_bytes)

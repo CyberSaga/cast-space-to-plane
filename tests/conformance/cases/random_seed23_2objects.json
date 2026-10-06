@@ -1,0 +1,108 @@
+{
+ "description": "tests.reference.random_scenes.make_scene(23, n_objects=2): box, cone; directional light (passes the spec 7.3 ray-cast gate)",
+ "version": "0.1",
+ "units": "m",
+ "up": "z",
+ "objects": [
+  {
+   "id": "obj0",
+   "type": "box",
+   "size": [
+    1.1339,
+    0.4672,
+    0.4478
+   ],
+   "transform": {
+    "position": [
+     -2.3858,
+     -2.2559,
+     0.141211
+    ],
+    "rotation_deg": [
+     0.0,
+     0.0,
+     235.2044
+    ]
+   }
+  },
+  {
+   "id": "obj1",
+   "type": "cone",
+   "radius": 0.4491,
+   "height": 0.8936,
+   "transform": {
+    "position": [
+     0.3224,
+     1.4687,
+     0.122907
+    ],
+    "rotation_deg": [
+     -13.8983,
+     -7.7646,
+     22.9874
+    ]
+   }
+  }
+ ],
+ "lights": [
+  {
+   "id": "light",
+   "type": "directional",
+   "direction": [
+    0.5333929335953178,
+    0.061321809747894716,
+    0.8436418754660202
+   ]
+  }
+ ],
+ "receivers": [
+  {
+   "id": "ground",
+   "type": "plane",
+   "normal": [
+    0,
+    0,
+    1
+   ],
+   "offset": 0.0
+  }
+ ],
+ "camera": {
+  "position": [
+   -11.1988,
+   -3.2128,
+   9.0046
+  ],
+  "target": [
+   -1.5573,
+   -0.1434,
+   0.2445
+  ],
+  "roll_deg": 0.0,
+  "focal_length_mm": 52.74,
+  "frame_mm": [
+   36.0,
+   24.0
+  ],
+  "shift_mm": [
+   0.0,
+   0.0
+  ],
+  "near_m": 0.05
+ },
+ "output": {
+  "canvas_mm": [
+   360.0,
+   240.0
+  ],
+  "layers": [
+   "horizon",
+   "objects",
+   "form_shadow",
+   "cast_shadow",
+   "construction",
+   "labels"
+  ],
+  "png_dpi": 150
+ }
+}

@@ -25,7 +25,7 @@ from __future__ import annotations
 import numpy as np
 
 from .camera import clip_segments_rect_h, divide, project
-from .homogeneous import TOL_DIR, normalize_max
+from .homogeneous import TOL_DIR, normalize_max, row_max_abs
 
 #: Extension factor of the ``P'→S'`` segment when the far point is at infinity (contract §2.7).
 RAY_EXTENSION = 0.2
@@ -73,7 +73,7 @@ def covering_segments(A, B, C):
     A = np.broadcast_to(np.asarray(A, dtype=np.float64).reshape(-1, 2), B.shape)
     d = C - B
     alt = A - B
-    use_alt = np.max(np.abs(d), axis=1) <= 1e-12 * np.maximum(1.0, np.max(np.abs(B), axis=1))
+    use_alt = row_max_abs(d) <= 1e-12 * np.maximum(1.0, row_max_abs(B))
     d = np.where(use_alt[:, None], alt, d)
     norm = np.sqrt(np.einsum("ij,ij->i", d, d))
     norm = np.where(norm == 0.0, 1.0, norm)
@@ -81,12 +81,13 @@ def covering_segments(A, B, C):
     tA = np.einsum("ij,ij->i", A - B, d)
     tB = np.zeros(B.shape[0])
     tC = np.einsum("ij,ij->i", C - B, d)
-    t = np.stack([tA, tB, tC], axis=1)          # (n, 3), fixed shape (contract §2.8 determinism)
-    lo = np.min(t, axis=1)
-    hi = np.max(t, axis=1)
-    start = B + lo[:, None] * d
-    end = B + hi[:, None] * d
-    return np.stack([start, end], axis=1)
+    # the lowest / highest of the three parameters (fixed-size expressions, contract §2.8 determinism)
+    lo = np.minimum(np.minimum(tA, tB), tC)
+    hi = np.maximum(np.maximum(tA, tB), tC)
+    out = np.empty((B.shape[0], 2, 2), dtype=np.float64)
+    out[:, 0, :] = B + lo[:, None] * d
+    out[:, 1, :] = B + hi[:, None] * d
+    return out
 
 
 def extended_segments(B, C, frac: float = RAY_EXTENSION):
@@ -105,13 +106,16 @@ def clip_segments_uv(segments, rect):
     seg = np.asarray(segments, dtype=np.float64).reshape(-1, 2, 2)
     if seg.shape[0] == 0:
         return seg, np.zeros(0, dtype=bool)
-    ones = np.ones((seg.shape[0], 1))
-    A = np.concatenate([seg[:, 0, :], ones], axis=1)
-    B = np.concatenate([seg[:, 1, :], ones], axis=1)
+    A = np.ones((seg.shape[0], 3))
+    A[:, :2] = seg[:, 0, :]
+    B = np.ones((seg.shape[0], 3))
+    B[:, :2] = seg[:, 1, :]
     A2, B2, keep = clip_segments_rect_h(A, B, rect)
-    out = np.stack([divide(A2), divide(B2)], axis=1)
+    out = np.empty((seg.shape[0], 2, 2), dtype=np.float64)
+    out[:, 0, :] = divide(A2)
+    out[:, 1, :] = divide(B2)
     out = np.where(keep[:, None, None], out, 0.0)
-    length = np.max(np.abs(out[:, 1, :] - out[:, 0, :]), axis=1)
+    length = row_max_abs(out[:, 1, :] - out[:, 0, :])
     keep = keep & (length > 1e-9)
     return out, keep
 
@@ -135,13 +139,13 @@ def coincidence_check(Sp, Rp, tol: float):
     one = np.array([0.0, 0.0, 1.0])
     safe_S = np.where(skipped[:, None], one, Sp)
     safe_R = np.where(skipped[:, None], one, Rp)
-    err = np.max(np.abs(divide(safe_S) - divide(safe_R)), axis=1)
+    err = row_max_abs(divide(safe_S) - divide(safe_R))
     return np.where(skipped, 0.0, err), skipped
 
 
 def _relative_zero(v, scale):
     """Rows of ``v`` whose max-|component| is ≤ ``LINE_ZERO_REL · scale``."""
-    return np.max(np.abs(v), axis=-1) <= LINE_ZERO_REL * scale
+    return row_max_abs(v) <= LINE_ZERO_REL * scale
 
 
 def self_check(Lp, Pp, Fp, Qp, Sp, tol: float):
@@ -164,18 +168,18 @@ def self_check(Lp, Pp, Fp, Qp, Sp, tol: float):
     Fp = np.asarray(Fp, dtype=np.float64).reshape(3)
     l1 = np.cross(np.broadcast_to(Lp, (n, 3)), Pp)
     l2 = np.cross(np.broadcast_to(Fp, (n, 3)), Qp)
-    scale1 = float(np.max(np.abs(Lp))) * np.max(np.abs(Pp), axis=1)
-    scale2 = float(np.max(np.abs(Fp))) * np.max(np.abs(Qp), axis=1)
+    scale1 = float(np.max(np.abs(Lp))) * row_max_abs(Pp)
+    scale2 = float(np.max(np.abs(Fp))) * row_max_abs(Qp)
     skipped = _relative_zero(l1, scale1) | _relative_zero(l2, scale2)
     l1n = normalize_max(l1)
     l2n = normalize_max(l2)
     meet = np.cross(l1n, l2n)
-    skipped |= np.max(np.abs(meet), axis=1) <= LINE_ZERO_REL          # parallel or coincident lines
+    skipped |= row_max_abs(meet) <= LINE_ZERO_REL                        # parallel or coincident lines
     skipped |= np.abs(Sp[:, 2]) <= tol                                   # S' at infinity
     meet_n = normalize_max(meet)
     skipped |= np.abs(meet_n[:, 2]) <= TOL_DIR                           # meet at infinity (parallel lines)
     safe_meet = np.where(skipped[:, None], np.array([0.0, 0.0, 1.0]), meet_n)
     safe_S = np.where(skipped[:, None], np.array([0.0, 0.0, 1.0]), normalize_max(Sp))
-    err = np.max(np.abs(divide(safe_meet) - divide(safe_S)), axis=1)
+    err = row_max_abs(divide(safe_meet) - divide(safe_S))
     err = np.where(skipped, 0.0, err)
     return err, skipped

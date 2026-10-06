@@ -1,0 +1,92 @@
+{
+ "description": "camera given as position + yaw_deg / pitch_deg (contract 2.2 yaw/pitch form), looking down 20 deg and turned 15 deg left",
+ "version": "0.1",
+ "units": "m",
+ "up": "z",
+ "objects": [
+  {
+   "id": "crate",
+   "type": "box",
+   "size": [
+    1.0,
+    0.8,
+    0.6
+   ],
+   "transform": {
+    "position": [
+     1.0,
+     5.0,
+     0.0
+    ],
+    "rotation_deg": [
+     0,
+     0,
+     30
+    ]
+   }
+  },
+  {
+   "id": "pillar",
+   "type": "cylinder",
+   "radius": 0.3,
+   "height": 2.0,
+   "transform": {
+    "position": [
+     -1.5,
+     6.0,
+     0.0
+    ]
+   }
+  }
+ ],
+ "lights": [
+  {
+   "id": "lamp",
+   "type": "point",
+   "position": [
+    0.0,
+    3.0,
+    3.5
+   ]
+  }
+ ],
+ "receivers": [
+  {
+   "id": "ground",
+   "type": "plane",
+   "normal": [
+    0,
+    0,
+    1
+   ],
+   "offset": 0.0
+  }
+ ],
+ "camera": {
+  "roll_deg": 0,
+  "focal_length_mm": 35,
+  "frame_mm": [
+   36,
+   24
+  ],
+  "shift_mm": [
+   0.0,
+   0.0
+  ],
+  "near_m": 0.05,
+  "position": [
+   0.0,
+   -1.0,
+   3.0
+  ],
+  "yaw_deg": 15.0,
+  "pitch_deg": -20.0
+ },
+ "output": {
+  "canvas_mm": [
+   360,
+   240
+  ],
+  "png_dpi": 150
+ }
+}

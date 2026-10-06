@@ -8,7 +8,19 @@
       "point_names": ["<id>.v0", ...]      names of the mesh vertices (§3.1),
       "analytic": None | {kind, base, axis, e1, e2, radius, height, centre},
       "bbox": (min_xyz, max_xyz),
+      "face_first": (k,) int      first vertex of every face (the ``lit`` representative point),
+      "faces_padded": (k, Lmax) int   faces as a -1 padded table, "face_lens": (k,) int,
+      "face_point_names": [[names of the face's vertices], ...],
+      "edge_templates": [{object, from, to, silhouette: False, back: False, visibility: "visible",
+                          segment: None}, ...]   one §3.1 edge record per mesh edge, camera / light free,
+      "world_lists": [[x, y, z], ...]   the vertices as canonical Python lists (the ``world`` of the §3.1
+                                        point records; shared by reference with every document),
     }
+
+The ``face_*`` tables are derived from the mesh once here so that stage B can
+project every polyhedral object of a scene in a few batched numpy calls (spec §8);
+stage C copies the ``edge_templates`` and fills in the three camera / light dependent
+keys (``silhouette``, ``back``, ``segment``) instead of building every record from scratch.
 
 Curved primitives (cylinder, sphere, cone) carry an approximate 32-segment
 mesh ONLY for bounding boxes / scene scale and the M5-shaped representation;
@@ -76,12 +88,24 @@ def analytic_record(obj: dict, R, position):
     }
 
 
+def face_tables(mesh: dict) -> dict:
+    """``{face_first, faces_padded, face_lens}`` of a mesh (see the module docstring)."""
+    faces = mesh["faces"]
+    lens = np.array([len(f) for f in faces], dtype=np.int64).reshape(-1)
+    width = int(lens.max()) if lens.shape[0] else 0
+    padded = np.full((lens.shape[0], width), -1, dtype=np.int64)
+    for k, f in enumerate(faces):
+        padded[k, :len(f)] = f
+    first = padded[:, 0].copy() if width else np.zeros(0, dtype=np.int64)
+    return {"face_first": first, "faces_padded": padded, "face_lens": lens}
+
+
 def build_object(obj: dict) -> dict:
     """Build the object record of a validated ``objects[i]`` dict with the world transform applied."""
     R, position = transform_frame(obj.get("transform"))
     mesh = transform_mesh(local_mesh(obj), R, position)
     names = [f"{obj['id']}.{n}" for n in mesh["vertex_names"]]
-    return {
+    rec = {
         "id": obj["id"],
         "type": obj["type"],
         "mesh": mesh,
@@ -89,3 +113,10 @@ def build_object(obj: dict) -> dict:
         "analytic": analytic_record(obj, R, position),
         "bbox": mesh_bbox(mesh),
     }
+    rec.update(face_tables(mesh))
+    rec["face_point_names"] = [[names[int(v)] for v in f] for f in mesh["faces"]]
+    rec["world_lists"] = (mesh["vertices"] + 0.0).tolist()
+    rec["edge_templates"] = [{"object": obj["id"], "from": names[i], "to": names[j], "silhouette": False,
+                              "back": False, "visibility": "visible", "segment": None}
+                             for i, j in mesh["edges"].tolist()]
+    return rec

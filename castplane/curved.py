@@ -19,9 +19,10 @@ How stage A / B / C (M2) call this module
 
 The pipeline hooks are :func:`stage_a_object` (stage A: silhouette, terminator,
 construction points, shadow outline / polygon and the shadow record of every light,
-stored on the object as ``obj["curved"][<light id>]``) and :func:`stage_b_object`
-(stage B: camera outline, terminator drawables, cast-shadow conic arcs and the named
-points, all near- and rectangle-clipped in closed form through :func:`arc_record`);
+stored on the object as ``obj["curved"][<light id>]``) and :func:`stage_b_objects`
+(stage B of all curved objects of a scene at once, :func:`stage_b_object` for one: camera
+outline, terminator drawables, cast-shadow conic arcs and the named points, all near- and
+rectangle-clipped in closed form through :func:`arc_record`);
 stage C (``pipeline.compose``) turns the arc records into drawables.  In terms of the
 primitives below, stage A per curved object ``obj`` with
 ``an = obj["analytic"]``, light ``L = light_vector(light)``, ``pi = (0, 0, 1, 0)``,
@@ -133,6 +134,7 @@ __all__ = [
     "canonical_factor",
     "stage_a_object",
     "stage_b_object",
+    "stage_b_objects",
     "arc_record",
     "near_functional",
     "plane_min",
@@ -1429,28 +1431,14 @@ def _project_segments(cam: dict, A4: np.ndarray, B4: np.ndarray, rect) -> tuple:
     return np.stack([A3, B3], axis=1), keep & keep_rect, behind
 
 
-def stage_b_object(obj: dict, rec: dict, cam: dict, tol: float, warnings: list) -> None:
-    """Stage B of one curved object (contract §2.2 / §2.6 / §2.7 / §2.10): adds to ``rec``
-    (the pipeline's per-object stage-B record) in place::
-
-        point_names, world, image_h, depth, behind   named points: the §2.7 construction points of
-                                                     every light plus the camera outline generator
-                                                     endpoints <obj>.og<k>.base / .top (a cone's .top
-                                                     is its apex; these names are camera dependent)
-        gen_edges     [{"from", "to", "segment_h": (2, 3), "keep": bool}]   camera outline generators
-        outline_arcs  [arc_record ...]   cap arcs (split at the outline generators, back flag) /
-                                         sphere outline circle, map "image"
-        terminator    {light id: [{"segment": [name, name], "segment_h", "keep"} | arc_record]}
-        shadow_arcs   {light id: [arc_record ...]}   cast-shadow conic arcs, H = P M E, map "shadow"
-
-    Every arc is near-clipped and rectangle-clipped in closed form (:func:`arc_record`);
-    every segment goes through the normal segment pipeline.  Warnings: ``POINT_BEHIND_CAMERA``
-    (a named point, a generator endpoint or part of a drawn circle behind the near plane) and
-    ``CONIC_SAMPLED`` (some conic degenerate or ill-conditioned), ids ``[obj id]``."""
+def _stage_b_prepare(obj: dict, cam: dict, tol: float) -> dict:
+    """Everything of :func:`stage_b_object` except the projection of the named points and of the
+    straight segments, which :func:`_stage_b_finish` receives from one batched call for all curved
+    objects of the scene (spec §8).  Returns the job: the arc records, the point names / 4-vectors
+    and the segment endpoints with the slots they belong to."""
     from .camera import rect_functionals
     an = obj["analytic"]
     oid = obj["id"]
-    P = np.asarray(cam["P"], dtype=np.float64)
     f_nu = near_functional(cam)
     rect_rows = rect_functionals(cam["rect"])
     behind_any = False
@@ -1463,17 +1451,21 @@ def stage_b_object(obj: dict, rec: dict, cam: dict, tol: float, warnings: list) 
             names.append(name)
             X4.append(np.asarray(X, dtype=np.float64).reshape(4))
 
+    seg_A, seg_B, slots = [], [], []          # straight segments: endpoints and (target dict) per row
+
     # --- objects layer: camera outline (contract §2.10)
     co = camera_outline(an, cam["C"], tol)
-    gen_A, gen_B, gen_names = [], [], []
+    gen_edges = []
     for k, g in enumerate(co["generators"]):
         a_name = f"{oid}.og{k}.base"
         b_name = f"{oid}.og{k}.top"          # the apex for a cone (both generators end there)
         add_point(a_name, _point4(g["base"]))
         add_point(b_name, _point4(g["top"]))
-        gen_A.append(_point4(g["base"]))
-        gen_B.append(_point4(g["top"]))
-        gen_names.append((a_name, b_name))
+        edge = {"from": a_name, "to": b_name, "segment_h": None, "keep": False}
+        gen_edges.append(edge)
+        seg_A.append(_point4(g["base"]))
+        seg_B.append(_point4(g["top"]))
+        slots.append(edge)
     outline_arcs = []
     if co["circle"] is not None:
         a = arc_record(co["circle"], 0.0, TWO_PI, True, None, cam, f_nu, rect_rows, "image", "silhouette")
@@ -1495,15 +1487,14 @@ def stage_b_object(obj: dict, rec: dict, cam: dict, tol: float, warnings: list) 
         for nm, X in cd["points"].items():
             add_point(nm, X)
         items = []
-        seg_A, seg_B, seg_names = [], [], []
         for t in cd["terminator"]:
             if "segment" in t:
                 A4, B4 = t["segment"]
-                piece_names = _terminator_segment_names(oid, t, cd["silhouette"])
+                it = {"segment": _terminator_segment_names(oid, t, cd["silhouette"]), "segment_h": None, "keep": False}
+                items.append(it)
                 seg_A.append(A4)
                 seg_B.append(B4)
-                seg_names.append(piece_names)
-                items.append({"segment": piece_names})
+                slots.append(it)
             else:
                 ca = t["circle_arc"]
                 a = arc_record(ca["circle"], ca["theta0"], ca["theta1"], ca["full"], None, cam, f_nu, rect_rows,
@@ -1512,14 +1503,6 @@ def stage_b_object(obj: dict, rec: dict, cam: dict, tol: float, warnings: list) 
                     behind_any = True
                 else:
                     items.append(a)
-        if seg_A:
-            seg_h, keep, behind = _project_segments(cam, np.array(seg_A), np.array(seg_B), cam["rect"])
-            behind_any = behind_any or bool(np.any(behind))
-            j = 0
-            for it in items:
-                if "segment" in it:
-                    it["segment_h"], it["keep"] = seg_h[j], bool(keep[j])
-                    j += 1
         terminator_out[lid] = items
         arcs = []
         out = cd["outline"]
@@ -1542,33 +1525,82 @@ def stage_b_object(obj: dict, rec: dict, cam: dict, tol: float, warnings: list) 
                 continue
             behind_any = behind_any or a["near_cut"]
             sampled_any = sampled_any or a["sampled"]
-    # --- named points and generator edges
-    X4_arr = np.array(X4, dtype=np.float64).reshape(-1, 4)
-    pts = _project_points(cam, names, X4_arr)
-    behind_any = behind_any or bool(np.any(pts["behind"]))
-    seg_h, keep, behind = _project_segments(cam, np.array(gen_A).reshape(-1, 4), np.array(gen_B).reshape(-1, 4),
-                                            cam["rect"])
-    behind_any = behind_any or bool(np.any(behind))
-    gen_edges = [{"from": nm[0], "to": nm[1], "segment_h": seg_h[k], "keep": bool(keep[k])}
-                 for k, nm in enumerate(gen_names)]
+    return {
+        "id": oid, "names": names, "X4": np.array(X4, dtype=np.float64).reshape(-1, 4),
+        "seg_A": np.array(seg_A, dtype=np.float64).reshape(-1, 4), "seg_B": np.array(seg_B, dtype=np.float64).reshape(-1, 4),
+        "slots": slots, "gen_edges": gen_edges, "outline_arcs": outline_arcs, "terminator": terminator_out,
+        "shadow_arcs": shadow_arcs, "camera_inside": bool(co["camera_inside"]),
+        "behind_any": behind_any, "sampled_any": sampled_any,
+    }
+
+
+def _stage_b_finish(job: dict, rec: dict, pts: dict, seg_h, keep, behind, warnings: list) -> None:
+    """Fill the stage-B record from a job and its projected points / segments (see :func:`_stage_b_prepare`)."""
+    behind_any = job["behind_any"] or bool(np.any(pts["behind"])) or bool(np.any(behind))
+    keep_list = keep.tolist()
+    for k, slot in enumerate(job["slots"]):
+        slot["segment_h"], slot["keep"] = seg_h[k], keep_list[k]
     if behind_any:
-        warnings.append(make_warning("POINT_BEHIND_CAMERA", [oid]))
-    if sampled_any:
-        warnings.append(make_warning("CONIC_SAMPLED", [oid]))
+        warnings.append(make_warning("POINT_BEHIND_CAMERA", [job["id"]]))
+    if job["sampled_any"]:
+        warnings.append(make_warning("CONIC_SAMPLED", [job["id"]]))
     rec.update({
-        "point_names": names,
+        "point_names": job["names"],
         "world": pts["world"],
         "image_h": pts["image_h"],
         "depth": pts["image_h"][:, 2],
         "behind": pts["behind"],
-        "gen_edges": gen_edges,
-        "outline_arcs": outline_arcs,
-        "terminator": terminator_out,
-        "shadow_arcs": shadow_arcs,
-        "camera_inside": bool(co["camera_inside"]),
+        "gen_edges": job["gen_edges"],
+        "outline_arcs": job["outline_arcs"],
+        "terminator": job["terminator"],
+        "shadow_arcs": job["shadow_arcs"],
+        "camera_inside": job["camera_inside"],
         "form_faces": [],
         "form_polygons": [],
     })
+
+
+def stage_b_objects(objs: list, recs: list, cam: dict, tol: float, warnings: list) -> None:
+    """Stage B of several curved objects at once (spec §8): :func:`stage_b_object` for each of
+    ``objs`` into the matching ``recs``, with the named points and the straight segments
+    (outline generators, terminator generators) of all objects projected in one batched call."""
+    if not objs:
+        return
+    jobs = [_stage_b_prepare(obj, cam, tol) for obj in objs]
+    X4 = np.concatenate([job["X4"] for job in jobs], axis=0)
+    pts = _project_points(cam, None, X4)
+    seg_h, keep, behind = _project_segments(cam, np.concatenate([job["seg_A"] for job in jobs], axis=0),
+                                            np.concatenate([job["seg_B"] for job in jobs], axis=0), cam["rect"])
+    p0 = s0 = 0
+    for job, rec in zip(jobs, recs):
+        p1, s1 = p0 + job["X4"].shape[0], s0 + job["seg_A"].shape[0]
+        sub = {"names": job["names"], "world": pts["world"][p0:p1], "image_h": pts["image_h"][p0:p1],
+               "behind": pts["behind"][p0:p1]}
+        _stage_b_finish(job, rec, sub, seg_h[s0:s1], keep[s0:s1], behind[s0:s1], warnings)
+        p0, s0 = p1, s1
+
+
+def stage_b_object(obj: dict, rec: dict, cam: dict, tol: float, warnings: list) -> None:
+    """Stage B of one curved object (contract §2.2 / §2.6 / §2.7 / §2.10): adds to ``rec``
+    (the pipeline's per-object stage-B record) in place::
+
+        point_names, world, image_h, depth, behind   named points: the §2.7 construction points of
+                                                     every light plus the camera outline generator
+                                                     endpoints <obj>.og<k>.base / .top (a cone's .top
+                                                     is its apex; these names are camera dependent)
+        gen_edges     [{"from", "to", "segment_h": (2, 3), "keep": bool}]   camera outline generators
+        outline_arcs  [arc_record ...]   cap arcs (split at the outline generators, back flag) /
+                                         sphere outline circle, map "image"
+        terminator    {light id: [{"segment": [name, name], "segment_h", "keep"} | arc_record]}
+        shadow_arcs   {light id: [arc_record ...]}   cast-shadow conic arcs, H = P M E, map "shadow"
+
+    Every arc is near-clipped and rectangle-clipped in closed form (:func:`arc_record`);
+    every segment goes through the normal segment pipeline.  Warnings: ``POINT_BEHIND_CAMERA``
+    (a named point, a generator endpoint or part of a drawn circle behind the near plane) and
+    ``CONIC_SAMPLED`` (some conic degenerate or ill-conditioned), ids ``[obj id]``.
+    The pipeline calls :func:`stage_b_objects`, which does the same for all curved objects of
+    a scene with the segment and point projections batched."""
+    stage_b_objects([obj], [rec], cam, tol, warnings)
 
 
 def _terminator_segment_names(oid: str, t: dict, sil: dict) -> list:
@@ -1585,7 +1617,8 @@ def _terminator_segment_names(oid: str, t: dict, sil: dict) -> list:
 
     def end_of(X):
         g = sil["generators"][gen]
-        if np.allclose(X[:3], g["base"]):
+        # numpy.allclose verdict (|a - b| <= 1e-8 + 1e-5 |b| per component) in plain scalar arithmetic
+        if all(abs(float(x) - float(b)) <= 1e-8 + 1e-5 * abs(float(b)) for x, b in zip(X[:3], g["base"])):
             return f"{oid}.g{gen}.base"
         return f"{oid}.apex" if sil["kind"] == "cone" else f"{oid}.g{gen}.top"
     return [end_of(A4), end_of(B4)]

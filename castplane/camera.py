@@ -19,7 +19,7 @@ import math
 import numpy as np
 
 from .errors import make_warning
-from .homogeneous import (TOL_DIR, clip_polygon_halfspace, clip_segment_halfspace,
+from .homogeneous import (TOL_DIR, clip_polygon_halfspace, clip_polygons_halfspace, clip_segment_halfspace,
                           clip_segments_halfspace, join, normalize_max)
 
 UP_WORLD = np.array([0.0, 0.0, 1.0])
@@ -142,7 +142,9 @@ def clip_polygon_rect_h(points, rect):
 
     Direction vertices (``x̃3 == 0``) are handled by linear interpolation; since
     a bounded rectangle contains no point at infinity, every surviving vertex has
-    ``x̃3 > 0`` and can be divided safely.
+    ``x̃3 > 0`` and can be divided safely.  A polygon left with fewer than three
+    vertices after **any** of the four functionals is dropped (empty result) -- the
+    remaining functionals are not applied to it; :func:`project_polygons` does the same.
     """
     pts = np.asarray(points, dtype=np.float64).reshape(-1, 3)
     for row in rect_functionals(rect):
@@ -152,6 +154,37 @@ def clip_polygon_rect_h(points, rect):
     if pts.shape[0] < 3:
         return np.zeros((0, 3))
     return pts
+
+
+def project_polygons(cam: dict, pts, lens):
+    """Batched drawing pipeline of contract §2.2 for padded homogeneous world polygons (spec §8).
+
+    ``pts`` is ``(N, L, 4)`` with ``lens[i]`` valid leading rows per polygon and zero
+    padding.  Every polygon goes through near clip -> ``P`` -> homogeneous rectangle clip
+    -> divide exactly like ``pipeline._project_polygon``: a polygon with fewer than three
+    vertices after the near clip or after any one of the four rectangle functionals is
+    empty from then on (``clip_polygon_rect_h`` stops clipping such a polygon and returns
+    empty, so the two paths agree).  Returns ``(uv (N, W, 2) canvas mm, lens)``; padded rows
+    of ``uv`` are ``0``.
+    """
+    pts = np.asarray(pts, dtype=np.float64)
+    lens = np.where(np.asarray(lens, dtype=np.int64) < 3, 0, np.asarray(lens, dtype=np.int64))
+    N = pts.shape[0]
+    if N == 0:
+        return np.zeros((0, 0, 2)), lens
+    # the functionals are evaluated on the flattened (rows, k) array so that the very same
+    # 2-D kernels as in the per-polygon path produce bit-identical values
+    vals = nu(cam, pts.reshape(-1, 4)).reshape(N, -1)
+    pts, lens = clip_polygons_halfspace(pts, lens, vals)                  # 1. near clip (4-D)
+    lens = np.where(lens < 3, 0, lens)
+    X = project(cam, pts.reshape(-1, 4)).reshape(N, -1, 3)                 # 2. P
+    for row in rect_functionals(cam["rect"]):                              # 3. rectangle clip
+        vals = (X.reshape(-1, 3) @ row).reshape(N, -1)
+        X, lens = clip_polygons_halfspace(X, lens, vals)
+        lens = np.where(lens < 3, 0, lens)
+    valid = np.arange(X.shape[1])[None, :] < lens[:, None]
+    X = np.where(valid[:, :, None], X, np.array([0.0, 0.0, 1.0]))
+    return divide(X), lens                                                 # 4. divide last
 
 
 def clip_segments_rect_h(A, B, rect):
