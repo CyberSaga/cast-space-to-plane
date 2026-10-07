@@ -1109,3 +1109,146 @@ def test_trimesh_face_index_out_of_range_is_a_loader_error(tmp_path, bad):
     with pytest.raises(SceneError) as info:
         expand_scene(mesh_scene(p))
     assert info.value.field == "objects[0].path"
+
+
+# --------------------------------------------------------------------------- loaders review, second pass
+def _zero_mesh_doc(count, n_prims=1, n_nodes=1):
+    """One accessor without bufferView (``count`` zero vertices) shared by ``n_prims`` primitives of
+    one mesh that ``n_nodes`` nodes instance: a few KB that used to expand to gigabytes."""
+    return {"asset": {"version": "2.0"},
+            "accessors": [{"componentType": 5126, "count": count, "type": "VEC3"}],
+            "meshes": [{"primitives": [{"attributes": {"POSITION": 0}}] * n_prims}],
+            "nodes": [{"mesh": 0}] * n_nodes, "scenes": [{"nodes": list(range(n_nodes))}]}
+
+
+# second pass m5-loaders#2: a capped zero accessor reused by many primitives / nodes is bounded too
+@pytest.mark.parametrize("n_prims, n_nodes", [(100, 1), (1, 2000)])
+def test_gltf_reused_zero_accessor_hits_the_size_guard_quickly(tmp_path, n_prims, n_nodes):
+    d = _zero_mesh_doc(G.MAX_ZERO_ACCESSOR_COUNT, n_prims, n_nodes)
+    for fn in (load_mesh_file, G.import_gltf_scene):
+        err = _bad(d, "nodes[0].mesh", tmp_path, fn)
+        assert "mesh size guard" in err.message
+    p = write_gltf(tmp_path, d)
+    with pytest.raises(SceneError) as info:                       # behind a scene's mesh path: objects[i].path
+        expand_scene(mesh_scene(p))
+    assert info.value.field == "objects[0].path" and "nodes[0].mesh" in info.value.message
+
+
+def test_gltf_size_guard_is_a_running_budget_at_the_exact_limit(tmp_path, monkeypatch):
+    from castplane import scene as sc
+    d = _tri_doc()
+    d["meshes"][0]["primitives"] = d["meshes"][0]["primitives"] * 2      # 6 vertices, 2 triangles
+    p = write_gltf(tmp_path, d)
+    monkeypatch.setattr(sc, "MESH_MAX_VERTICES", 6)
+    monkeypatch.setattr(sc, "MESH_MAX_FACES", 2)
+    assert len(load_mesh_file(p)["vertices"]) == 6
+    monkeypatch.setattr(sc, "MESH_MAX_VERTICES", 5)
+    assert "more than 5 vertices" in _bad(d, "nodes[0].mesh", tmp_path).message
+    monkeypatch.setattr(sc, "MESH_MAX_VERTICES", 6)
+    monkeypatch.setattr(sc, "MESH_MAX_FACES", 1)
+    assert "triangles" in _bad(d, "nodes[0].mesh", tmp_path).message
+
+
+def test_gltf_oversized_node_is_an_error_not_a_skipped_node(tmp_path, monkeypatch):
+    """The per-object guard must not use the field ``node`` (import skips such nodes as lines-only)."""
+    from castplane import scene as sc
+    d = _tri_doc()
+    d["nodes"] = [{"mesh": 0, "name": "a"}, {"mesh": 0, "name": "b"}]
+    d["meshes"][0]["primitives"] = d["meshes"][0]["primitives"] * 2
+    monkeypatch.setattr(sc, "MESH_MAX_VERTICES", 5)
+    _bad(d, "nodes[0].mesh", tmp_path, G.import_gltf_scene)
+
+
+def test_gltf_import_budget_bounds_instanced_objects(tmp_path, monkeypatch):
+    # 2000 nodes instancing 49 998 zero vertices each: every object is under the per-object guard
+    d = _zero_mesh_doc(49998, 1, 2000)
+    err = _bad(d, f"nodes[{G.IMPORT_MAX_TOTAL_VERTICES // 49998}].mesh", tmp_path, G.import_gltf_scene)
+    assert "import budget" in err.message
+    # the boundary, with a small budget: 4 instanced triangles = 12 vertices / 4 triangles
+    d = _tri_doc()
+    d["nodes"] = [{"mesh": 0}] * 4
+    monkeypatch.setattr(G, "IMPORT_MAX_TOTAL_VERTICES", 12)
+    monkeypatch.setattr(G, "IMPORT_MAX_TOTAL_FACES", 4)
+    scene, _ = G.import_gltf_scene(write_gltf(tmp_path, d))
+    assert len(scene["objects"]) == 4
+    monkeypatch.setattr(G, "IMPORT_MAX_TOTAL_FACES", 3)
+    _bad(d, "nodes[3].mesh", tmp_path, G.import_gltf_scene)
+    monkeypatch.setattr(G, "IMPORT_MAX_TOTAL_FACES", 4)
+    monkeypatch.setattr(G, "IMPORT_MAX_TOTAL_VERTICES", 11)
+    _bad(d, "nodes[3].mesh", tmp_path, G.import_gltf_scene)
+
+
+# second pass m5-loaders#0: integer literals too large for a float are SceneErrors, not OverflowError
+BIG_INT = 10 ** 400
+
+
+@pytest.mark.parametrize("mutate, field", [
+    (_set(["nodes", 0, "translation"], [BIG_INT, 0, 0]), "nodes[0].translation"),
+    (_set(["nodes", 0, "matrix"], [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, BIG_INT, 0, 0, 1]), "nodes[0].matrix"),
+    (_set(["nodes", 0, "rotation"], [0, 0, 0, BIG_INT]), "nodes[0].rotation"),
+    (_set(["nodes", 0, "scale"], [BIG_INT, 1, 1]), "nodes[0].scale"),
+])
+def test_gltf_huge_integer_literals_are_scene_errors(tmp_path, mutate, field):
+    d = _tri_doc()
+    mutate(d)
+    _bad(d, field, tmp_path)
+    _bad(d, field, tmp_path, G.import_gltf_scene)
+
+
+def test_gltf_huge_integer_camera_value_and_primitive_parameter(tmp_path, capsys):
+    d = _cam_light_doc()
+    d["cameras"][0]["perspective"]["znear"] = BIG_INT
+    _bad(d, "cameras[0].perspective.znear", tmp_path, G.import_gltf_scene)
+    p = write_gltf(tmp_path, d, "cam.gltf")
+    assert main(["import", p, "-q", "-o", str(tmp_path / "s.json")]) == EXIT_INPUT
+    assert "error: cameras[0].perspective.znear:" in capsys.readouterr().err
+    d = _tri_doc()                                                # validated by scene.py: the safety net
+    d["nodes"].append({"extras": {"castplane": {"type": "sphere", "radius": BIG_INT}}})
+    with pytest.raises(SceneError):
+        G.import_gltf_scene(write_gltf(tmp_path, d))
+    assert G._is_number(BIG_INT) is False and G._is_number(10 ** 300) is True
+
+
+# second pass m5-loaders#3: a symbolic link inside the directory cannot lead outside it
+def test_gltf_external_buffer_symlink_cannot_escape(tmp_path):
+    d, sub = _external(tmp_path, "link.bin")
+    try:
+        os.symlink(tmp_path / "secret.bin", sub / "link.bin")
+        os.symlink(sub / "tri.bin", sub / "inner_link.bin")
+    except (OSError, NotImplementedError):
+        pytest.skip("symbolic links are unavailable")
+    (sub / "inner").mkdir()
+    for uri in ("link.bin", "inner/../link.bin", "./link.bin"):
+        d["buffers"][0]["uri"] = uri
+        err = _bad(d, "buffers[0].uri", sub)
+        assert "symbolic link" in err.message
+    d["buffers"][0]["uri"] = "inner_link.bin"                     # a link that stays inside is fine
+    assert load_mesh_file(write_gltf(sub, d))["faces"] == [[0, 1, 2]]
+
+
+# second pass: finite node values whose world transform overflows / has no orientation
+def test_gltf_overflowing_node_transform_is_reported_at_the_node(tmp_path, capsys):
+    d = _tri_doc()
+    d["nodes"][0]["matrix"] = [1e308] * 16
+    _bad(d, "nodes[0]", tmp_path)
+    _bad(d, "nodes[0]", tmp_path, G.import_gltf_scene)
+    p = write_gltf(tmp_path, d, "inf.gltf")
+    assert main(["import", p, "-q", "-o", str(tmp_path / "s.json")]) == EXIT_INPUT
+    assert "error: nodes[0]: the world transform" in capsys.readouterr().err
+    d = _tri_doc()                                                # parent · child overflows
+    d["nodes"] = [{"scale": [1e200, 1e200, 1e200], "children": [1]},
+                  {"mesh": 0, "scale": [1e200, 1e200, 1e200]}]
+    d["scenes"] = [{"nodes": [0]}]
+    _bad(d, "nodes[1]", tmp_path)
+
+
+@pytest.mark.parametrize("node, field", [(1, "nodes[1].scale"), (2, "nodes[2].scale")])
+def test_gltf_zero_scale_camera_or_directional_light_is_a_node_error(tmp_path, node, field):
+    d = _cam_light_doc()
+    d["extensions"]["KHR_lights_punctual"]["lights"][0]["type"] = "directional"
+    G.import_gltf_scene(write_gltf(tmp_path, d))
+    d["nodes"][node]["scale"] = [0.0, 0.0, 0.0]
+    _bad(d, field, tmp_path, G.import_gltf_scene)
+    d["nodes"][node]["scale"] = [1.0, 1.0, 1.0]
+    d["nodes"][node]["matrix"] = [0.0] * 15 + [1.0]
+    _bad(d, f"nodes[{node}].matrix", tmp_path, G.import_gltf_scene)

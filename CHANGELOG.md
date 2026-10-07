@@ -13,3 +13,7 @@
 - m5-mesh#1: the mesh length scale `scale_A` is the bounding box of the vertices used by a face, so a stray unused vertex no longer loosens the tolerances or makes validation reject a good mesh ("no usable face").
 - m5-mesh#2: docs/USAGE.md states the smoothing rule as the contract does (one shared non-zero group: always smooth; no groups: angle test; different groups: feature).
 - m5-mesh#0: a mesh object's receiver-contact tolerance is `max(tol, weld_tolerance)`: a concave mesh resting on the ground with float32-scale bottom noise keeps its clean shadow outline (no chord across the notch, no spurious `OBJECT_BELOW_RECEIVER`).
+- m5-loaders#2 (second pass): the glTF mesh size guard is a running budget checked before each primitive is transformed, and `import_gltf_parts` has an import budget of 20 · 50000 vertices / triangles, so one zero or real accessor reused by many primitives or nodes is a quick `SceneError(nodes[k].mesh)` instead of a `MemoryError` / OOM kill.
+- m5-loaders#0 (second pass): glTF integer literals too large for a float (309–4300 digits) are `SceneError`s at their JSON path instead of an `OverflowError` traceback.
+- m5-loaders#3 (second pass): an external glTF buffer reached through a symbolic link that resolves outside the file's directory is rejected (`buffers[k].uri`).
+- gltf (second pass): a node transform that overflows or has a zero scale is reported at `nodes[k]` / `nodes[k].scale | .matrix` instead of as non-finite scene values at validation.

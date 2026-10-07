@@ -2041,6 +2041,41 @@ unordered world pairs with equal `silhouette` / `back` flags and `segment` endpo
   primitives, are unchanged (no conformance case changes bytes). Known limit: a concave bottom that is non-planar by
   **more** than `weld_tolerance` is still cut face by face (Sutherland–Hodgman), as any genuinely penetrating
   geometry is. The TypeScript port's mesh path must use the same contact tolerance (§5.2.9).
+- **[decision, implementation] (review fixes, loaders, second pass) Running mesh size guard and import budget.** The
+  §5.2.1 size guard (`MESH_MAX_VERTICES` / `MESH_MAX_FACES`) is also applied by the glTF loader **while** it assembles
+  one mesh object: `gltf_raw` keeps running vertex / triangle totals and, before a primitive is transformed or
+  appended, raises `SceneError(nodes[k].mesh, "the selected geometry has more than N vertices | triangles (mesh size
+  guard)")` for the node `k` whose primitive crosses the limit (a `mesh` + `path` object reports it at
+  `objects[i].path`, as §5.2.1 asks for file sources). The capped zero accessor of the first pass could still be
+  referenced by any number of primitives or nodes (a 3 KB file allocated > 4 GB). A result over the limit was always
+  rejected by validation, so no valid import is lost; the error now names the glTF field instead of
+  `objects[i].path` / `objects[i].data.vertices` after the allocation. The field is never `node` (that field means
+  "points / lines only" and makes `import_gltf_parts` skip the node). Across objects, `import_gltf_parts` keeps an
+  **import budget** `gltf.IMPORT_MAX_TOTAL_VERTICES = IMPORT_MAX_TOTAL_FACES = 20 · 50000` (twenty objects at the
+  per-object limit): one file instancing a mesh on thousands of nodes would otherwise produce thousands of valid-sized
+  objects before validation (`SceneError(nodes[k].mesh, "... exceed the import budget ...")` at the node of the
+  object that crosses it). This is a new importer limit not in §5.2.8; `expand_scene` of a user-written scene is not
+  budgeted (it has no scene-wide limit). The reviewer's alternative of rejecting a POSITION / indices accessor without
+  `bufferView` was not taken: with the running guard it is bounded, and note (8)'s glTF semantics stay.
+- **[decision, implementation] (review fixes, loaders, second pass) Integers too large for a float.** `gltf._is_number`
+  is total: an integer literal outside the float range (309 to 4300 digits; longer ones are already the parser's
+  digit-limit error) is "not a finite number" at its glTF JSON path, and `OverflowError` joins the safety net's
+  exception list (a primitive parameter in `extras.castplane`, validated by `scene.py`, becomes `SceneError("",
+  "malformed glTF: OverflowError: ...")`). The same crash in `scene._number` for a scene file is outside the loaders.
+- **[decision, implementation] (review fixes, loaders, second pass) Symbolic links in buffer URIs.** The confinement of
+  external buffers compares **resolved** paths as well: `os.path.realpath` of the file's directory and of the
+  normalised buffer path must still be one inside the other, else `SceneError(buffers[k].uri, "... resolves (through a
+  symbolic link) outside the file's directory")`; the regular-file test and the read use the resolved path. A link
+  that stays inside the directory is accepted.
+- **[decision, implementation] (review fixes, loaders, second pass) Non-finite node transforms.** Finite node values
+  can still give a non-finite world matrix or transformed vertex (`matrix = [1e308]*16`, a `1e200` parent scale times a
+  `1e200` child scale); this was reported only at validation (`objects[0].data.vertices[1][0]`, `camera.target[0]`,
+  `lights[0].direction[0]`). Now a mesh node whose world matrix or transformed vertices are not finite is
+  `SceneError(nodes[k])`, a camera / directional light / `extras.castplane` node with a non-finite world matrix is
+  `SceneError(nodes[k])`, and one whose world matrix has a zero column (zero scale, no orientation) is
+  `SceneError(nodes[k].scale | nodes[k].matrix)` (for `extras.castplane` nodes this check precedes the "mirrored
+  node" test, which a zero determinant also failed). A zero-scale **mesh** node is unchanged ("no usable face" at
+  validation). The world-matrix products run under `np.errstate` so no `RuntimeWarning` is printed.
 
 ### 5.3 M6 — multiple lights (amendment to §2.0, §2.3, §2.5–2.10, §3, §3.1, §4)
 
