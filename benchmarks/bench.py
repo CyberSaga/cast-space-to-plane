@@ -14,6 +14,7 @@ Usage::
 
     python3 benchmarks/bench.py [-n REPS] [--objects N] [--no-curved] [--gate both|full|none]
                                 [--profile] [--json] [--hidden-lines] [--scene benchmark|mesh10k]
+                                [--lights N] [--no-umbra]
 
 With the default arguments (100 objects, curved primitives included) the scene is **loaded from
 the committed file** ``benchmarks/scenes/benchmark_100.json`` (written by
@@ -33,7 +34,15 @@ informational row that shows the collector's share (the library never touches th
 collector).  With ``--profile`` the slowest functions of each path are listed
 (``cProfile``).  ``--hidden-lines`` (M4, contract §5.1.6.6 / §5.0.9) adds one informational row: the
 full render of the same scene with ``output.hidden_lines`` switched on (soft target < 5 s, never part of
-the exit status); every other row keeps the switch off.  It is not part of the default test suite (see ``benchmarks/README.md``).
+the exit status); every other row keeps the switch off.  ``--lights N`` (M6, contract §5.3.9 / §5.0.9) renders
+the scene with ``N`` lights (:func:`with_lights`: the benchmark light, then its mirror image about the scene
+centre in ``x``, then in ``y``); with ``N >= 2`` three informational rows are added: the umbra alone
+(:func:`castplane.umbra.umbra_from_document` on the full-render document, i.e. every ``record_pieces`` scan
+and the intersection scan), its share of the camera-only re-render, and ``record_pieces`` on a simple
+2 000-edge loop (:func:`loop_2000`, the M5 mesh case of §5.3.9).  ``--no-umbra`` runs the full and
+camera-only rows with ``project_scene(..., umbra=False)`` (the M7 drag path; no effect for one light).
+No target is attached to ``N >= 2`` (spec §8 names one light); ``--gate`` still decides the exit status
+on the rows as measured.  It is not part of the default test suite (see ``benchmarks/README.md``).
 """
 
 from __future__ import annotations
@@ -112,6 +121,70 @@ def mesh10k_scene(n_u: int = 100, n_v: int = 50) -> dict:
     }
 
 
+#: ``--lights`` choices (M6, contract §5.3.9): one light (the gated scene), or the benchmark light plus its
+#: mirror image(s) about the scene centre.
+LIGHT_COUNTS = (1, 2, 3)
+
+
+def with_lights(raw: dict, n: int) -> dict:
+    """The raw scene with ``n`` lights (contract §5.3.9): the scene's own first light, then (``n >= 2``)
+    its mirror image about the scene centre in ``x`` and (``n = 3``) in ``y``.  The scene centre is the
+    midpoint of the bounding box of the objects' ``transform.position`` (x, y); a directional light's
+    direction is mirrored likewise.  ``n = 1`` returns ``raw`` itself (the gated input, unchanged)."""
+    if n not in LIGHT_COUNTS:
+        raise ValueError(f"--lights must be one of {LIGHT_COUNTS}")
+    if n == 1:
+        return raw
+    pos = [o.get("transform", {}).get("position", [0.0, 0.0, 0.0]) for o in raw["objects"]]
+    centre = [(min(p[a] for p in pos) + max(p[a] for p in pos)) / 2.0 for a in (0, 1)]
+    first = raw["lights"][0]
+    lights = [first]
+    for axis, suffix in ((0, "mx"), (1, "my"))[:n - 1]:
+        lt = json.loads(json.dumps(first))
+        lt["id"] = f"{first['id']}_{suffix}"
+        if lt["type"] == "point":
+            lt["position"][axis] = 2.0 * centre[axis] - lt["position"][axis] + 0.0
+        else:
+            lt["direction"][axis] = -lt["direction"][axis] + 0.0
+        lights.append(lt)
+    return dict(raw, lights=lights)
+
+
+def loop_2000(n: int = 2000) -> list:
+    """The ``record_pieces`` input of the 2 000-edge row (contract §5.3.9): one simple star-shaped loop
+    (``n`` vertices at sorted angles, radius 50–70 mm around the canvas centre; seed 3), as in
+    ``tests/test_umbra.py::test_record_pieces_on_a_2000_edge_loop``."""
+    import numpy as np
+
+    rng = np.random.default_rng(3)
+    th = np.sort(rng.random(n)) * 2 * np.pi
+    r = 50.0 + 20.0 * rng.random(n)
+    return [np.stack([r * np.cos(th), r * np.sin(th)], axis=1)]
+
+
+def record_pieces_2000(loop: list, canvas_mm=(360.0, 240.0)) -> int:
+    """``castplane.umbra.record_pieces`` on :func:`loop_2000` with the tolerances of a 360 × 240 canvas;
+    returns the number of pieces."""
+    from castplane import umbra
+
+    tol_mm, tol_area = umbra.tolerances(list(canvas_mm))
+    return len(umbra.record_pieces(loop, tol_mm, tol_area)[0])
+
+
+def umbra_counts(doc: dict) -> dict:
+    """Piece counts of a multi-light document: ``record_pieces`` per light (summed over its records and
+    receivers) and the umbra pieces (summed over the receivers)."""
+    from castplane import umbra
+
+    tol_mm, tol_area = umbra.tolerances(doc["canvas_mm"])
+    per_light = {}
+    for sh in doc["shadows"]:
+        n = len(umbra.record_pieces(sh["polygons"], tol_mm, tol_area)[0]) if sh["polygons"] else 0
+        per_light[sh["light"]] = per_light.get(sh["light"], 0) + n
+    return {"record_pieces": per_light,
+            "umbra_pieces": sum(len(e["polygons"] or []) for e in doc.get("umbra", []))}
+
+
 def mesh_preprocessing(scene: dict) -> None:
     """The mesh preprocessing of every ``mesh`` object alone (weld ... edge classification)."""
     from castplane.meshprep import preprocess_mesh
@@ -133,19 +206,20 @@ def exit_status(ok_full: bool, ok_cam: bool, gate: str = "both") -> int:
     raise ValueError(f"unknown gate {gate!r} (one of {', '.join(GATES)})")
 
 
-def full_render(scene: dict) -> tuple[dict, str, str]:
-    """Stages A, B, C, the SVG and the JSON text (spec §8 "含 SVG 輸出")."""
+def full_render(scene: dict, umbra: bool = True) -> tuple[dict, str, str]:
+    """Stages A, B, C, the SVG and the JSON text (spec §8 "含 SVG 輸出"); ``umbra`` is the M6
+    ``project_scene`` keyword (no effect for one light)."""
     A = castplane.shadow_geometry(scene)
-    B = castplane.project_scene(scene, A)
+    B = castplane.project_scene(scene, A, umbra=umbra)
     doc = castplane.compose(scene, B)
     svg = write_svg(doc, layers=scene["output"]["layers"])
     text = geometry_json.dumps(doc)
     return doc, svg, text
 
 
-def camera_render(scene: dict, A: dict, camera: dict) -> str:
+def camera_render(scene: dict, A: dict, camera: dict, umbra: bool = True) -> str:
     """Stages B and C plus the SVG with a cached stage A (spec §8 "只換相機重算")."""
-    B = castplane.project_scene(scene, A, camera=camera)
+    B = castplane.project_scene(scene, A, camera=camera, umbra=umbra)
     doc = castplane.compose(scene, B)
     return write_svg(doc, layers=scene["output"]["layers"])
 
@@ -205,24 +279,33 @@ def main(argv=None) -> int:
     ap.add_argument("--scene", choices=SCENES, default="benchmark",
                     help="benchmark (default: the spec §8 scene) or mesh10k (M5: one 10 000-triangle unwelded mesh; "
                          "no target, use --gate none)")
+    ap.add_argument("--lights", type=int, choices=LIGHT_COUNTS, default=1,
+                    help="M6: number of lights (default 1, the gated scene; 2 / 3 add the benchmark light's mirror "
+                         "images about the scene centre in x, then y, and the informational umbra rows)")
+    ap.add_argument("--no-umbra", action="store_true",
+                    help="M6: run the full and camera-only rows with project_scene(..., umbra=False)")
     args = ap.parse_args(argv)
 
     if args.scene == "mesh10k":
         raw, source = mesh10k_scene(), "mesh10k_scene() (10 000 unwelded triangles)"
     else:
         raw, source = benchmark_input(args.objects, args.no_curved)
+    if args.lights != 1:   # M6 (contract §5.3.9): the light's mirror images; N = 1 keeps the input as it is
+        raw = with_lights(raw, args.lights)
+        source += f" with {args.lights} lights (mirrored about the scene centre)"
+    use_umbra = not args.no_umbra
     scene = castplane.load_scene(raw)
     n_edges = random_scenes.count_edges(raw) if args.scene == "benchmark" else \
         sum(len(o["mesh"]["edges"]) for o in castplane.shadow_geometry(scene)["objects"])
     other_camera = dict(scene["camera"], position=[6.0, -28.0, 12.0], target=[0.0, 0.0, 0.5], roll_deg=3.0)
 
     # warm-up (imports, numpy kernels) and the cached stage A for the camera-only path
-    doc, svg, text = full_render(scene)
+    doc, svg, text = full_render(scene, use_umbra)
     A = castplane.shadow_geometry(scene)
 
-    t_full = timeit(lambda: full_render(scene), args.reps)
-    t_cam = timeit(lambda: camera_render(scene, A, other_camera), args.reps)
-    t_cam_nogc = timeit_no_gc(lambda: camera_render(scene, A, other_camera), args.reps)
+    t_full = timeit(lambda: full_render(scene, use_umbra), args.reps)
+    t_cam = timeit(lambda: camera_render(scene, A, other_camera, use_umbra), args.reps)
+    t_cam_nogc = timeit_no_gc(lambda: camera_render(scene, A, other_camera, use_umbra), args.reps)
     t_stage_a = timeit(lambda: castplane.shadow_geometry(scene), args.reps)
     t_svg = timeit(lambda: write_svg(doc, layers=scene["output"]["layers"]), args.reps)
     t_json = timeit(lambda: geometry_json.dumps(doc), args.reps)
@@ -245,6 +328,8 @@ def main(argv=None) -> int:
         "svg_s": {"min": min(t_svg), "median": statistics.median(t_svg)},
         "json_s": {"min": min(t_json), "median": statistics.median(t_json)},
         "scene": args.scene,
+        "lights": args.lights,
+        "umbra": use_umbra,
     }
     if t_prep is not None:
         result["mesh_preprocessing_s"] = {"min": min(t_prep), "median": statistics.median(t_prep)}
@@ -261,6 +346,19 @@ def main(argv=None) -> int:
                                                 "target": SOFT_TARGET_HIDDEN_S,
                                                 "soft_pass": min(t_hl) < SOFT_TARGET_HIDDEN_S}
         result["hidden_lines_svg_bytes"], result["hidden_lines_json_bytes"] = len(svg_h), len(text_h)
+
+    if args.lights >= 2:   # M6 (contract §5.3.9): informational umbra rows, never gated
+        from castplane.umbra import umbra_from_document
+
+        t_umbra = timeit(lambda: umbra_from_document(doc), args.reps)
+        loop = loop_2000()
+        n_loop = record_pieces_2000(loop)
+        t_loop = timeit(lambda: record_pieces_2000(loop), args.reps)
+        result["umbra_s"] = {"min": min(t_umbra), "median": statistics.median(t_umbra),
+                             "share_of_camera_only": min(t_umbra) / min(t_cam)}
+        result["record_pieces_2000_s"] = {"min": min(t_loop), "median": statistics.median(t_loop),
+                                          "edges": len(loop[0]), "pieces": n_loop}
+        result.update(umbra_counts(doc if use_umbra else dict(doc, umbra=umbra_from_document(doc))))
 
     if args.json:
         print(json.dumps(result, indent=1, sort_keys=True))
@@ -291,6 +389,14 @@ def main(argv=None) -> int:
                   f"{result['hidden_lines_svg_bytes'] / 1024:.0f} kB, JSON {result['hidden_lines_json_bytes'] / 1024:.0f} kB)")
         if t_prep is not None:
             row("  mesh preprocessing only", t_prep)
+        if args.lights >= 2:
+            row("  umbra alone", t_umbra)
+            print(f"  {'  umbra share of camera-only':<34} {result['umbra_s']['share_of_camera_only'] * 100:5.1f} %"
+                  f"   (camera-only rows {'with' if use_umbra else 'WITHOUT'} the umbra)")
+            row(f"  record_pieces, {len(loop[0])}-edge loop", t_loop)
+            per = ", ".join(f"{k} {v}" for k, v in result["record_pieces"].items())
+            print(f"  pieces: record_pieces per light {per}; umbra {result['umbra_pieces']}; "
+                  f"{len(loop[0])}-edge loop {n_loop}")
         print(f"RESULT: {'PASS' if status == 0 else 'FAIL'} (gate: {args.gate})")
 
     if args.profile:

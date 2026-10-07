@@ -27,6 +27,8 @@ python3 benchmarks/bench.py --profile      # cProfile hot spots of both paths
 python3 benchmarks/bench.py --json         # machine-readable measurements (incl. "gate" and "pass")
 python3 benchmarks/bench.py --no-curved    # prisms only
 python3 benchmarks/bench.py --hidden-lines # M4: + full render with output.hidden_lines on (informational)
+python3 benchmarks/bench.py --lights 2    # M6: two lights (+ umbra alone, its share, record_pieces 2000-edge loop)
+python3 benchmarks/bench.py --lights 3 --no-umbra  # M6: three lights, project_scene(umbra=False)
 ```
 
 Timings are the minimum over the repetitions (the least noisy estimate of the cost
@@ -232,3 +234,58 @@ interleaved part 1 runs are a before / after comparison; these rows are the curr
 | stage A only | 85 ms | 86 ms | 80 ms | – | – |
 | SVG writer only | 32 ms | 33 ms | 34 ms | – | – |
 | JSON dumps only | 127 ms | 125 ms | 137 ms | – | – |
+
+## M6 (2026-10-07): `--lights 2|3`, `--no-umbra`, the 2000-edge `record_pieces` row, N = 1 re-measured
+
+Contract §5.3.9 / §5.0.9. `--lights N` renders the committed `scenes/benchmark_100.json` with `N` lights
+(`bench.with_lights`): the benchmark light `lamp` (3, −4, z), then its mirror image about the scene centre
+(the midpoint of the objects' position bounding box) in `x` (`lamp_mx`) and, for `N = 3`, in `y`
+(`lamp_my`). With `N ≥ 2` three informational rows are added: **umbra alone**
+(`castplane.umbra.umbra_from_document` on the full-render document: every per-record `record_pieces`
+scan plus the intersection scan), the **umbra share of camera-only** (umbra alone / camera-only
+re-render), and **`record_pieces`, 2000-edge loop** (`bench.loop_2000()`: one simple star-shaped loop of
+2000 edges, radius 50–70 mm, the M5 mesh case of §5.3.9). `--no-umbra` runs the full and camera-only
+rows with `project_scene(..., umbra=False)` (`umbra[].polygons = null`, the M7 drag path). No target is
+attached to `N ≥ 2` (spec §8 names one light; `--gate none`). Minimum over 7 repetitions, the median in
+brackets, one run each on the same container:
+
+| path | `--lights 2` | `--lights 2 --no-umbra` | `--lights 3` | `--lights 3 --no-umbra` |
+| --- | --- | --- | --- | --- |
+| full render (A+B+C+SVG+JSON) | 1012 ms (1049) | 640 ms (705) | 1295 ms (1689) | 795 ms (870) |
+| camera-only re-render (B+C+SVG) | 566 ms (610) | 197 ms (293) | 843 ms (942) | 259 ms (337) |
+| same, cyclic GC disabled | 457 ms (572) | 155 ms (178) | 866 ms (919) | 186 ms (234) |
+| stage A only | 93 ms | 125 ms | 157 ms | 163 ms |
+| SVG writer only | 51 ms | 54 ms | 77 ms | 76 ms |
+| JSON dumps only | 243 ms | 256 ms | 276 ms | 337 ms |
+| umbra alone | 294 ms (350) | 355 ms (371) | 621 ms (670) | 639 ms (652) |
+| umbra share of camera-only | 51.9 % | – (the rows run without it) | 73.6 % | – |
+| `record_pieces`, 2000-edge loop | 81 ms (86) | 71 ms (75) | 83 ms (88) | 79 ms (81) |
+
+Document: 9030 drawn edges, 20 395 named points (`N = 2`) / 25 619 (`N = 3`), SVG 3087 / 4082 kB, JSON
+21.9 / 28.0 MB, `warnings []`. Pieces: `record_pieces` per light `lamp` 3637, `lamp_mx` 3652, `lamp_my`
+3651; umbra **3514** pieces for `N = 2` (the contract's prototype numbers, 3 637 per light and 3 514 umbra
+pieces, reproduced exactly) and 4129 for `N = 3`; the 2000-edge loop gives 1998 pieces. The umbra is
+about half of the two-light camera-only re-render (the vectorised kernel; the prototype's 2.3 s, mostly
+per-piece Python, is gone), and `--no-umbra` brings a two-light camera-only re-render to ≈ 0.2 s, about
+twice the single-light path (two lights' stage B). The 2000-edge simple loop takes ≈ 80 ms (a random
+self-intersecting loop of the same size is the worst case of the slab decomposition, ≈ 100 s; ARCHITECTURE
+§5.3 implementation notes).
+
+**N = 1 re-measured** (`python3 benchmarks/bench.py -n 10 --gate full`, the committed file, three runs
+interleaved with the v5 base `claude/epic-gauss-rgttme` at `3ad6888` extracted with `git archive`).
+The document is unchanged (100 primitives, 10 726 mesh edges, 9030 drawn edges, 15 171 named points,
+SVG 1915 kB, JSON 10 379 kB, `warnings []`; conformance dry run 0 drift, `tests/golden/example_basic.svg`
+equal): M6 adds nothing to the single-light path but a `len(lights) ≥ 2` test.
+
+| path | v5 run 1 | v5 run 2 | v5 run 3 | M6 run 1 | M6 run 2 | M6 run 3 | target | status |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| full render | 343 ms (403) | 285 ms (346) | 339 ms (399) | 343 ms (418) | 280 ms (355) | 299 ms (446) | < 1 s | **PASS** 6/6 (the CI gate, `--gate full` exit 0) |
+| camera-only re-render | 113 ms (127) | 112 ms (118) | 114 ms (132) | 107 ms (110) | 100 ms (116) | 103 ms (130) | < 100 ms | informational (D17); above the target on this container for v5 and M6 alike |
+| same, cyclic GC disabled | 90 ms | 79 ms | 96 ms | 91 ms | 80 ms | 110 ms | – | – |
+| stage A only | 67 ms | 81 ms | 86 ms | 80 ms | 87 ms | 85 ms | – | – |
+| SVG writer only | 28 ms | 33 ms | 35 ms | 34 ms | 28 ms | 42 ms | – | – |
+| JSON dumps only | 103 ms | 135 ms | 123 ms | 130 ms | 119 ms | 134 ms | – | – |
+
+The deltas are inside the container's run-to-run drift (the v5 and M6 minima overlap on every row); the
+camera-only row is at 100–114 ms for both trees today (the M5 part 2 reading above was 94–100 ms on a
+quieter container), so it is not an M6 regression.

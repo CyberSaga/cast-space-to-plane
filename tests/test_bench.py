@@ -371,3 +371,51 @@ def test_bench_mesh10k_reports_the_mesh_preprocessing_row(capsys):
     out = json.loads(capsys.readouterr().out)
     assert status == 0 and out["scene"] == "mesh10k" and out["objects"] == 1 and out["warnings"] == []
     assert out["mesh_preprocessing_s"]["min"] > 0.0 and out["stage_a_s"]["min"] > 0.0
+
+
+# M6: --lights N, --no-umbra and the 2 000-edge record_pieces row (contract §5.3.9, §5.0.9)
+# ---------------------------------------------------------------------------
+
+def test_with_lights_mirrors_the_benchmark_light_about_the_scene_centre():
+    raw, _source = bench.benchmark_input()
+    assert bench.with_lights(raw, 1) is raw                                  # the gated input, unchanged
+    two, three = bench.with_lights(raw, 2), bench.with_lights(raw, 3)
+    first = raw["lights"][0]
+    assert [lt["id"] for lt in three["lights"]] == [first["id"], f"{first['id']}_mx", f"{first['id']}_my"]
+    assert two["lights"] == three["lights"][:2] and raw["lights"] == [first]  # raw is not mutated
+    pos = [o["transform"]["position"] for o in raw["objects"]]
+    cx = (min(p[0] for p in pos) + max(p[0] for p in pos)) / 2
+    cy = (min(p[1] for p in pos) + max(p[1] for p in pos)) / 2
+    mx, my = three["lights"][1]["position"], three["lights"][2]["position"]
+    assert mx[0] == pytest.approx(2 * cx - first["position"][0]) and mx[1:] == first["position"][1:]
+    assert my[1] == pytest.approx(2 * cy - first["position"][1]) and [my[0], my[2]] == [first["position"][0],
+                                                                                         first["position"][2]]
+    assert len(load_scene(three)["lights"]) == 3
+    with pytest.raises(ValueError):
+        bench.with_lights(raw, 4)
+
+
+def test_bench_lights_rows_report_the_umbra_share(capsys):
+    status = bench.main(["--objects", "4", "-n", "1", "--json", "--gate", "none", "--lights", "2"])
+    out = json.loads(capsys.readouterr().out)
+    assert status == 0 and out["lights"] == 2 and out["umbra"] is True
+    assert out["umbra_s"]["min"] > 0.0 and 0.0 < out["umbra_s"]["share_of_camera_only"]
+    assert sorted(out["record_pieces"]) == ["lamp", "lamp_mx"] and out["umbra_pieces"] > 0
+    loop = out["record_pieces_2000_s"]
+    assert loop["edges"] == 2000 and loop["pieces"] > 0 and loop["min"] > 0.0
+    assert set(out["pass"]) == {"full_render", "camera_only"}                # the M6 rows are never gated
+    bench.main(["--objects", "4", "-n", "1", "--gate", "none", "--lights", "3", "--no-umbra"])
+    text = capsys.readouterr().out
+    assert "with 3 lights" in text and "umbra alone" in text and "umbra share of camera-only" in text
+    assert "WITHOUT the umbra" in text and "2000-edge loop" in text
+    bench.main(["--objects", "4", "-n", "1", "--json", "--gate", "none"])
+    one = json.loads(capsys.readouterr().out)
+    assert one["lights"] == 1 and "umbra_s" not in one and "record_pieces_2000_s" not in one
+
+
+def test_bench_readme_records_the_m6_rows():
+    text = (ROOT / "benchmarks" / "README.md").read_text(encoding="utf-8")
+    section = text.split("## M6", 1)[1]
+    for needle in ("--lights 2", "--lights 3", "--no-umbra", "umbra alone", "record_pieces", "2000-edge",
+                   "--gate full", "N = 1"):
+        assert needle in section, needle
