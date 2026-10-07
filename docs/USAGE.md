@@ -12,7 +12,7 @@ castplane [--version] <command> ...
 | --- | --- |
 | `castplane render SCENE -o OUTDIR [選項]` | 渲染場景，寫出 `OUTDIR/<場景檔名>.svg` / `.json` / `.png` |
 | `castplane validate SCENE [-q]` | 只驗證場景檔，印出物件、光源、受影面數量 |
-| `castplane info SCENE [--camera JSON]` | 印出物件清單、畫布、主點、地平線 v_mm、三個消失點（軸平行畫面時印 `at infinity (axis parallel to the picture plane)`，表示該方向的線在畫面上仍平行）、L′、F′（在無窮遠時印 `at infinity, direction (…)`）、點／邊／影子／作圖線數量、自我驗證最大誤差、受影面清單（M4：有界／無界、平面、各光源的 `lit` / `casts`）與警告表 |
+| `castplane info SCENE [--camera JSON]` | 印出物件清單、畫布、主點、地平線 v_mm、三個消失點（軸平行畫面時印 `at infinity (axis parallel to the picture plane)`，表示該方向的線在畫面上仍平行）、L′、F′（在無窮遠時印 `at infinity, direction (…)`）、點／邊／影子／作圖線數量、自我驗證最大誤差、受影面清單（M4：有界／無界、平面、各光源的 `lit` / `casts`）與警告表；M6：列出每個光源（id、種類、位置／方向、在各受影面上是否有效） |
 | `castplane stages SCENE [--camera JSON] [-o FILE] [-q]` | 把 A 段與 B 段的中間結果以標準 JSON（`{"A": …, "B": …}`）寫到 FILE 或 stdout，除錯與移植對照用 |
 
 ### `render` 選項
@@ -61,9 +61,9 @@ castplane render examples/wall_and_ground.json -o out --hidden-lines --hidden-st
 | `load_scene(path_or_dict) -> dict` | 讀取 JSON 檔或 dict，依合約 §2.0 驗證並回傳**新的**、填好預設值的場景 dict；失敗拋 `SceneError` |
 | `validate_scene(scene) -> dict` | 同上，但只接受 dict |
 | `shadow_geometry(scene) -> dict` | **A 段**：與相機無關的幾何——物件網格、光源向量 L、投影矩陣 M、垂足 F、受光旗標、光輪廓迴圈、齊次影子迴圈（含方向頂點）、影子點 S 與垂足 Q、曲面基元的輪廓圓與影子圓錐曲線、警告 |
-| `project_scene(scene, A, camera=None) -> dict` | **B 段**：以場景相機或 `camera` 覆寫（規格 §4 形式的 dict）投影 A 段結果；相機矩陣、所有投影點與裁切後的線段／多邊形（齊次 2D）、L′、F′、作圖線、自我驗證 |
+| `project_scene(scene, A, camera=None, umbra=True) -> dict` | **B 段**：以場景相機或 `camera` 覆寫（規格 §4 形式的 dict）投影 A 段結果；相機矩陣、所有投影點與裁切後的線段／多邊形（齊次 2D）、L′、F′、作圖線、自我驗證；M6：`umbra=False` 時多光源文件的 `umbra[].polygons` 為 `null`（不計算），其餘不變 |
 | `compose(scene, B) -> dict` | **C 段**：產生規格 §6.2 幾何文件（最後才除以 x̃₃、浮點數標準化、點名排序） |
-| `render(scene, camera=None) -> dict` | 連跑 A、B、C 並寫 SVG：`{"geometry": doc, "svg": str}`，圖層子集取自 `scene["output"]["layers"]` |
+| `render(scene, camera=None, hidden_lines=None, hidden_style=None, umbra=True) -> dict` | 連跑 A、B、C 並寫 SVG：`{"geometry": doc, "svg": str}`，圖層子集取自 `scene["output"]["layers"]`；`umbra`（M6）傳給 `project_scene` |
 | `SceneError(field, message)` | 輸入錯誤例外（`ValueError` 子類）；`field` 是 JSON 路徑 |
 | `make_warning(code, ids=(), message=None) -> dict` | 建立 `{"code", "ids", "message"}` 警告；`code` 必須在 `errors.WARNING_CODES` 中 |
 | `merge_warnings(*lists) -> list` | 合併警告清單，依 (code, ids) 去重並排序 |
@@ -107,9 +107,9 @@ castplane render examples/wall_and_ground.json -o out --hidden-lines --hidden-st
 | 函式 | 說明 |
 | --- | --- |
 | `shadow_geometry(scene) -> dict` | A 段（見 2.1）。回傳 `{objects, vertices, bbox, scene_scale, tol, receiver, receivers, lights, shadows, warnings}`；M4：`receivers` 每個受影面一筆（平面、座標系、bounds 邊泛函、各光源紀錄、`lit` / `casts`），`shadows` 依受影面 → 光源 → 施影者排序 |
-| `project_scene(scene, A, camera=None) -> dict` | B 段（見 2.1）。回傳 `{A, camera, scene_scale, tol, objects, lights, receiver_lights, receivers, plates, horizon, shadows, construction, warnings}`；M4：`B["A"]` 就是 A 段本身，`receiver_lights` 是非預設受影面的 F′_r，`plates` 是有界面的 bounds 點、邊與背光面 |
-| `compose(scene, B, hidden_lines=None) -> dict` | C 段（見 2.1）；M4：`hidden_lines=None` 取場景 `output.hidden_lines`，文件頂層 `hidden_lines` 記錄實際值；另有 `receivers`、`construction.per_receiver` 等 M4 鍵（合約 §5.0.3） |
-| `render(scene, camera=None, hidden_lines=None, hidden_style=None) -> dict` | 見 2.1；M4：兩個關鍵字覆寫場景的 `output` 值（場景本身不改） |
+| `project_scene(scene, A, camera=None) -> dict` | B 段（見 2.1）。回傳 `{A, camera, scene_scale, tol, objects, lights, receiver_lights, receivers, plates, horizon, shadows, construction, warnings}`；M4：`B["A"]` 就是 A 段本身，`receiver_lights` 是非預設受影面的 F′_r，`plates` 是有界面的 bounds 點、邊與背光面；M6（N ≥ 2）：另有 `light_ids`、`constructions`（每個光源一個作圖區塊，`construction` 是第一個光源的同一物件）與 `umbra`（每個受影面一筆），多面體紀錄帶 `silhouette_lights`、`form_by_light`、`form_core`，平面板帶 `form_by_light` / `form_core` |
+| `compose(scene, B, hidden_lines=None) -> dict` | C 段（見 2.1）；M4：`hidden_lines=None` 取場景 `output.hidden_lines`，文件頂層 `hidden_lines` 記錄實際值；另有 `receivers`、`construction.per_receiver` 等 M4 鍵（合約 §5.0.3）；M6：兩個以上光源時加上 `constructions`、`umbra`、`form_shadow_core`、`form_shadow[].light`、`edges[].silhouette_lights`（只在多光源文件出現，合約 §5.3.5） |
+| `render(scene, camera=None, hidden_lines=None, hidden_style=None, umbra=True) -> dict` | 見 2.1；M4：兩個關鍵字覆寫場景的 `output` 值（場景本身不改）；M6：`umbra` 傳給 `project_scene` |
 
 模組 docstring 記載點名規則、地面裁切與曲面物件的文件結構，是 §6.2 文件最完整的說明。
 
@@ -246,13 +246,13 @@ castplane render examples/wall_and_ground.json -o out --hidden-lines --hidden-st
 | `terminator(analytic, L, tol=0.0) -> list` | 同一條輪廓的畫面側可畫項目（`form_shadow` 層）：`{"segment": (A4, B4)}` 與 `{"circle_arc": {...}}` |
 | `shadow_outline(analytic, L, M, pi, tol=0.0, tol_dir=1e-9) -> dict` | 有向地面影子輪廓：圓錐曲線弧片段、母線影子線段、地面截面鏈、方向頂點；`{pieces, unbounded, warnings}` |
 | `shadow_polygon_h(outline, samples_per_circle=64) -> dict` | 輪廓取樣成有向齊次地面多邊形 `{vertices, sources, unbounded}`（走一般繪圖管線） |
-| `construction_points(analytic, L, tol=0.0, obj_id="obj") -> dict` | 作圖點 `{名稱: 4 向量}`：球 `c`、`sil.0..3`；圓柱 `g0/g1.base/top`；圓錐 `g0/g1.base`、`apex` |
+| `construction_points(analytic, L, tol=0.0, obj_id="obj", light_id=None) -> dict` | 作圖點 `{名稱: 4 向量}`：球 `c`、`sil.0..3`；圓柱 `g0/g1.base/top`；圓錐 `g0/g1.base`、`apex`；M6：給了 `light_id`（多光源場景）時，隨光源而異的 `sil.<k>`、`g<k>.base/top` 名稱最後加 `.<light_id>` |
 | `camera_outline(analytic, C, tol=0.0) -> dict` | 從相機位置看的輪廓：`{generators, cap_arcs（含 back 旗標）, circle, camera_inside}` |
 | `loop_pieces_4d(sil) -> list` | 輪廓迴圈拆成 4D 片段（線段、圓弧） |
 | `canonical_light(L) -> ndarray` | L 的標準代表：有限點 w = +1、方向單位長 |
 | `canonical_factor(L) -> float` | 使 L / s 為標準形的純量 s |
 | `plane_min(analytic, pi) -> float` | 實體基元上 πᵀX 的最小值（精確曲面的 `OBJECT_BELOW_RECEIVER` 判定） |
-| `stage_a_object(obj, lights, pi, tol, receiver_id, warnings) -> list` | 管線 A 段掛鉤：每個光源的輪廓、明暗交界線、作圖點與影子紀錄（存於 `obj["curved"]`） |
+| `stage_a_object(obj, lights, receiver, tol, warnings, multi=False) -> list` | 管線 A 段掛鉤：每個光源的輪廓、明暗交界線、作圖點與影子紀錄（存於 `obj["curved"]`）；M6：`multi`（場景有兩個以上光源）時作圖點基本名帶光源 id（`ball.sil.0.lamp`、影子 `ball.sil.0.lamp.shadow.lamp`） |
 | `stage_b_object(obj, rec, cam, tol, warnings) -> None` | 管線 B 段掛鉤：相機輪廓、明暗交界線可畫項目、影子圓錐曲線弧與命名點，閉式近平面與畫布裁切 |
 | `stage_b_objects(objs, recs, cam, tol, warnings) -> None` | 多個曲面物件一次做 B 段（規格 §8）：逐物件呼叫 `stage_b_object` 的批次版，所有物件的命名點與直線段合併成一次投影 |
 | `arc_record(circle, theta0, theta1, full, T, cam, f_nu, rect_rows, map, which, back=False) -> dict \| None` | 一段圓弧經 H = P·T·E 的 B 段紀錄（含 `visible` 區間）；全在近平面後方時 `None` |
@@ -296,6 +296,8 @@ castplane render examples/wall_and_ground.json -o out --hidden-lines --hidden-st
 | `svg.write_svg(doc, layers=None, hidden_style="dashed") -> str` | 規格 §6.1 分圖層 SVG；`layers` 選子集，順序固定；未知 id 拋 `ValueError`；M4：`hidden_style`（`dashed` / `omit`）決定隱藏線子群組的畫法，`hidden_lines` 關閉的文件與 v2 輸出位元相同 |
 | `svg.LAYER_ORDER`、`svg.STYLE` | 圖層順序與預設樣式屬性字串 |
 | `svg.HIDDEN_STYLES`、`svg.HIDDEN_STROKE`、`svg.OUTLINE_STYLE` | M4：`hidden_style` 的允許值、各層 `*.hidden` 群組的線色（`#111` / `#335` / `#000`）、開啟消隱時影子輪廓群組 `cast_shadow.<light>.<object>.outline` 的描邊 |
+| `svg_multilight.layer_form_shadow(doc, cv, hidden_style=None)`、`svg_multilight.layer_cast_shadow(doc, cv, hidden_style=None)`、`svg_multilight.layer_construction(doc, cv)` | M6：多光源文件（有 `constructions` 鍵）的三個圖層：每個光源一個子群組（光源 id 碼位順序，`fill-opacity` 為 `0.18 / N_act`、`0.3 / N_act`）、`form_shadow.core`（被所有光源背光的面，各光源群組不再畫它們）、`cast_shadow.umbra`（每筆 `umbra[]` 一個 `<path>`，每塊碎片一個 `M … Z` 子路徑）、`construction.<light>`；開啟消隱時 `*.hidden` 群組在最前（合約 §5.3.6、§5.0.6）。`svg.write_svg` 自動分派 |
+| `svg_multilight.is_multi_light(doc)`、`svg_multilight.n_active(doc)`、`svg_multilight.light_ids(doc)`、`svg_multilight.UMBRA_STYLE` | M6：多光源文件判定、`N_act = max(1, umbra[].lights 聯集的 id 數)`、光源 id（碼位順序）、本影群組樣式 |
 | `png.write_png(svg_str, dpi=300) -> bytes` | 以 cairosvg（或 resvg）柵格化；沒有後端時拋 `ImportError` |
 | `png.png_size(svg_str, dpi) -> (w_px, h_px)` | round(canvas_mm · dpi / 25.4) |
 

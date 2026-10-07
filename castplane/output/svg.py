@@ -412,6 +412,9 @@ def _drawables(entry: dict, cv: _Canvas) -> list:
 
 
 def _layer_form_shadow(doc: dict, cv: _Canvas) -> list:
+    if "constructions" in doc:   # M6 (contract §5.3.6): a multi-light document
+        from . import svg_multilight
+        return svg_multilight.layer_form_shadow(doc, cv)
     body = []
     points = doc.get("points", {})
     entries = doc.get("form_shadow", [])
@@ -451,6 +454,9 @@ def _layer_form_shadow(doc: dict, cv: _Canvas) -> list:
 def _layer_cast_shadow(doc: dict, cv: _Canvas) -> list:
     """One ``<path>`` per shadow entry with all of its loops as subpaths, so that the ``nonzero``
     fill rule of the layer group unites the loops of one object (contract §2.5 / §2.10)."""
+    if "constructions" in doc:   # M6 (contract §5.3.6): a multi-light document
+        from . import svg_multilight
+        return svg_multilight.layer_cast_shadow(doc, cv)
     per_light = {}
     points = doc.get("points", {})
     shadows = doc.get("shadows", [])
@@ -492,6 +498,9 @@ def _shadow_subgroup_id(sh: dict, first_receiver, suffix: str) -> str:
 
 
 def _layer_construction(doc: dict, cv: _Canvas) -> list:
+    if "constructions" in doc:   # M6 (contract §5.3.6): a multi-light document
+        from . import svg_multilight
+        return svg_multilight.layer_construction(doc, cv)
     body = []
     con = doc.get("construction") or {}
     lp = con.get("light_point")
@@ -731,6 +740,9 @@ def _layer_objects_hidden(doc: dict, cv: _Canvas, hidden_style: str) -> list:
 def _layer_form_shadow_hidden(doc: dict, cv: _Canvas, hidden_style: str) -> list:
     """The form-shadow layer with hidden lines on: ``form_shadow.hidden`` first (sub-groups in document
     order), then the v2 entries whose terminator keeps the visible runs only (fills unchanged)."""
+    if "constructions" in doc:   # M6 (contract §5.3.6, §5.0.6): a multi-light document
+        from . import svg_multilight
+        return svg_multilight.layer_form_shadow(doc, cv, hidden_style)
     entries = doc.get("form_shadow", [])
     hidden_groups, body = [], []
     for entry in entries:
@@ -763,6 +775,9 @@ def _layer_cast_shadow_hidden(doc: dict, cv: _Canvas, hidden_style: str) -> list
     """The cast-shadow layer with hidden lines on: ``cast_shadow.hidden`` (sub-groups per light) first; per
     record the fill path with ``stroke="none"``, the visible conic drawables in ``.conics`` and the visible
     outline runs of the drawn polygon edges in ``cast_shadow.<light>.<object>[.<r>].outline``."""
+    if "constructions" in doc:   # M6 (contract §5.3.6, §5.0.6): a multi-light document
+        from . import svg_multilight
+        return svg_multilight.layer_cast_shadow(doc, cv, hidden_style)
     shadows = doc.get("shadows", [])
     first_receiver = doc["receivers"][0]["id"] if doc.get("receivers") else None
     loop_sets = [[poly for poly in (sh.get("polygons") or []) if len(poly) >= 3] for sh in shadows]

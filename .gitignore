@@ -14,3 +14,4 @@ out/
 *.png
 !docs/**/*.png
 !tests/**/*.png
+!tests/golden/*.svg
