@@ -4,14 +4,27 @@ recognisers, importer API.  Fixtures: ``tests/fixtures/step/`` (written by
 
 from __future__ import annotations
 
+import copy
+import json
 import math
-import re
 import pathlib
+import random
+import re
+import time
 
+import numpy as np
 import pytest
 
+import castplane
+from castplane.errors import SceneError
 from castplane.io import part21
+from castplane.io import step as S
 from castplane.io.part21 import Part21SyntaxError, parse, tokenize
+from castplane.io.step import (DEFAULT_SCENE_TEMPLATE, STEP_WARNING_CODES, StepError, euler_zyx_deg,
+                               expand_step_object, import_step, make_step_warning, recognise_solid, to_metres)
+from castplane.output.geometry_json import dumps as geometry_dumps
+from castplane.transform import euler_zyx_matrix
+from tests.test_conformance import CASES, EXPECTED, compare_documents, recorded_numpy_version
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 FIX = ROOT / "tests" / "fixtures" / "step"
@@ -105,21 +118,6 @@ def test_parse_cylinder_fixture_counts():
 
 
 # =========================================================================== STEP semantics (§5.5.3–§5.5.6)
-import copy  # noqa: E402
-import json  # noqa: E402
-import random  # noqa: E402
-import time  # noqa: E402
-
-import numpy as np  # noqa: E402
-
-import castplane  # noqa: E402
-from castplane.errors import SceneError  # noqa: E402
-from castplane.io import step as S  # noqa: E402
-from castplane.io.step import (DEFAULT_SCENE_TEMPLATE, STEP_WARNING_CODES, StepError, euler_zyx_deg,  # noqa: E402
-                               expand_step_object, import_step, make_step_warning, recognise_solid, to_metres)
-from castplane.output.geometry_json import dumps as geometry_dumps  # noqa: E402
-from castplane.transform import euler_zyx_matrix  # noqa: E402
-from tests.test_conformance import CASES, EXPECTED, compare_documents  # noqa: E402
 
 FIXTURES = ("cylinder", "cylinder_down", "cylinder_tilted", "sphere", "cone", "box", "frustum", "two_solids")
 PILLAR = {"id": "pillar", "type": "cylinder", "radius": 0.3, "height": 2.4,
@@ -247,7 +245,7 @@ class Builder:
             faces.append(self.face([], self.add(f"CYLINDRICAL_SURFACE('',{self.axis(o)},{f(radius2)})")))
         return self.solid(faces)
 
-    def cone(self, r, h, semi, o=(0.0, 0.0, 0.0)) -> str:
+    def cone(self, r, h, semi, o=(0.0, 0.0, 0.0), surface_axis=(0, 0, -1)) -> str:
         apex = (o[0], o[1], o[2] + h)
         vb, va = self.vertex((o[0] + r, o[1], o[2])), self.vertex(apex)
         cb = self.add(f"CIRCLE('',{self.axis(o)},{f(r)})")
@@ -255,7 +253,9 @@ class Builder:
         line = self.add(f"LINE('',{self.point((o[0] + r, o[1], o[2]))},"
                         f"{self.add(f'VECTOR({chr(39)}{chr(39)},{self.direction((-r, 0, h))},1.)')})")
         seam = self.edge(vb, va, line)
-        side = self.face([eb, seam], self.add(f"CONICAL_SURFACE('',{self.axis(o)},{f(r)},{semi!r})"))
+        # ISO 10303-42: the surface radius is radius + u·tan(semi) along the placement axis, so the
+        # axis points away from the apex (as OCC writes it: axis (0, 0, -1) for an apex above the base)
+        side = self.face([eb, seam], self.add(f"CONICAL_SURFACE('',{self.axis(o, surface_axis)},{f(r)},{semi!r})"))
         base = self.face([eb], self.add(f"PLANE('',{self.axis(o, (0, 0, -1))})"))
         return self.solid([side, base])
 
@@ -361,6 +361,18 @@ def test_degree_angle_unit_cone_equals_radian_cone(tmp_path):
     bad.cone(400.0, 1200.0, 18.434948822922)
     with pytest.raises(StepError, match="semi-angle out of range"):
         import_step(write(tmp_path, bad.text(), "bad.step"))
+
+
+@pytest.mark.parametrize("semi, surface_axis", [(0.5, (0, 0, -1)), (math.atan(1.0 / 3.0), (0, 0, 1))])
+def test_cone_with_wrong_semi_angle_or_axis_sense_is_rejected(tmp_path, semi, surface_axis):
+    """Placement in the base plane (OCC's layout): the radius test alone reduces to ``r == radius_s``,
+    so a wrong semi-angle, or a surface axis pointing at the apex (radius growing towards it), is
+    caught by the surface radius having to vanish at the apex vertex."""
+    b = Builder()
+    b.units()
+    b.cone(400.0, 1200.0, semi, surface_axis=surface_axis)
+    with pytest.raises(StepError, match="inconsistent cone"):
+        import_step(write(tmp_path, b.text()))
 
 
 # --------------------------------------------------------------------------- tolerances (§5.5.4)
@@ -470,7 +482,8 @@ def test_box_fixture_within_1e9_and_conformance():
     # the OCC 8.0 numbers recorded in contract §5.5.5
     assert crate["size"] == [1.00000000000002, 0.8000000000003888, 0.6]
     assert crate["transform"]["position"] == [2.0000000000000004, 4.0, 0.0]
-    assert crate["transform"]["rotation_deg"] == [0.0, 0.0, 30.000000000012566]
+    if recorded_numpy_version() == np.__version__:      # atan2's last bit is per build (§5.5.5)
+        assert crate["transform"]["rotation_deg"] == [0.0, 0.0, 30.000000000012566]
     doc = json.loads(geometry_dumps(_geometry(_basic_with("crate", crate))))
     expected = json.loads((EXPECTED / "example_basic.json").read_text(encoding="utf-8"))
     assert compare_documents(expected, doc, "example_basic") == []
@@ -487,6 +500,42 @@ def test_box_with_opposite_axis_signs_is_the_same_box(tmp_path):
 def test_cylinder_down_fixture_turns_the_frame():
     (obj,) = expand(FIX / "cylinder_down.step", id="pillar")
     assert obj == dict(PILLAR, transform={"position": [-1.5, 6.0, 0.0], "rotation_deg": [0.0, 0.0, 180.0]})
+
+
+_CONIC_FRAME_LEAVES = re.compile(r"\.(circle\.e1\[\d\]|circle\.e2\[\d\]|arc\.theta[01]|arcs\[\d+\]\.theta\[\d\]"
+                                 r"|visible\[\d+\]\[\d\])$")
+
+
+def _leaf_differences(a, b, path=""):
+    """``(path, a, b)`` of every leaf differing by more than 1e-9 (structure must agree)."""
+    if isinstance(a, dict):
+        assert set(a) == set(b), path
+        return [d for k in a for d in _leaf_differences(a[k], b[k], f"{path}.{k}")]
+    if isinstance(a, list):
+        assert len(a) == len(b), path
+        return [d for i, (u, v) in enumerate(zip(a, b)) for d in _leaf_differences(u, v, f"{path}[{i}]")]
+    if isinstance(a, (int, float)) and not isinstance(a, bool):
+        return [] if abs(a - b) <= 1e-9 else [(path, a, b)]
+    return [] if a == b else [(path, a, b)]
+
+
+def test_cylinder_down_render_differs_only_in_the_conic_frame():
+    """§5.5.10: the frame turned by 180° flips ``e1`` / ``e2`` and shifts every conic parameter by π;
+    everything else (points, polygons, segments) agrees within 1e-9.  The flipped parameters also
+    appear in ``visible`` intervals and in ``form_shadow[].terminator[]`` conics (implementation note)."""
+    (down,) = expand(FIX / "cylinder_down.step", id="pillar")
+    inline = json.loads(geometry_dumps(_geometry(json.loads((ROOT / "examples" / "basic.json")
+                                                            .read_text(encoding="utf-8")))))
+    doc = json.loads(geometry_dumps(_geometry(_basic_with("pillar", down))))
+    diffs = _leaf_differences(inline, doc)
+    assert diffs and all(_CONIC_FRAME_LEAVES.search(p) for p, _, _ in diffs), diffs
+    assert len(diffs) == 64
+    assert {p.split(".")[1].split("[")[0] for p, _, _ in diffs} == {"outlines", "shadows", "form_shadow"}
+    for p, x, y in diffs:
+        if ".circle." in p:
+            assert x == -y, (p, x, y)
+        else:                                           # a conic parameter: shifted by π (mod 2π)
+            assert abs((x - y) % (2 * math.pi) - math.pi) < 1e-9, (p, x, y)
 
 
 def test_cylinder_axis_edit_canonicalises_bit_equal(tmp_path):
@@ -708,7 +757,42 @@ def test_euler_exact_180_with_signed_zeros():
         e = euler_zyx_deg(R)
         assert e == [0.0, 0.0, 180.0] and all(math.copysign(1.0, v) == 1.0 for v in e)
     assert euler_zyx_deg(np.eye(3)) == [0.0, 0.0, 0.0]
-    assert euler_zyx_deg(euler_zyx_matrix([0, 0, 30])) == [0.0, 0.0, 29.999999999999996]
+    e = euler_zyx_deg(euler_zyx_matrix([0, 0, 30]))
+    assert e[0] == e[1] == 0.0 and abs(e[2] - 30.0) < 1e-12
+    if recorded_numpy_version() == np.__version__:      # atan2's last bit is per build (§5.5.5)
+        assert e == [0.0, 0.0, 29.999999999999996]
+
+
+@pytest.mark.parametrize("sy", [1.0, -1.0])
+@pytest.mark.parametrize("r01", [0.0, -0.0])
+def test_euler_gimbal_lock_signed_zero_is_180_not_minus_180(sy, r01):
+    # R = Rz(0)·Ry(sy·90)·Rx(180): R01 = sy·sin(180°)·… is a zero of either sign; sy·R01 must not be -0.0
+    R = [[0.0, r01, -sy], [0.0, -1.0, 0.0], [-sy, 0.0, 0.0]]
+    e = euler_zyx_deg(R)
+    assert e == [180.0, 90.0 * sy, 0.0] and all(-180.0 < v <= 180.0 for v in e)
+    assert np.allclose(euler_zyx_matrix(e), R, rtol=0, atol=1e-12)
+    assert euler_zyx_deg([[0, 0, 1], [0, -1, 0], [1, 0, 0]]) == [180.0, -90.0, 0.0]
+    assert euler_zyx_deg([[0, 0, -1], [0, 1, 0], [1, 0, 0]]) == [0.0, -90.0, 0.0]
+
+
+def test_cylinder_along_x_with_ref_z_is_180_not_minus_180(tmp_path):
+    """A horizontal pipe: axis world +x, ref_direction +z -> frame [[0,0,1],[0,-1,0],[1,0,0]] (gimbal lock)."""
+    b = Builder()
+    b.units()
+    a, ref, r, h = (1, 0, 0), (0, 0, 1), 300.0, 2400.0
+    o, top = (0.0, 0.0, 0.0), (h, 0.0, 0.0)
+    vb, vt = b.vertex((0.0, 0.0, r)), b.vertex((h, 0.0, r))
+    eb = b.edge(vb, vb, b.add(f"CIRCLE('',{b.axis(o, a, ref)},{f(r)})"))
+    et = b.edge(vt, vt, b.add(f"CIRCLE('',{b.axis(top, a, ref)},{f(r)})"))
+    seam = b.edge(vb, vt, b.add(f"LINE('',{b.point((0.0, 0.0, r))},"
+                                f"{b.add(f'VECTOR({chr(39)}{chr(39)},{b.direction(a)},1.)')})"))
+    side = b.face([eb, seam, et, seam], b.add(f"CYLINDRICAL_SURFACE('',{b.axis(o, a, ref)},{f(r)})"))
+    bottom = b.face([eb], b.add(f"PLANE('',{b.axis(o, (-1, 0, 0), ref)})"))
+    topf = b.face([et], b.add(f"PLANE('',{b.axis(top, a, ref)})"))
+    b.solid([side, topf, bottom])
+    (obj,) = import_step(write(tmp_path, b.text()), obj_id="pipe")["objects"]
+    assert obj == {"id": "pipe", "type": "cylinder", "radius": 0.3, "height": 2.4,
+                   "transform": {"position": [0.0, 0.0, 0.0], "rotation_deg": [180.0, -90.0, 0.0]}}
 
 
 # --------------------------------------------------------------------------- expansion object (§5.5.1)
@@ -797,8 +881,16 @@ def test_mesh_fallback_with_ocp():
     (obj,) = rep["objects"]
     assert obj["type"] == "mesh" and rep["solids"][0]["kind"] == "mesh"
     assert rep["notes"] == [make_step_warning("STEP_SOLID_TESSELLATED", ["#15"])]
+    assert "transform" not in obj
     scene = castplane.validate_scene(dict(copy.deepcopy(DEFAULT_SCENE_TEMPLATE), objects=[obj]))
     castplane.render(scene)
+    raw = {"position": [1, 0, 0]}
+    moved = import_step(FIX / "frustum.step", fallback="mesh", obj_id="f", transform=raw)["objects"][0]
+    assert moved["transform"] == {"position": [1, 0, 0]} and type(moved["transform"]["position"][0]) is int
+    assert moved["data"] == obj["data"]
+    (via_expand,), _ = expand_step_object({"id": "f", "type": "step", "path": "frustum.step", "fallback": "mesh",
+                                           "transform": raw}, "objects[0]", FIX)
+    assert via_expand == moved and raw == {"position": [1, 0, 0]}
     tri = S.tessellate_step(FIX / "frustum.step")
     n = len(tri["vertices"])
     assert tri["cascade_unit"] == "MM" and len(tri["faces"]) >= 100

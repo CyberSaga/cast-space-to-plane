@@ -3696,11 +3696,15 @@ LGPL-2.1；確定性只到 OCC 版本；頂點重建誤差 1.4e-9 mm；OCP 8 的
   `.path` replaced by `.solid` / `.fallback` / `.transform` (`objects[i].solid` when expanding; `step.solid` for the
   default `field="step"`). A `POLY_LOOP` or a nested `ORIENTED_EDGE` makes the solid unrecognised (so `fallback="mesh"`
   still applies) instead of raising.
-- **[decision, implementation] (M8 part 1) Cone semi-angle check.** When the conical surface's placement lies in the
-  base plane (OCC always writes it so), `(b − o)·a_s = 0` and the §5.5.5 consistency test reduces to `r = radius_s`; the
-  semi-angle is then only range-checked (`0 < |semi| < π/2 − tol_dir_step`). This is sufficient for a valid B-rep (the
-  seam edge lies on the surface) and is why a degree value read as radians (`18.43…` rad) is rejected by the range check,
-  not by consistency.
+- **[decision, implementation] (M8 part 1, review fix) Cone semi-angle check.** When the conical surface's placement lies
+  in the base plane (OCC always writes it so), `(b − o)·a_s = 0` and the §5.5.5 consistency test reduces to
+  `r = radius_s`, so it cannot see a wrong semi-angle, and (because of its inner `| … |`) not a surface axis pointing at
+  the apex either. **Added** after it: the surface radius must vanish at the apex vertex,
+  `| radius_s + ((V − o)·a_s)·tan(semi) | ≤ tol`, else unsupported ("inconsistent cone (the surface radius does not
+  vanish at the apex vertex)"). ISO 10303-42 puts the apex at `o − (radius_s / tan(semi))·a_s`, so this holds for every
+  valid file whatever the placement (OCC's 12-digit semi-angle leaves a residual of ≈ 4.8e-10 mm on `cone.step`, whose `tol` is 5e-3 mm).
+  A degree value read as radians (`18.43…` rad) is still rejected earlier by the range check
+  (`0 < |semi| < π/2 − tol_dir_step`).
 - **[decision, implementation] (M8 part 1) Mesh fallback in multi-solid files.** `fallback="mesh"` on an unrecognised
   solid `k` of a file with several solids tessellates only the `k`-th `TopAbs_SOLID` of the shape (explorer order;
   verified equal to the entity order on `two_solids`: 170 / 164 and 1447 / 2836, identical to the single fixtures), with
@@ -3709,6 +3713,19 @@ LGPL-2.1；確定性只到 OCC 版本；頂點重建誤差 1.4e-9 mm；OCP 8 的
 - **[decision, implementation] (M8 part 1) Gimbal-lock branch.** §5.5.5 says the M5 `gltf.euler_zyx` is "the same
   decomposition"; it is, except at gimbal lock, where `gltf.euler_zyx` sets `rx = 0` (and `rz = atan2(−R01, R11)`) while
   `euler_zyx_deg` sets `rz = 0` (and `rx = atan2(sy·R01, R11)`). Both reproduce `R`; `gltf.py` (M5's file) is unchanged.
+  The product is canonicalised too, `atan2(sy·R01 + 0.0, R11)`: with `sy = −1` and `R01 = +0.0` the product is `−0.0`
+  and `atan2(−0.0, −1) = −π` would give `−180.0` (review fix; e.g. a cylinder along world `+x` with `ref_direction
+  (0, 0, 1)` is `[180.0, -90.0, 0.0]`).
+- **[decision, implementation] (M8 part 1, review fix) Mesh fallback `transform` (§5.5.7).** `import_step` passes the
+  caller's **raw** `transform` block (deep-copied; validated but not normalised, so `{"position": [1, 0, 0]}` stays
+  integer and gains no `rotation_deg`), as §5.5.8 requires for the written scene; the key is **omitted** when
+  `transform` is `None` (`validate_scene` would reject `"transform": null`).
+- **[decision, implementation] (M8 part 1, review fix) `cylinder_down` render leaves (§5.5.10).** Measured with every
+  numeric leaf compared at 1e-9: exactly 64 leaves differ (the count PLAN-v2 quotes), all in conic dicts of `outlines[]`,
+  `shadows[]` **and `form_shadow[].terminator[]`**: `circle.e1`, `circle.e2` (negated), `arc.theta0/theta1`,
+  `arcs[].theta` **and `visible[][]`** (each shifted by π mod 2π, the same intervals in the flipped parameterisation).
+  The allowed list of §5.5.10 is read with `visible` added and as applying to every conic dict, not only those under a
+  `conics` key; every point, polygon, segment and edge agrees within 1e-9.
 - **[decision, implementation] (M8 part 1) Vector arithmetic.** `step.py` does its 3-vector arithmetic in plain Python
   floats in a fixed order (`_dot`, `_cross`, …; numpy only for `to_metres` of arrays, `euler_zyx_deg` input and the
   user-transform composition), so recognition and the emitted numbers do not depend on a BLAS build.

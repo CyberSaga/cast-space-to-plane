@@ -508,6 +508,8 @@ def _recognise_cone(faces: list, ud: float, tol: float) -> dict:
         raise _Reject("base circles of different radii")
     if abs(r - abs(radius_s + _dot(_sub(b, o), a_s) * math.tan(semi))) > tol or not h > tol:
         raise _Reject("inconsistent cone")
+    if abs(radius_s + _dot(_sub(V, o), a_s) * math.tan(semi)) > tol:
+        raise _Reject("inconsistent cone (the surface radius does not vanish at the apex vertex)")
     return {"type": "cone", "radius": to_metres(r, ud), "height": to_metres(h, ud),
             "transform": {"position": to_metres(b, ud), "rotation_deg": _frame_rotation(e1, e2, a)}}
 
@@ -612,7 +614,7 @@ def euler_zyx_deg(R) -> list:
     else:
         sy = -r[2][0]
         rz = 0.0
-        rx = math.atan2(sy * r[0][1], r[1][1])
+        rx = math.atan2(sy * r[0][1] + 0.0, r[1][1])     # + 0.0: sy = -1 must not make a -0.0
     return [math.degrees(rx) + 0.0, math.degrees(ry) + 0.0, math.degrees(rz) + 0.0]
 
 
@@ -699,7 +701,7 @@ def import_step(path, *, fallback="error", solid=None, obj_id=None, transform=No
                     msg = f"{ref}: unsupported solid: faces {{{faces}}} (supported: {_SUPPORTED})"
                     raise _err(msg + (f"; {reason}" if reason else ""), ref)
                 tri = _tessellate(path_s, None if len(solid_ids) == 1 else k, None)
-                obj = mesh_object_from_triangles(oid, tri, user_t)
+                obj = mesh_object_from_triangles(oid, tri, transform)
                 notes.append(make_step_warning("STEP_SOLID_TESSELLATED", [ref]))
                 kind = "mesh"
             else:
