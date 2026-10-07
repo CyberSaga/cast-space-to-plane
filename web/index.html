@@ -1,0 +1,46 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>castplane web</title>
+  </head>
+  <body>
+    <header id="toolbar">
+      <span class="brand">castplane</span>
+      <label class="group">Example
+        <select id="examples"><option value="">—</option></select>
+      </label>
+      <label class="group file">Open scene JSON
+        <input id="file" type="file" accept=".json,application/json" />
+      </label>
+      <button id="reset" type="button">Reset camera</button>
+      <label class="group">Focal <input id="focal" type="range" min="0" max="1" step="0.001" /> <output id="focal-out"></output></label>
+      <label class="group">Roll <input id="roll" type="range" min="-180" max="180" step="0.5" /> <output id="roll-out"></output></label>
+      <span class="group" id="layers"></span>
+      <label class="group"><input id="view3d" type="checkbox" checked /> 3D view</label>
+      <span class="group">
+        <button id="dl-svg" type="button">Download SVG</button>
+        <button id="dl-json" type="button">Download JSON</button>
+        <button id="dl-scene" type="button">Download scene (current camera)</button>
+        <button id="copy-camera" type="button">Copy camera block</button>
+      </span>
+    </header>
+    <main id="main">
+      <section id="viewport" aria-label="viewport">
+        <div id="stage">
+          <canvas id="gl"></canvas>
+        </div>
+        <div id="drop-hint">Drop a scene JSON file anywhere, or pick an example.</div>
+      </section>
+      <aside id="side">
+        <div id="status">no scene</div>
+        <div id="error" hidden></div>
+        <h2>Warnings</h2>
+        <table id="warnings"><thead><tr><th>code</th><th>ids</th><th>message</th></tr></thead><tbody></tbody></table>
+        <p class="help">Left drag: orbit · right drag or Shift + drag: pan · wheel: zoom</p>
+      </aside>
+    </main>
+    <script type="module" src="./src/main.ts"></script>
+  </body>
+</html>

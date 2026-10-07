@@ -326,3 +326,23 @@ taken on the container this repository's CI runs in, not on a GitHub-hosted runn
 runner turns out slower, the literal is changed only with a new recorded measurement here (§5.4.12),
 never loosened to absorb a regression. The JSON writer is not on the camera-only path; `Float64Array`
 scratch buffers (§5.4.2) are not used (no measured need).
+
+### Web UI frame cost (M7 step 8): `core ms` / `dom ms`
+
+These are the drag frames of the web UI (`web/`, contract §5.4.13 (b)), measured with `web/scripts/smoke.mjs`
+(a 30-step mouse drag per scene, headless Chromium 141 with SwiftShader WebGL, on the CI container). Each cell
+gives the minimum over the 30 drag frames, with the median in brackets, for three runs. `core ms` is
+`project_scene + compose + write_svg` with stage A cached. `dom ms` is the synchronous overlay update, without
+the browser's later layout and paint. `web/README.md` has the details and the overlay-mode threshold.
+
+| scene | drag overlay | core ms run 1 | run 2 | run 3 | dom ms run 1 | run 2 | run 3 |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| basic | DOM | 0.9 (1.2) | 0.9 (1.3) | 0.9 (1.3) | 0.5 (0.8) | 0.5 (0.8) | 0.5 (0.8) |
+| construction_demo | DOM | 0.5 (0.7) | 0.6 (0.8) | 0.6 (1.0) | 0.7 (0.9) | 0.6 (0.9) | 0.6 (0.9) |
+| curved_demo | DOM | 1.2 (1.8) | 1.4 (1.9) | 1.4 (1.8) | 0.6 (0.8) | 0.7 (0.9) | 0.7 (0.9) |
+| directional | DOM | 1.3 (1.6) | 1.0 (1.5) | 1.3 (1.6) | 0.7 (0.8) | 0.8 (1.1) | 0.7 (1.1) |
+| three_point | DOM | 0.5 (0.8) | 0.6 (0.7) | 0.6 (0.7) | 0.5 (0.8) | 0.5 (0.9) | 0.5 (0.7) |
+| benchmark_100 | `<img>` (SVG > 250 000 chars) | 57.0 (85.5) | 63.0 (85.6) | 59.2 (108.2) | 12.3 (15.5) | 11.5 (13.8) | 10.9 (14.8) |
+
+At rest, the DOM overlay of `benchmark_100.json` took 98–151 ms of `innerHTML`, plus the browser's layout. The
+UI therefore switches that scene to the `<img>` mode while dragging (§5.4.10 DOM budget).

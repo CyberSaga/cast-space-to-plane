@@ -1,0 +1,28 @@
+:root { font: 13px/1.35 system-ui, sans-serif; color: #222; background: #fafafa; }
+* { box-sizing: border-box; }
+html, body { margin: 0; height: 100%; }
+body { display: flex; flex-direction: column; }
+#toolbar { display: flex; flex-wrap: wrap; gap: 6px 14px; align-items: center; padding: 6px 10px; border-bottom: 1px solid #ddd; background: #fff; }
+#toolbar .brand { font-weight: 700; }
+#toolbar .group { display: inline-flex; gap: 4px; align-items: center; }
+#toolbar output { min-width: 4.5em; font-variant-numeric: tabular-nums; }
+#layers label { display: inline-flex; gap: 2px; align-items: center; margin-right: 6px; }
+#main { flex: 1; display: flex; min-height: 0; }
+#viewport { flex: 1; position: relative; display: flex; align-items: center; justify-content: center; background: #e9e9e6; min-width: 0; overflow: hidden; }
+#viewport.dragover { outline: 3px dashed #36c; outline-offset: -6px; }
+#stage { position: relative; background: #fff; box-shadow: 0 0 0 1px #ccc; touch-action: none; }
+#stage canvas, #stage .overlay { position: absolute; inset: 0; width: 100%; height: 100%; display: block; }
+#stage .overlay { pointer-events: none; }
+#stage canvas.hidden { visibility: hidden; }
+#drop-hint { position: absolute; bottom: 8px; left: 0; right: 0; text-align: center; color: #777; pointer-events: none; }
+#side { width: 340px; overflow: auto; padding: 8px 10px; border-left: 1px solid #ddd; background: #fff; }
+#side h2 { font-size: 13px; margin: 12px 0 4px; }
+#status { font-variant-numeric: tabular-nums; white-space: pre-wrap; }
+#error { margin-top: 8px; padding: 6px; border: 1px solid #d33; color: #a00; background: #fff4f4; white-space: pre-wrap; }
+#warnings { border-collapse: collapse; width: 100%; font-size: 12px; }
+#warnings th, #warnings td { border-bottom: 1px solid #eee; padding: 2px 4px; text-align: left; vertical-align: top; }
+#warnings td:first-child { font-family: ui-monospace, monospace; }
+.help { color: #777; }
+/* layer toggles of the DOM overlay: ids are the §2.10 layer ids */
+.hide-horizon #horizon, .hide-objects #objects, .hide-form_shadow #form_shadow, .hide-cast_shadow #cast_shadow,
+.hide-construction #construction, .hide-labels #labels { display: none; }

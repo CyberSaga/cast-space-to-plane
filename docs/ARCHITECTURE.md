@@ -3306,6 +3306,29 @@ and the hidden-run SVG groups (§5.1.8). Nothing an M4–M6 case needs lies beyo
   workspace, so the decision rests on the container measurement. If the first hosted `ts` job is slower, the literal
   changes only with a new recorded measurement (§5.4.12). No `Float64Array` scratch buffer is used (§5.4.2: no
   measured need).
+- **[implementation] (M7 step 8) Web UI details the contract leaves open.**
+  - *Test script*: the `web` test script is `tsc -p tsconfig.test.json && node --test build/test/*.test.js`, for
+    the node 21+ glob reason given for `ts` above.
+  - *Pure download module*: `svg_blob(doc, layers, sceneName)`, `json_blob(doc, sceneName)` and
+    `scene_blob(scene, cam, sceneName)` take the scene name and return `{filename, type, text}`. `main.ts` wraps
+    the text in a `Blob`, so `download.ts` stays DOM-free and testable under node. `camera_block_text(cam)` is
+    the text that "Copy camera block" copies (`dumps(cam) + "\n"`).
+  - *Ground extent*: `build_scene3d(scene, A?)` takes the optional stage A for the scene extent of the ground
+    plane (`A.bbox`, `A.scene_scale`).
+  - *Pure input mapping*: the drag functions are `rotate_orbit`, `pan_orbit`, `zoom_orbit`, `set_roll`,
+    `set_focal` and `focal_from_slider` / `slider_from_focal`. They apply the §5.4.10 formulas literally,
+    including `pitch_deg += dy·(180 / H_px)`, so dragging down raises the view axis.
+  - *Overlay*: `<img>` mode during a drag when the last resting SVG is longer than 250 000 characters
+    (`IMG_MODE_THRESHOLD`, recorded in `web/README.md`). In that mode the writer is called with the checked
+    layers, otherwise with all six.
+  - *Test hooks*: the page exposes read-only measurement hooks on `window.castplane_web` (frame timings, current
+    camera, the scene-camera SVG / JSON through the bundled core) for the dev smoke script
+    `web/scripts/smoke.mjs` (Playwright, outside the repository's dependencies, not a CI step).
+  - *Smoke-check result*: in headless Chromium 141 the bundled core writes SVG byte-identical to the Python
+    writer for all five examples, and a downloaded `<name>.scene.json` rendered by the Python CLI reproduces the
+    downloaded SVG byte for byte.
+  - *Build warning*: vite warns that the three.js bundle (≈ 660 kB) is above its 500 kB chunk hint. The
+    normative `vite.config.ts` is kept as written.
 
 ### 5.5 M8 — STEP import (spec §9 row "STEP", spec §10 M8) — a loader, outside the core
 

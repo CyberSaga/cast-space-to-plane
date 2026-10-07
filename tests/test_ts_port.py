@@ -231,3 +231,52 @@ def test_ts_bench_reports_the_bench_py_record(built_port):
     bad = subprocess.run([NODE, str(built_port / "bench" / "camera_only.js"), "--gate", "sometimes"],
                          cwd=ROOT, capture_output=True, text=True, timeout=60)
     assert bad.returncode == 2 and "unknown gate" in bad.stderr
+
+
+# ---------------------------------------------------------------------------
+# the npm workspace and the web UI (M7 step 8)
+# ---------------------------------------------------------------------------
+
+WEB = ROOT / "web"
+#: Exact pins of contract §5.4.1 [decision] (no ``^`` anywhere).
+WEB_PINS = {"three": "0.186.1", "castplane": "0.1.0", "vite": "8.3.3", "typescript": "6.0.2", "@types/three": "0.186.0"}
+
+
+def _pins(pkg: dict) -> dict:
+    return {**pkg.get("dependencies", {}), **pkg.get("devDependencies", {})}
+
+
+@needs_ts
+def test_npm_workspace_and_exact_pins():
+    root = json.loads((ROOT / "package.json").read_text(encoding="utf-8"))
+    assert root["private"] is True and root["workspaces"] == ["ts", "web"]
+    ts_pkg = json.loads((TS / "package.json").read_text(encoding="utf-8"))
+    web_pkg = json.loads((WEB / "package.json").read_text(encoding="utf-8"))
+    assert web_pkg["name"] == "castplane-web" and web_pkg["private"] is True and web_pkg["type"] == "module"
+    for name, pkg in (("ts", ts_pkg), ("web", web_pkg)):
+        for dep, version in _pins(pkg).items():
+            assert re.fullmatch(r"\d+\.\d+\.\d+", version), f"{name}/package.json: {dep} {version!r} is not an exact pin"
+    pins = _pins(web_pkg)
+    assert {k: pins[k] for k in WEB_PINS} == WEB_PINS
+    assert pins["@types/node"] == _pins(ts_pkg)["@types/node"] and _pins(ts_pkg)["typescript"] == "6.0.2"
+    assert web_pkg["dependencies"] == {"three": "0.186.1", "castplane": castplane.__version__}
+    lock = json.loads((ROOT / "package-lock.json").read_text(encoding="utf-8"))
+    for dep, version in WEB_PINS.items():
+        if dep != "castplane":
+            assert lock["packages"][f"node_modules/{dep}"]["version"] == version, dep
+    assert lock["packages"]["node_modules/castplane"].get("link") is True
+    assert "shadowMap.enabled = false" in (WEB / "src" / "main.ts").read_text(encoding="utf-8")
+
+
+@needs_node
+def test_web_unit_tests_pass(built_port):
+    """``npm run -w web test``: the orbit / download tests of §5.4.13 (needs the workspace's typescript)."""
+    if not TSC.is_file():
+        pytest.skip("typescript is not installed (npm ci)")
+    proc = subprocess.run([NODE, str(TSC), "-p", "tsconfig.test.json"], cwd=WEB, capture_output=True, text=True, timeout=600)
+    assert proc.returncode == 0, proc.stdout[-4000:] + proc.stderr[-2000:]
+    tests = sorted(str(p) for p in (WEB / "build" / "test").glob("*.test.js"))
+    assert tests
+    proc = subprocess.run([NODE, "--test", *tests], cwd=WEB, capture_output=True, text=True, timeout=600)
+    assert proc.returncode == 0, "\n".join(proc.stdout.splitlines()[-40:]) + proc.stderr[-2000:]
+    assert re.search(r"^# fail 0$", proc.stdout, re.M)
