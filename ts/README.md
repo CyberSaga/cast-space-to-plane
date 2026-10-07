@@ -39,4 +39,4 @@ const text  = dumps(doc);                     // deterministic JSON (Python json
 const out   = render(scene, camera);          // {geometry: doc, svg}
 ```
 
-Function names are the Python names (snake_case); see contract §5.4.2 for the module map (`docs/USAGE.md` §4, written in M7 step 9, will document the port).
+Function names are the Python names (snake_case); see contract §5.4.2 for the module map and `docs/USAGE.md` §4 for the user guide (API, benchmark, web UI).

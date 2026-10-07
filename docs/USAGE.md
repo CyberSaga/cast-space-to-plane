@@ -550,3 +550,97 @@ B 段在多光源場景呼叫；純 numpy、確定性；只讀畫出的 `shadows
 M4 改變的適用範圍（合約 §5.1.9）：`LIGHT_BELOW_RECEIVER`、`DIRECTIONAL_HORIZONTAL`、`VERTEX_NOT_BELOW_LIGHT`、`OBJECT_BELOW_RECEIVER` 只用於無界受影面（有界板的背後裁切是靜默的，裁切點命名為 `<物件>.s<k>.<光源>.<受影面>`）；`POINT_BEHIND_CAMERA` 的 ids 可以是受影面 id（其 `b<k>` 頂點或影子點）；`SHADOW_VP_AT_INFINITY` 對 `receivers[0]` 為 `[光源]`、其他受影面為 `[光源, 受影面]`；`CONSTRUCTION_CHECK_SKIPPED` 的點名帶受影面後綴。影子沒落在板上、物件在板後、板側對光源或相機、共平面施影體、以及任何消隱情況都**不**發警告。
 
 以上四個 `MESH_*` 代碼由 M5 加入；合併後在警告清單中接在 M4 的 `RECEIVER_UNLIT` 之後（合約 §5.0.5）。
+
+## 4. TypeScript API 與網頁 UI（合約 §5.4）
+
+核心有一份 TypeScript 移植（`ts/`，npm 套件名 `castplane`，版本與 Python 相同為 `0.1.0`，不發佈）。另有一個 three.js 網頁 UI（`web/`）建在移植之上。Python 仍是**參考實作**：移植以一致性測試集（目前 34 案例，v3）驗收，對測試集沒有任何權限（`tests/conformance/README.md` 規則 3）。
+
+### 4.1 建置、測試、基準
+
+需要 node ≥ 20.19（`^20.19.0 || >=22.12.0`）。在儲存庫根目錄執行：
+
+```sh
+npm ci                                   # npm workspace：ts、web；package-lock.json 已提交
+npm run -w ts build                      # tsc → ts/build/（宣告檔 + source map，ESM）
+npm run -w ts test                       # node:test：一致性、寫出器對等、確定性、解析案例、退化、驗證…
+node ts/build/bench/camera_only.js --gate both --reps 20   # 規格 §8 基準（TypeScript 端）
+node ts/scripts/render.mjs examples/basic.json out/        # 開發工具：out/basic.svg 與 out/basic.json
+python3 tools/compare_svg.py                               # 開發工具：逐案例比對兩個實作的 SVG 文字
+npm run -w web build && npm run -w web preview             # 網頁 UI（靜態檔，web/dist）
+npm run -w web test                                        # orbit / download 單元測試
+```
+
+`npm test` 與 `npm run build` 會依 ts → web 的順序執行兩個 workspace。Python 的 `tests/test_ts_port.py` 檢查兩邊共用的檔案：版本、`rules.json` 與比對常數、`INT_KEYS`、核心不碰 node API、npm 版本釘選。PATH 上有 node 時，它也會建置並執行移植的整套測試、比對五個範例的 SVG（逐位元組）與 JSON，並跑網頁的單元測試。
+
+### 4.2 API
+
+函式名稱**與 Python 完全相同**（snake_case），型別名稱用 PascalCase。每個匯出的函式都是作用在 JSON 資料（一般物件、`number` 陣列）上的純函式，核心沒有任何執行期相依。`src/` 不使用 `fs`、`process`、`Buffer` 或 `performance`，同一份輸出在 node 與瀏覽器都能直接執行。
+
+```ts
+import { load_scene, load_scene_text, shadow_geometry, project_scene, compose, write_svg, dumps, render } from "castplane";
+
+const scene = load_scene(JSON.parse(text));     // 或 load_scene_text(text)；驗證並補預設值，錯誤拋 SceneError
+const A     = shadow_geometry(scene);           // A 段：不讀 scene.camera；換相機時重複使用
+const B     = project_scene(scene, A, camera);  // B 段：camera 可省略（用場景相機）
+const doc   = compose(scene, B);                // C 段：規格 §6.2 文件（唯讀資料，與 A 共用串列）
+const svg   = write_svg(doc, layers);           // 圖層字串；layers 省略時六層全畫
+const json  = dumps(doc);                       // 與 Python geometry_json.dumps 逐位元組相同的格式
+const out   = render(scene, camera);            // {geometry: doc, svg}
+```
+
+與 Python 的差異：
+
+| 項目 | TypeScript |
+| --- | --- |
+| 讀檔 | 核心不讀檔：`load_scene(data)` 收已解析的 JSON；`load_scene_text(text)` 收文字，非 JSON 時拋 `SceneError("", "invalid JSON: …")` |
+| 錯誤 | `SceneError` 帶 `field`（JSON 欄位路徑，與 Python 相同字串）、`detail`；`message` = `"<field>: <detail>"`（= Python 的 `str(e)`） |
+| 警告 | 同一份封閉代碼表（§3），`WARNING_CODES` 與 `castplane/errors.py` 相同（有測試） |
+| 以 id 為鍵的表 | 一律 `Map<string, …>`（避免 JS 重排整數形式的鍵）；文件的 `points` 是一般物件 |
+| 整數 | JS 只有一種數字；寫出器只在 `INT_KEYS`（`large_arc`、`sweep`）下寫整數，其餘一律寫成浮點數（`1.0`） |
+| 沒有移植的部分 | PNG、命令列、`tools/regen_conformance.py`、光線投射與 z-buffer 對照組、hypothesis 測試、所有載入器（`castplane/io/*`）。移植只吃展開後的場景 JSON |
+
+**相機覆寫一律明確建構。** 傳給 `project_scene` 的相機區塊要從鏡頭欄位逐一建出：`{position, target, roll_deg, focal_length_mm, frame_mm, shift_mm, near_m}`，不要寫 `{...scene.camera, position, target}`。若場景相機是 yaw/pitch 形式（例如 `examples/directional.json`），展開後會同時帶 `yaw_deg` 與 `target`，`validate_camera` 會拒絕。`ts/test/helpers.ts` 的 `camera_override` 與網頁 UI 的 `camera_from_orbit` 都照這個規則建構。
+
+**數值與確定性。** 全程 binary64，V8 不做 FMA 收縮。因為 numpy / BLAS 的求和順序不同，兩個實作在最後幾位會有 ulp 差異，所以 JSON 以測試集的容差比對。實測 34/34 通過，最差的葉節點為容差的 0.22。SVG 寫出器在 34 個案例、五個範例與 `benchmark_100.json` 上都與 Python 逐位元組相同。同一個 node 版本中，相同輸入的 JSON 與 SVG 字串位元相同。
+
+### 4.3 基準（規格 §8）
+
+`ts/bench/camera_only.ts` 讀 Python 基準用的同一個檔案 `benchmarks/scenes/benchmark_100.json`，先暖機 3 次完整渲染，再各計時 20 次，回報最小值與中位數。`--json` 輸出與 `bench.py --json` 同名的欄位，另加 `engine`。`--gate both|full|camera|none` 決定結束碼。在 CI 容器（node 22）上的實測：
+
+- 完整渲染約 320–340 ms；
+- 只換相機約 55–63 ms（最小值），低於 100 ms 目標，也低於 70 ms 的餘裕線，所以 CI 的 `ts` job 以 `--gate both` 為閘門；
+- Python 端維持 `--gate full`（D17）。
+
+數字見 `benchmarks/README.md`。
+
+### 4.4 網頁 UI（`web/`）
+
+vite + three.js（版本釘選：three 0.186.1、vite 8.3.3）。`vite build` 產生靜態檔，不需要伺服器。執行時不連網，範例在建置時打包進去。
+
+- **載入**：
+  - 「Example」選單（五個 `examples/*.json`）、檔案選擇器，或把 JSON 檔拖放到頁面任何位置；
+  - 不是 JSON 的檔案顯示「not a JSON file」；
+  - 場景無效時，錯誤面板顯示 `SceneError` 的欄位路徑與訊息，原本的場景保留。
+- **3D 顯示**：
+  - 方塊、圓柱、圓錐、球、稜柱以核心的 `transform_frame` 擺放；
+  - 點光源畫成小球，平行光畫成箭頭；地面加格線；
+  - three.js 相機直接由核心的 `camera_matrix` 建出，所以 WebGL 畫面與 SVG 疊圖是同一台 castplane 相機的兩種渲染；
+  - three.js 不產生任何陰影，畫面上的影子全部來自移植的核心。
+- **相機**：
+  - 左鍵拖曳環繞（俯仰限制 ±89.5°），右鍵或 Shift + 拖曳平移，滾輪縮放；
+  - 焦距滑桿為對數刻度 8–400 mm，滾轉滑桿 ±180°；
+  - 「Reset camera」回到場景相機。
+- **SVG 疊圖**：
+  - 每個動畫影格最多重算一次（最新的相機為準）：沿用快取的 A 段，執行 `project_scene` → `compose` → `write_svg`；
+  - 圖層勾選框以 CSS 隱藏圖層；「3D view」勾選框隱藏 WebGL 畫面；
+  - SVG 超過 250 000 字元的場景（例如 `benchmark_100.json`）在拖曳時改用 `<img src="blob:…">` 顯示同一份寫出器文字，放開滑鼠後恢復 DOM 疊圖。
+- **下載**：
+  - 「Download SVG」：勾選的圖層，`<名稱>.svg`；
+  - 「Download JSON」：§6.2 文件，`<名稱>.json`；
+  - 「Download scene (current camera)」：場景加上目前的相機區塊，`<名稱>.scene.json`。用 Python 命令列的 `render` 指令渲染這個檔案會重現同一張 SVG（已驗證逐位元組相同）；
+  - 「Copy camera block」：把目前的相機區塊複製到剪貼簿。
+- **面板**：
+  - 狀態列顯示 A 段 ms（快取）、`core ms`（B + C + SVG）、`dom ms`（疊圖更新）、疊圖模式，以及點／邊／作圖線數量；
+  - 警告表列出目前文件的 `code`、`ids` 與 `message`。
+
+五個範例與 `benchmark_100.json` 拖曳時的 `core ms` / `dom ms` 實測見 `web/README.md`：範例每格約 1–2 ms，`benchmark_100.json` 約 57–63 ms（`<img>` 模式）。截圖見 `docs/images/web_ui.png`。

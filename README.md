@@ -76,6 +76,25 @@ result = castplane.render(scene, hidden_lines=True, hidden_style="dashed")   # �
 B = castplane.project_scene(scene, A, camera=camera, umbra=False)   # umbra[].polygons = None（不計算）
 ```
 
+### 網頁 UI / TypeScript
+
+核心另有一份 TypeScript 移植（`ts/`，零執行期相依，函式名稱與 Python 相同），以同一個一致性測試集驗收（34/34）。SVG 輸出與 Python 逐位元組相同。只換相機的重算在 node 上約 55–63 ms，達到規格 §8 的 < 100 ms。`web/` 是建在移植上的 three.js 網頁 UI，功能包括：
+
+- 開啟或拖放場景 JSON，也可以從範例選單載入；
+- 以 3D 顯示物件、光源與地面，用滑鼠拖曳相機，用滑桿調整焦距與滾轉；
+- 作圖線稿每個影格由移植的核心重新寫出 SVG，疊在 3D 畫面上；
+- 可下載 SVG、JSON，以及帶目前相機的場景檔（Python 命令列可重現同一張圖）。
+
+它是純靜態網頁，不需要伺服器。
+
+```sh
+npm ci && npm run build          # ts → web
+npm run -w web preview           # 本機開啟 web/dist
+npm test                         # TypeScript 與網頁的測試
+```
+
+說明見 [`docs/USAGE.md`](docs/USAGE.md) §4、[`ts/README.md`](ts/README.md) 與 [`web/README.md`](web/README.md)。截圖：[`docs/images/web_ui.png`](docs/images/web_ui.png)。
+
 ## 作圖線是什麼
 
 ![construction_demo 的輸出：三個物件、點光源，紅線 L′P′、藍線 F′Q′、綠線 P′Q′](docs/images/construction_demo.png)
@@ -208,7 +227,7 @@ B = castplane.project_scene(scene, A, camera=camera, umbra=False)   # umbra[].po
 | M4 多受影面與隱藏線 | 有界受影面、逐面裁切、轉折影、取樣式隱藏線、visibility 欄位 | 完成（已合併到主分支，一致性測試集 v4）：任意平面的有界凸受影面、bounds 裁切與錨點規則、轉折影、`RECEIVER_UNLIT`、逐受影面作圖線、取樣式消隱（`hidden_lines` 預設關閉，`--hidden-lines`）、9 個一致性案例；34 個既有案例在合併時做了一次鍵新增重產（一致性 v4，合約 §5.0.8） |
 | M5 網格匯入 | OBJ、glTF/GLB 載入、前處理管線 | 完成（已合併到主分支，一致性測試集 v5）：`mesh` 物件（`path` / 內嵌 `data`）、`castplane.meshprep` 前處理（焊接 → 退化面 → 流形與方向 → 共面合併 → 平滑／特徵邊）、非流形逐面退路、`castplane.io` 載入器（OBJ、glTF / GLB、STL / PLY 經選用的 trimesh）與 `castplane import`；3 個網格一致性案例；`benchmarks/bench.py --scene mesh10k` |
 | M6 多光源 | 多光源影子分組、疊影規則、SVG 子圖層 | 完成（已合併到主分支，一致性測試集 v6）：任意數量的光源、每個光源單獨以 v1 / M4 公式計算（與單光源文件逐位元相同）、本影（`castplane.umbra` 純 numpy 掃描線核心，只讀畫出的影子多邊形）、半影由各光源子群組的較淡填色呈現、`form_shadow_core`、`constructions`、曲面作圖點帶光源 id、SVG 每光源子群組與 `cast_shadow.umbra` / `form_shadow.core`、`castplane info` 列出每個光源；4 個多光源一致性案例；`benchmarks/bench.py --lights 2\|3`、`--no-umbra`；單光源文件與 SVG 完全不變 |
-| M7 TypeScript 移植與網頁 UI | 核心移植、three.js 場景顯示、相機拖曳 | 進行中：第 1 步完成（`tests/conformance/rules.json` 與一致性測試集 v3、`regen_conformance.py --rules-only`、提交的基準場景檔 `benchmarks/scenes/benchmark_100.json`、`tests/test_ts_port.py`）；移植本身見合約 §5.4 與 `docs/PLAN-v2.md` |
+| M7 TypeScript 移植與網頁 UI | 核心移植、three.js 場景顯示、相機拖曳 | 第一階段完成（合約 §5.4 第 1–10 步）：TypeScript 核心（一致性測試集 v3 34/34，SVG 與 Python 逐位元組相同）、TypeScript 基準（只換相機 55–63 ms，CI `--gate both`）、three.js 網頁 UI（`web/`）、CI 的 `ts` / `web` job。第二階段（M4–M6 格式的移植、v6）待 M4–M6 合併後進行（`docs/PLAN-v2.md`） |
 | M8 STEP 評估 | 可行性報告、原型解析器 | 未排程／預留 |
 
 ## 與規格文件的差異
