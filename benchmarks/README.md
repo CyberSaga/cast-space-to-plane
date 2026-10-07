@@ -400,3 +400,67 @@ Python writer).
 All three runs exit 0 with `--gate both`. **§5.4.9 gate decision restated:** the camera-only minimum stays below the
 70 ms margin line in every run (61 / 61 / 58 ms, against 55 / 60 / 63 ms in phase 1: inside run-to-run drift), so
 the `ts` CI job keeps `--gate both`. The closing part of phase 2 appends the final phase-2 row.
+
+## TypeScript port (M7 phase 2, closing part, 2026-10-07): the final phase-2 row and the M4–M6 example scenes
+
+The port now carries the whole §5.0.3 format: hidden lines, bounded receivers, meshes and several lights with the
+umbra. The acceptance command `node ts/build/bench/camera_only.js --gate both --reps 20` was run three consecutive
+times on the same container (node 22.22.0, V8 12.4.254.21-node.33; minimum over 20 repetitions, the median in
+brackets). The document of `benchmark_100.json` is unchanged by parts 2–5: 9030 drawn edges, 15171 named points,
+`warnings []`, SVG 1 960 727 bytes (byte-identical to the Python writer), JSON 10 628 469 bytes. Since this part,
+`write_svg` in the benchmark receives the scene's `output.hidden_style`, which is the default `dashed` for this scene.
+
+| path | run 1 | run 2 | run 3 | target | status |
+| --- | --- | --- | --- | --- | --- |
+| full render (A+B+C+SVG+JSON) | 387 ms (486) | 394 ms (497) | 344 ms (486) | < 1 s | **PASS** (3/3) |
+| camera-only re-render (B+C+SVG) | 72 ms (105) | 62 ms (73) | 68 ms (83) | < 100 ms | **PASS** (3/3) |
+| stage A only | 19 ms (36) | 21 ms (28) | 18 ms (22) | – | – |
+| SVG writer only | 46 ms (59) | 32 ms (46) | 29 ms (34) | – | – |
+| JSON dumps only | 273 ms (360) | 285 ms (333) | 240 ms (324) | – | – |
+
+All three runs exit 0 with `--gate both`.
+
+The camera-only minimum of run 1 (72 ms) lies above the 70 ms margin line of §5.4.9. To find out whether parts 2–5
+made the path slower, the part-1 tree was compared against this one. The part-1 tree is commit `d041afe` (the last
+measured phase-2 row above), extracted with `git archive` and built with the same compiler. The two benchmarks were
+then run interleaved, three times each, right after the table above (`--gate none --json`, 20 repetitions):
+
+| camera-only minimum (median) | run 1 | run 2 | run 3 |
+| --- | --- | --- | --- |
+| part 1 (`d041afe`) | 65.6 ms (92.1) | 63.9 ms (80.6) | 61.4 ms (80.8) |
+| part 5 (this tree) | 61.7 ms (93.0) | 62.8 ms (77.1) | 63.4 ms (88.0) |
+
+The two trees measure the same: parts 2–5 put nothing on the single-light, hidden-lines-off path. The container was
+noisier today than during part 1, where the minima were 58–61 ms. Over the six runs of this tree, the camera-only
+minima are 72, 62, 68, 62, 63 and 63 ms. Five of the six are below the margin line, and the smallest minimum is
+62 ms, which is 1.6× below the 100 ms target. **§5.4.9 gate decision:** the `ts` CI job keeps `--gate both`. The
+literal is unchanged, so nothing was loosened. If a hosted runner records camera-only minima of 70 ms or more, the
+step-7 rule applies: `ci.yml` switches to `--gate full`, with that measurement recorded here.
+
+**The M4–M6 example scenes** use the same protocol and the same second camera through `--scene` (no target is
+attached; `--gate none`). Each scene was run three times:
+
+- **`examples/wall_and_ground.json`, hidden lines on:** the scene sets `output.hidden_lines: true`, so `compose`
+  classifies every edge, generator and shadow-polygon edge against the occluders of both camera positions. The
+  scene has one point lamp and two receivers: the ground and the bounded 6 m × 2.5 m wall. The document has
+  16 drawn edges and 49 named points; the SVG is 8 896 bytes and the JSON 33 885.
+- **`examples/two_lights.json`:** two point lights, with the umbra on. The document has 12 drawn edges and
+  331 named points; the SVG is 27 621 bytes and the JSON 199 387.
+
+| scene | path | run 1 | run 2 | run 3 |
+| --- | --- | --- | --- | --- |
+| wall_and_ground (hidden lines on) | full render (A+B+C+SVG+JSON) | 2.7 ms (3.9) | 2.7 ms (4.8) | 2.1 ms (3.9) |
+| | camera-only re-render (B+C+SVG) | 1.0 ms (1.1) | 0.9 ms (1.1) | 0.9 ms (1.1) |
+| | stage A only | 0.1 ms (0.2) | 0.1 ms (0.2) | 0.1 ms (0.2) |
+| | SVG writer only | 0.1 ms (0.2) | 0.1 ms (0.2) | 0.1 ms (0.2) |
+| | JSON dumps only | 0.2 ms (0.2) | 0.2 ms (0.2) | 0.2 ms (0.2) |
+| two_lights (umbra on) | full render (A+B+C+SVG+JSON) | 9.4 ms (11.9) | 13.8 ms (19.6) | 10.3 ms (15.0) |
+| | camera-only re-render (B+C+SVG) | 5.2 ms (6.1) | 4.8 ms (6.5) | 5.5 ms (7.4) |
+| | stage A only | 2.1 ms (2.2) | 2.2 ms (2.4) | 1.5 ms (2.2) |
+| | SVG writer only | 0.8 ms (1.1) | 1.1 ms (1.2) | 0.5 ms (1.0) |
+| | JSON dumps only | 1.5 ms (1.9) | 1.5 ms (1.9) | 0.8 ms (1.0) |
+
+Both scenes re-render in about 1–5 ms per camera, far inside the 100 ms frame budget. The two-light benchmark scene
+(`--lights 2` on the Python side: 3514 umbra pieces in both implementations) takes about 0.5–0.6 s for a full
+TypeScript render, of which the umbra is 0.3–0.4 s (§5.4 implementation notes, part 4). The web UI skips the umbra
+during a drag (§5.4.11).

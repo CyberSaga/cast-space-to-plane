@@ -11,7 +11,9 @@
  * alone; min and median are reported. Targets: full render < 1 s, camera-only < 100 ms (minimum over reps).
  * `--gate` picks which targets decide the exit status (default `both`; `camera` gates the camera-only target
  * alone; `none` always exits 0). `--json` prints the record of `bench.py --json` (same field names) plus
- * `engine: {node, v8}`.
+ * `engine: {node, v8}`. `--scene` measures another scene file with the same protocol (no target attached; phase 2
+ * records `examples/wall_and_ground.json`, whose `output.hidden_lines` is on, and `examples/two_lights.json`, umbra
+ * on): `compose` takes the scene's `output.hidden_lines` and `write_svg` its `output.hidden_style`.
  */
 
 import { readFileSync } from "node:fs";
@@ -66,7 +68,7 @@ function full_render(scene: Scene): { doc: ReturnType<typeof compose>; svg: stri
   const A = shadow_geometry(scene);
   const B = project_scene(scene, A);
   const doc = compose(scene, B);
-  const svg = write_svg(doc, scene.output.layers);
+  const svg = write_svg(doc, scene.output.layers, scene.output.hidden_style);
   const text = dumps(doc);
   return { doc, svg, text };
 }
@@ -74,7 +76,7 @@ function full_render(scene: Scene): { doc: ReturnType<typeof compose>; svg: stri
 function camera_render(scene: Scene, A: StageA, camera: unknown): string {
   const B = project_scene(scene, A, camera);
   const doc = compose(scene, B);
-  return write_svg(doc, scene.output.layers);
+  return write_svg(doc, scene.output.layers, scene.output.hidden_style);
 }
 
 interface Args {
@@ -135,7 +137,7 @@ function main(): number {
   const t_full = timeit(() => full_render(scene), args.reps);
   const t_cam = timeit(() => camera_render(scene, A, other_camera), args.reps);
   const t_stage_a = timeit(() => shadow_geometry(scene), args.reps);
-  const t_svg = timeit(() => write_svg(doc, scene.output.layers), args.reps);
+  const t_svg = timeit(() => write_svg(doc, scene.output.layers, scene.output.hidden_style), args.reps);
   const t_json = timeit(() => dumps(doc), args.reps);
 
   const stat = (t: number[]) => ({ min: Math.min(...t), median: median(t) });
