@@ -38,3 +38,43 @@ jobs:
         # every drifted case to stay within the §7.5 tolerances.
         if: matrix.python-version == '3.13'
         run: python3 tools/regen_conformance.py --reason "CI dry run" --dry-run
+      - name: Python-side checks of the TypeScript port's shared files (contract §5.4.13; no node needed)
+        # Already part of the suite above; repeated with -rs so the skipped node-only checks are listed.
+        if: matrix.python-version == '3.13'
+        run: python -m pytest -q -rs tests/test_ts_port.py
+
+  # M7 (contract §5.4.12): the TypeScript port on node 20 and 22 — conformance runner, writer parity,
+  # determinism and unit suites — and, on node 22, the spec §8 benchmark.  Gate literal set at M7 step 7
+  # by the §5.4.9 margin rule (camera-only minimum 55 / 60 / 63 ms < 70 ms, benchmarks/README.md); it is
+  # changed only with a new recorded measurement, never loosened to absorb a regression.
+  ts:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        node: ["20", "22"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+          cache: npm
+      - run: npm ci
+      - run: npm run -w ts build                # tsc -p tsconfig.json && tsc -p tsconfig.test.json
+      - run: npm run -w ts test                 # node --test build/test/*.test.js (conformance, parity, determinism, unit)
+      - name: Spec §8 benchmark on the TypeScript side (both targets gated, §5.4.9)
+        if: matrix.node == '22'
+        run: node ts/build/bench/camera_only.js --gate both --reps 20
+
+  # M7 (contract §5.4.12): the web UI — orbit / download tests, type check and the static vite build.
+  web:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+      - run: npm ci
+      - run: npm run -w ts build                # the workspace package "castplane" the UI imports
+      - run: npm run -w web test && npm run -w web build   # orbit tests, type check, vite build

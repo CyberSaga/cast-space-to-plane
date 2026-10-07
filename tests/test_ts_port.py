@@ -280,3 +280,25 @@ def test_web_unit_tests_pass(built_port):
     proc = subprocess.run([NODE, "--test", *tests], cwd=WEB, capture_output=True, text=True, timeout=600)
     assert proc.returncode == 0, "\n".join(proc.stdout.splitlines()[-40:]) + proc.stderr[-2000:]
     assert re.search(r"^# fail 0$", proc.stdout, re.M)
+
+
+def test_ci_runs_the_port_and_the_web_ui_with_the_recorded_gate():
+    """``.github/workflows/ci.yml`` (contract §5.4.12): jobs ``ts`` (node 20 / 22) and ``web``; the benchmark gate
+    literal is the one recorded in ``benchmarks/README.md`` at M7 step 7 (§5.4.9 margin rule)."""
+    yaml = pytest.importorskip("yaml")
+    ci = yaml.safe_load((ROOT / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8"))
+    jobs = ci["jobs"]
+    assert {"test", "ts", "web"} <= set(jobs)
+    assert jobs["ts"]["strategy"]["matrix"]["node"] == ["20", "22"]
+    ts_runs = [s.get("run", "") for s in jobs["ts"]["steps"]]
+    web_runs = [s.get("run", "") for s in jobs["web"]["steps"]]
+    assert "npm ci" in ts_runs and "npm ci" in web_runs
+    assert any(r.startswith("npm run -w ts test") for r in ts_runs)
+    bench = [s for s in jobs["ts"]["steps"] if "camera_only.js" in s.get("run", "")]
+    assert len(bench) == 1 and bench[0]["if"] == "matrix.node == '22'"
+    gate = re.search(r"--gate (\w+)", bench[0]["run"]).group(1)
+    assert "--reps 20" in bench[0]["run"]
+    readme = (ROOT / "benchmarks" / "README.md").read_text(encoding="utf-8")
+    assert f"node ts/build/bench/camera_only.js --gate {gate} --reps 20" in readme
+    assert any("npm run -w web test" in r and "npm run -w web build" in r for r in web_runs)
+    assert any("tests/test_ts_port.py" in s.get("run", "") for s in jobs["test"]["steps"])

@@ -3329,6 +3329,20 @@ and the hidden-run SVG groups (§5.1.8). Nothing an M4–M6 case needs lies beyo
     downloaded SVG byte for byte.
   - *Build warning*: vite warns that the three.js bundle (≈ 660 kB) is above its 500 kB chunk hint. The
     normative `vite.config.ts` is kept as written.
+- **[implementation] (M7 step 10) CI layout.**
+  - *Two jobs*: §5.4.0 / `docs/PLAN-v2.md` name two jobs, `ts` and `web`, while the §5.4.12 YAML puts the web
+    steps in the node-22 leg of `ts`. `ci.yml` has both jobs:
+    - `ts`: node 20 / 22 matrix; `npm ci`, the `ts` build and test, and on node 22 the benchmark with the
+      step-7 literal `--gate both --reps 20`;
+    - `web`: node 22; `npm ci`, the `ts` build (the UI imports the built workspace package), then
+      `npm run -w web test && npm run -w web build`.
+
+    The commands are those of §5.4.12.
+  - *Python job*: the `test` job already runs `tests/test_ts_port.py` as part of the suite. One appended step
+    re-runs it with `-rs`, so the skipped node-only checks are listed.
+  - *Local verification*: the same commands were run under node 20.20.0 and 22.22.0 (120 TS tests, 13 web
+    tests, `vite build`), and `npm ci` was run from the committed lockfile. The node-20 camera-only time is
+    ≈ 89 ms, so the benchmark is gated on node 22 only, as §5.4.12 specifies.
 
 ### 5.5 M8 — STEP import (spec §9 row "STEP", spec §10 M8) — a loader, outside the core
 
