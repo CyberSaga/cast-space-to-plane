@@ -3208,7 +3208,9 @@ and the hidden-run SVG groups (§5.1.8). Nothing an M4–M6 case needs lies beyo
   (broadcast, as the pipeline passes `L'` / `F'`) or one point per row; the list forms of the clips return `null` for a
   dropped row instead of a separate keep mask. `project_scene(scene, A, camera?, umbra?)`, `compose(scene, B,
   hidden_lines?)`, `write_svg(doc, layers?, hidden_style?)` and `render(scene, camera?, hidden_lines?, hidden_style?,
-  umbra?)` already carry the phase-2 switches of §5.4.7; in phase 1 they have no effect (v1 document, one light).
+  umbra?)` already carry the phase-2 switches of §5.4.7; in phase 1 they have no effect (v1 document, one light). The
+  stage-A `sources` entries are the tagged objects of §5.4.2 (`{kind: "vertex", index}` included, after the second
+  review pass) and stage B shares the stage-A `S_lists` / `Q_lists` / `G_lists` by reference (`StageAShadow`).
 - **[implementation] (M7 steps 2–6) Result of the port against set v3.** 34/34 cases pass `compare_documents` with the v3
   rules; the worst leaf over the whole set is 0.22 of its tolerance (`random_seed3_3objects`,
   `construction.segments[31].points[1][0]`, an extended ray), every other case stays below 0.16 and the analytic cases
@@ -3218,31 +3220,66 @@ and the hidden-run SVG groups (§5.1.8). Nothing an M4–M6 case needs lies beyo
   The writer's number formatter `fmt` uses the table-driven fast path of D17-b (`round(x·1e4)` away from a half-way by
   1e-6, as `_fmt_bytes`) with the exact BigInt tie rule otherwise; `ts/test/svg.test.ts` proves the identity with an
   exact round-half-even reference on 10^5 values incl. every tie class.
-- **[decision, implementation] (M7 review) A circle within rounding has rotation 0.** `ellipse_params` decided the
-  axis direction of an image ellipse with the exact tests `p >= r` / `s1 >= s2`; for an exact circle (a sphere whose
-  centre lies on the camera axis) the two implementations' ulp noise picked different answers (numpy/BLAS left
-  `p < r` by 1.3e-18 → `rotation_deg = 90`, the port's fixed-order sums gave `p == r` → `0`: a `compare_documents`
-  failure and a structurally different `<ellipse … transform="rotate(-90 …)">`). Both `castplane/conics.py` and
-  `ts/src/conics.ts` now treat `rad <= 1e-12 · max(|p|, |r|)` (relative axis difference ≤ 1e-12, invisible at any canvas
-  size) as a circle: `major = max(s1, s2)`, `minor = min(s1, s2)`, axis `+x`, rotation 0. Drift rule of §5.4.8 (the
-  reference is fixed first): `tools/regen_conformance.py --dry-run` reports 0 of 34 expected files changed (no v3 case
-  has a circular image), so no regeneration and no set version; the SVG of the five examples, the 34 cases and
-  `benchmark_100.json` is unchanged as well.
-- **[decision, implementation] (M7 review) Object-id label anchor ties.** §2.10 puts the bold object id at the highest
-  labelled point; the strict `z > best` let a one-ulp height difference (the two generator ends of a cylinder lying on
-  its side) move the label between implementations. Both writers now replace the anchor only when
-  `z > best + 1e-9 · max(1, |best|)` (metres); otherwise the first name in code-point order keeps it. No case, example or
-  benchmark SVG changes.
+- **[implementation, deferred] (M7 review, pass 2) Circle axis direction: the predicate stays verbatim; a proposal for
+  the wave-3 merge.** `ellipse_params` decides the axis direction with the exact tests `p >= r` / `s1 >= s2`. On an
+  exact circle the two implementations' ulp noise answers differently. Reproducer (not a set case): a sphere of radius
+  0.5 at the origin, lamp `(0, 0, 4)`, camera `(4, −8, 5) → (0, 0, 0.5)`, 35 mm, canvas 360×240: Python gives
+  `outlines[0].conics[0].ellipses[0].rotation_deg = 90` (numpy/BLAS leave `p < r` by 1.3e-18) and
+  `<ellipse … transform="rotate(-90 180 120)"/>`, the port `0` and no `transform` (its fixed-order sums give `p == r`).
+  Per §5.4.4 (7) and the ownership table of `docs/PLAN-v2.md` (phase 1 edits no `castplane/` file after step 1) the
+  first review pass's band in both implementations was reverted: `ts/src/conics.ts` keeps `s1 >= s2` verbatim
+  (`ts/test/numerics.test.ts` checks the Python answers on the three noisy matrices of this sphere) and the
+  cross-implementation test uses a sphere off the camera axis (`ts/test/svg.test.ts`). Proposal for the maintainers,
+  to land on main as its own step with a `--reason` CHANGELOG entry ("reference amendment, no expected file changed"),
+  then ported in phase 2: treat `rad <= 1e-12 · max(|p|, |r|)` as a circle (`major = max(s1, s2)`, `minor = min(s1,
+  s2)`, axis `+x`, rotation 0). Measured on the reference: `tools/regen_conformance.py --dry-run` → 0 of 34 change; the
+  SVG/JSON of the 34 cases, the five examples and `benchmark_100.json` are byte-identical. Until then no conformance
+  case may contain a circular image ellipse (M4–M6 case authors: an on-axis sphere sits on this boundary).
+- **[implementation, deferred] (M7 review, pass 2) Object-id label anchor: the strict `z > best` stays verbatim; a
+  proposal for the wave-3 merge.** §2.10 puts the bold object id at the highest labelled point; when two labelled
+  points have equal heights the winner depends on one ulp. Reproducer (not a set case): a cylinder `radius 0.5, height
+  2`, position `(0.3, −0.2, 0.5)`, `rotation_deg (0, −90, 0)`, lamp `(1, 1, 4)`, the camera above: the bold `c` sits
+  at `x = 117.9239` (Python) vs `x = 180.0115` (port); the same happens for `rotation_deg (90, 0, 30)` / `(−90, 0, 30)`
+  with lamp `(−2, 1, 3)` and `(0, 90, 15)` with lamp `(−2, 1, 3)` (4 of 192 lying cylinders / cones of a scratch
+  sweep; the documents agree within tolerance). The first pass's `1e-9 · max(1, |best|)` band in
+  `castplane/output/svg.py` (a function M4 owns: "label filter") and `ts/src/output/svg.ts` was reverted; the port keeps
+  `z > t[0]` (`ts/test/svg.test.ts`: a one-ulp-higher `crate.v7` takes the anchor, exactly as `svg.py`). Proposal for
+  the wave-3 merge, after M4's label filter: replace the anchor only when `z > best + 1e-9 · max(1, |best|)` metres
+  (first name in code-point order otherwise), as a versioned reference amendment (0 of 34 expected files and no SVG of
+  the set, examples or benchmark change, measured). Until then no conformance case may rely on the object-id position of
+  an object with two equally high labelled points.
 - **[implementation, deferred] (M7 review) `covering_segments` is ill-conditioned when `S' ≈ Q'`.** For a vertex a few
   micrometres above the receiver the direction `C − B` (`S' − Q'`, ≈ 1e-5 mm long) amplifies the ulp noise of the
-  projected points by `|A − B| / |C − B|` (up to 4e7) into the far endpoint; the differential fuzz of the review shows
-  1.4e-6 and 1.7e-6 mm endpoint differences between the implementations on two non-set scenes, and the set itself has
-  rows with `|C − B| / |A − B|` down to 5.4e-9 (`random_seed14_2objects`, `random_seed3_3objects`, …) that pass with
-  ≤ 0.22 of the tolerance. A well-conditioned rule (take the direction from `A − B`, oriented like `C − B`, when
-  `|C − B| < 1e-3 · |A − B|`) was measured on the reference: it moves 8 of the 34 expected files by up to 1.6e-7 mm
-  (`construction.segments[].points` only), which the §5.0.8 plan does not allow inside M7 phase 1 (v3: no expected file
-  changes; v4 is key-additive only). Left unchanged in both implementations; the fix needs its own versioned
-  regeneration, to be decided by the maintainers.
+  projected points by `|A − B| / |C − B|` (up to 8e7) into the far endpoint. Measured differences between the
+  implementations (second review pass, `tests.test_conformance.compare_documents` on non-set scenes): up to 5.8e-6 mm on
+  5 of 242 random scenes of `tests/reference/random_scenes.py` seeds 0–39 (all `construction.segments[].points`, every
+  one a vertex at `z = 1e-6` m with `|A − B| / |C − B|` between 2.3e7 and 7.9e7: `poly_7` seg 2 135.04214335613466 vs
+  135.0421491372371, `behind_7`, `behind_2`, `poly_19`, `poly_4`), and up to 4.0e-5 mm on a unit box whose bottom sits
+  5e-10…2e-9 m below `z = 0` (inside the tol band, so `OBJECT_BELOW_RECEIVER` does not fire), where two SVGs differ in
+  the fourth decimal of the extended ray. The set itself has rows with `|C − B| / |A − B|` down to 5.4e-9
+  (`random_seed14_2objects`, `random_seed3_3objects`, …) that pass with ≤ 0.22 of the tolerance. A well-conditioned rule
+  (take the unit direction from `A − B`, oriented like `C − B`, when `|C − B| < 1e-3 · |A − B|`; in both
+  implementations in one commit) was measured on the reference: it moves 8 of the 34 expected files by up to 1.6e-7 mm
+  (`construction.segments[].points` only), which neither v3 (no expected file changes) nor v4 (key-additive only) of the
+  §5.0.8 plan permits. Left unchanged in both implementations; proposal for the maintainers: its own versioned
+  regeneration (`tools/regen_conformance.py --reason`, a set version of its own right after the M4 regeneration, or
+  before it with the maintainers' consent). Until then the port's construction-ray far endpoints are guaranteed within
+  the image tolerance only when `|S' − Q'|` is not below 1e-3 · `|L' − Q'|` (recorded under rule 3 of
+  `tests/conformance/README.md`), and no new case may place a silhouette vertex within ~1e-5 m above the receiver.
+- **[implementation, informational] (M7 review, pass 2) `L'` is ill-conditioned when the point light is within ~1e-7 m
+  of the camera centre** (both implementations; no predicate change, §5.4.4 (7) class). Reproducer: a unit box at the origin,
+  the lamp at `(4 + 1e-7, −8, 5)` and the camera at `(4, −8, 5) → (0, 0, 0.5)` (35 mm, canvas 360×240): `construction.light_point[1]` is
+  176.09036517 (Python) vs 176.09036091 (port), 4.3e-6 mm apart, and the LP rays follow; `x̃3 = forward · (L − C) ≈
+  4e-8` is obtained by cancelling terms of size ~8, so one ulp of the sum is 2.5e-8 relative in `L'` while the point is
+  still above the `special_point_image` undefined band (`LINE_ZERO_REL · |P| · |L|` ≈ 2.8e-6). No conformance case may
+  put a light that close to the camera centre.
+- **[implementation, informational] (M7 review, pass 2) Shadow conics of a cap whose plane nearly contains the light
+  are ill-conditioned** (both implementations). Reproducer: a cylinder `radius 0.5, height 2`, position `(0.3, −0.2,
+  0.5)`, `rotation_deg (90, 0, 60)`, lamp `(1, 1, 4)` (the lamp lies 6 mm from the plane of a cap): the cap's shadow
+  arc has `ry ≈ 0.0197` mm and `shadows[0].conics[0].arcs[0].rx` is 19.505409461324366 (Python) vs 19.505805411071975
+  (port); the reference itself moves by up to 5.2e-4 mm when one coordinate of the lamp changes by one ulp, so this is
+  input sensitivity, not a port error, and `classify_and_condition` does not flag it. No conformance case may put a
+  light within centimetres of a disc's plane; whether `COND_MAX` should catch it is left to the maintainers.
 - **[implementation] (M7 review) Port-only exported names not in the §5.4.2 table:** `transform.ts` `radians`,
   `degrees`, `matmul3`, `rotate`, `rigid`; `camera.ts` `clip_segment_rect_h`; `light.ts` `lit_value` (Python's private
   `_lit_value`); `shadow.ts` `mat4_vec`; `conics.ts` `matmul`, `transpose`, `det3`, `conic_points`; `errors.ts`

@@ -134,25 +134,25 @@ function bold_and_plain_x(svg: string, oid: string, label: string): [string, str
   return [bold[1] as string, plain[1] as string];
 }
 
-test("object-id label anchor: heights within rounding tie and the first name wins (as svg.py, M7 review)", () => {
+test("object-id label anchor: the strict `z > best` of svg.py is kept verbatim (contract §5.4.4 (7))", () => {
   const doc = structuredClone(doc_of("basic"));
   const top = doc.points["crate.v7"].world as number[];
   const z = top[2] as number;
+  let [bold, v4] = bold_and_plain_x(write_svg(doc), "crate", "v4");
+  assert.equal(bold, v4);                                   // equal heights: the first name in code-point order (v4)
   const up = z + z * Number.EPSILON;                        // the next double above z (z = 0.6 is in [0.5, 1))
   assert.ok(up > z);
   doc.points["crate.v7"].world = [top[0], top[1], up];
-  let [bold, v4] = bold_and_plain_x(write_svg(doc), "crate", "v4");
-  assert.equal(bold, v4);
-  doc.points["crate.v7"].world = [top[0], top[1], z + 1e-6];
   const [bold2, v7] = bold_and_plain_x(write_svg(doc), "crate", "v7");
-  assert.equal(bold2, v7);
+  assert.equal(bold2, v7);                                  // one ulp higher wins, exactly as the Python writer
   assert.notEqual(v7, v4);
 });
 
-test("a sphere centred on the camera axis: the outline circle has rotation 0 and no transform (as Python, M7 review)", () => {
+test("a sphere off the camera axis: the outline ellipse matches the Python reference (M7 review)", () => {
+  // the on-axis sphere is an exact circle, i.e. on the `s1 >= s2` boundary; the case is moved off it (§5.4.4 (7))
   const scene = load_scene({
     version: "0.1", units: "m", up: "z",
-    objects: [{ id: "s0", type: "sphere", radius: 0.5, transform: { position: [0, 0, 0] } }],
+    objects: [{ id: "s0", type: "sphere", radius: 0.5, transform: { position: [0.4, 0.3, 0] } }],
     lights: [{ id: "lamp", type: "point", position: [0, 0, 4] }],
     receivers: [{ id: "ground", type: "plane", normal: [0, 0, 1], offset: 0 }],
     camera: { position: [4, -8, 5], target: [0, 0, 0.5], focal_length_mm: 35, frame_mm: [36, 24] },
@@ -160,6 +160,7 @@ test("a sphere centred on the camera axis: the outline circle has rotation 0 and
   });
   const out = render(scene);
   const ell = (out.geometry as any).outlines[0].conics[0].ellipses[0];
-  assert.equal(ell.rotation_deg, 0);
-  assert.ok(out.svg.includes('<ellipse cx="180" cy="120" rx="17.5" ry="17.5"/>'));
+  assert.ok(Math.abs(ell.rotation_deg - 4.671607872309661) <= 1e-9);
+  assert.ok(Math.abs(ell.rx - 17.381912899640614) <= 1e-9 && Math.abs(ell.ry - 17.361112474632982) <= 1e-9);
+  assert.ok(out.svg.includes('<ellipse cx="197.1021" cy="118.6025" rx="17.3819" ry="17.3611" transform="rotate(-4.6716 197.1021 118.6025)"/>'));
 });

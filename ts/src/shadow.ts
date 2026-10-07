@@ -2,8 +2,8 @@
  * Plane projection of shadows (port of `castplane/shadow.py`; spec §5.2, §5.3, §5.7; contract §2.3, §2.5).
  *
  * Oriented homogeneous 4-vectors with the canonical forms of contract §2.1. `sources` entries are tagged objects
- * (contract §5.4.2): a number (input vertex index) or `{kind: "ground", i, j}` / `{kind: "dir", i, j}` /
- * `{kind: "arc", k}`.
+ * (contract §5.4.2): `{kind: "vertex", index}` (input vertex index) / `{kind: "ground", i, j}` /
+ * `{kind: "dir", i, j}` / `{kind: "arc", k}`.
  */
 
 import { mesh_from_faces } from "./mesh.js";
@@ -15,8 +15,9 @@ import type { Mat4, Vec3, Vec4 } from "./types.js";
 /** Contract §2.5: at-infinity sub-edges span < 90°; `ceil(delta / 60°)` steps. */
 export const ARC_STEP_DEG = 60.0;
 
+export type VertexTag = { kind: "vertex"; index: number };
 export type GroundTag = { kind: "ground"; i: Source; j: Source };
-export type Source = number | GroundTag | { kind: "dir"; i: Source; j: Source } | { kind: "arc"; k: number };
+export type Source = VertexTag | GroundTag | { kind: "dir"; i: Source; j: Source } | { kind: "arc"; k: number };
 export type Origin = number | { kind: "ground"; i: number; j: number };
 
 function dot4(a: readonly number[], b: readonly number[]): number {
@@ -63,7 +64,7 @@ export function clip_loop_to_plane(points4: readonly (readonly number[])[], pi: 
   sources?: readonly Source[]): [Vec4[], Source[], boolean] {
   const P = points4.map((p) => [p[0], p[1], p[2], p[3]] as Vec4);
   const n = P.length;
-  const src: readonly Source[] = sources ?? P.map((_p, i) => i);
+  const src: readonly Source[] = sources ?? P.map((_p, i): VertexTag => ({ kind: "vertex", index: i }));
   if (n === 0) return [[], [], false];
   const f = P.map((p) => dot4(p, pi));
   const keep = f.map((v) => v >= -tol);
@@ -115,13 +116,14 @@ export function clip_mesh_to_plane(mesh: Mesh, pi: readonly number[], tol = 0.0)
   const crossing = new Map<string, number>();
   const faces_out: number[][] = [];
   for (const face of mesh.faces) {
-    const [P, src] = clip_loop_to_plane(face.map((v) => V4[v] as Vec4), pi, tol, face);
+    const [P, src] = clip_loop_to_plane(face.map((v) => V4[v] as Vec4), pi, tol,
+      face.map((v): VertexTag => ({ kind: "vertex", index: v })));
     if (P.length < 3) continue;
     const poly: number[] = [];
     P.forEach((row, r) => {
       const s = src[r] as Source;
       if (is_ground(s)) {
-        const i = s.i as number, j = s.j as number;
+        const i = (s.i as VertexTag).index, j = (s.j as VertexTag).index;
         const lo = Math.min(i, j), hi = Math.max(i, j);
         const key = `${lo},${hi}`;
         if (!crossing.has(key)) {
@@ -131,7 +133,7 @@ export function clip_mesh_to_plane(mesh: Mesh, pi: readonly number[], tol = 0.0)
         }
         poly.push(crossing.get(key) as number);
       } else {
-        poly.push(index_of.get(s as number) as number);
+        poly.push(index_of.get((s as VertexTag).index) as number);
       }
     });
     faces_out.push(poly);

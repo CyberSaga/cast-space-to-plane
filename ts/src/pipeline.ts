@@ -34,7 +34,7 @@ import type { EdgeTemplate, ObjectRecord } from "./primitives.js";
 import { validate_camera } from "./scene.js";
 import type { Light, Receiver, Scene } from "./scene.js";
 import { clip_mesh_to_plane, foot, mat4_vec, shadow_loop, shadow_matrix, shadow_w } from "./shadow.js";
-import type { Origin, Source } from "./shadow.js";
+import type { Origin, Source, VertexTag } from "./shadow.js";
 import { degrees } from "./transform.js";
 import type { Mat4, Vec2, Vec3, Vec4 } from "./types.js";
 
@@ -83,9 +83,12 @@ export interface StageA {
   tol: number;
   receiver: { id: string; pi: Vec4 };
   lights: LightRecord[];
-  shadows: ShadowRecord[];
+  shadows: StageAShadow[];
   warnings: Warning[];
 }
+
+/** A stage-A shadow record with its camera-free point lists (contract §5.4.7: shared by reference with stage B). */
+export type StageAShadow = ShadowRecord & { S_lists: Vec3[]; Q_lists: Vec3[]; G_lists: Vec3[] };
 
 export interface PolyStageB {
   id: string;
@@ -262,8 +265,8 @@ function object_light_data(obj: StageAObject, lt: LightRecord): [ObjectLightData
   }, warnings];
 }
 
-function is_tag(s: Source): s is Exclude<Source, number> {
-  return typeof s === "object";
+function is_tag(s: Source): s is Exclude<Source, VertexTag> {
+  return s.kind !== "vertex";
 }
 
 function poly_loop_entries(sources: readonly Source[], V: readonly Vec4[], loop_vertex_ids: readonly number[], origins: readonly Origin[] | null,
@@ -286,7 +289,7 @@ function poly_loop_entries(sources: readonly Source[], V: readonly Vec4[], loop_
         entries.push({ direction: [X[0] + 0, X[1] + 0, X[2] + 0] });
       }
     } else {
-      const vid = loop_vertex_ids[src] as number;
+      const vid = loop_vertex_ids[src.index] as number;
       const origin = origins === null ? vid : (origins[vid] as Origin);
       if (typeof origin === "object") {
         entries.push(ground_name(`v:${vid}`, [X[0] / X[3], X[1] / X[3], X[2] / X[3]]));
@@ -422,11 +425,11 @@ export function shadow_geometry(scene: Scene): StageA {
       shadows.push(rec);
     }
   }
-  for (const rec of shadows) {
-    rec.S_lists = rec.S_world.filter((_s, i) => rec.keep[i]).map(canonical3);
-    rec.Q_lists = rec.Q_world.filter((_s, i) => rec.keep[i]).map(canonical3);
-    rec.G_lists = rec.ground_points.map((g) => canonical3(g[1]));
-  }
+  const shadows_a: StageAShadow[] = shadows.map((rec) => Object.assign(rec, {
+    S_lists: rec.S_world.filter((_s, i) => rec.keep[i]).map(canonical3),
+    Q_lists: rec.Q_world.filter((_s, i) => rec.keep[i]).map(canonical3),
+    G_lists: rec.ground_points.map((g) => canonical3(g[1])),
+  }));
   const lo: Vec3 = [Infinity, Infinity, Infinity], hi: Vec3 = [-Infinity, -Infinity, -Infinity];
   for (const v of vertices) {
     for (let k = 0; k < 3; k++) {
@@ -442,7 +445,7 @@ export function shadow_geometry(scene: Scene): StageA {
     tol,
     receiver: { id: receiver.id, pi },
     lights,
-    shadows,
+    shadows: shadows_a,
     warnings: merge_warnings(warnings),
   };
 }
@@ -539,7 +542,7 @@ function ray_kinds(light: LightStageB, P_uv: Vec2[], S_uv: Vec2[], Q_uv: Vec2[])
   return kinds;
 }
 
-function project_shadow(rec: ShadowRecord, cam: CameraRecord, tol: number, light: LightStageB): [ShadowStageB, Warning[]] {
+function project_shadow(rec: StageAShadow, cam: CameraRecord, tol: number, light: LightStageB): [ShadowStageB, Warning[]] {
   const warnings: Warning[] = [];
   const P4 = rec.P_world.map(h4), S4 = rec.S_world.map(h4), Q4 = rec.Q_world.map(h4);
   const xP = P4.map((x) => project(cam, x)), xS = S4.map((x) => project(cam, x)), xQ = Q4.map((x) => project(cam, x));
@@ -597,9 +600,9 @@ function project_shadow(rec: ShadowRecord, cam: CameraRecord, tol: number, light
     Q_world: rec.Q_world, Q_h: xQ, Q_behind,
     ground_names: rec.ground_points.map((g) => g[0]),
     G_world, G_h: xG, G_behind,
-    S_lists: rec.S_lists ?? rec.S_world.filter((_s, i) => rec.keep[i]).map(canonical3),
-    Q_lists: rec.Q_lists ?? rec.Q_world.filter((_s, i) => rec.keep[i]).map(canonical3),
-    G_lists: rec.G_lists ?? G_world.map(canonical3),
+    S_lists: rec.S_lists,
+    Q_lists: rec.Q_lists,
+    G_lists: rec.G_lists,
     loops: rec.loops.map((loop) => loop.entries),
     polygons,
     unbounded: rec.unbounded,

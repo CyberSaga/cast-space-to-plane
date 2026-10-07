@@ -354,8 +354,7 @@ function layer_labels(doc: AnyDoc, cv: Canvas): string[] {
     pts.push([img, rest]);
     const z = (p.world ?? [0.0, 0.0, 0.0])[2] as number;
     const t = top.get(oid);
-    // strictly higher by more than rounding, else the first name in code-point order keeps the anchor (as svg.py)
-    if (t === undefined || z > t[0] + 1e-9 * Math.max(1.0, Math.abs(t[0]))) top.set(oid, [z, img]);
+    if (t === undefined || z > t[0]) top.set(oid, [z, img]);
   }
   const texts = (items: [UV, string][], attrs: string, dx: number, dy: number): string[] => items.map(([p, s]) => cv.text(p, s, attrs, dx, dy));
   const body = texts(lf, "", 1.4, 2.4);

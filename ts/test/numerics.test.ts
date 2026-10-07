@@ -101,19 +101,22 @@ function affine(a: number, b: number, alpha: number, tx: number, ty: number): nu
   return [[c * a, -s * b, tx], [s * a, c * b, ty], [0, 0, 1]];
 }
 
-test("ellipse_params: a circle within rounding has rotation 0, whatever the ulp noise (as conics.py, M7 review)", () => {
-  const noisy: [number, number, number][] = [
-    [-0.0032653061224489806, 1.27e-20, -0.0032653061224489793], // numpy/BLAS values of the on-axis sphere
-    [-0.0032653061224489793, -1.27e-20, -0.0032653061224489806],
-    [-0.00326530612244898, 0.0, -0.00326530612244898],            // exact tie (the port's fixed-order sums)
+test("ellipse_params keeps the reference predicates verbatim on a circle's ulp noise (contract §5.4.4 (7))", () => {
+  // the exact tests `p >= r` / `s1 >= s2` of castplane/conics.py are not banded: the same matrix gives the same answer
+  // in both implementations (values below are the Python reference's); a scene whose computed matrix differs by ulps
+  // across implementations sits on the boundary and is kept out of every cross-implementation case (§5.4 notes)
+  const cases: [[number, number, number], number, [number, number]][] = [
+    [[-0.0032653061224489806, 1.27e-20, -0.0032653061224489793], Math.PI / 2, [17.5, 17.499999999999996]],
+    [[-0.0032653061224489793, -1.27e-20, -0.0032653061224489806], 0.0, [17.5, 17.499999999999996]],
+    [[-0.00326530612244898, 0.0, -0.00326530612244898], 0.0, [17.5, 17.5]],
   ];
-  for (const [p, q, r] of noisy) {
+  for (const [[p, q, r], rot, [major, minor]] of cases) {
     const res = ellipse_params([[p, q, 0], [q, r, 0], [0, 0, 1]]);
     assert.ok(res !== null);
-    assert.equal(res[2], 0);
-    assert.ok(res[1][0] >= res[1][1] && Math.abs(res[1][0] - 17.5) <= 1e-11 && Math.abs(res[1][1] - 17.5) <= 1e-11);
+    assert.equal(res[2], rot);
+    assert.ok(Math.abs(res[1][0] - major) <= 1e-12 && Math.abs(res[1][1] - minor) <= 1e-12);
   }
-  const ell = ellipse_params([[-(1 + 2e-6), 0, 0], [0, -1, 0], [0, 0, 1]]);  // above the band: major axis along y
+  const ell = ellipse_params([[-(1 + 2e-6), 0, 0], [0, -1, 0], [0, 0, 1]]);  // a genuine ellipse: major axis along y
   assert.ok(ell !== null && Math.abs(ell[2] - Math.PI / 2) <= 1e-12 && ell[1][0] > ell[1][1]);
 });
 

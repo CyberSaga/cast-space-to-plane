@@ -163,9 +163,6 @@ export interface ShadowRecord {
   loops: { vertices: Vec4[]; sources: unknown[]; entries: LoopEntry[]; unbounded: boolean }[];
   unbounded: boolean;
   pieces?: OutlinePiece[];
-  S_lists?: Vec3[];
-  Q_lists?: Vec3[];
-  G_lists?: Vec3[];
 }
 
 export interface LightRecordLike {

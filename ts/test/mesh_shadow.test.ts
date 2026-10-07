@@ -80,7 +80,10 @@ test("ground clip of a loop and of a buried box", () => {
   const [P, src, below] = clip_loop_to_plane([[0, 0, -1, 1], [1, 0, 1, 1], [0, 1, 1, 1]], GROUND, 1e-9);
   assert.equal(below, true);
   assert.equal(P.length, 4);
-  assert.ok(src.some((s) => typeof s === "object" && s.kind === "ground"));
+  // contract §5.4.2: every source is a tagged object, `{kind: "vertex", index}` for a kept input vertex
+  assert.deepEqual(src, [{ kind: "ground", i: { kind: "vertex", index: 0 }, j: { kind: "vertex", index: 1 } },
+    { kind: "vertex", index: 1 }, { kind: "vertex", index: 2 },
+    { kind: "ground", i: { kind: "vertex", index: 2 }, j: { kind: "vertex", index: 0 } }]);
   const obj = build_object({ id: "b", type: "box", size: [1, 1, 1], transform: { position: [0, 0, -0.5], rotation_deg: [10, 20, 0] } });
   const [clipped, origins] = clip_mesh_to_plane(obj.mesh, GROUND, 1e-9);
   assert.equal(euler_characteristic(clipped), 2);

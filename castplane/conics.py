@@ -323,12 +323,7 @@ def ellipse_params(C):
         v1 = np.array([1.0, 0.0])
     else:
         v1 = np.array([0.0, 1.0])
-    if rad <= 1e-12 * max(abs(p), abs(r)):
-        # a circle within rounding: the axis direction is undefined and the exact tests below would
-        # pick it from ulp noise (90 deg vs 0 deg between implementations); fix it at +x (M7 review,
-        # contract §5.4 implementation notes)
-        major, minor, v = max(s1, s2), min(s1, s2), np.array([1.0, 0.0])
-    elif s1 >= s2:
+    if s1 >= s2:
         major, minor, v = s1, s2, v1
     else:
         major, minor, v = s2, s1, np.array([-v1[1], v1[0]])

@@ -106,3 +106,16 @@ test("construction_block (contract §5.4.14 (c)) builds the construction block o
   assert.ok(B.construction.segments.length > 0);
   assert.deepEqual(construction_block(lt, []).segments, []);
 });
+
+test("stage B shares the camera-free point lists of stage A by reference (contract §5.4.7, M7 review)", () => {
+  for (const f of examples) {
+    const scene = load_scene(read_json(repo_path("examples", f)));
+    const A = shadow_geometry(scene);
+    const B = project_scene(scene, A);
+    assert.equal(B.shadows.length, A.shadows.length);
+    A.shadows.forEach((a, i) => {
+      const b = B.shadows[i] as (typeof B.shadows)[number];
+      assert.ok(b.S_lists === a.S_lists && b.Q_lists === a.Q_lists && b.G_lists === a.G_lists, `${f} shadow ${i}`);
+    });
+  }
+});
