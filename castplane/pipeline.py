@@ -374,7 +374,7 @@ def _mesh_ray_vertices(obj: dict, sil, sil_loops, loop_mesh: dict, origins, edge
 
 
 def _fallback_shadow_record(obj: dict, ol: dict, lt: dict, pi: np.ndarray, tol: float,
-                            receiver_id: str) -> tuple[dict, list]:
+                            receiver_id: str, rcv: dict | None = None) -> tuple[dict, list]:
     """Per-face shadow record of a non-manifold mesh (contract §5.2.5), replacing :func:`_shadow_record`.
 
     ``vertex_ids`` = every vertex used by a kept face (ascending), each with its ``.shadow`` and
@@ -385,9 +385,17 @@ def _fallback_shadow_record(obj: dict, ol: dict, lt: dict, pi: np.ndarray, tol: 
     than 3 vertices, or a bounded loop whose receiver-plane area is ``<= tol·scale_A``, is dropped.
     Crossings are named ``<obj>.s<k>.<light>`` in order of first appearance keyed by the undirected
     original edge, so a crossing shared by two faces is one point.  The drawn region is the nonzero
-    union of the loops (one ``<path>``)."""
+    union of the loops (one ``<path>``).
+
+    ``rcv`` (M4/M5 merge, contract §5.2.5 / §5.2.7): a bounded receiver record (``pi = rcv["pi"]``); each
+    face loop is shadowed with the receiver frame and then cut by ``shadow.clip_polygon_bounds``, the
+    names carry the receiver suffix, the bounds-clip rows are crossings of their own
+    (``<obj>.s<k>.<light>.<r>``), ``VERTEX_NOT_BELOW_LIGHT`` is not emitted and ``ray_keep`` marks the
+    shadow points inside the bounds (like :func:`_caster_record`).  ``None`` = the unbounded ground."""
     mesh = obj["mesh"]
     oid, lid = obj["id"], lt["id"]
+    bounded = rcv is not None and bool(rcv["bounded"])
+    sfx = rcv["suffix"] if rcv is not None else ""
     V4 = to_homogeneous(mesh["vertices"])
     ids = np.array(sorted({int(v) for f in mesh["faces"] for v in f}), dtype=np.int64)
     P4 = V4[ids]
@@ -400,7 +408,7 @@ def _fallback_shadow_record(obj: dict, ol: dict, lt: dict, pi: np.ndarray, tol: 
     # the light, i.e. one that can reach a shadow loop (light-parallel faces are skipped below)
     in_loop_faces = {int(v) for f, par in zip(mesh["faces"], ol["parallel"]) if not par for v in f}
     reach = np.array([int(k) in in_loop_faces for k in ids], dtype=bool)
-    if bool(np.any(reach & ~finite)):
+    if not bounded and bool(np.any(reach & ~finite)):
         warnings.append(make_warning("VERTEX_NOT_BELOW_LIGHT", [oid]))
     S4 = P4 @ lt["M"].T
     w_safe = np.where(keep, w_S, 1.0)
@@ -416,7 +424,13 @@ def _fallback_shadow_record(obj: dict, ol: dict, lt: dict, pi: np.ndarray, tol: 
         if parallel[fi]:
             continue
         cyc = [int(v) for v in face] if lit_flags[fi] else [int(face[0])] + [int(v) for v in face[1:]][::-1]
-        sh = shadow_loop(V4[cyc], lt["M"], pi, lt["tol_w"], tol_clip=tol)
+        if rcv is None:
+            sh = shadow_loop(V4[cyc], lt["M"], pi, lt["tol_w"], tol_clip=tol)
+        else:
+            sh = shadow_loop(V4[cyc], lt["M"], pi, lt["tol_w"], tol_clip=tol, frame=rcv["frame"], F=lt["F"])
+        if bounded:
+            V, src = clip_polygon_bounds(sh["vertices"], sh["sources"], rcv["psi"], rcv["bounds"], tol)
+            sh = {"vertices": V, "sources": src, "unbounded": False}
         verts = sh["vertices"]
         if verts.shape[0] < 3:
             continue
@@ -428,22 +442,25 @@ def _fallback_shadow_record(obj: dict, ol: dict, lt: dict, pi: np.ndarray, tol: 
         entries = []
         for row, src in enumerate(sh["sources"]):
             if isinstance(src, tuple):
-                if src[0] == "ground":
-                    i, j = cyc[int(src[1])], cyc[int(src[2])]
-                    key = (min(i, j), max(i, j))
+                if src[0] in ("ground", "bounds"):
+                    if src[0] == "ground":
+                        i, j = cyc[int(src[1])], cyc[int(src[2])]
+                        key = (min(i, j), max(i, j))
+                    else:   # a bounds-clip crossing or anchor (M4 §5.1.3.3): a point of its own
+                        key = ("clip", len(ground))
                     if key not in ground:
                         X = verts[row]
-                        ground[key] = (f"{oid}.s{len(ground)}.{lid}", X[:3] / X[3])
+                        ground[key] = (f"{oid}.s{len(ground)}.{lid}{sfx}", X[:3] / X[3])
                     entries.append(ground[key][0])
                 else:  # ("dir", i, j) or ("arc", k): a direction vertex (w = 0)
                     d = verts[row]
                     entries.append({"direction": [float(d[0]) + 0.0, float(d[1]) + 0.0, float(d[2]) + 0.0]})
             else:
-                entries.append(f"{oid}.v{cyc[int(src)]}.shadow.{lid}")
+                entries.append(f"{oid}.v{cyc[int(src)]}.shadow.{lid}{sfx}")
         unbounded = unbounded or bool(sh["unbounded"])
         loops.append({"vertices": verts, "sources": sh["sources"], "entries": entries,
                       "unbounded": bool(sh["unbounded"])})
-    return {
+    rec = {
         "light": lid,
         "receiver": receiver_id,
         "object": oid,
@@ -454,13 +471,16 @@ def _fallback_shadow_record(obj: dict, ol: dict, lt: dict, pi: np.ndarray, tol: 
         "S_world": S_world,
         "Q_world": Q_world,
         "w_S": w_S,
-        "shadow_names": [f"{oid}.v{int(k)}.shadow.{lid}" for k in ids],
-        "foot_names": [f"{oid}.v{int(k)}.foot" for k in ids],
+        "shadow_names": [f"{oid}.v{int(k)}.shadow.{lid}{sfx}" for k in ids],
+        "foot_names": [f"{oid}.v{int(k)}.foot{sfx}" for k in ids],
         "vertex_names": [obj["point_names"][int(k)] for k in ids],
         "ground_points": list(ground.values()),
         "loops": loops,
         "unbounded": unbounded,
-    }, warnings
+    }
+    if bounded:
+        rec["ray_keep"] = keep & np.all(S4 @ rcv["psi"].T >= -tol * np.abs(S4[:, 3:4]), axis=1)
+    return rec, warnings
 
 
 def shadow_geometry(scene: dict) -> dict:
@@ -638,6 +658,8 @@ def _clip_object(obj: dict, rcv: dict, tol: float):
     """``obj["clipped"][r]`` (contract §5.1.2): the part of the solid in front of ``pi_r`` as a closed mesh
     (``clip_mesh_to_plane``), ``None`` when no vertex is behind ``pi_r`` or the cut surface is not a
     closed manifold (the silhouette loops are then clipped edge by edge, silently)."""
+    if obj.get("fallback"):   # M5 §5.2.5 [decision, synthesis]: clip_mesh_to_plane is never called on a fallback mesh
+        return None
     below = (to_homogeneous(obj["mesh"]["vertices"]) @ rcv["pi"]) < -tol
     if not bool(np.any(below)):
         return None
@@ -749,12 +771,15 @@ def _bounded_object_record(obj: dict, ol: dict, lt: dict, rcv: dict, tol: float)
     oid, lid, rid = obj["id"], lt["id"], rcv["id"]
     if not lt["active"] or ol["light_inside"]:
         return _empty_shadow_record(lid, rid, oid), []
+    if obj.get("fallback"):   # M5 §5.2.5 / §5.2.7: per-face shadow_loop + bounds clip on this receiver
+        return _fallback_shadow_record(obj, ol, lt, rcv["pi"], tol, rid, rcv=rcv)
     mesh = obj["mesh"]
     V4 = to_homogeneous(mesh["vertices"])
     clipped = obj["clipped"].get(rid)
     if clipped is None:
         loop_mesh, origins, sil_loops = mesh, None, ol["loops"]
         sil = ol["silhouette_vertices"]
+        edge_sil = ol["edge_silhouette"]
     else:
         loop_mesh, origins = clipped
         if not loop_mesh["faces"]:     # the whole solid is behind the receiver plane
@@ -767,8 +792,14 @@ def _bounded_object_record(obj: dict, ol: dict, lt: dict, rcv: dict, tol: float)
                                if isinstance(origins[int(v)], int)}), dtype=np.int64)
     V4c = to_homogeneous(loop_mesh["vertices"])
     loops = [(V4c[loop], loop) for loop in sil_loops]
-    return _caster_record(oid, lt, rcv, tol, sil, V4[sil], [obj["point_names"][int(k)] for k in sil], loops,
-                          origins, "v")
+    rec, warnings = _caster_record(oid, lt, rcv, tol, sil, V4[sil], [obj["point_names"][int(k)] for k in sil], loops,
+                                   origins, "v")
+    if obj["type"] == "mesh":
+        # M5 §5.2.4: the feature-vertex ray selection on the loop mesh actually used (per object, light, receiver)
+        rec["ray_vertices"], capped = _mesh_ray_vertices(obj, sil, sil_loops, loop_mesh, origins, edge_sil)
+        if capped:
+            warnings.append(make_warning("MESH_RAYS_CAPPED", [oid]))
+    return rec, warnings
 
 
 def _plate_shadow_record(plate: dict, lt: dict, rcv: dict, tol: float) -> tuple[dict, list]:

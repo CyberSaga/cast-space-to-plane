@@ -1931,6 +1931,34 @@ unordered world pairs with equal `silhouette` / `back` flags and `segment` endpo
   mines constants from the imported modules, so the new `castplane/io` modules changed its draws) generated two
   separate boxes, one wholly below and one wholly above the light, for which no outline is unbounded. The predicate is
   now evaluated per object (one object straddling the light height), which is what the spec §5.7 row 4 statement means.
+- **[decision, implementation] (M4 / M5 merge) What the rebase onto v4 completed.** This supersedes the "pre-M4
+  worktree" note above. (1) `pipeline._clip_object` returns `None` for a fallback mesh, so `obj["clipped"][r] = None` for
+  every receiver `r` (and `ground_mesh = None`, its alias for `receivers[0]`), on both the unbounded-ground path and the
+  bounded-default path; `clip_mesh_to_plane` is never called on a fallback mesh. (2) On a bounded receiver
+  `_bounded_object_record` hands a fallback object to `_fallback_shadow_record(obj, ol, lt, rcv["pi"], tol, rid,
+  rcv=rcv)`: every non-parallel face loop is shadowed with the receiver frame (`shadow_loop(..., frame, F)`) and cut by
+  `clip_polygon_bounds`, then the `< 3` vertices / `|area| ≤ tol·scale_A` drop rule of §5.2.5 is applied to the clipped
+  loop; names carry the receiver suffix (`<obj>.v<k>.shadow.<light>.<r>`, `.foot.<r>`); receiver-plane crossings keep the
+  undirected-edge key of §5.2.5, and every bounds-clip row (crossing or anchor) is a crossing point of its own
+  `<obj>.s<k>.<light>.<r>`, exactly as `_loop_entries` names them for the manifold path; `VERTEX_NOT_BELOW_LIGHT` is not
+  emitted (unbounded ground only, §5.1.9) and the record carries M4's `ray_keep` (irrelevant: `ray_vertices` is all
+  False). `rcv=None` is the unchanged v2 ground path. (3) The manifold mesh path on a bounded receiver
+  (`_bounded_object_record` → `_caster_record`) gets the §5.2.4 `ray_vertices` from `_mesh_ray_vertices` on the loop
+  mesh actually used (receiver-clipped or not) and `MESH_RAYS_CAPPED` per (object, light, receiver); `_project_shadows`
+  ANDs both masks (`ok &= ray_keep`, then `ok &= ray_vertices`). (4) `shadow_geometry` merges `prep_warnings` before
+  the bounded-default branch, so the `MESH_*` warnings are emitted on every receiver configuration. (5) The four
+  `MESH_*` codes now follow `RECEIVER_UNLIT` (the §5.0.5 order); the CLI `_run` keeps both changes
+  (`load_expanded_scene` + notes, and the `hidden_lines` parameter). (6) Tests: `tests/test_mesh_pipeline.py` adds the
+  §5.2.11 "fallback mesh on a bounded receiver" test (the §5.1.11 wall scene and a bounded-floor variant with the crate
+  as an open-bottom box: all `clipped` entries `None`, every loop vertex on the plate inside its bounds, ray-cast IoU ≥
+  0.99 on each plate — measured 1.0 — and no rays / checks for the crate) and the manifold split-box crate on the same
+  two receiver configurations, byte-identical to the parametric crate after deleting the two mesh keys. With hidden
+  lines **on**, the mesh crate's runs may differ from the parametric crate's by one bisection step (measured
+  `s = 0.66245` vs `0.66255` on one edge of the bounded-floor variant): the occluder of a mesh is its triangle fan
+  (§5.2.7), the box's is the exact box, and a sample grazing a box edge can fall on either side of the `1 − eps` test;
+  this is inside the conformance runs rule (1e-3 in `s`) and is not asserted byte-for-byte. (7) Conformance: the three
+  mesh cases were regenerated on the merged branch (they now carry the M4 keys) and the CHANGELOG entry is the one M5
+  milestone entry **v5** (0 existing files changed, 3 added; 43 v4 cases with zero drift), §5.0.8 rule 1.
 
 ### 5.3 M6 — multiple lights (amendment to §2.0, §2.3, §2.5–2.10, §3, §3.1, §4)
 

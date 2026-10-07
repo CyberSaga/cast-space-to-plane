@@ -641,3 +641,77 @@ def test_acceptance_1_end_to_end_through_load_expanded_scene(name, keys):
     assert loaded["objects"][0]["path"] == f"../../fixtures/meshes/{name}" and loaded["objects"][0]["up"] == "z"
     doc = render(loaded)["geometry"]
     assert dumps(strip_mesh_keys(doc)) == dumps(doc_of(analytic_box_scene()))
+
+
+# --- M4/M5 merge: meshes on bounded receivers (contract §5.2.5, §5.2.7, §5.2.11) -------------------
+
+def wall_mesh_scene(faces, vertices=None, floor=False) -> dict:
+    """``tests.test_receivers.wall_and_ground_scene`` (the §5.1.11 hand-computed case) with the crate
+    replaced by an inline mesh of the same unit box; ``floor`` swaps the unbounded ground for the
+    bounded floor tile ``[-2, 2] x [2, 5.5]`` of ``test_raycast_iou_on_plates`` (bounded default receiver)."""
+    from tests.test_receivers import wall_and_ground_scene
+
+    scene = wall_and_ground_scene()
+    scene["objects"] = [{"id": "crate", "type": "mesh",
+                         "data": {"vertices": copy.deepcopy(CUBE_V if vertices is None else vertices),
+                                  "faces": copy.deepcopy(faces)},
+                         "transform": {"position": [0, 4.5, 0]}}]
+    if floor:
+        scene["receivers"] = [{"id": "floor", "type": "plane", "normal": [0, 0, 1], "offset": 0,
+                               "bounds": [[-2, 2, 0], [2, 2, 0], [2, 5.5, 0], [-2, 5.5, 0]]},
+                              scene["receivers"][1]]
+    return scene
+
+
+@pytest.mark.parametrize("floor", [False, True], ids=["ground+wall", "floor+wall"])
+def test_fallback_mesh_on_a_bounded_receiver(floor):
+    """§5.2.5 / §5.2.7: a non-manifold mesh is never cut by any receiver plane (``clipped[r] = None``); on a
+    bounded receiver every face loop is shadowed with ``M_r`` and cut by the bounds; the union of the
+    loops agrees with the ray cast on the plate (IoU >= 0.99); no rays / checks for the fallback object."""
+    from tests.test_receivers import plate_masks
+
+    scene = load_scene(wall_mesh_scene(OPEN_BOTTOM_F, floor=floor))
+    A = shadow_geometry(scene)
+    (obj,) = A["objects"]
+    assert obj["fallback"] is True and obj["ground_mesh"] is None
+    assert obj["clipped"] and all(c is None for c in obj["clipped"].values())
+    doc = render(scene)["geometry"]
+    assert warning_set(doc) == {("MESH_NON_MANIFOLD", ("crate",))}
+    pts = doc["points"]
+    rids = ("floor", "wall") if floor else ("wall",)
+    for rid in rids:
+        (sh,) = [s for s in doc["shadows"] if s["receiver"] == rid and s["object"] == "crate"]
+        assert sh["loops"] and sh["unbounded"] is False and sh["outline"] == sh["loops"][0]
+        sfx = "" if rid == scene["receivers"][0]["id"] else f".{rid}"
+        rcv = next(r for r in scene["receivers"] if r["id"] == rid)
+        B = np.asarray(rcv["bounds"], dtype=float)
+        for loop in sh["loops"]:
+            assert len(loop) >= 3
+            for name in loop:
+                assert name.startswith("crate.") and name.endswith(f".lamp{sfx}"), name
+                X = np.asarray(pts[name]["world"], dtype=float)
+                assert abs(float(np.dot(rcv["normal"], X)) + rcv["offset"]) <= 1e-9
+                assert np.all(X >= B.min(axis=0) - 1e-9) and np.all(X <= B.max(axis=0) + 1e-9), (name, X)
+        mask_doc, mask_ref = plate_masks(scene, doc, rid)
+        assert mask_ref.any() and raster.iou(mask_doc, mask_ref) >= 0.99, (rid, raster.iou(mask_doc, mask_ref))
+    con = doc["construction"]
+    rays = con["rays"] + [r for pr in con["per_receiver"].values() for r in pr["rays"]]
+    checks = con["checks"] + [c for pr in con["per_receiver"].values() for c in pr["checks"]]
+    assert not any("crate" in json.dumps(r) for r in rays + checks)
+    assert dumps(render(scene)["geometry"]) == dumps(doc)                  # deterministic
+
+
+@pytest.mark.parametrize("floor", [False, True], ids=["ground+wall", "floor+wall"])
+def test_manifold_mesh_on_bounded_receivers_equals_the_parametric_crate(floor):
+    """Acceptance 1 on the M4 receivers: the split / triangulated mesh crate renders the parametric crate's
+    document byte for byte (after deleting the two mesh-only edge keys), including the per-receiver rays
+    selected through ``ray_vertices`` on the receiver-clipped loop mesh."""
+    from tests.test_receivers import wall_and_ground_scene
+
+    ref_scene = wall_and_ground_scene()
+    mesh_scene = wall_mesh_scene(SPLIT_F, SPLIT_V, floor=floor)
+    ref_scene["receivers"] = mesh_scene["receivers"]
+    ref = doc_of(ref_scene)
+    doc = doc_of(mesh_scene)
+    assert ref["construction"]["per_receiver"]["wall"]["rays"]
+    assert dumps(strip_mesh_keys(doc)) == dumps(ref)

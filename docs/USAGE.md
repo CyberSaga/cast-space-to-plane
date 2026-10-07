@@ -390,7 +390,7 @@ C 段在 `hidden_lines` 開啟時呼叫；純 numpy、確定性（取樣位置�
 | `runs_straight(result, a3, b3, length_mm)`、`runs_conic(interval, runs, cum, th)` | 文件的 run 紀錄：直線 `{s, t, mm, visible}`、圓錐曲線 `{interval, theta, mm, visible}` |
 | `HLR_SPACING_MM`、`HLR_MIN_SAMPLES`、`HLR_MAX_SAMPLES`、`HLR_BISECTIONS`、`HLR_RAY_EPS` | 1.0、8、4096、6、1e-5（合約固定） |
 
-### 2.17 M5 網格物件（`mesh`，合約 §5.2）
+### 2.18 M5 網格物件（`mesh`，合約 §5.2）
 
 `castplane.scene` 新增（合約 §5.2.1、§5.0.1）：
 
@@ -430,7 +430,7 @@ C 段在 `hidden_lines` 開啟時呼叫；純 numpy、確定性（取樣位置�
 
 警告代碼增加 `MESH_NON_MANIFOLD`、`MESH_WINDING_FIXED`、`MESH_DEGENERATE_FACES`、`MESH_RAYS_CAPPED`（合約 §5.0.5，接在 M4 的 `RECEIVER_UNLIT` 之後）。
 
-### 2.18 `castplane.io` — 載入器與場景展開（只在 Python；合約 §5.0.2、§5.2.2、§5.2.8）
+### 2.19 `castplane.io` — 載入器與場景展開（只在 Python；合約 §5.0.2、§5.2.2、§5.2.8）
 
 載入器只在「展開」這一步使用，`validate_scene` 與 A/B/C 段永遠只看內嵌的 `data`。
 
