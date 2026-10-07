@@ -482,10 +482,11 @@ def convex_clip(subject, clip):
     return out
 
 
-def union_corners(polys, tol=1e-9) -> list:
+def union_corners(polys, tol=1e-9, angle_tol=1e-6) -> list:
     """The corner vertices of the union of disjoint convex CCW polygons: a candidate vertex is a corner iff
     the total interior angle of the union there (sum over the pieces: their angle at a vertex, ``π`` on the
-    relative interior of an edge, ``2π`` strictly inside) is not ``π`` or ``2π`` (within 1e-6)."""
+    relative interior of an edge, ``2π`` strictly inside) is not ``π`` or ``2π`` (within ``angle_tol``);
+    candidates closer than ``tol`` are one vertex."""
     polys = [np.asarray(p, dtype=float) for p in polys]
     cands = []
     for p in polys:
@@ -519,7 +520,7 @@ def union_corners(polys, tol=1e-9) -> list:
                 total_angle += math.pi
             elif inside:
                 total_angle += 2 * math.pi
-        if abs(total_angle - math.pi) > 1e-6 and abs(total_angle - 2 * math.pi) > 1e-6:
+        if abs(total_angle - math.pi) > angle_tol and abs(total_angle - 2 * math.pi) > angle_tol:
             corners.append(c)
     return corners
 
@@ -980,3 +981,16 @@ def test_rigid_equivariance_of_the_umbra(angle, shift):
     a3 = doc_of(three_light_scene())["umbra"][0]["polygons"]
     b3 = doc_of(rigid(three_light_scene(), angle, shift))["umbra"][0]["polygons"]
     assert total(b3) == pytest.approx(total(a3), rel=1e-9)
+
+
+def test_curved_two_lights_with_hidden_lines_bit_identical():
+    """Hidden lines on (M4): every light's terminator entries are classified exactly as in its single-light
+    document (``hidden._curved_pairs`` pairs them per (light, object) in a multi-light document)."""
+    scene = curved_scene()
+    scene["output"]["hidden_lines"] = True
+    doc = assert_per_light_bit_identical(scene)
+    assert doc["hidden_lines"] is True
+    vis = [t["visibility"] for e in doc["form_shadow"] for t in e["terminator"] if "segment" in t]
+    assert vis and set(vis) != {"visible"}             # some terminator segment is (partly) hidden
+    svg = render(scene)["svg"]
+    assert g_ids(svg).index("form_shadow.hidden") < g_ids(svg).index("form_shadow.lamp")

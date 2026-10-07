@@ -402,3 +402,49 @@ def test_direction_truncation_reproduces_a_half_plane():
     X, Y = np.meshgrid(xs, ys)
     expected = (np.abs(X) < 1.0) & (Y > 0.0)
     assert raster.iou(mask, expected) >= 0.99
+
+
+# --------------------------------------------------------------------------- M6: several lights (contract §5.3.10)
+#: (seed, n_lights) of the multi-light comparison: ``make_scene(seed, n_objects, n_lights=…)``.
+MULTI_LIGHT_CASES = [(seed, n) for n in (2, 3) for seed in range(8)]
+
+
+def multi_light_scene(seed: int, n_lights: int) -> dict:
+    return random_scenes.make_scene(seed, 2 + seed % 3, light_type="point" if seed % 2 == 0 else None,
+                                    n_lights=n_lights)
+
+
+def test_make_scene_single_light_is_unchanged_by_the_n_lights_argument():
+    for seed in range(5):
+        assert random_scenes.make_scene(seed) == random_scenes.make_scene(seed, n_lights=1)
+    scene = random_scenes.make_scene(3, n_lights=3)
+    assert [lt["id"] for lt in scene["lights"]] == ["light", "light1", "light2"]
+    assert scene["lights"][0] == random_scenes.make_scene(3)["lights"][0]
+    assert scene["camera"] == random_scenes.make_scene(3)["camera"]
+
+
+@pytest.mark.parametrize("seed, n_lights", MULTI_LIGHT_CASES)
+def test_multi_light_umbra_matches_the_raycast_and(seed, n_lights):
+    """The reference "occluded from every light" (``raycast.occluded`` ANDed over the active lights) against
+    the umbra pieces mapped back to the ground by ``H⁻¹``, IoU ≥ 0.99; each light's own drawables against
+    its own ray cast as in v1 (union of the objects)."""
+    from tests.test_multilight import umbra_raycast_iou
+    scene = multi_light_scene(seed, n_lights)
+    validated = load_scene(scene)
+    doc = castplane.render(validated)["geometry"]
+    assert len(doc["umbra"]) == 1 and len(doc["umbra"][0]["lights"]) >= 2
+    assert umbra_raycast_iou(validated, doc) >= IOU_MIN
+    for light in scene["lights"]:
+        sub_scene = dict(scene, lights=[light])
+        sub_doc = dict(doc, shadows=[sh for sh in doc["shadows"] if sh["light"] == light["id"]])
+        out = compare(sub_scene, sub_doc)
+        assert_iou(out, sub_scene, f"light {light['id']}")
+
+
+def test_multi_light_cases_have_umbra():
+    """The comparison above is not vacuous: most of its scenes have a non-empty umbra."""
+    with_umbra = 0
+    for seed, n_lights in MULTI_LIGHT_CASES:
+        doc = castplane.render(load_scene(multi_light_scene(seed, n_lights)))["geometry"]
+        with_umbra += bool(doc["umbra"][0]["polygons"])
+    assert with_umbra >= len(MULTI_LIGHT_CASES) // 2

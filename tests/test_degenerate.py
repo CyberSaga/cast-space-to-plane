@@ -614,3 +614,51 @@ def test_m4_receiver_degeneracies_warn_and_stay_finite(name):
         assert "F.lamp.wall" not in doc["points"]
     if name == "light in the wall plane":
         assert {r["id"]: r["casts"]["lamp"] for r in doc["receivers"]}["wall"] is False
+
+
+# --- M6: degenerate lights in a multi-light scene (contract §5.3.8, §5.3.10) ------------------
+def scene_with_lights(objects, lights, camera):
+    return load_scene({
+        "version": "0.1",
+        "objects": objects,
+        "lights": lights,
+        "receivers": [{"id": "ground", "type": "plane", "normal": [0, 0, 1], "offset": 0.0}],
+        "camera": dict({"roll_deg": 0, "focal_length_mm": 24, "frame_mm": [36, 24], "near_m": 0.05}, **camera),
+        "output": {"canvas_mm": [360, 240]},
+    })
+
+
+LAMP = {"id": "lamp", "type": "point", "position": [2.0, 2.0, 4.0]}
+
+
+def test_m6_vertical_directional_light_as_the_second_light():
+    """``F`` undefined for the second light: ``constructions[that].shadow_vp == null``, its rays have no ``F``
+    entries; the first light's block is untouched (the single-light document of that light)."""
+    zenith = {"id": "zenith", "type": "directional", "direction": [0.0, 0.0, 1.0]}
+    r = castplane.render(scene_with_lights([BOX], [LAMP, zenith], LEVEL_CAMERA))
+    doc = r["geometry"]
+    finite_and_drawable(doc)
+    c = doc["constructions"]["zenith"]
+    assert c["shadow_vp"] is None and c["shadow_vp_at_infinity"] is None
+    assert c["rays"] and all(kind == "L" for kind, _name in c["rays"])
+    assert "F.zenith" not in doc["points"] and "F.lamp" in doc["points"]
+    assert any(kind == "F" for kind, _name in doc["constructions"]["lamp"]["rays"])
+    single = castplane.render(scene_with_lights([BOX], [LAMP], LEVEL_CAMERA))["geometry"]
+    assert dumps(doc["constructions"]["lamp"]) == dumps(single["construction"])
+    assert doc["umbra"][0]["lights"] == ["lamp", "zenith"]
+    xml.dom.minidom.parseString(r["svg"])
+
+
+def test_m6_both_lights_inactive():
+    below = {"id": "below", "type": "point", "position": [0.0, 4.0, -1.0]}
+    flat = {"id": "flat", "type": "directional", "direction": [1.0, 0.0, 0.0]}
+    r = castplane.render(scene_with_lights([BOX], [below, flat], LEVEL_CAMERA))
+    doc = r["geometry"]
+    finite_and_drawable(doc)
+    codes = {(w["code"], tuple(w["ids"])) for w in doc["warnings"]}
+    assert ("LIGHT_BELOW_RECEIVER", ("below",)) in codes and ("DIRECTIONAL_HORIZONTAL", ("flat",)) in codes
+    assert doc["umbra"] == [{"receiver": "ground", "lights": [], "polygons": []}]
+    assert all(sh["polygons"] == [] for sh in doc["shadows"])
+    assert '<g id="cast_shadow.umbra" fill="#000" fill-opacity="0.3" stroke="none"/>' in r["svg"]
+    assert 'id="cast_shadow.below" fill-opacity="0.3"' in r["svg"]            # N_act = max(1, 0)
+    xml.dom.minidom.parseString(r["svg"])

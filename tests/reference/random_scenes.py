@@ -326,13 +326,14 @@ def camera_frame(camera: dict) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     return fwd, right, up
 
 
-def assemble_scene(objects: list[dict], light: dict, camera: dict) -> dict:
+def assemble_scene(objects: list[dict], lights, camera: dict) -> dict:
+    """The spec §4 scene dict; ``lights`` is one light dict or (M6, contract §5.3.9) a list of them."""
     return {
         "version": "0.1",
         "units": "m",
         "up": "z",
         "objects": objects,
-        "lights": [light],
+        "lights": [lights] if isinstance(lights, dict) else list(lights),
         "receivers": [{"id": "ground", "type": "plane", "normal": [0, 0, 1], "offset": 0.0}],
         "camera": camera,
         "output": {"canvas_mm": list(CANVAS_MM), "layers": list(LAYERS), "png_dpi": 300},
@@ -342,12 +343,16 @@ def assemble_scene(objects: list[dict], light: dict, camera: dict) -> dict:
 # --------------------------------------------------------------------------- public
 def make_scene(seed: int, n_objects: int | None = None, light_type: str | None = None,
                light_above_objects: bool = True, allow_tilt: bool = True,
-               kinds: tuple[str, ...] | None = None) -> dict:
+               kinds: tuple[str, ...] | None = None, n_lights: int = 1) -> dict:
     """Valid spec §4 scene with ``n_objects`` (1–10, random when None) primitives, one
     random light and a random camera; deterministic for a given ``seed``.
 
     ``kinds`` restricts the primitive types (e.g. ``("box", "prism")`` for polyhedral
     scenes); by default all five types appear once in scenes of 5+ objects.
+
+    M6 (contract §5.3.9): ``n_lights >= 2`` appends ``n_lights - 1`` further random lights
+    (ids ``light1``, ``light2`` …, same ``light_type`` rule) drawn from the generator **after**
+    the camera, so that ``n_lights = 1`` is byte-identical to the frozen single-light scenes.
     """
     rng = np.random.default_rng(seed)
     if n_objects is None:
@@ -363,7 +368,10 @@ def make_scene(seed: int, n_objects: int | None = None, light_type: str | None =
         objects.append(random_object(rng, i, kind, allow_tilt))
     light = random_light(rng, objects, light_type, light_above_objects)
     camera = random_camera(rng, objects)
-    return assemble_scene(objects, light, camera)
+    lights = [light]
+    for k in range(1, max(1, int(n_lights))):
+        lights.append(dict(random_light(rng, objects, light_type, light_above_objects), id=f"light{k}"))
+    return assemble_scene(objects, light if len(lights) == 1 else lights, camera)
 
 
 def make_polyhedral_scene(seed: int, n_objects: int | None = None, light_type: str | None = None,

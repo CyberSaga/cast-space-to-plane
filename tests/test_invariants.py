@@ -570,3 +570,37 @@ def test_no_nan_or_inf(scene):
     assert "NaN" not in text and "Infinity" not in text and not re.search(r"-0\.0(?![0-9])", text)
     low = svg.lower().replace("infinity", "")
     assert "nan" not in low and "inf" not in low
+
+
+# --------------------------------------------------------------------------- M6: row 2 for the umbra (contract §5.3.10)
+def _umbra_ground(doc):
+    from tests.test_multilight import map_back
+    return [uv for _w, uv in map_back(doc, doc["umbra"][0]["polygons"])]
+
+
+@pytest.mark.parametrize("which", ["acceptance", "three_lights"])
+def test_umbra_ground_image_is_camera_independent(which):
+    """Two cameras that both see the whole umbra: the ground images (``H⁻¹``) of the umbra pieces have equal
+    union area within 1e-9 (relative) and the same vertex set -- the corner vertices of the union, since the
+    slab decomposition itself is made in the image -- within 1e-9 m on the acceptance scene.  On the
+    three-light scene the snapping of §5.3.4 step 1 (≤ tol_mm along the image ``v`` axis, a camera-dependent
+    direction) moves vertices by ~1e-7 m on the ground and kinks short edges, so its corners are compared
+    by their turning angle > 1e-3 at 1e-6 m (implementation note of §5.3)."""
+    from tests.test_multilight import acceptance_scene, shoelace, three_light_scene, union_corners
+    scene = load_scene(acceptance_scene() if which == "acceptance" else three_light_scene())
+    cam2 = dict(scene["camera"])
+    if which == "acceptance":
+        cam2.update(position=[2.0, -5.0, 5.5], target=[0.2, 0.1, 0.0], roll_deg=7.0, focal_length_mm=30.0)
+    else:
+        cam2.update(position=[-7.0, -6.0, 8.0], target=[0.5, 0.5, 0.0], roll_deg=-10.0, focal_length_mm=24.0)
+    doc1, doc2 = geometry(scene), geometry(scene, camera=cam2)
+    assert doc1["camera"]["P"] != doc2["camera"]["P"]
+    g1, g2 = _umbra_ground(doc1), _umbra_ground(doc2)
+    assert g1 and g2
+    a1, a2 = sum(shoelace(p) for p in g1), sum(shoelace(p) for p in g2)
+    assert a2 == pytest.approx(a1, rel=1e-9)
+    tol, angle_tol = (1e-9, 1e-6) if which == "acceptance" else (1e-6, 1e-3)
+    c1, c2 = union_corners(g1, tol, angle_tol), union_corners(g2, tol, angle_tol)
+    assert len(c1) == len(c2) >= 3
+    for c in c1:
+        assert min(float(np.max(np.abs(c - d))) for d in c2) <= tol, c

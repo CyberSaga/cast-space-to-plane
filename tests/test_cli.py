@@ -355,3 +355,47 @@ def test_m4_info_lists_receivers(tmp_path, capsys):
     assert "wall: bounded, 4 vertices, plane [0, -1, 0, 6]; lit: lamp=yes; casts: lamp=yes" in out
     assert main(["info", BASIC]) == EXIT_OK
     assert "receivers: 1" in capsys.readouterr().out
+
+
+# --------------------------------------------------------------------------- M6: several lights (contract §5.3.9)
+def two_light_scene() -> dict:
+    scene = basic_scene()
+    second = dict(scene["lights"][0], id="lamp2", position=[-2.0, 3.5, 3.0])
+    sun = {"id": "sun", "type": "directional", "direction": [0.6, 0.0, 0.8]}
+    scene["lights"] += [second, sun]
+    return scene
+
+
+def test_info_lists_every_light(tmp_path, capsys):
+    assert main(["info", BASIC]) == EXIT_OK
+    out = capsys.readouterr().out
+    assert "lights: 1" in out and "  lamp (point): position (0, 3, 3.5); active: ground=yes" in out
+    path = write_json(tmp_path / "three.json", two_light_scene())
+    assert main(["info", path]) == EXIT_OK
+    out = capsys.readouterr().out
+    assert "lights: 3" in out
+    assert "  lamp (point): position (0, 3, 3.5); active: ground=yes" in out
+    assert "  lamp2 (point): position (-2, 3.5, 3); active: ground=yes" in out
+    assert "  sun (directional): direction (0.6, 0, 0.8); active: ground=yes" in out
+    scene = two_light_scene()
+    scene["lights"][1]["position"][2] = -1.0                     # below the ground: inactive
+    path = write_json(tmp_path / "below.json", scene)
+    assert main(["info", path]) == EXIT_OK
+    out = capsys.readouterr().out
+    assert "  lamp2 (point): position (-2, 3.5, -1); active: ground=no" in out
+    assert "LIGHT_BELOW_RECEIVER" in out
+
+
+def test_render_two_light_scene_writes_the_sub_groups(tmp_path):
+    path = write_json(tmp_path / "multi.json", two_light_scene())
+    assert main(["render", path, "-o", str(tmp_path / "out"), "-q"]) == EXIT_OK
+    svg = (tmp_path / "out" / "multi.svg").read_text(encoding="utf-8")
+    ids = re.findall(r'<g id="([^"]*)"', svg)
+    for gid in ("cast_shadow.lamp", "cast_shadow.lamp2", "cast_shadow.sun", "cast_shadow.umbra", "form_shadow.core",
+                "construction.lamp", "construction.lamp2.LP", "construction.sun"):
+        assert gid in ids, gid
+    assert '<g id="cast_shadow.lamp" fill-opacity="0.1">' in svg
+    doc = json.loads((tmp_path / "out" / "multi.json").read_text(encoding="utf-8"))
+    assert sorted(doc["constructions"]) == ["lamp", "lamp2", "sun"]
+    assert doc["umbra"][0]["lights"] == ["lamp", "lamp2", "sun"]
+    assert doc["construction"] == doc["constructions"]["lamp"]

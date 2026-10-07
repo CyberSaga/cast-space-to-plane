@@ -692,3 +692,30 @@ def test_m4_cases_cover_the_required_sources():
         assert any(r["visibility"] == "partial" and r["runs"] for r in records), n
     for n in set(M4_CASES) - {"wall_and_ground_hidden", "hidden_lines_curved_unbounded", "hidden_lines_vp_in_canvas"}:
         assert load_expected(n)["hidden_lines"] is False, n
+
+
+# --------------------------------------------------------------------------- M6: multi-light documents
+def test_comparator_on_a_multi_light_document():
+    """The multi-light keys (contract §5.3.5) go through the comparator: ``umbra[].polygons`` is an mm key
+    (``polygons``), ``silhouette_lights`` / ``umbra[].lights`` are compared exactly, a missing M6 key is a key
+    mismatch.  (The ``constructions`` mm paths join ``rules.json`` with the v6 cases, PLAN step 9.)"""
+    from tests.test_multilight import acceptance_scene
+    doc = json.loads(dumps(castplane.render(castplane.load_scene(acceptance_scene()))["geometry"]))
+    assert compare_documents(doc, json.loads(json.dumps(doc))) == []
+    assert is_image_path(("umbra", 0, "polygons", 2, 1, 0))
+    ok = json.loads(json.dumps(doc))
+    ok["umbra"][0]["polygons"][0][1][0] += 5e-7
+    assert compare_documents(doc, ok) == []
+    bad = json.loads(json.dumps(doc))
+    bad["umbra"][0]["polygons"][0][1][0] += 2e-6
+    assert any(m.startswith("umbra[0].polygons[0][1][0]") for m in compare_documents(doc, bad))
+    bad = json.loads(json.dumps(doc))
+    bad["umbra"][0]["lights"].reverse()
+    k = next(i for i, e in enumerate(doc["edges"]) if e["silhouette_lights"] == ["west"])
+    bad["edges"][k]["silhouette_lights"] = ["east"]
+    msgs = compare_documents(doc, bad)
+    assert any(m.startswith("umbra[0].lights[0]") for m in msgs)
+    assert any(m.startswith(f"edges[{k}].silhouette_lights[0]") for m in msgs)
+    bad = json.loads(json.dumps(doc))
+    del bad["form_shadow_core"]
+    assert any("key mismatch" in m and "form_shadow_core" in m for m in compare_documents(doc, bad))

@@ -455,3 +455,102 @@ def test_curved_objects_contribute_no_mesh_edges_or_vertex_labels(basic):
     A = castplane.shadow_geometry(scene)
     assert [o["id"] for o in A["objects"]] == ["crate", "pillar"]
     assert A["bbox"][1][1] >= 6.25 and A["bbox"][1][2] >= 2.4      # pillar at (-1.5, 6), r = 0.3, h = 2.4
+
+
+# --- M6: multi-light sub-groups (contract §5.3.6, §5.0.6, §5.3.10) ---------------------------
+import re  # noqa: E402
+
+from castplane.output.svg import _Canvas, _f  # noqa: E402
+
+GOLDEN_BASIC = pathlib.Path(__file__).resolve().parent / "golden" / "example_basic.svg"
+
+
+def _g_ids(svg: str) -> list:
+    return re.findall(r'<g id="([^"]*)"', svg)
+
+
+def _g_tags(svg: str) -> dict:
+    return {m.group(1): m.group(0) for m in re.finditer(r'<g id="([^"]*)"[^>]*>', svg)}
+
+
+def test_m6_opacity_strings():
+    from castplane.output.svg import _f
+    assert [_f(0.3 / n) for n in (1, 2, 3, 4)] == ["0.3", "0.15", "0.1", "0.075"]
+    assert [_f(0.18 / n) for n in (1, 2, 3, 4)] == ["0.18", "0.09", "0.06", "0.045"]
+
+
+def test_m6_single_light_svg_is_the_single_light_structure():
+    """``N = 1``: the SVG of ``example_basic`` equals the golden file (generated on the merged base; its sha256
+    is the v2 golden hash), and no single-light SVG has an opacity override or an M6 group."""
+    scene = castplane.load_scene(str(pathlib.Path(__file__).resolve().parents[1] / "examples" / "basic.json"))
+    svg = castplane.render(scene)["svg"]
+    golden = GOLDEN_BASIC.read_text(encoding="utf-8")
+    assert svg == golden
+    assert _g_ids(svg) == _g_ids(golden)
+    for name in ("basic.json", "curved_demo.json", "wall_and_ground.json", "directional.json"):
+        scene = castplane.load_scene(str(pathlib.Path(__file__).resolve().parents[1] / "examples" / name))
+        svg = castplane.render(scene)["svg"]
+        for gid, tag in _g_tags(svg).items():
+            if gid.startswith(("cast_shadow.", "form_shadow.")):
+                assert "opacity" not in tag, (name, tag)
+        ids = _g_ids(svg)
+        assert "cast_shadow.umbra" not in ids and "form_shadow.core" not in ids
+        lid = scene["lights"][0]["id"]
+        assert not any(i.startswith(f"construction.{lid}") for i in ids)
+
+
+def _three_light_doc():
+    from tests.test_multilight import three_light_scene
+    return castplane.render(castplane.load_scene(three_light_scene()))
+
+
+@pytest.mark.parametrize("n_lights", [2, 3])
+def test_m6_group_ids_order_and_opacities(n_lights):
+    from tests.test_multilight import acceptance_scene
+    r = castplane.render(castplane.load_scene(acceptance_scene())) if n_lights == 2 else _three_light_doc()
+    doc, svg = r["geometry"], r["svg"]
+    lights = sorted(doc["constructions"])
+    n_act = len({lid for e in doc["umbra"] for lid in e["lights"]})
+    assert n_act == n_lights
+    tags = _g_tags(svg)
+    for lid in lights:
+        assert tags[f"cast_shadow.{lid}"] == f'<g id="cast_shadow.{lid}" fill-opacity="{_f(0.3 / n_act)}">'
+        assert tags[f"form_shadow.{lid}"].startswith(f'<g id="form_shadow.{lid}" fill-opacity="{_f(0.18 / n_act)}"')
+        assert tags[f"construction.{lid}"] == f'<g id="construction.{lid}">'
+    ids = _g_ids(svg)
+    top = [i for i in ids if i.count(".") == 1 and i.split(".")[0] in ("form_shadow", "cast_shadow", "construction")]
+    assert top == ([f"form_shadow.{lid}" for lid in lights] + ["form_shadow.core"]
+                   + [f"cast_shadow.{lid}" for lid in lights] + ["cast_shadow.umbra"]
+                   + [f"construction.{lid}" for lid in lights])
+    # the umbra path: one M … Z subpath per piece
+    body = svg.split('<g id="cast_shadow.umbra"', 1)[1].split("</g>", 1)[0]
+    (path,) = re.findall(r'<path d="([^"]*)"', body)
+    assert path.count("M ") == len(doc["umbra"][0]["polygons"]) == path.count(" Z")
+
+
+def test_m6_core_faces_are_absent_from_the_per_light_groups():
+    from tests.test_multilight import acceptance_scene
+    scene = castplane.load_scene(acceptance_scene())
+    r = castplane.render(scene)
+    doc, svg = r["geometry"], r["svg"]
+    from tests.test_multilight import g_body
+    cv = _Canvas(*doc["canvas_mm"])
+    core = {cv.polygon(p) for c in doc["form_shadow_core"] for p in c["polygons"]}
+    assert len(core) == 3
+    for lid in ("west", "east"):
+        polys = set(re.findall(r"<polygon [^>]*/>", g_body(svg, f"form_shadow.{lid}")))
+        assert len(polys) == 1 and not (polys & core)
+        entry = next(e for e in doc["form_shadow"] if e["light"] == lid)
+        assert len(entry["polygons"]) == 4                     # the document keeps the core faces
+    assert set(re.findall(r"<polygon [^>]*/>", g_body(svg, "form_shadow.core"))) == core
+
+
+def test_m6_layers_subset_and_hidden_style_omit():
+    from tests.test_multilight import wall_two_lights
+    scene = castplane.load_scene(wall_two_lights())
+    doc = castplane.render(scene)["geometry"]
+    svg = write_svg(doc, layers=["cast_shadow"], hidden_style="omit")
+    ids = _g_ids(svg)
+    assert ids[0] == "cast_shadow" and ids[1] == "cast_shadow.hidden" and "cast_shadow.umbra" in ids
+    assert not any(i.startswith(("form_shadow", "construction")) for i in ids)
+    assert "stroke-dasharray" in _g_tags(svg)["cast_shadow.hidden"]
