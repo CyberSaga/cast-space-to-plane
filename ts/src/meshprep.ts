@@ -111,7 +111,7 @@ const OFFSETS: readonly (readonly [number, number, number])[] = (() => {
 })();
 
 /** Cell indices are exact integers in Python (`math.floor` of a float is an `int`); in JavaScript `c + d` stays exact
- * only below 2^52, so larger cells are keyed through `BigInt` (the same decimal integer either way). */
+ * only below 2^52, so the string keys of larger cells go through `BigInt` (the same decimal integer either way). */
 const EXACT_INT = 2 ** 52;
 
 function cell_part(c: number, d: number): string {
@@ -125,6 +125,33 @@ function cell_quotients(V: readonly (readonly number[])[], tol: number): number[
   const q = V.map((v) => [(v[0] as number) / tol + 0.5, (v[1] as number) / tol + 0.5, (v[2] as number) / tol + 0.5]);
   for (const row of q) for (const x of row) if (!Number.isFinite(x)) return null;
   return q;
+}
+
+/**
+ * One exact number key per cell such that neighbour cells stay neighbours (the key encoding of the Python fast path,
+ * `_compressed_cell_keys`): per axis the distinct cell indices are renumbered with gaps capped at 2 (`|Δ| <= 1` is
+ * preserved exactly; a computed gap of distinct integral floats is `>= 2` whenever the true gap is), offset by 1, and
+ * combined as `(c0·R + c1)·R + c2` with `R = max + 2`, so the 27 neighbours are `key + (dx·R + dy)·R + dz` without
+ * carry. Only an encoding of the reference loop's dictionary keys: the visiting order and the lowest-index rule are
+ * unchanged. `null` when `R³` would leave the exact integers (more than ~10^5 vertices): the string keys are used then.
+ */
+function compressed_cells(cells: readonly (readonly number[])[]): [number[], number] | null {
+  const cols: number[][] = [];
+  let R = 0;
+  for (let a = 0; a < 3; a++) {
+    const u = [...new Set(cells.map((c) => c[a] as number))].sort((x, y) => x - y);
+    const index = new Map<number, number>();
+    let c = 1;
+    u.forEach((x, k) => {
+      if (k > 0) c += Math.min(x - (u[k - 1] as number), 2);
+      index.set(x, c);
+    });
+    R = Math.max(R, c + 2);
+    cols.push(cells.map((cell) => index.get(cell[a] as number) as number));
+  }
+  if (R * R * R >= 2 ** 53) return null;
+  const c0 = cols[0] as number[], c1 = cols[1] as number[], c2 = cols[2] as number[];
+  return [c0.map((x, i) => (x * R + (c1[i] as number)) * R + (c2[i] as number)), R];
 }
 
 function weld_reference(V: readonly (readonly number[])[], tol: number): number[] {
@@ -146,15 +173,30 @@ function weld_reference(V: readonly (readonly number[])[], tol: number): number[
     }
     return rep;
   }
-  const cells = new Map<string, number[]>();
+  const cells = q.map((qi) => [Math.floor(qi[0] as number), Math.floor(qi[1] as number), Math.floor(qi[2] as number)]);
+  const compressed = compressed_cells(cells);
+  // the cell dictionary of the reference loop, keyed by the compressed number (or by the decimal string)
+  let keys: (number | string)[];
+  let neighbour: (i: number, k: number) => number | string = () => 0;
+  if (compressed !== null) {
+    keys = compressed[0];
+  } else {
+    keys = cells.map(([cx, cy, cz]) => `${cell_part(cx as number, 0)},${cell_part(cy as number, 0)},${cell_part(cz as number, 0)}`);
+    neighbour = (i, k) => {
+      const [cx, cy, cz] = cells[i] as number[];
+      const [dx, dy, dz] = OFFSETS[k] as readonly [number, number, number];
+      return `${cell_part(cx as number, dx)},${cell_part(cy as number, dy)},${cell_part(cz as number, dz)}`;
+    };
+  }
+  const table = new Map<number | string, number[]>();
+  const shift = compressed === null ? null : OFFSETS.map(([dx, dy, dz]) => (dx * compressed[1] + dy) * compressed[1] + dz);
   for (let i = 0; i < n; i++) {
-    const qi = q[i] as number[];
-    const cx = Math.floor(qi[0] as number), cy = Math.floor(qi[1] as number), cz = Math.floor(qi[2] as number);
     const v = V[i] as readonly number[];
     const x = v[0] as number, y = v[1] as number, z = v[2] as number;
     let best = -1;
-    for (const [dx, dy, dz] of OFFSETS) {
-      const lst = cells.get(`${cell_part(cx, dx)},${cell_part(cy, dy)},${cell_part(cz, dz)}`);
+    const base = keys[i] as number | string;
+    for (let k = 0; k < 27; k++) {
+      const lst = table.get(shift !== null ? (base as number) + (shift[k] as number) : neighbour(i, k));
       if (lst === undefined) continue;
       for (const r of lst) {
         if (best >= 0 && r >= best) continue;
@@ -163,9 +205,8 @@ function weld_reference(V: readonly (readonly number[])[], tol: number): number[
       }
     }
     if (best < 0) {
-      const key = `${cell_part(cx, 0)},${cell_part(cy, 0)},${cell_part(cz, 0)}`;
-      const lst = cells.get(key);
-      if (lst === undefined) cells.set(key, [i]);
+      const lst = table.get(base);
+      if (lst === undefined) table.set(base, [i]);
       else lst.push(i);
       best = i;
     }

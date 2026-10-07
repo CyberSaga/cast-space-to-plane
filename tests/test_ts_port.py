@@ -319,6 +319,39 @@ def test_ts_mesh_scenes_equal_the_reference(built_port, tmp_path):
 
 
 @needs_node
+def test_ts_weld_map_equals_the_reference_loop(built_port, tmp_path):
+    """``meshprep.weld_map`` of the port (the reference loop of contract §5.2.3 step 2 on compressed number keys,
+    string keys beyond 2^53) against Python's reference loop: clustered near-duplicates straddling cell borders,
+    exact copies, points exactly on cell borders and at distance exactly ``τ``, for six tolerances incl. 0."""
+    import numpy as np
+
+    from castplane.meshprep import weld_map
+
+    cases = []
+    for seed in range(12):
+        rng = np.random.default_rng(seed)
+        tau = [1e-6, 1e-3, 0.05, 0.0, 0.3, 1e-6][seed % 6] * (1.0 if seed < 6 else 7.3)
+        centres = rng.uniform(-2, 2, size=(60, 3))
+        pts = [centres[int(rng.integers(60))] + rng.uniform(-1.2, 1.2, size=3) * tau for _ in range(600)]
+        pts += list(centres) + [np.array([0.5, 0.5, 0.5]) * tau, np.array([1.5, 0.5, 0.5]) * tau,
+                                np.array([-0.5, 0.5, 0.5]) * tau]
+        pts += [pts[int(rng.integers(len(pts)))] for _ in range(100)]
+        V = np.array(pts)[rng.permutation(len(pts))]
+        cases.append({"V": V.tolist(), "tau": tau, "rep": weld_map(V, tau, fast=False).tolist()})
+    cases.append({"V": [[1.0, 0, 0], [1.0, 0, 0], [2.0, 0, 0], [1.0, 1e-300, 0]], "tau": 1e-300,
+                  "rep": weld_map([[1.0, 0, 0], [1.0, 0, 0], [2.0, 0, 0], [1.0, 1e-300, 0]], 1e-300, fast=False).tolist()})
+    (tmp_path / "weld.json").write_text(json.dumps(cases), encoding="utf-8")
+    script = ("import { readFileSync } from 'node:fs';"
+              f"const {{ weld_map }} = await import({json.dumps((built_port / 'src' / 'meshprep.js').as_uri())});"
+              "const cases = JSON.parse(readFileSync(process.argv[1], 'utf-8'));"
+              "console.log(JSON.stringify(cases.map((c) => JSON.stringify(weld_map(c.V, c.tau)) === JSON.stringify(c.rep))));")
+    proc = subprocess.run([NODE, "--input-type=module", "-e", script, str(tmp_path / "weld.json")],
+                          capture_output=True, text=True, timeout=300)
+    assert proc.returncode == 0, proc.stderr[-2000:]
+    assert json.loads(proc.stdout) == [True] * len(cases)
+
+
+@needs_node
 def test_ts_bench_reports_the_bench_py_record(built_port):
     """``ts/bench/camera_only.ts --json`` (§5.4.9): the field names of ``bench.py --json`` plus ``engine``, the
     document size of the committed benchmark scene, and ``--gate none`` exits 0."""
