@@ -133,8 +133,7 @@ def cmd_stages(args) -> int:
     camera = load_camera(args.camera) if args.camera else None
     A = shadow_geometry(scene)
     B = project_scene(scene, A, camera=camera)
-    # B["A"] is the stage A itself (contract §5.0.7): written once
-    text = dumps({"A": A, "B": {k: v for k, v in B.items() if k != "A"}}) + "\n"
+    text = dumps({"A": A, "B": _stage_b_without_a(B)}) + "\n"
     if args.output:
         with open(args.output, "w", encoding="utf-8") as fh:
             fh.write(text)
@@ -211,6 +210,11 @@ def _print_receivers(doc: dict) -> None:
         casts = ", ".join(f"{lid}={'yes' if v else 'no'}" for lid, v in r["casts"].items()) or "-"
         default = " (default)" if k == 0 else ""
         print(f"  {r['id']}{default}: {kind}, plane [{plane}]; lit: {lit}; casts: {casts}")
+
+
+def _stage_b_without_a(B: dict) -> dict:
+    """``stages``: ``B["A"]`` is the stage A itself (contract §5.0.7), so B is written without it (A once)."""
+    return {k: v for k, v in B.items() if k != "A"}
 
 
 def build_parser() -> argparse.ArgumentParser:

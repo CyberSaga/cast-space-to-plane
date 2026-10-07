@@ -935,6 +935,11 @@ def test_svg_ids_are_unique_with_several_receivers(label, make):
     ids = re.findall(r'\sid="([^"]*)"', result["svg"])
     dup = [k for k, n in collections.Counter(ids).items() if n > 1]
     assert dup == [], (label, dup)
+    # hidden lines on: the .outline groups follow the same per-receiver scheme (polyhedra included)
+    hidden_ids = re.findall(r'\sid="([^"]*)"', render(make(), hidden_lines=True)["svg"])
+    dup = [k for k, n in collections.Counter(hidden_ids).items() if n > 1]
+    assert dup == [], (label, "hidden lines", dup)
+    assert any(i.endswith(".wall.outline") for i in hidden_ids), label
     receivers = {s["receiver"] for s in result["geometry"]["shadows"] if s.get("conics")}
     if label != "wall_and_ground":
         assert receivers == {"ground", "wall"}
