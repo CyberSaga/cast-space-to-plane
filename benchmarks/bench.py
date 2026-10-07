@@ -369,23 +369,32 @@ def main(argv=None) -> int:
               f"SVG {len(svg) / 1024:.0f} kB, JSON {len(text) / 1024:.0f} kB, warnings {result['warnings']}")
         print(f"repetitions: {args.reps}")
 
-        def row(name, t, target=None):
+        # spec §8 attaches its targets (and §5.1.6.6 its hidden-lines soft target) to the benchmark scene
+        # with one light only; the --lights N >= 2 and --scene mesh10k variants are target-free (§5.0.9,
+        # benchmarks/README.md), so their rows print "no target" instead of a verdict (final review)
+        spec8 = args.scene == "benchmark" and args.lights == 1
+        no_target = "   no target (spec §8: the benchmark scene, one light)"
+
+        def row(name, t, target=None, untargeted=False):
             line = f"  {name:<34} min {min(t) * 1e3:8.1f} ms   median {statistics.median(t) * 1e3:8.1f} ms"
-            if target is not None:
+            if untargeted:
+                line += no_target
+            elif target is not None:
                 line += f"   target < {target * 1e3:6.0f} ms   {'PASS' if min(t) < target else 'FAIL'}"
             print(line)
 
-        row("full render (A+B+C+SVG+JSON)", t_full, TARGET_FULL_S)
-        row("camera-only re-render (B+C+SVG)", t_cam, TARGET_CAMERA_S)
+        row("full render (A+B+C+SVG+JSON)", t_full, TARGET_FULL_S, not spec8)
+        row("camera-only re-render (B+C+SVG)", t_cam, TARGET_CAMERA_S, not spec8)
         row("  same, cyclic GC disabled", t_cam_nogc)
         row("  stage A only", t_stage_a)
         row("  SVG writer only", t_svg)
         row("  JSON dumps only", t_json)
         if args.hidden_lines:
             hl = result["hidden_lines_full_render_s"]
+            verdict = (f"   soft target < {SOFT_TARGET_HIDDEN_S * 1e3:6.0f} ms   "
+                       f"{'pass' if hl['soft_pass'] else 'miss'}" if spec8 else no_target) + " (informational;"
             print(f"  {'full render, hidden lines on':<34} min {hl['min'] * 1e3:8.1f} ms   median "
-                  f"{hl['median'] * 1e3:8.1f} ms   soft target < {SOFT_TARGET_HIDDEN_S * 1e3:6.0f} ms   "
-                  f"{'pass' if hl['soft_pass'] else 'miss'} (informational; SVG "
+                  f"{hl['median'] * 1e3:8.1f} ms{verdict} SVG "
                   f"{result['hidden_lines_svg_bytes'] / 1024:.0f} kB, JSON {result['hidden_lines_json_bytes'] / 1024:.0f} kB)")
         if t_prep is not None:
             row("  mesh preprocessing only", t_prep)

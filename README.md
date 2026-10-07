@@ -116,7 +116,7 @@ B = castplane.project_scene(scene, A, camera=camera, umbra=False)   # umbra[].po
 
 **M6 多光源（合約 §5.3.6）。** `lights` 有兩個以上光源時，`form_shadow`、`cast_shadow`、`construction` 三層改成**每個光源一個子群組**（`form_shadow.<light>`、`cast_shadow.<light>`、`construction.<light>`，依光源 id 的碼位順序）：各光源的影子填色降為 `fill-opacity = 0.3 / N_act`、背光面 `0.18 / N_act`（`N_act` 是在某個受影面上有效的光源數；兩盞時 `0.15` / `0.09`），只被部分光源遮住的區域（半影）因此較淡；**本影**（被所有有效光源都遮住的區域）以一個 `<path>` 畫在 `cast_shadow.umbra`（`fill-opacity="0.3"`、不描邊，每塊凸片一個 `M … Z` 子路徑），被所有光源背光的面畫一次在 `form_shadow.core`（原本的 0.18 色調）。半影不另外存成多邊形：就是各光源子群組露出本影之外的部分。只有一個光源時 SVG 與單光源版本逐位元相同。
 
-**M4 隱藏線（合約 §5.1.8）。** `output.hidden_lines`（或 `--hidden-lines`、`render(..., hidden_lines=True)`）開啟時，每條邊、母線、明暗交界線、圓錐曲線與影子輪廓邊依取樣結果切成可見段與隱藏段：可見段留在原本的群組，隱藏段放進各層**第一個**子群組 `objects.hidden` / `form_shadow.hidden` / `cast_shadow.hidden`，畫成 0.15 mm 虛線（`hidden_style: "dashed"`，預設）或留空（`"omit"`，真正的消隱）；影子的填色不受影響，輪廓改畫在 `cast_shadow.<light>.<object>.outline`。關閉時 SVG 與 v2 位元相同。有界受影面的邊畫在 `objects.<受影面 id>`，板子的影子跟物件的影子一樣在 `cast_shadow.<light>`。
+**M4 隱藏線（合約 §5.1.8）。** `output.hidden_lines`（或 `--hidden-lines`、`render(..., hidden_lines=True)`）開啟時，每條邊、母線、明暗交界線、圓錐曲線與影子輪廓邊依取樣結果切成可見段與隱藏段：可見段留在原本的群組，隱藏段放進各層**第一個**子群組 `objects.hidden` / `form_shadow.hidden` / `cast_shadow.hidden`，畫成 0.15 mm 虛線（`hidden_style: "dashed"`，預設）或留空（`"omit"`，真正的消隱）；影子的填色不受影響，輪廓改畫在 `cast_shadow.<light>.<object>.outline`（落在 `receivers[0]` 以外的受影面 `r` 上的影子是 `cast_shadow.<light>.<object>.<r>.outline`；圓錐曲線影子的 `….conics` 群組同理，例如 `examples/wall_and_ground.json` 的 `cast_shadow.lamp.crate.wall.outline`）。關閉時 SVG 與 v2 位元相同。有界受影面的邊畫在 `objects.<受影面 id>`，板子的影子跟物件的影子一樣在 `cast_shadow.<light>`。
 
 ### JSON 幾何（規格 §6.2）
 

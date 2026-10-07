@@ -1063,3 +1063,32 @@ def test_stages_cli_writes_a_once_and_receiver_frames_as_lists(tmp_path):
     assert isinstance(wall["frame"], list) and len(wall["frame"]) == 2
     assert all(isinstance(e, list) and len(e) == 3 for e in wall["frame"])
     assert isinstance(wall["psi"], list) and len(wall["psi"]) == 4 and all(len(row) == 4 for row in wall["psi"])
+
+
+# --- review fix m4-hidden#0: the construction layer follows receivers[] order, not per_receiver key order ----
+
+@pytest.mark.parametrize("hidden", [False, True])
+@pytest.mark.parametrize("n_lights", [1, 2])
+def test_construction_layer_is_independent_of_per_receiver_key_order(hidden, n_lights):
+    """``write_svg`` of the canonical JSON round trip (``sort_keys``) equals ``write_svg`` of the in-memory
+    document for two bounded receivers whose ids are not in code-point order (``wall`` then ``panel``):
+    the F′_r markers and rays are emitted in ``receivers[]`` order (§5.0.6)."""
+    import copy
+
+    from castplane.output.geometry_json import dumps
+    from castplane.output.svg import write_svg
+    from tests.test_hidden import zbuffer_random_scene
+
+    scene = zbuffer_random_scene(2)
+    assert [r["id"] for r in scene["receivers"]][1:] == ["wall", "panel"]
+    if n_lights == 2:
+        extra = copy.deepcopy(scene["lights"][0])
+        extra["id"] = "zz_second"
+        if "position" in extra:
+            extra["position"] = [p + d for p, d in zip(extra["position"], (0.9, -0.6, 0.4))]
+        scene["lights"].append(extra)
+    doc = castplane.render(castplane.load_scene(scene), hidden_lines=hidden)["geometry"]
+    direct = write_svg(doc)
+    assert "F′wall" in direct and "F′panel" in direct
+    assert direct.index("F′wall") < direct.index("F′panel")
+    assert write_svg(json.loads(dumps(doc))) == direct

@@ -419,3 +419,53 @@ def test_bench_readme_records_the_m6_rows():
     for needle in ("--lights 2", "--lights 3", "--no-umbra", "umbra alone", "record_pieces", "2000-edge",
                    "--gate full", "N = 1"):
         assert needle in section, needle
+
+
+# final review determinism-perf#2: no spec-§8 target is printed for the target-free variants
+# ---------------------------------------------------------------------------
+
+def _rows(text: str) -> dict:
+    return {ln.split(" min ")[0].strip(): ln for ln in text.splitlines() if " min " in ln}
+
+
+@pytest.mark.parametrize("extra", [["--lights", "2"], ["--lights", "3", "--hidden-lines"]])
+def test_bench_target_free_variants_print_no_target(capsys, extra):
+    """§5.0.9 / benchmarks/README.md: no target is attached to N >= 2 (spec §8 names one light) nor to the
+    mesh10k scene, so their full / camera-only / hidden-lines rows say "no target" instead of a PASS/FAIL
+    verdict against the single-light targets."""
+    assert bench.main(["--objects", "4", "-n", "1", "--gate", "none"] + extra) == 0
+    rows = _rows(capsys.readouterr().out)
+    names = ["full render (A+B+C+SVG+JSON)", "camera-only re-render (B+C+SVG)"]
+    if "--hidden-lines" in extra:
+        names.append("full render, hidden lines on")
+    for name in names:
+        assert "no target" in rows[name] and "target <" not in rows[name], rows[name]
+        assert "FAIL" not in rows[name] and "PASS" not in rows[name] and "miss" not in rows[name]
+    bench.main(["--objects", "4", "-n", "1", "--gate", "none", "--hidden-lines"])
+    rows = _rows(capsys.readouterr().out)                                  # the spec §8 variant keeps its targets
+    assert "target <   1000 ms" in rows[names[0]] and "target <    100 ms" in rows[names[1]]
+    assert "soft target <   5000 ms" in rows["full render, hidden lines on"]
+
+
+def test_bench_readme_records_the_mesh10k_hidden_lines_row():
+    """Final review m4-hidden#1: the informational mesh10k hidden-lines row is recorded, with the reason it
+    has no target (§5.1.6.6 is for the spec §8 scene; the brute-force occluder test is permitted by §5.1.6.2)."""
+    text = (ROOT / "benchmarks" / "README.md").read_text(encoding="utf-8")
+    section = text.split("## Final review", 1)[1]
+    assert "--scene mesh10k" in section and "--hidden-lines" in section and "no target" in section
+    assert "§5.1.6.6" in section and "§5.1.6.2" in section and "BVH" in section
+    # second pass: the review measured that a smaller Möller–Trumbore block / an AABB cull do help (2-3x,
+    # result-identical); the note must not claim otherwise, and it names the umbra escape hatch
+    flat = " ".join(section.split())
+    assert "does not help" not in flat and "`_MT_BLOCK`" in flat and "result-identical" in flat
+    assert "O(events × active edges)" in flat and "umbra=False" in flat
+
+
+def test_bench_mesh10k_rows_print_no_target(capsys):
+    """Final review (second pass): the ``--scene mesh10k`` variant is target-free too (§5.2.7 attaches no gate
+    to it; spec §8 names the benchmark scene), so its full and camera-only rows say "no target"."""
+    assert bench.main(["--scene", "mesh10k", "-n", "1", "--gate", "none"]) == 0
+    rows = _rows(capsys.readouterr().out)
+    for name in ("full render (A+B+C+SVG+JSON)", "camera-only re-render (B+C+SVG)"):
+        assert "no target" in rows[name] and "target <" not in rows[name], rows[name]
+        assert "FAIL" not in rows[name] and "PASS" not in rows[name], rows[name]
