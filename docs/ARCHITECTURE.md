@@ -2284,6 +2284,51 @@ dependency (shapely, pyclipper); `float32` or GPU paths.
   (an object without a record for any light still gets one `False` per edge; a flag array of another length raises
   `ValueError`, a caller error, not a scene degeneracy). The USAGE sections of `umbra` / `multilight` are numbered §2.20 /
   §2.21 because M5 owns §2.18 / §2.19.
+- **[decision, implementation] (M6 steps 4–5) Where the hooks sit.** `curved.stage_a_object(..., multi)` stores the flag
+  as `obj["curved"][<r>][<light>]["multi"]` so that stage B composes the terminator segment names
+  (`_terminator_segment_names(oid, t, sil, light_id, multi)`) with the same base names. `_project_polyhedra` also accepts
+  a single light id (the v1 call form). The plates' per-light form shadow and core of §5.1.8 / §5.3.3 are computed by
+  `pipeline._plate_multi` right after `_plate_record` (whose single-light `form_shadow` is left as it is and not used
+  for `N ≥ 2`); the face is projected once. The `rays` `F` entries are taken from the records' `foot_names` (§5.3.2),
+  the same strings as before for every single-light record. **One hunk outside the M6 column of the PLAN table**:
+  `hidden._curved_pairs` (M4's file) pairs the terminator entries per `(object, light)` when the document is
+  multi-light; without it only the first light's entry of a curved object got its `visibility` / `runs` and the
+  other lights' entries kept the switch-off values (`tests/test_multilight.py::test_curved_two_lights_with_hidden_lines_bit_identical`
+  fails on the M4 code). Single-light documents take the unchanged path.
+- **[decision, implementation] (M6 step 6) SVG details §5.3.6 leaves open.** The branch to `svg_multilight` sits in the
+  three layer builders **and** in the two hidden-line builders of `form_shadow` / `cast_shadow` (five one-line `if`s,
+  all on the `constructions` key). `form_shadow.<light>` and `construction.<light>` are written for every key of
+  `constructions` (an empty `<g …/>` when that light has nothing), `cast_shadow.<light>` exactly as in the
+  single-light writer (one per light with `shadows[]` records) with the opacity attribute added; `form_shadow.core`
+  and `cast_shadow.umbra` are always written in a multi-light SVG (empty when there is nothing). With hidden lines on,
+  the `form_shadow.hidden` sub-groups are merged per object (`form_shadow.hidden.<obj>`, first appearance) so that ids
+  stay unique when several lights' terminators of one object have hidden runs. A per-light entry whose `polygons` is
+  not parallel to its `faces` (a plate whose face is clipped away) is drawn whole unless every face is a core face.
+  The `L′` / `F′` marker texts are unchanged for every light (§5.3.6 "unchanged shapes and colours"; the light is told
+  by the enclosing `construction.<light>` group).
+- **[decision, implementation] (M6 step 8) "As a set the result does not depend on the light order" holds for the
+  region, not for the partition.** With coincident edges of different lights (the ground-contact edges every light's
+  loop shares, normal in a scene) step 4 orders them by edge index, i.e. by light order, so the edge that closes a run
+  (step 5) is the later light's; when the coincident edges part in the next slab, the run merge of step 6 continues or
+  restarts depending on which line bounded the run. Measured on the three-light concave case of §5.3.10: 19 pieces in
+  scene order, 16 after permuting the lights; the union area agrees within 1e-9 (relative) and the corner vertices of the
+  union within 1e-9 mm. The tests therefore read "the piece set" as the region (union area + union corner set); the
+  kernel is unchanged (a port reproduces the pieces of the scene order bit for bit, which is what conformance compares).
+- **[decision, implementation] (M6 step 8) Row 2 for the umbra: "the same vertex set" is the corner set of the union.**
+  The slab decomposition is made in the image, so two cameras give different pieces whose extra vertices lie on the
+  union's edges; the test compares the vertices where the union's interior angle is neither `π` nor `2π`. On the
+  acceptance scene they agree within 1e-9 m (and the union areas within 1e-9). On the three-light scene the snapping of
+  §5.3.4 step 1 (≤ `tol_mm` along the image `v` axis, a camera-dependent direction) moves vertices by ~1e-7 m on the
+  ground and kinks very short edges, so its corners are compared at a turning angle > 1e-3 within 1e-6 m (the union
+  areas still agree within 1e-9). Spec §7.1 row 2 itself is about the camera-free shadow records, which are untouched.
+- **[decision, implementation] (M6 step 8) Test fixtures.** §5.3.10 names the curved two-light scene by its objects and
+  lights only; the positions and camera are fixed in `tests/test_multilight.py::curved_scene` (the conformance case
+  `multilight_point_and_directional_curved` should reuse them). `tests/golden/example_basic.svg` was generated on the
+  M4-merged base of the worktree; its sha256 equals the v2 golden hash of `example_basic`, which the M5 branch keeps, so
+  it is the M5-merged base's SVG as well (`.gitignore` gains `!tests/golden/*.svg`). The §5.3.10 `test_umbra.py` rows
+  that need the pipeline (equivariance of the acceptance pieces, three-light union area) live in
+  `tests/test_multilight.py::test_rigid_equivariance_of_the_umbra`. `castplane info` prints `lights: N` and one line per
+  light `<id> (<type>): position|direction (x, y, z); active: <r>=yes|no, …` in place of the v1 `light:` line.
 
 ### 5.4 M7 — TypeScript port of the core and the three.js web UI (spec §9 row "TypeScript 移植", spec §10 M7)
 
