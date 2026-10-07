@@ -59,6 +59,7 @@
    21.14386503651555
   ],
   "light_point_at_infinity": null,
+  "per_receiver": {},
   "rays": [
    [
     "L",
@@ -182,6 +183,7 @@
    "back": false,
    "from": "tower.v0",
    "object": "tower",
+   "runs": [],
    "segment": [
     [
      -13.01444066740331,
@@ -200,6 +202,7 @@
    "back": false,
    "from": "tower.v0",
    "object": "tower",
+   "runs": [],
    "segment": [
     [
      -13.01444066740331,
@@ -218,6 +221,7 @@
    "back": false,
    "from": "tower.v0",
    "object": "tower",
+   "runs": [],
    "segment": [
     [
      -13.01444066740331,
@@ -236,6 +240,7 @@
    "back": true,
    "from": "tower.v1",
    "object": "tower",
+   "runs": [],
    "segment": [
     [
      16.484958178710865,
@@ -254,6 +259,7 @@
    "back": false,
    "from": "tower.v1",
    "object": "tower",
+   "runs": [],
    "segment": [
     [
      16.484958178710865,
@@ -272,6 +278,7 @@
    "back": true,
    "from": "tower.v2",
    "object": "tower",
+   "runs": [],
    "segment": [
     [
      11.463050389169808,
@@ -290,6 +297,7 @@
    "back": true,
    "from": "tower.v2",
    "object": "tower",
+   "runs": [],
    "segment": [
     [
      11.463050389169808,
@@ -308,6 +316,7 @@
    "back": false,
    "from": "tower.v3",
    "object": "tower",
+   "runs": [],
    "segment": [
     [
      -14.936035933731313,
@@ -326,6 +335,7 @@
    "back": false,
    "from": "tower.v4",
    "object": "tower",
+   "runs": [],
    "segment": [
     [
      -14.305128998054878,
@@ -344,6 +354,7 @@
    "back": false,
    "from": "tower.v4",
    "object": "tower",
+   "runs": [],
    "segment": [
     [
      -14.305128998054878,
@@ -362,6 +373,7 @@
    "back": true,
    "from": "tower.v5",
    "object": "tower",
+   "runs": [],
    "segment": [
     [
      18.093246781511922,
@@ -380,6 +392,7 @@
    "back": true,
    "from": "tower.v6",
    "object": "tower",
+   "runs": [],
    "segment": [
     [
      12.452666250105331,
@@ -501,6 +514,7 @@
    "terminator": []
   }
  ],
+ "hidden_lines": false,
  "horizon": {
   "line": [
    0.0,
@@ -728,6 +742,24 @@
    ]
   }
  },
+ "receivers": [
+  {
+   "bounds": null,
+   "casts": {
+    "lamp": false
+   },
+   "id": "ground",
+   "lit": {
+    "lamp": true
+   },
+   "plane": [
+    0.0,
+    0.0,
+    1.0,
+    0.0
+   ]
+  }
+ ],
  "shadows": [
   {
    "conics": [],
@@ -773,6 +805,7 @@
      ]
     }
    ],
+   "polygon_edges": [],
    "polygons": [
     [
      [

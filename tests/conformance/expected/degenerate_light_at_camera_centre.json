@@ -68,6 +68,7 @@
   ],
   "light_point": null,
   "light_point_at_infinity": null,
+  "per_receiver": {},
   "rays": [
    [
     "F",
@@ -247,6 +248,7 @@
    "back": false,
    "from": "crate.v0",
    "object": "crate",
+   "runs": [],
    "segment": [
     [
      -11.664011064449776,
@@ -265,6 +267,7 @@
    "back": true,
    "from": "crate.v0",
    "object": "crate",
+   "runs": [],
    "segment": [
     [
      -11.664011064449776,
@@ -283,6 +286,7 @@
    "back": false,
    "from": "crate.v0",
    "object": "crate",
+   "runs": [],
    "segment": [
     [
      -11.664011064449776,
@@ -301,6 +305,7 @@
    "back": true,
    "from": "crate.v1",
    "object": "crate",
+   "runs": [],
    "segment": [
     [
      11.664011064449776,
@@ -319,6 +324,7 @@
    "back": false,
    "from": "crate.v1",
    "object": "crate",
+   "runs": [],
    "segment": [
     [
      11.664011064449776,
@@ -337,6 +343,7 @@
    "back": true,
    "from": "crate.v2",
    "object": "crate",
+   "runs": [],
    "segment": [
     [
      10.68384206743719,
@@ -355,6 +362,7 @@
    "back": true,
    "from": "crate.v2",
    "object": "crate",
+   "runs": [],
    "segment": [
     [
      10.68384206743719,
@@ -373,6 +381,7 @@
    "back": true,
    "from": "crate.v3",
    "object": "crate",
+   "runs": [],
    "segment": [
     [
      -10.68384206743719,
@@ -391,6 +400,7 @@
    "back": false,
    "from": "crate.v4",
    "object": "crate",
+   "runs": [],
    "segment": [
     [
      -12.050968777488393,
@@ -409,6 +419,7 @@
    "back": false,
    "from": "crate.v4",
    "object": "crate",
+   "runs": [],
    "segment": [
     [
      -12.050968777488393,
@@ -427,6 +438,7 @@
    "back": false,
    "from": "crate.v5",
    "object": "crate",
+   "runs": [],
    "segment": [
     [
      12.050968777488393,
@@ -445,6 +457,7 @@
    "back": false,
    "from": "crate.v6",
    "object": "crate",
+   "runs": [],
    "segment": [
     [
      11.007594857359528,
@@ -566,6 +579,7 @@
    "terminator": []
   }
  ],
+ "hidden_lines": false,
  "horizon": {
   "line": [
    0.0,
@@ -859,6 +873,24 @@
    ]
   }
  },
+ "receivers": [
+  {
+   "bounds": null,
+   "casts": {
+    "lamp": false
+   },
+   "id": "ground",
+   "lit": {
+    "lamp": true
+   },
+   "plane": [
+    0.0,
+    0.0,
+    1.0,
+    0.0
+   ]
+  }
+ ],
  "shadows": [
   {
    "conics": [],
@@ -882,6 +914,7 @@
     "crate.v7.shadow.lamp",
     "crate.v4.shadow.lamp"
    ],
+   "polygon_edges": [],
    "polygons": [
     [
      [

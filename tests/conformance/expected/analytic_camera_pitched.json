@@ -91,6 +91,7 @@
    174.55527247037858
   ],
   "light_point_at_infinity": null,
+  "per_receiver": {},
   "rays": [
    [
     "L",
@@ -586,6 +587,7 @@
    "back": false,
    "from": "a.v0",
    "object": "a",
+   "runs": [],
    "segment": [
     [
      8.098990726232577,
@@ -604,6 +606,7 @@
    "back": false,
    "from": "a.v0",
    "object": "a",
+   "runs": [],
    "segment": [
     [
      8.098990726232577,
@@ -622,6 +625,7 @@
    "back": false,
    "from": "a.v0",
    "object": "a",
+   "runs": [],
    "segment": [
     [
      8.098990726232577,
@@ -640,6 +644,7 @@
    "back": true,
    "from": "a.v1",
    "object": "a",
+   "runs": [],
    "segment": [
     [
      49.37146316357361,
@@ -658,6 +663,7 @@
    "back": false,
    "from": "a.v1",
    "object": "a",
+   "runs": [],
    "segment": [
     [
      49.37146316357361,
@@ -676,6 +682,7 @@
    "back": true,
    "from": "a.v2",
    "object": "a",
+   "runs": [],
    "segment": [
     [
      33.77862412463369,
@@ -694,6 +701,7 @@
    "back": true,
    "from": "a.v2",
    "object": "a",
+   "runs": [],
    "segment": [
     [
      33.77862412463369,
@@ -712,6 +720,7 @@
    "back": false,
    "from": "a.v3",
    "object": "a",
+   "runs": [],
    "segment": [
     [
      -4.738116040005184,
@@ -730,6 +739,7 @@
    "back": false,
    "from": "a.v4",
    "object": "a",
+   "runs": [],
    "segment": [
     [
      8.718301060522343,
@@ -748,6 +758,7 @@
    "back": false,
    "from": "a.v4",
    "object": "a",
+   "runs": [],
    "segment": [
     [
      8.718301060522343,
@@ -766,6 +777,7 @@
    "back": false,
    "from": "a.v5",
    "object": "a",
+   "runs": [],
    "segment": [
     [
      52.98209690150857,
@@ -784,6 +796,7 @@
    "back": false,
    "from": "a.v6",
    "object": "a",
+   "runs": [],
    "segment": [
     [
      36.04221784557398,
@@ -802,6 +815,7 @@
    "back": false,
    "from": "b.v0",
    "object": "b",
+   "runs": [],
    "segment": [
     [
      -105.24973429057633,
@@ -820,6 +834,7 @@
    "back": true,
    "from": "b.v0",
    "object": "b",
+   "runs": [],
    "segment": [
     [
      -105.24973429057633,
@@ -838,6 +853,7 @@
    "back": false,
    "from": "b.v0",
    "object": "b",
+   "runs": [],
    "segment": [
     [
      -105.24973429057633,
@@ -856,6 +872,7 @@
    "back": true,
    "from": "b.v1",
    "object": "b",
+   "runs": [],
    "segment": [
     [
      -69.32775965719328,
@@ -874,6 +891,7 @@
    "back": false,
    "from": "b.v1",
    "object": "b",
+   "runs": [],
    "segment": [
     [
      -69.32775965719328,
@@ -892,6 +910,7 @@
    "back": true,
    "from": "b.v2",
    "object": "b",
+   "runs": [],
    "segment": [
     [
      -77.50719103414353,
@@ -910,6 +929,7 @@
    "back": false,
    "from": "b.v3",
    "object": "b",
+   "runs": [],
    "segment": [
     [
      -116.04457883319954,
@@ -928,6 +948,7 @@
    "back": false,
    "from": "b.v3",
    "object": "b",
+   "runs": [],
    "segment": [
     [
      -116.04457883319954,
@@ -946,6 +967,7 @@
    "back": false,
    "from": "b.v4",
    "object": "b",
+   "runs": [],
    "segment": [
     [
      -76.49077541513206,
@@ -1118,6 +1140,7 @@
    "terminator": []
   }
  ],
+ "hidden_lines": false,
  "horizon": {
   "line": [
    0.0,
@@ -1609,6 +1632,24 @@
    ]
   }
  },
+ "receivers": [
+  {
+   "bounds": null,
+   "casts": {
+    "lamp": false
+   },
+   "id": "ground",
+   "lit": {
+    "lamp": true
+   },
+   "plane": [
+    0.0,
+    0.0,
+    1.0,
+    0.0
+   ]
+  }
+ ],
  "shadows": [
   {
    "conics": [],
@@ -1632,6 +1673,7 @@
     "a.v7.shadow.lamp",
     "a.v3.shadow.lamp"
    ],
+   "polygon_edges": [],
    "polygons": [
     [
      [
@@ -1683,6 +1725,7 @@
     "b.v5.shadow.lamp",
     "b.v3.shadow.lamp"
    ],
+   "polygon_edges": [],
    "polygons": [
     [
      [

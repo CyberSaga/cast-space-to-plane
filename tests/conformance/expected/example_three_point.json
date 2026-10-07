@@ -115,6 +115,7 @@
    104.34826384619382
   ],
   "light_point_at_infinity": null,
+  "per_receiver": {},
   "rays": [
    [
     "L",
@@ -868,6 +869,7 @@
    "back": false,
    "from": "tower.v0",
    "object": "tower",
+   "runs": [],
    "segment": [
     [
      3.977781604150985,
@@ -886,6 +888,7 @@
    "back": false,
    "from": "tower.v0",
    "object": "tower",
+   "runs": [],
    "segment": [
     [
      3.977781604150985,
@@ -904,6 +907,7 @@
    "back": false,
    "from": "tower.v0",
    "object": "tower",
+   "runs": [],
    "segment": [
     [
      3.977781604150985,
@@ -922,6 +926,7 @@
    "back": true,
    "from": "tower.v1",
    "object": "tower",
+   "runs": [],
    "segment": [
     [
      29.38741974488512,
@@ -940,6 +945,7 @@
    "back": false,
    "from": "tower.v1",
    "object": "tower",
+   "runs": [],
    "segment": [
     [
      29.38741974488512,
@@ -958,6 +964,7 @@
    "back": true,
    "from": "tower.v2",
    "object": "tower",
+   "runs": [],
    "segment": [
     [
      22.730125066274457,
@@ -976,6 +983,7 @@
    "back": true,
    "from": "tower.v2",
    "object": "tower",
+   "runs": [],
    "segment": [
     [
      22.730125066274457,
@@ -994,6 +1002,7 @@
    "back": false,
    "from": "tower.v3",
    "object": "tower",
+   "runs": [],
    "segment": [
     [
      -0.2773295261339014,
@@ -1012,6 +1021,7 @@
    "back": false,
    "from": "tower.v4",
    "object": "tower",
+   "runs": [],
    "segment": [
     [
      4.863138773459943,
@@ -1030,6 +1040,7 @@
    "back": false,
    "from": "tower.v4",
    "object": "tower",
+   "runs": [],
    "segment": [
     [
      4.863138773459943,
@@ -1048,6 +1059,7 @@
    "back": false,
    "from": "tower.v5",
    "object": "tower",
+   "runs": [],
    "segment": [
     [
      35.78662875513101,
@@ -1066,6 +1078,7 @@
    "back": false,
    "from": "tower.v6",
    "object": "tower",
+   "runs": [],
    "segment": [
     [
      27.10580928527256,
@@ -1084,6 +1097,7 @@
    "back": false,
    "from": "crate.v0",
    "object": "crate",
+   "runs": [],
    "segment": [
     [
      -61.423214994356464,
@@ -1102,6 +1116,7 @@
    "back": true,
    "from": "crate.v0",
    "object": "crate",
+   "runs": [],
    "segment": [
     [
      -61.423214994356464,
@@ -1120,6 +1135,7 @@
    "back": false,
    "from": "crate.v0",
    "object": "crate",
+   "runs": [],
    "segment": [
     [
      -61.423214994356464,
@@ -1138,6 +1154,7 @@
    "back": false,
    "from": "crate.v1",
    "object": "crate",
+   "runs": [],
    "segment": [
     [
      -42.55169409088431,
@@ -1156,6 +1173,7 @@
    "back": false,
    "from": "crate.v1",
    "object": "crate",
+   "runs": [],
    "segment": [
     [
      -42.55169409088431,
@@ -1174,6 +1192,7 @@
    "back": true,
    "from": "crate.v2",
    "object": "crate",
+   "runs": [],
    "segment": [
     [
      -31.95346154593115,
@@ -1192,6 +1211,7 @@
    "back": false,
    "from": "crate.v2",
    "object": "crate",
+   "runs": [],
    "segment": [
     [
      -31.95346154593115,
@@ -1210,6 +1230,7 @@
    "back": true,
    "from": "crate.v3",
    "object": "crate",
+   "runs": [],
    "segment": [
     [
      -50.00780543983996,
@@ -1228,6 +1249,7 @@
    "back": false,
    "from": "crate.v4",
    "object": "crate",
+   "runs": [],
    "segment": [
     [
      -63.228142228774594,
@@ -1246,6 +1268,7 @@
    "back": false,
    "from": "crate.v4",
    "object": "crate",
+   "runs": [],
    "segment": [
     [
      -63.228142228774594,
@@ -1264,6 +1287,7 @@
    "back": false,
    "from": "crate.v5",
    "object": "crate",
+   "runs": [],
    "segment": [
     [
      -43.8583869158795,
@@ -1282,6 +1306,7 @@
    "back": false,
    "from": "crate.v6",
    "object": "crate",
+   "runs": [],
    "segment": [
     [
      -32.86613563175273,
@@ -1300,6 +1325,7 @@
    "back": false,
    "from": "wedge.v0",
    "object": "wedge",
+   "runs": [],
    "segment": [
     [
      42.82458112662921,
@@ -1318,6 +1344,7 @@
    "back": true,
    "from": "wedge.v0",
    "object": "wedge",
+   "runs": [],
    "segment": [
     [
      42.82458112662921,
@@ -1336,6 +1363,7 @@
    "back": false,
    "from": "wedge.v0",
    "object": "wedge",
+   "runs": [],
    "segment": [
     [
      42.82458112662921,
@@ -1354,6 +1382,7 @@
    "back": true,
    "from": "wedge.v1",
    "object": "wedge",
+   "runs": [],
    "segment": [
     [
      78.62231799902393,
@@ -1372,6 +1401,7 @@
    "back": false,
    "from": "wedge.v1",
    "object": "wedge",
+   "runs": [],
    "segment": [
     [
      78.62231799902393,
@@ -1390,6 +1420,7 @@
    "back": true,
    "from": "wedge.v2",
    "object": "wedge",
+   "runs": [],
    "segment": [
     [
      58.447559549745165,
@@ -1408,6 +1439,7 @@
    "back": false,
    "from": "wedge.v3",
    "object": "wedge",
+   "runs": [],
    "segment": [
     [
      45.5264474437667,
@@ -1426,6 +1458,7 @@
    "back": false,
    "from": "wedge.v3",
    "object": "wedge",
+   "runs": [],
    "segment": [
     [
      45.5264474437667,
@@ -1444,6 +1477,7 @@
    "back": false,
    "from": "wedge.v4",
    "object": "wedge",
+   "runs": [],
    "segment": [
     [
      83.72766332363588,
@@ -1696,6 +1730,7 @@
    "terminator": []
   }
  ],
+ "hidden_lines": false,
  "horizon": {
   "line": [
    0.0,
@@ -2427,6 +2462,24 @@
    ]
   }
  },
+ "receivers": [
+  {
+   "bounds": null,
+   "casts": {
+    "lamp": false
+   },
+   "id": "ground",
+   "lit": {
+    "lamp": true
+   },
+   "plane": [
+    0.0,
+    0.0,
+    1.0,
+    0.0
+   ]
+  }
+ ],
  "shadows": [
   {
    "conics": [],
@@ -2450,6 +2503,7 @@
     "tower.v7.shadow.lamp",
     "tower.v3.shadow.lamp"
    ],
+   "polygon_edges": [],
    "polygons": [
     [
      [
@@ -2503,6 +2557,7 @@
     "crate.v7.shadow.lamp",
     "crate.v4.shadow.lamp"
    ],
+   "polygon_edges": [],
    "polygons": [
     [
      [
@@ -2554,6 +2609,7 @@
     "wedge.v5.shadow.lamp",
     "wedge.v2.shadow.lamp"
    ],
+   "polygon_edges": [],
    "polygons": [
     [
      [

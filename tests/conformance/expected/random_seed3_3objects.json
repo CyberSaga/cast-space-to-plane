@@ -95,6 +95,7 @@
    -257.82342802376564
   ],
   "light_point_at_infinity": null,
+  "per_receiver": {},
   "rays": [
    [
     "L",
@@ -710,6 +711,7 @@
    "back": false,
    "from": "obj0.v0",
    "object": "obj0",
+   "runs": [],
    "segment": [
     [
      -130.47349937381045,
@@ -728,6 +730,7 @@
    "back": true,
    "from": "obj0.v0",
    "object": "obj0",
+   "runs": [],
    "segment": [
     [
      -130.47349937381045,
@@ -746,6 +749,7 @@
    "back": false,
    "from": "obj0.v0",
    "object": "obj0",
+   "runs": [],
    "segment": [
     [
      -130.47349937381045,
@@ -764,6 +768,7 @@
    "back": true,
    "from": "obj0.v1",
    "object": "obj0",
+   "runs": [],
    "segment": [
     [
      -53.76322253012057,
@@ -782,6 +787,7 @@
    "back": false,
    "from": "obj0.v1",
    "object": "obj0",
+   "runs": [],
    "segment": [
     [
      -53.76322253012057,
@@ -800,6 +806,7 @@
    "back": true,
    "from": "obj0.v2",
    "object": "obj0",
+   "runs": [],
    "segment": [
     [
      -131.25722827872423,
@@ -818,6 +825,7 @@
    "back": false,
    "from": "obj0.v3",
    "object": "obj0",
+   "runs": [],
    "segment": [
     [
      -135.7977367653808,
@@ -836,6 +844,7 @@
    "back": false,
    "from": "obj0.v3",
    "object": "obj0",
+   "runs": [],
    "segment": [
     [
      -135.7977367653808,
@@ -854,6 +863,7 @@
    "back": false,
    "from": "obj0.v4",
    "object": "obj0",
+   "runs": [],
    "segment": [
     [
      -52.31346622693444,
@@ -988,10 +998,13 @@
       ]
      ],
      "ellipses": [],
+     "hidden_polylines": [],
      "kind": "ellipse",
      "map": "image",
      "polylines": [],
+     "runs": [],
      "sampled": false,
+     "visibility": "visible",
      "visible": [
       [
        -0.2783377698386711,
@@ -1013,10 +1026,12 @@
        ]
       ]
      ],
+     "runs": [],
      "segment": [
       "obj1.g1.base",
       "obj1.g1.top"
-     ]
+     ],
+     "visibility": "visible"
     },
     {
      "arc": {
@@ -1080,10 +1095,13 @@
       ]
      ],
      "ellipses": [],
+     "hidden_polylines": [],
      "kind": "ellipse",
      "map": "image",
      "polylines": [],
+     "runs": [],
      "sampled": false,
+     "visibility": "visible",
      "visible": [
       [
        2.863254883751122,
@@ -1105,10 +1123,12 @@
        ]
       ]
      ],
+     "runs": [],
      "segment": [
       "obj1.g0.top",
       "obj1.g0.base"
-     ]
+     ],
+     "visibility": "visible"
     }
    ]
   },
@@ -1179,10 +1199,13 @@
       ]
      ],
      "ellipses": [],
+     "hidden_polylines": [],
      "kind": "ellipse",
      "map": "image",
      "polylines": [],
+     "runs": [],
      "sampled": false,
+     "visibility": "visible",
      "visible": [
       [
        -0.9181217124617826,
@@ -1204,10 +1227,12 @@
        ]
       ]
      ],
+     "runs": [],
      "segment": [
       "obj2.g1.base",
       "obj2.apex"
-     ]
+     ],
+     "visibility": "visible"
     },
     {
      "polylines": [
@@ -1222,14 +1247,17 @@
        ]
       ]
      ],
+     "runs": [],
      "segment": [
       "obj2.apex",
       "obj2.g0.base"
-     ]
+     ],
+     "visibility": "visible"
     }
    ]
   }
  ],
+ "hidden_lines": false,
  "horizon": {
   "line": [
    0.0,
@@ -1319,10 +1347,13 @@
       ]
      ],
      "ellipses": [],
+     "hidden_polylines": [],
      "kind": "ellipse",
      "map": "image",
      "polylines": [],
+     "runs": [],
      "sampled": false,
+     "visibility": "visible",
      "visible": [
       [
        0.2092054420252749,
@@ -1394,10 +1425,13 @@
       ]
      ],
      "ellipses": [],
+     "hidden_polylines": [],
      "kind": "ellipse",
      "map": "image",
      "polylines": [],
+     "runs": [],
      "sampled": false,
+     "visibility": "visible",
      "visible": [
       [
        3.2315347891747055,
@@ -1469,10 +1503,13 @@
       ]
      ],
      "ellipses": [],
+     "hidden_polylines": [],
      "kind": "ellipse",
      "map": "image",
      "polylines": [],
+     "runs": [],
      "sampled": false,
+     "visibility": "visible",
      "visible": [
       [
        0.2092054420252749,
@@ -1544,10 +1581,13 @@
       ]
      ],
      "ellipses": [],
+     "hidden_polylines": [],
      "kind": "ellipse",
      "map": "image",
      "polylines": [],
+     "runs": [],
      "sampled": false,
+     "visibility": "visible",
      "visible": [
       [
        3.2315347891747055,
@@ -1561,6 +1601,7 @@
     {
      "back": false,
      "from": "obj1.og0.base",
+     "runs": [],
      "segment": [
       [
        29.62950000300774,
@@ -1571,11 +1612,13 @@
        24.27094920235272
       ]
      ],
-     "to": "obj1.og0.top"
+     "to": "obj1.og0.top",
+     "visibility": "visible"
     },
     {
      "back": false,
      "from": "obj1.og1.base",
+     "runs": [],
      "segment": [
       [
        83.80667444648387,
@@ -1586,7 +1629,8 @@
        20.46545693287674
       ]
      ],
-     "to": "obj1.og1.top"
+     "to": "obj1.og1.top",
+     "visibility": "visible"
     }
    ],
    "object": "obj1"
@@ -1656,10 +1700,13 @@
       ]
      ],
      "ellipses": [],
+     "hidden_polylines": [],
      "kind": "ellipse",
      "map": "image",
      "polylines": [],
+     "runs": [],
      "sampled": false,
+     "visibility": "visible",
      "visible": [
       [
        -0.15243268974266955,
@@ -1731,10 +1778,13 @@
       ]
      ],
      "ellipses": [],
+     "hidden_polylines": [],
      "kind": "ellipse",
      "map": "image",
      "polylines": [],
+     "runs": [],
      "sampled": false,
+     "visibility": "visible",
      "visible": [
       [
        3.282351871070783,
@@ -1748,6 +1798,7 @@
     {
      "back": false,
      "from": "obj2.og0.base",
+     "runs": [],
      "segment": [
       [
        28.677307520875843,
@@ -1758,11 +1809,13 @@
        87.84165161822364
       ]
      ],
-     "to": "obj2.og0.top"
+     "to": "obj2.og0.top",
+     "visibility": "visible"
     },
     {
      "back": false,
      "from": "obj2.og1.base",
+     "runs": [],
      "segment": [
       [
        65.57293998072528,
@@ -1773,7 +1826,8 @@
        87.84165161822364
       ]
      ],
-     "to": "obj2.og1.top"
+     "to": "obj2.og1.top",
+     "visibility": "visible"
     }
    ],
    "object": "obj2"
@@ -3569,6 +3623,24 @@
    ]
   }
  },
+ "receivers": [
+  {
+   "bounds": null,
+   "casts": {
+    "light": false
+   },
+   "id": "ground",
+   "lit": {
+    "light": true
+   },
+   "plane": [
+    0.0,
+    0.0,
+    1.0,
+    0.0
+   ]
+  }
+ ],
  "shadows": [
   {
    "conics": [],
@@ -3590,6 +3662,7 @@
     "obj0.v5.shadow.light",
     "obj0.v2.shadow.light"
    ],
+   "polygon_edges": [],
    "polygons": [
     [
      [
@@ -3681,10 +3754,13 @@
       ]
      ],
      "ellipses": [],
+     "hidden_polylines": [],
      "kind": "ellipse",
      "map": "shadow",
      "polylines": [],
+     "runs": [],
      "sampled": false,
+     "visibility": "visible",
      "visible": [
       [
        -0.2783377698386711,
@@ -3755,10 +3831,13 @@
       ]
      ],
      "ellipses": [],
+     "hidden_polylines": [],
      "kind": "ellipse",
      "map": "shadow",
      "polylines": [],
+     "runs": [],
      "sampled": false,
+     "visibility": "visible",
      "visible": [
       [
        2.863254883751122,
@@ -3908,6 +3987,7 @@
     "obj1.s61.light",
     "obj1.g0.top.shadow.light"
    ],
+   "polygon_edges": [],
    "polygons": [
     [
      [
@@ -4243,10 +4323,13 @@
       ]
      ],
      "ellipses": [],
+     "hidden_polylines": [],
      "kind": "ellipse",
      "map": "shadow",
      "polylines": [],
+     "runs": [],
      "sampled": false,
+     "visibility": "visible",
      "visible": [
       [
        -0.9181217124617826,
@@ -4350,6 +4433,7 @@
     "obj2.g1.base.shadow.light",
     "obj2.apex.shadow.light"
    ],
+   "polygon_edges": [],
    "polygons": [
     [
      [

@@ -127,6 +127,7 @@
    -313.36320577473646
   ],
   "light_point_at_infinity": null,
+  "per_receiver": {},
   "rays": [
    [
     "L",
@@ -1030,6 +1031,7 @@
    "back": false,
    "from": "post.v0",
    "object": "post",
+   "runs": [],
    "segment": [
     [
      -6.671902888073642,
@@ -1048,6 +1050,7 @@
    "back": true,
    "from": "post.v0",
    "object": "post",
+   "runs": [],
    "segment": [
     [
      -6.671902888073642,
@@ -1066,6 +1069,7 @@
    "back": false,
    "from": "post.v0",
    "object": "post",
+   "runs": [],
    "segment": [
     [
      -6.671902888073642,
@@ -1084,6 +1088,7 @@
    "back": true,
    "from": "post.v1",
    "object": "post",
+   "runs": [],
    "segment": [
     [
      6.671902888073642,
@@ -1102,6 +1107,7 @@
    "back": false,
    "from": "post.v1",
    "object": "post",
+   "runs": [],
    "segment": [
     [
      6.671902888073642,
@@ -1120,6 +1126,7 @@
    "back": true,
    "from": "post.v2",
    "object": "post",
+   "runs": [],
    "segment": [
     [
      6.353687206303814,
@@ -1138,6 +1145,7 @@
    "back": true,
    "from": "post.v2",
    "object": "post",
+   "runs": [],
    "segment": [
     [
      6.353687206303814,
@@ -1156,6 +1164,7 @@
    "back": true,
    "from": "post.v3",
    "object": "post",
+   "runs": [],
    "segment": [
     [
      -6.353687206303814,
@@ -1174,6 +1183,7 @@
    "back": false,
    "from": "post.v4",
    "object": "post",
+   "runs": [],
    "segment": [
     [
      -6.87266485253306,
@@ -1192,6 +1202,7 @@
    "back": true,
    "from": "post.v4",
    "object": "post",
+   "runs": [],
    "segment": [
     [
      -6.87266485253306,
@@ -1210,6 +1221,7 @@
    "back": true,
    "from": "post.v5",
    "object": "post",
+   "runs": [],
    "segment": [
     [
      6.87266485253306,
@@ -1228,6 +1240,7 @@
    "back": true,
    "from": "post.v6",
    "object": "post",
+   "runs": [],
    "segment": [
     [
      6.535494300312317,
@@ -1246,6 +1259,7 @@
    "back": false,
    "from": "crate.v0",
    "object": "crate",
+   "runs": [],
    "segment": [
     [
      132.85446889521023,
@@ -1264,6 +1278,7 @@
    "back": false,
    "from": "crate.v0",
    "object": "crate",
+   "runs": [],
    "segment": [
     [
      132.85446889521023,
@@ -1282,6 +1297,7 @@
    "back": false,
    "from": "crate.v0",
    "object": "crate",
+   "runs": [],
    "segment": [
     [
      132.85446889521023,
@@ -1300,6 +1316,7 @@
    "back": true,
    "from": "crate.v1",
    "object": "crate",
+   "runs": [],
    "segment": [
     [
      173.48893076624663,
@@ -1318,6 +1335,7 @@
    "back": false,
    "from": "crate.v1",
    "object": "crate",
+   "runs": [],
    "segment": [
     [
      173.48893076624663,
@@ -1336,6 +1354,7 @@
    "back": true,
    "from": "crate.v2",
    "object": "crate",
+   "runs": [],
    "segment": [
     [
      125.61095486551865,
@@ -1354,6 +1373,7 @@
    "back": true,
    "from": "crate.v2",
    "object": "crate",
+   "runs": [],
    "segment": [
     [
      125.61095486551865,
@@ -1372,6 +1392,7 @@
    "back": false,
    "from": "crate.v3",
    "object": "crate",
+   "runs": [],
    "segment": [
     [
      85.97106408850486,
@@ -1390,6 +1411,7 @@
    "back": false,
    "from": "crate.v4",
    "object": "crate",
+   "runs": [],
    "segment": [
     [
      134.85211975073625,
@@ -1408,6 +1430,7 @@
    "back": false,
    "from": "crate.v4",
    "object": "crate",
+   "runs": [],
    "segment": [
     [
      134.85211975073625,
@@ -1426,6 +1449,7 @@
    "back": false,
    "from": "crate.v5",
    "object": "crate",
+   "runs": [],
    "segment": [
     [
      175.77076731969373,
@@ -1444,6 +1468,7 @@
    "back": false,
    "from": "crate.v6",
    "object": "crate",
+   "runs": [],
    "segment": [
     [
      127.01869678854872,
@@ -1674,10 +1699,13 @@
        "ry": 21.06338197582474
       }
      ],
+     "hidden_polylines": [],
      "kind": "ellipse",
      "map": "image",
      "polylines": [],
+     "runs": [],
      "sampled": false,
+     "visibility": "visible",
      "visible": [
       [
        0.0,
@@ -1755,10 +1783,13 @@
       ]
      ],
      "ellipses": [],
+     "hidden_polylines": [],
      "kind": "ellipse",
      "map": "image",
      "polylines": [],
+     "runs": [],
      "sampled": false,
+     "visibility": "visible",
      "visible": [
       [
        -2.6261272860257483,
@@ -1780,10 +1811,12 @@
        ]
       ]
      ],
+     "runs": [],
      "segment": [
       "spire.g1.base",
       "spire.apex"
-     ]
+     ],
+     "visibility": "visible"
     },
     {
      "polylines": [
@@ -1798,14 +1831,17 @@
        ]
       ]
      ],
+     "runs": [],
      "segment": [
       "spire.apex",
       "spire.g0.base"
-     ]
+     ],
+     "visibility": "visible"
     }
    ]
   }
  ],
+ "hidden_lines": false,
  "horizon": {
   "line": [
    0.0,
@@ -1888,10 +1924,13 @@
        "ry": 26.267625878334353
       }
      ],
+     "hidden_polylines": [],
      "kind": "ellipse",
      "map": "image",
      "polylines": [],
+     "runs": [],
      "sampled": false,
+     "visibility": "visible",
      "visible": [
       [
        0.0,
@@ -1969,10 +2008,13 @@
       ]
      ],
      "ellipses": [],
+     "hidden_polylines": [],
      "kind": "ellipse",
      "map": "image",
      "polylines": [],
+     "runs": [],
      "sampled": false,
+     "visibility": "visible",
      "visible": [
       [
        -3.082500691658989,
@@ -2044,10 +2086,13 @@
       ]
      ],
      "ellipses": [],
+     "hidden_polylines": [],
      "kind": "ellipse",
      "map": "image",
      "polylines": [],
+     "runs": [],
      "sampled": false,
+     "visibility": "visible",
      "visible": [
       [
        0.06574565806111043,
@@ -2061,6 +2106,7 @@
     {
      "back": false,
      "from": "spire.og0.base",
+     "runs": [],
      "segment": [
       [
        -29.520805477372047,
@@ -2071,11 +2117,13 @@
        19.881498539137972
       ]
      ],
-     "to": "spire.og0.top"
+     "to": "spire.og0.top",
+     "visibility": "visible"
     },
     {
      "back": false,
      "from": "spire.og1.base",
+     "runs": [],
      "segment": [
       [
        -3.2907712225248886,
@@ -2086,7 +2134,8 @@
        19.881498539137972
       ]
      ],
-     "to": "spire.og1.top"
+     "to": "spire.og1.top",
+     "visibility": "visible"
     }
    ],
    "object": "spire"
@@ -4086,6 +4135,24 @@
    ]
   }
  },
+ "receivers": [
+  {
+   "bounds": null,
+   "casts": {
+    "sun": false
+   },
+   "id": "ground",
+   "lit": {
+    "sun": true
+   },
+   "plane": [
+    0.0,
+    0.0,
+    1.0,
+    0.0
+   ]
+  }
+ ],
  "shadows": [
   {
    "conics": [],
@@ -4109,6 +4176,7 @@
     "post.v7.shadow.sun",
     "post.v4.shadow.sun"
    ],
+   "polygon_edges": [],
    "polygons": [
     [
      [
@@ -4162,6 +4230,7 @@
     "crate.v7.shadow.sun",
     "crate.v4.shadow.sun"
    ],
+   "polygon_edges": [],
    "polygons": [
     [
      [
@@ -4244,10 +4313,13 @@
        "ry": 8.742605947183462
       }
      ],
+     "hidden_polylines": [],
      "kind": "ellipse",
      "map": "shadow",
      "polylines": [],
+     "runs": [],
      "sampled": false,
+     "visibility": "visible",
      "visible": [
       [
        0.0,
@@ -4393,6 +4465,7 @@
     "ball.s58.sun",
     "ball.s59.sun"
    ],
+   "polygon_edges": [],
    "polygons": [
     [
      [
@@ -4720,10 +4793,13 @@
       ]
      ],
      "ellipses": [],
+     "hidden_polylines": [],
      "kind": "ellipse",
      "map": "shadow",
      "polylines": [],
+     "runs": [],
      "sampled": false,
+     "visibility": "visible",
      "visible": [
       [
        -2.6261272860257483,
@@ -4819,6 +4895,7 @@
     "spire.g1.base.shadow.sun",
     "spire.apex.shadow.sun"
    ],
+   "polygon_edges": [],
    "polygons": [
     [
      [

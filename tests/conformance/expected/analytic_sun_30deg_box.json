@@ -71,6 +71,7 @@
    -922.2089092825031
   ],
   "light_point_at_infinity": null,
+  "per_receiver": {},
   "rays": [
    [
     "L",
@@ -344,6 +345,7 @@
    "back": false,
    "from": "post.v0",
    "object": "post",
+   "runs": [],
    "segment": [
     [
      -4.604905746542609,
@@ -362,6 +364,7 @@
    "back": true,
    "from": "post.v0",
    "object": "post",
+   "runs": [],
    "segment": [
     [
      -4.604905746542609,
@@ -380,6 +383,7 @@
    "back": false,
    "from": "post.v0",
    "object": "post",
+   "runs": [],
    "segment": [
     [
      -4.604905746542609,
@@ -398,6 +402,7 @@
    "back": false,
    "from": "post.v1",
    "object": "post",
+   "runs": [],
    "segment": [
     [
      1.547090742750906,
@@ -416,6 +421,7 @@
    "back": false,
    "from": "post.v1",
    "object": "post",
+   "runs": [],
    "segment": [
     [
      1.547090742750906,
@@ -434,6 +440,7 @@
    "back": true,
    "from": "post.v2",
    "object": "post",
+   "runs": [],
    "segment": [
     [
      4.569104730048594,
@@ -452,6 +459,7 @@
    "back": false,
    "from": "post.v2",
    "object": "post",
+   "runs": [],
    "segment": [
     [
      4.569104730048594,
@@ -470,6 +478,7 @@
    "back": true,
    "from": "post.v3",
    "object": "post",
+   "runs": [],
    "segment": [
     [
      -1.511285363940856,
@@ -488,6 +497,7 @@
    "back": false,
    "from": "post.v4",
    "object": "post",
+   "runs": [],
    "segment": [
     [
      -5.0500631226852875,
@@ -506,6 +516,7 @@
    "back": false,
    "from": "post.v4",
    "object": "post",
+   "runs": [],
    "segment": [
     [
      -5.0500631226852875,
@@ -524,6 +535,7 @@
    "back": false,
    "from": "post.v5",
    "object": "post",
+   "runs": [],
    "segment": [
     [
      1.6979446613290008,
@@ -542,6 +554,7 @@
    "back": false,
    "from": "post.v6",
    "object": "post",
+   "runs": [],
    "segment": [
     [
      5.007038090756128,
@@ -639,6 +652,7 @@
    "terminator": []
   }
  ],
+ "hidden_lines": false,
  "horizon": {
   "line": [
    0.0,
@@ -938,6 +952,24 @@
    ]
   }
  },
+ "receivers": [
+  {
+   "bounds": null,
+   "casts": {
+    "sun": false
+   },
+   "id": "ground",
+   "lit": {
+    "sun": true
+   },
+   "plane": [
+    0.0,
+    0.0,
+    1.0,
+    0.0
+   ]
+  }
+ ],
  "shadows": [
   {
    "conics": [],
@@ -961,6 +993,7 @@
     "post.v4.shadow.sun",
     "post.v5.shadow.sun"
    ],
+   "polygon_edges": [],
    "polygons": [
     [
      [

@@ -46,11 +46,20 @@ def test_switch_off_svg_and_stripped_json_are_byte_identical_to_v2(name):
     recorded_build = GOLDEN["build"].endswith(f"numpy {__import__('numpy').__version__}")
     if recorded_build:
         assert hashlib.sha256(result["svg"].encode("utf-8")).hexdigest() == GOLDEN["sha256"][name]
-    doc = json.loads(dumps(result["geometry"]))
+    full_text = dumps(result["geometry"]) + "\n"
+    doc = json.loads(full_text)
     assert doc["hidden_lines"] is False and len(doc["receivers"]) == 1
     stripped, problems = _regen().strip_new_keys(doc)
     assert problems == []
     expected_text = (ROOT / "tests" / "conformance" / "expected" / f"{name}.json").read_text(encoding="utf-8")
+    if '"hidden_lines":' in expected_text:
+        # after the v4 key-additive regeneration (contract §5.0.8) the expected file carries the M4 keys: the
+        # render equals it byte for byte, and the v2 document is the expected file with the M4 keys stripped
+        if recorded_build:
+            assert full_text == expected_text
+        expected_v2, problems = _regen().strip_new_keys(json.loads(expected_text))
+        assert problems == []
+        expected_text = dumps(expected_v2) + "\n"
     if recorded_build:
         assert dumps(stripped) + "\n" == expected_text
     else:   # another libm: the spec §7.5 tolerances (contract §4) and the SVG structure of the v2 document

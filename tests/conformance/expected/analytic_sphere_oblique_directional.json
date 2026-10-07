@@ -67,6 +67,7 @@
    -642.6943031036443
   ],
   "light_point_at_infinity": null,
+  "per_receiver": {},
   "rays": [
    [
     "L",
@@ -383,10 +384,13 @@
        "ry": 8.332139483241818
       }
      ],
+     "hidden_polylines": [],
      "kind": "ellipse",
      "map": "image",
      "polylines": [],
+     "runs": [],
      "sampled": false,
+     "visibility": "visible",
      "visible": [
       [
        0.0,
@@ -398,6 +402,7 @@
    ]
   }
  ],
+ "hidden_lines": false,
  "horizon": {
   "line": [
    0.0,
@@ -483,10 +488,13 @@
        "ry": 28.440223385812516
       }
      ],
+     "hidden_polylines": [],
      "kind": "ellipse",
      "map": "image",
      "polylines": [],
+     "runs": [],
      "sampled": false,
+     "visibility": "visible",
      "visible": [
       [
        0.0,
@@ -1426,6 +1434,24 @@
    ]
   }
  },
+ "receivers": [
+  {
+   "bounds": null,
+   "casts": {
+    "sun": false
+   },
+   "id": "ground",
+   "lit": {
+    "sun": true
+   },
+   "plane": [
+    0.0,
+    0.0,
+    1.0,
+    0.0
+   ]
+  }
+ ],
  "shadows": [
   {
    "conics": [
@@ -1478,10 +1504,13 @@
        "ry": 13.36415030451481
       }
      ],
+     "hidden_polylines": [],
      "kind": "ellipse",
      "map": "shadow",
      "polylines": [],
+     "runs": [],
      "sampled": false,
+     "visibility": "visible",
      "visible": [
       [
        0.0,
@@ -1627,6 +1656,7 @@
     "ball.s58.sun",
     "ball.s59.sun"
    ],
+   "polygon_edges": [],
    "polygons": [
     [
      [
