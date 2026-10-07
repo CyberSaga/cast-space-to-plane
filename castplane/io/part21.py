@@ -33,6 +33,15 @@ class Part21SyntaxError(ValueError):
         super().__init__(f"{message} at offset {self.offset}")
 
 
+#: Deepest accepted nesting of lists / typed values (real Part 21 files nest at most 3 deep); a
+#: deeper value is a syntax error instead of a ``RecursionError`` (review fix).
+_MAX_NESTING = 64
+
+#: Longest accepted entity id (digits after ``#``; 18 digits stay below 2**63, the integer range of
+#: every Part 21 writer); a longer id is a syntax error instead of an ``int()`` failure (review fix).
+_MAX_REF_DIGITS = 18
+
+
 _TOKEN_RE = re.compile(r"""
       (?P<skip>  \s+ | /\*.*?\*/ )
     | (?P<ref>   \#\d+ )
@@ -58,6 +67,8 @@ def _scan(text: str) -> list:
                 raise Part21SyntaxError(pos, "unterminated string")
             raise Part21SyntaxError(pos, f"unexpected character {text[pos]!r}")
         kind = m.lastgroup
+        if kind == "ref" and m.end() - pos - 1 > _MAX_REF_DIGITS:
+            raise Part21SyntaxError(pos, f"entity id too long (more than {_MAX_REF_DIGITS} digits)")
         if kind != "skip":
             out.append((kind, m.group(), pos))
         pos = m.end()
@@ -70,9 +81,14 @@ def tokenize(text: str) -> list:
 
 
 def _number(tok: str):
+    """``float`` for a token with ``.`` / ``E``; otherwise ``int`` when the value is exactly
+    representable as a double (``|v| < 2**53``), else the correctly rounded ``float`` (``inf``
+    beyond 1e308), so a huge integer literal never reaches ``int()``'s digit limit nor raises
+    ``OverflowError`` later (review fix; non-finite values are rejected by the reader)."""
+    f = float(tok)
     if "." in tok or "E" in tok or "e" in tok:
-        return float(tok)
-    return int(tok)
+        return f
+    return int(tok) if abs(f) < 2.0 ** 53 else f
 
 
 class _Parser:
@@ -80,6 +96,7 @@ class _Parser:
         self.tokens = _scan(text)
         self.end = len(text)
         self.i = 0
+        self.depth = 0
 
     # -- token access -------------------------------------------------------------------------
     def peek(self):
@@ -120,13 +137,23 @@ class _Parser:
             if tok in ("$", "*"):
                 return None
             if tok == "(":
-                return self.args_after_open()
+                return self._nested(off, self.args_after_open)
         if kind == "name":
             self.expect("punct", "(")
-            inner = self.value()
+            inner = self._nested(off, self.value)
             self.expect("punct", ")")
             return (tok, inner)
         raise Part21SyntaxError(off, f"unexpected {tok!r} where a value is expected")
+
+    def _nested(self, off: int, parse_inner):
+        """``parse_inner()`` one nesting level deeper; past :data:`_MAX_NESTING` a syntax error."""
+        if self.depth >= _MAX_NESTING:
+            raise Part21SyntaxError(off, f"nesting too deep (more than {_MAX_NESTING} levels)")
+        self.depth += 1
+        try:
+            return parse_inner()
+        finally:
+            self.depth -= 1
 
     def args_after_open(self) -> list:
         """The comma-separated values after an opening ``(`` up to and including its ``)``."""

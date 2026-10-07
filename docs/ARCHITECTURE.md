@@ -40,21 +40,21 @@ castplane/                  pure library, depends only on numpy (stdlib otherwis
   io/obj.py io/gltf.py io/trimesh_adapter.py   (M5, §5.2.8) mesh file loaders (trimesh = optional extra `mesh`)
   io/part21.py io/step.py   (M8, §5.5.2–§5.5.7) ISO 10303-21 parser and STEP recognisers; tessellate_step needs the optional extra `step`
   io/cli.py                 (M5 + M8, §5.0.2) the one `castplane import` subcommand (mesh and STEP options)
-ts/                         (M7, §5.4) the TypeScript core (ts/src, zero dependencies), node:test suites, ts/bench/camera_only.ts
-web/                        (M7, §5.4.10) the vite + three.js web UI (static build)
-package.json, package-lock.json   (M7) root npm workspace for ts/ and web/
+ts/                         (M7, §5.4, on M7 branch) the TypeScript core (ts/src, zero dependencies), node:test suites, ts/bench/camera_only.ts
+web/                        (M7, §5.4.10, on M7 branch) the vite + three.js web UI (static build)
+package.json, package-lock.json   (M7, on M7 branch) root npm workspace for ts/ and web/
 tests/
   reference/raycast.py      independent ray-casting reference (shares NO code with castplane except reading scene dicts)
   reference/raster.py       nonzero-winding polygon rasterizer for IoU
   reference/random_scenes.py random scene generator (seeded)
   reference/zbuffer.py      (M4, §5.1.11) three-valued per-pixel depth-buffer reference for hidden lines (shares no code with castplane)
-  fixtures/meshes/*, fixtures/step/*   (M5, M8) loader fixtures; tests/golden/example_basic.svg (M6)
+  fixtures/meshes/*, fixtures/step/*   (M5, M8) loader fixtures; tests/golden/example_basic.svg (M6), tests/golden/v2_svg_sha256.json (M4)
   test_*.py                 unit / invariant / analytic / degenerate / property / raycast tests
   conformance/cases/*.json  inputs ; conformance/expected/*.json outputs (§6.2 format) ; test_conformance.py ; README.md ; CHANGELOG.md
   conformance/rules.json    (M7, §5.0.8) the comparator constants shared by the Python and TypeScript runners
   test_ts_port.py           (M7) Python-side checks of the files shared with the TypeScript port
 tools/regen_conformance.py  regenerates expected files; requires --reason, appends a versioned entry to CHANGELOG.md
-                            (+ `--rules-only`, `--strip-new-keys`, §5.0.8); tools/compare_svg.py (M7 dev tool); tools/make_step_fixtures.py (M8, needs OCP)
+                            (+ `--rules-only`, `--strip-new-keys`, §5.0.8); tools/make_mesh_fixtures.py (M5, writes tests/fixtures/meshes/*); tools/compare_svg.py (M7 dev tool, on M7 branch); tools/make_step_fixtures.py (M8, needs OCP)
 benchmarks/bench.py         §8 performance targets (benchmarks/README.md records the measured status)
 benchmarks/scenes/benchmark_100.json   (M7, §5.4.9) the §8 benchmark scene as a committed scene file (bench.py reads it by default); benchmarks/export_scene.py writes it
 examples/*.json             example scenes (the §4 scene is examples/basic.json); examples/README.md
@@ -219,7 +219,7 @@ Curved objects carry `analytic = {kind, base (b), axis (a), e1, e2, radius, heig
 where `(e1, e2, a)` is the rotated local frame.
 
 ### 2.5 Shadow outlines of polyhedra (spec §5.1, §5.7)
-*Amended by §5.1.2 ("counter-clockwise in ground `(x, y)`" reads "counter-clockwise about `n`" in the receiver frame; the ground keeps the literal v2 code) and §5.1.3.3 (bounds clip, anchor rule).*
+*Amended by §5.1.2 ("counter-clockwise in ground `(x, y)`" reads "counter-clockwise about `n`" in the receiver frame; the ground keeps the literal v2 code) and §5.1.3.3 (bounds clip, anchor rule); and, for a loop that crosses the plane through the light four or more times, by the §5.1 implementation note "Arc pairing for a loop with several excursions to infinity" (D70): "the next incoming direction" is then the one matched by the angular order of the loop's crossings, not the loop-order next one, and the polygon splits into one loop per cycle.*
 - Silhouette edges: edges whose two adjacent faces have different `lit`. `silhouette_loops` walks
   them into closed loops oriented with the **lit face on the left** when seen from the light; under `M` such a
   loop maps to a polygon that is **counter-clockwise in ground `(x,y)`** (verified), and the shadow region is
@@ -586,7 +586,7 @@ All rows are additive: every v2 scene validates unchanged. Field paths are as wr
 | --- | --- | --- |
 | `objects[i].type` | one of `box, cylinder, sphere, cone, prism, mesh` (`OBJECT_TYPES`); the loader-only type `step` (`LOADER_TYPES = ("step",)`) is rejected by `validate_object` **before** the `OBJECT_TYPES` test with `SceneError(f"{field}.type", "loader object type 'step' must be expanded first (castplane.io.expand_scene or 'castplane import')")`; unknown types keep the "must be one of …" message | M5, M8 |
 | `objects[i]` (`mesh`) | `data` (inline geometry, §5.2.1) is **required by validation**; `path` / `node` / `up` / `scale` / `weld_tolerance` / `smooth_angle_deg` as §5.2.1. **[decision, synthesis]** A `mesh` object written with `path` and no `data` is a loader-level object exactly like `step`: `validate_object` raises `SceneError(f"{field}.path", "mesh file must be expanded first (castplane.io.expand_scene or 'castplane import')")`; `castplane.io.expand_scene` (§5.0.2) reads the file and fills `data`, keeping `path` as written (informational). In the scene as written at least one of `path` / `data` is present (neither → `SceneError(f"{field}.data", "required")` from `validate_object`); an object carrying **both** is taken as already expanded (`data` is used, `path` is informational) — there is no "both given" error, which is what keeps `expand_scene` idempotent. The usable-face guard and the `up: "y"` axis map of §5.2.1 run in `validate_object` on `data` (numpy only, no file) | M5, M8 |
-| `objects[i].id` / `receivers[i].id` / `lights[i].id` | **[decision, synthesis] reserved ids**: `hidden` is never a valid object, receiver or light id (it is the id of the `objects.hidden` / `form_shadow.hidden` / `cast_shadow.hidden` sub-groups of §5.1.8); in a **multi-light** scene (`len(lights) ≥ 2`) `umbra` and `core` are rejected as light ids (M6, §5.3.0) **and** `core` also as an object id (kept symmetric with the light-id rule so that the prefix `form_shadow.core` names the core group alone; `form_shadow.<light>.<obj>` itself cannot collide with it because a light id is never `core`). Message `"reserved id"`, field the id's own path. Receiver ids are disjoint from object ids (M4) **and from light ids** (§5.0.4: the point-name grammar is parsed from the right against the known light ids and receiver ids) | M4, M6 |
+| `objects[i].id` / `receivers[i].id` / `lights[i].id` | **[decision, synthesis] reserved ids**: `hidden` is never a valid object, receiver or light id (it is the id of the `objects.hidden` / `form_shadow.hidden` / `cast_shadow.hidden` sub-groups of §5.1.8); in a **multi-light** scene (`len(lights) ≥ 2`) `umbra` and `core` are rejected as light ids (M6, §5.3.0) **and** `core` also as an object id (kept symmetric with the light-id rule so that the prefix `form_shadow.core` names the core group alone; `form_shadow.<light>.<obj>` itself cannot collide with it because a light id is never `core`). Message `"reserved id"` for `hidden` (any id kind) and for the object id `core`; `"reserved id in a multi-light scene"` for the light ids `umbra` / `core` (§5.3.0; one string per row, M6 implementation note; final review docs-contract#6); field the id's own path. Receiver ids are disjoint from object ids (M4) **and from light ids** (§5.0.4: the point-name grammar is parsed from the right against the known light ids and receiver ids) | M4, M6 |
 | `receivers` | non-empty list; ids unique, non-empty, no `.`; §5.1.1 rows (`normal` any unit vector, `offset` any number, `bounds` as there, unbounded only at index 0 and only for the ground) | M4 |
 | `lights` | non-empty list of any length; ids unique, non-empty, no `.`; §5.3.0 | M6 |
 | `output.hidden_lines` | boolean, default `false` | M4 |
@@ -706,12 +706,17 @@ only when `project_scene(..., umbra=False)` was used. Serialisation unchanged (�
 **Camera-free parts** (byte-identical for two cameras; amends the M7 list of §5.4.7 for the final format):
 `hidden_lines`, `receivers[]`, `points[*].world / direction / at_infinity` for every name except the camera outline points
 `/\.og\d+\.(base|top)$/`, `edges[].{object, from, to, silhouette, silhouette_lights, smooth}`,
-`shadows[].{light, receiver, object, outline, loops, unbounded}` and `conics[].{conic, kind, arc, circle, map, which}`,
+`shadows[].{light, receiver, object, outline, loops, unbounded}` and `conics[].{arc, circle, map, which}` (of an
+object without `POINT_BEHIND_CAMERA`: §2.6 restricts `arc` to the sub-arcs in front of the near plane and stage B
+drops an arc with nothing in front, so for an object whose conics the near plane cuts — it then carries
+`POINT_BEHIND_CAMERA` — the `conics[]` entry list and `arc` are camera-dependent; final review, second pass),
 `form_shadow[].{object, faces, light}` and `form_shadow_core[].{object, faces}` of **object** entries (a plate's entries exist
 iff the camera faces its unlit side, §5.1.8, so their *presence* is camera-dependent; their `faces` are not), `outlines[].object`,
 `construction.rays` / `per_receiver[*].rays` / `constructions[*].rays`, `umbra[].{receiver, lights}`, the camera-independent
 warning codes. Camera-dependent: everything drawn (`image`, `depth`, `segment`, `polygons`, `polylines`, `arcs`,
 `ellipses`, `visible`, `hidden_polylines`), `back`, `camera_silhouette`, every `visibility` / `runs` / `polygon_edges`,
+`conics[].{conic, kind, sampled}` (the **image** conic `adj(H)ᵀ·C·adj(H)` with `H = P·M·E` for shadows, `P·E` for outlines,
+§2.6, so its class can change with the camera; final review determinism-perf#1),
 `umbra[].polygons`, the rest of `construction*`, `horizon`, `camera`, `outlines[].generators`, the `og` points.
 
 #### 5.0.4 Point-name grammar (unified; amends §3.1)
@@ -730,8 +735,11 @@ L.<light>   F.<light>[.<r>]                 light point, light foot per receiver
 The trailing receiver suffix exists only for receivers other than `receivers[0]` (M4); the light suffix on curved stems
 only when `N ≥ 2` (M6); the light id of a multi-light curved shadow therefore appears twice on purpose
 (`<obj>.sil.0.<light>.shadow.<light>[.<r>]`). Receiver ids are disjoint from object ids and light ids (§5.0.1), so the
-parse is unambiguous. **Labels (SVG)**: a name is unlabelled iff any part **after the first** (the object / receiver id) equals `shadow` or
-`foot`, or its head (the part after the id) is `s<k>` / `og<k>` (so an object called `foot` keeps its labels, as in v2); `L.<light>` and `F.<light>[.<r>]` are labelled through the L/F branch and never set an object's top
+parse is unambiguous. **Labels (SVG)**: a name is unlabelled iff, parsed from the right as above, it is a shadow point
+`<base>.shadow.<light>[.<r>]` or a foot `<base>.foot[.<r>]` (equivalently: a part **after the first** (the object /
+receiver id) equals `shadow` or `foot` as a marker, never as a light id — a light called `shadow` / `foot` keeps its
+`L.`/`F.` and stem labels, §5.3.11; final review m6-umbra#1), or its head (the part after the id) is `s<k>` / `og<k>`
+(so an object called `foot` keeps its labels, as in v2); `L.<light>` and `F.<light>[.<r>]` are labelled through the L/F branch and never set an object's top
 label; `<r>.b<k>` is labelled `b<k>` with the receiver id bold at its highest vertex; a light-dependent curved stem is
 labelled with its `rest` (`sil.0.lamp`).
 
@@ -758,8 +766,8 @@ Layer order and default styles of §2.10 are unchanged. Inside a layer the sub-g
 | --- | --- |
 | `objects` | `objects.hidden` (*iff* `doc.hidden_lines`; sub-groups `objects.hidden.<id>`, §5.1.8), then `objects.<id>` / `.front` / `.back` for every object **and every bounded receiver** (its bounds edges), document order |
 | `form_shadow` | `form_shadow.hidden` (*iff* hidden lines; `form_shadow.hidden.<id>`); then, for `N = 1`: `form_shadow.<id>` / `.terminator`; for `N ≥ 2`: per light `form_shadow.<light>` (`fill-opacity = 0.18 / N_act`) holding `form_shadow.<light>.<obj>` (that light's unlit faces **minus the core faces**) and `.terminator`, then `form_shadow.core` holding `form_shadow.core.<obj>` (§5.3.6). Plates (`<obj>` = receiver id) are ordinary entries |
-| `cast_shadow` | `cast_shadow.hidden` (*iff* hidden lines; `cast_shadow.hidden.<light>`); then per light `cast_shadow.<light>` (`fill-opacity = 0.3 / N_act` *iff* `N ≥ 2`) with `cast_shadow.<light>.<object>.conics` and, *iff* hidden lines, `cast_shadow.<light>.<object>.outline` (§5.1.8: the paths then carry `stroke="none"`); then `cast_shadow.umbra` (*iff* `N ≥ 2`; `fill="#000" fill-opacity="0.3" stroke="none"`, one `<path>` per `umbra[]` entry with non-empty polygons) |
-| `construction` | for `N = 1`: `construction.LP` / `.FQ` / `.PQ` (markers `L'`, `F'` and — M4 — every receiver's `F'_r` marker and its rays in the same three groups; **[decision, synthesis]** no per-receiver sub-group); for `N ≥ 2`: per light `construction.<light>` holding that light's markers and `construction.<light>.LP` / `.FQ` / `.PQ` |
+| `cast_shadow` | `cast_shadow.hidden` (*iff* hidden lines; `cast_shadow.hidden.<light>`); then per light `cast_shadow.<light>` (`fill-opacity = 0.3 / N_act` *iff* `N ≥ 2`) with `cast_shadow.<light>.<object>.conics` and, *iff* hidden lines, `cast_shadow.<light>.<object>.outline` (§5.1.8: the paths then carry `stroke="none"`) for a record on `receivers[0]` (and every record of a v2 document), `cast_shadow.<light>.<object>.<r>.conics` / `cast_shadow.<light>.<object>.<r>.outline` for a record on any other receiver `r` (M4 implementation note "object casting on several receivers"; final review docs-contract#5); then `cast_shadow.umbra` (*iff* `N ≥ 2`; `fill="#000" fill-opacity="0.3" stroke="none"`, one `<path>` per `umbra[]` entry with non-empty polygons) |
+| `construction` | for `N = 1`: `construction.LP` / `.FQ` / `.PQ` (markers `L'`, `F'` and — M4 — every receiver's `F'_r` marker and its rays in the same three groups; **[decision, synthesis]** no per-receiver sub-group; the receivers' markers and rays follow `receivers[]` document order, never the key order of `per_receiver`, which the canonical JSON sorts — final review m4-hidden#0); for `N ≥ 2`: per light `construction.<light>` holding that light's markers and `construction.<light>.LP` / `.FQ` / `.PQ` |
 | `horizon`, `labels` | unchanged (labels per §5.0.4) |
 Light sub-groups are ordered by light id in code-point order (as `cast_shadow.<light>` already is); hidden-run style
 `stroke-width="0.15" stroke-dasharray="0.5 0.5" fill="none"` with the layer's stroke colour; `hidden_style == "omit"`
@@ -1204,7 +1212,9 @@ infinity (eye level) whether or not a ground receiver exists. `stages` (CLI) ser
   `stroke-width="0.15" stroke-dasharray="0.5 0.5" fill="none"` with the layer's stroke colour (`#111`, `#335`, `#000`).
   `hidden_style == "omit"` writes those groups empty (ids kept, nothing drawn) — true hidden-line removal. Cast-shadow
   paths are then written `stroke="none"` and their outline runs stroked in `cast_shadow.<light>.<object>.outline`
-  (`stroke="#000" stroke-width="0.25"`); the fill is unchanged (regions are not subject, §5.1.6.1).
+  (`cast_shadow.<light>.<object>.<r>.outline` for a record on a receiver `r` other than `receivers[0]`, like the
+  `.conics` groups — M4 implementation note "ids with several receivers", final review docs-contract#5;
+  `stroke="#000" stroke-width="0.25"`); the fill is unchanged (regions are not subject, §5.1.6.1).
   `write_svg(doc, layers=None, hidden_style="dashed")`; the hidden groups exist iff `doc["hidden_lines"]` is true.
 
 #### 5.1.9 Warning codes (§2.9 amendment: the closed list grows by one; the table is in §5.0.5)
@@ -1373,7 +1383,7 @@ worktree and the merge rule are in `docs/PLAN-v2.md`.
   the camera's side; a sphere's light-silhouette circle just behind its rim). The same happens on a **face seen
   edge-on**: in the contract's own case `hidden_lines_vp_in_canvas` the camera (`z = 3`) lies exactly in the plane of
   the tower's top face, so the pixel-centre rays beside the hidden top edges see `Z = inf` through the zero-width face.
-  Measured with `guard=False` over the 28 depth-buffer scenes of `tests/test_hidden.py` (77,529 decided samples, 273
+  Measured with `guard=False` over the 29 depth-buffer scenes of `tests/test_hidden.py` (77,529 decided samples, 273
   disagreements): the bare rule fails the ≥ 99 % gate on `hidden_lines_vp_in_canvas` (543 / 618 = 87.9 %),
   `hidden_lines_curved_unbounded` (973 / 984 = 98.9 %), `random_1` (98.7 %) and `random_3` (97.9 %), and it fails the
   **100 % rule on box / prism `edges[]`** ("no silhouette ambiguity there") on `hidden_lines_vp_in_canvas` (467 / 535;
@@ -1449,6 +1459,110 @@ worktree and the merge rule are in `docs/PLAN-v2.md`.
   on` (`hidden_lines_full_render_s: {min, median, target: 5.0, soft_pass}`, `hidden_lines_svg_bytes`,
   `hidden_lines_json_bytes` in `--json`); every other row, `pass` and the exit status stay the switch-off measurement,
   so `--gate full` is unchanged with or without the option.
+- **[decision, implementation] (final review, m4-hidden#0) Receiver order of the construction layer.** `_layer_construction`
+  iterated `construction.per_receiver` in dict order: scene order in memory, code-point order after the canonical JSON
+  round trip (`sort_keys`), so `write_svg(json.loads(dumps(doc)))` differed from `write_svg(doc)` (the `F′wall` /
+  `F′panel` markers and rays swapped) whenever two bounded receivers were not in code-point order — the writer must be a
+  pure function of the document's content (§3, §5.4.6). The F′_r markers and rays are now emitted in `receivers[]`
+  document order (ids missing from `receivers[]`, not produced by the pipeline, last in code-point order); the
+  multi-light path passes `receivers` to the per-light sub-document. The in-memory order was already scene order, so no
+  golden or expected SVG changes. §5.0.6 states the order. Test:
+  `tests/test_receivers.py::test_construction_layer_is_independent_of_per_receiver_key_order`.
+- **[decision, implementation] (review fix, D70) Arc pairing for a loop with several excursions to infinity.** §2.5 /
+  D7 pair each outgoing direction `D_out` with "the next incoming direction" in **loop order** and sweep counter-clockwise
+  by `Δθ ∈ (0, 2π]`. That is exact only when the plane through the light parallel to the receiver cuts the loop twice
+  (every convex caster, every vertical prism on the unbounded ground, the light-in-notch cases with the plate beyond the
+  closed arm: loop order and angular order coincide). When the plane cuts the loop `2p ≥ 4` times — a concave caster
+  with the light between its arms: an arch standing on the ground with the lamp below the lintel, a U-prism on its side
+  with the lamp in the notch, a U on the ground with a wall beyond its **opening**, a U straddling the plane through the
+  lamp parallel to a wall — the crossings of the pairs interleave in angle, the loop-order arcs sweep e.g. 289° + 242°
+  and cover the whole circle, and the nonzero fill blackens the entire ground / plate (review findings m4-geometry#0,
+  determinism-perf#0; on a bounded receiver the §5.1.3.3 anchor rule then faithfully fills the plate, with no warning).
+  Mathematics: the loop is a closed curve on the sphere of directions from the light with the shadow on its left and the
+  light plane as equator; walking the equator counter-clockwise about `n`, the number of solid hits rises by one at every
+  outgoing crossing and falls by one at every incoming one, so the shadowed directions at infinity — the arcs — are fixed
+  by the loop's own crossings and by nothing else (no origin, no reference point). `shadow.shadow_loop` therefore:
+  (1) keeps the literal v1/v2 code for `p ≤ 1` (byte identity; the 50 conformance cases contain no loop with `p ≥ 2`,
+  dry run 0 changes); (2) for `p ≥ 2` sorts the `2p` crossings by angle about `n` (`atan2` in ground `(x, y)`, or in
+  `(e1, e2)` for a receiver with a frame, reduced to `[0, 2π)`; an incoming crossing sorts before an outgoing one at equal
+  angles), starts at the first crossing of minimal running level and matches outgoing (`(`) with incoming (`)`) crossings
+  like parentheses — for a loop that is simple on the sphere this pairs every `D_out` with the **angularly next** `D_in`;
+  (3) sweeps each arc counter-clockwise from `D_out` to its matched `D_in` by the literal v1 expression
+  `(θ_in − θ_out) mod 2π` on the raw `atan2` angles (`2π` when `≤ 1e-12`) plus `2π·round((unwrapped sorted difference −
+  that) / 2π)` whole turns (zero for every loop-order-equivalent pairing, so such loops are bit-identical to the v1 code;
+  second-pass review fix, see the note "Base level of the arcs at infinity" below), subdivided with the unchanged
+  `ceil(Δθ / 60°)` rule and `("arc", k)` sources;
+  (4) re-links the finite chains `in → … → out` through the matched arcs and emits **one loop per cycle** of chains (the
+  cycle holding the loop's start vertex first, in the loop's own vertex order; then the others, each starting at its
+  lowest chain in loop order), every one `{"vertices", "sources", "unbounded": true}` under the new result key `"loops"`
+  (for `p ≤ 1` a one-element list aliasing the top-level arrays, also when the result is empty; the top-level arrays are
+  always the first component). `_shadow_record`, `_fallback_shadow_record` and `_caster_record` draw every component as a
+  loop of the record (its own `clip_polygon_bounds` on a bounded receiver, its own `entries`; crossing names `s<k>` keep
+  first-appearance order over the components; `shadows[].loops` / `polygons` / `polygon_edges` stay parallel). The
+  reviewer's proposal — a signed sum of the dropped vertices' `S[:3]` azimuths — is **not** used: that azimuth is measured
+  from the receiver-frame origin, and the identical arch translated by `(0, 6, 0)` came out as the complement of its
+  shadow; the matching above uses directions only, so the result is translation and rotation invariant
+  (`tests/test_arc_pairing.py`). Only the total sweep of a loop's arcs enters the winding number of a finite point, so the
+  fill is exact for every loop whose region leaves some equator direction free (the minimal level is the outside); a loop
+  whose region covers the whole equator needs an external base level — this **is** reachable with one prism (a spiral
+  prism with the lamp inside at mid-height, `p = 1` or `p ≥ 2`) and is handled by the note "Base level of the arcs at
+  infinity" below. `curved.shadow_polygon_h` is unchanged: a convex solid's silhouette meets the equator at most twice.
+  §2.5 and D7 are amended by reference; the TypeScript port (`src/shadow.ts`) must mirror steps (1)–(4) literally (same
+  sort key, tie rule, minimum-level start, cycle order). Acceptance (ray cast, `tests/test_arc_pairing.py`,
+  `tests/test_raycast.py::test_multi_crossing_loops_match_raycast_reference`): `arch_ground` IoU 1.000 (was 0.075, the
+  whole plane), `u_on_side` 1.000 (was 0.458), `u_notch_wall` 0.994 (was 0.456, the whole plate), `u_wall` wall shadow
+  empty (was the whole 15 m² plate), a concave star with a wall 1.000 (was 0.299); the four scenes are v7 candidates
+  (`tests/fixtures/v7_candidates/`).
+- **[decision, implementation] (second-pass review fix, D70 revision) Base level of the arcs at infinity.** The arcs of
+  `shadow_loop` fix the winding number of the directions at infinity only **relative** to each other: the `p = 1` sweep
+  `(θ_in − θ_out) mod 2π ∈ (0, 2π]` and the `p ≥ 2` minimal-level start both assume that some direction of the light
+  plane (through `L`, parallel to the receiver) misses the lit patch. A spiral prism with the lamp inside at mid-height
+  violates that with primitives only: upright (`p = 1`, the unchanged v1 code) the 1.3-turn arc came out as 108° (ground
+  IoU 0.26 with the ray cast, also on the M8 merge), tilted 15° (`p = 2`) the two matched arcs swept 8° + 36° while every
+  light-plane direction hits the solid (IoU 0.03–0.07; 7 of 331 configurations of the review scan), and on a raised
+  bounded floor plate 0.27. Fix, per record built from the silhouette loops of a closed mesh (`_shadow_record`,
+  `_bounded_object_record` → `_caster_record`; plates and the per-face fallback are planar and never need it, curved
+  records are convex): (1) every `shadow_loop` component now carries `"arcs"`, its `(θ_out, signed sweep)` list in
+  emission order (`_arc_angle` angles); (2) `shadow.light_plane_level(loop mesh, its lit flags, L, π, tol_w, frame)`
+  classifies the vertices like `shadow_loop` (`shadow_w > tol_w` is below the light), takes the `t* = w_a / (w_a − w_b)`
+  crossing of every edge adjacent to a lit face that straddles the light plane, picks `θ_ref` = midpoint of the largest
+  angular gap between their azimuths (sorted `atan2 mod 2π`, wrap gap included, first maximum; the ray then meets no
+  edge), and counts the lit faces the ray `L + t·u(θ_ref)` crosses: a lit face is crossed iff `n_f · u < 0` (its plane
+  is ahead) and an odd number of its straddling edges have their crossing on the left of the ray (`cos θ·y − sin θ·x >
+  0`); `None` for a directional light or when no lit face straddles; (3) `shadow.arc_level(arcs, θ)` is the drawn winding
+  at infinity (a counter-clockwise arc adds `ceil((sweep − r) / 2π)` when `sweep > r = (θ − θ_out) mod 2π`, a clockwise
+  one subtracts the mirrored count); (4) when the record has an unbounded loop and `c = count − Σ arc_level ≠ 0`, the
+  first unbounded loop (silhouette-loop order) is recomputed with `shadow_loop(..., turns=c)`, which adds `2π·c` to the
+  signed sweep of its **first arc emitted** (the start vertex's chain); `_sweep_arc` takes a signed sweep (`ceil(|Δ| /
+  60°)` steps, clockwise when negative; unchanged for `Δ > 0`). The record's loops are one nonzero path (§2.5, the umbra
+  kernel too), so one arc can carry the whole correction; `clip_polygon_bounds` handles sweeps over `2π` (winding is
+  preserved by Sutherland–Hodgman). `c = 0` for every conformance case (byte identity, full suite green without
+  regeneration). Results: upright, tilted and floor-plate spirals IoU 1.000; the review scan 331/331 and the 300-scene
+  concave fuzz (ground + plate) all ≥ 0.98. **Known limit:** a record with **no** unbounded loop cannot carry the
+  correction — a genus-≥ 1 imported mesh (a closed ring) with the lamp in its hole at mid-height, whose top silhouette
+  loop lies entirely above the light and whose bottom loop is bounded, is drawn as the complement of its shadow
+  (`VERTEX_NOT_BELOW_LIGHT` is the only warning; strict xfail
+  `tests/test_arc_base_level.py::test_closed_ring_mesh_with_the_lamp_in_the_hole_is_a_known_limit`); it would need a
+  loop made of directions only. The TypeScript port must mirror (1)–(4) literally (gap rule, parity rule, first
+  unbounded loop, first arc). Fixtures (v7 candidates): `spiral_upright`, `spiral_tilted`, `spiral_floor`,
+  `u_closed_arm_wall` (the `p = 2` loop-order-equivalent wall loop, bit-identical to the v1 code; the previous
+  unwrapped-difference sweep differed in the last ulp of the anchor points). Tests: `tests/test_arc_base_level.py`.
+- **[decision, implementation] (merge of the final review fixes) Conformance v7 and the merged shadow-record code.** The
+  five fix branches (`wt/fix-docs`, `wt/fix-step`, `wt/fix-loaders`, `wt/fix-misc`, `wt/fix-arc`) were merged in that
+  order. `_shadow_record`, `_fallback_shadow_record` and `_caster_record` combine both edits: every component of
+  `shadow_loop(...)["loops"]` (arc pairing, base-level `turns` re-run) is computed with `tol_clip = tol_c`, the mesh
+  receiver-contact tolerance `max(tol, weld_tolerance)` of the §5.2 note (m5-mesh#0); `_caster_record` takes both
+  `tol_contact` and `level_mesh`. The §5.0.8 table gains one row by this note: **v7** — final review merge — expected
+  files: none of the 50 v6 cases change (dry run 0 of 50) — cases added: 10 (`arc_pairing_arch_ground`,
+  `arc_pairing_u_wall`, `arc_pairing_u_notch_wall`, `arc_pairing_u_on_side`, `arc_pairing_u_closed_arm_wall`,
+  `arc_base_level_spiral_upright`, `arc_base_level_spiral_tilted`, `arc_base_level_spiral_floor`,
+  `mesh_noisy_l_ground_contact`, `multilight_mesh_fallback_shared_edges`) — `--case` only, one entry; the candidate
+  scenes of `tests/fixtures/v7_candidates/` were renamed with an `arc_pairing_` / `arc_base_level_` prefix, given a
+  `description`, and the directory removed. `multilight_mesh_fallback_shared_edges` is the first multi-light case
+  outside the four §5.3.10 cases (`tests/test_conformance.py::V7_MULTI_LIGHT_CASES`). The expected set is 2.7 MB of the
+  3 MiB limit of `test_expected_files_are_canonical_and_small`; the next additions should stay small. Also on the
+  merge: `conics.classify` / `classify_and_condition` evaluate `det` / `svd` under `np.errstate(all="ignore")` (a singular
+  centred conic with subnormal entries made numpy warn "divide by zero"; values unchanged, the conic is degenerate).
 
 ### 5.2 M5 — mesh import (spec §9 rows 網格匯入 / 匯入格式, spec §10 M5, spec §11.3)
 
@@ -1965,6 +2079,117 @@ unordered world pairs with equal `silhouette` / `back` flags and `segment` endpo
   this is inside the conformance runs rule (1e-3 in `s`) and is not asserted byte-for-byte. (7) Conformance: the three
   mesh cases were regenerated on the merged branch (they now carry the M4 keys) and the CHANGELOG entry is the one M5
   milestone entry **v5** (0 existing files changed, 3 added; 43 v4 cases with zero drift), §5.0.8 rule 1.
+- **[decision, implementation] (review fixes, loaders) Typed glTF JSON values.** §5.2.8 says every import error is a
+  `SceneError` whose field is the glTF JSON path (exit 2); the loader now checks every JSON value it consumes before
+  numpy or `float()` sees it: `nodes[k].matrix` / `.translation` / `.rotation` / `.scale` must be lists of exactly 16 /
+  3 / 4 / 3 finite numbers (bools rejected; `null`, strings, nested lists, NaN and ±Infinity literals are errors at
+  that key); `nodes[k].children`, `scenes[s].nodes`, `meshes[m].primitives` and
+  `extensions.KHR_lights_punctual.lights` must be lists, `extensions`, its `KHR_lights_punctual` and each light
+  objects; `cameras[c].perspective.yfov` / `.aspectRatio` / `.znear` finite numbers; `primitives[p].mode`,
+  `accessors[k].componentType` integers and `accessors[k].type` a string; a buffer `uri` with a NUL byte is
+  `buffers[k].uri`. As a safety net `read_gltf`, `gltf_context`, `gltf_raw`, `load_gltf` and `import_gltf_parts`
+  turn any remaining `TypeError` / `ValueError` / `KeyError` / `IndexError` / `AttributeError` into
+  `SceneError("", "malformed glTF: <type>: <message>")` (a `mesh` + `path` object reports it at `objects[i].path`), so
+  a malformed file is never a traceback / exit 1. JSON that the parser itself rejects for depth (`RecursionError`)
+  or for the integer digit limit (`ValueError`) is `SceneError("", "invalid glTF JSON: ...")`, and
+  `scene.read_json` / `load_camera` treat every `ValueError` (incl. `UnicodeDecodeError` of a non-UTF-8 file) and
+  `RecursionError` like a `JSONDecodeError`: `SceneError("", "invalid JSON: ...")`.
+- **[decision, implementation] (review fixes, loaders) Accessor and bufferView integers.** `bufferViews[k].byteOffset`
+  / `.byteLength` / `.byteStride` and `accessors[k].byteOffset` must be non-negative integers (bools and floats
+  rejected), each reported at its own JSON path; a negative accessor offset that stayed inside the buffer used to read
+  the neighbouring view's bytes silently. `byteStride` keeps the existing "not smaller than the element size" rule
+  (no [4, 252] range check: an over-long stride is already caught by the "accessor exceeds its buffer view" bound).
+- **[decision, implementation] (review fixes, loaders) Zero accessors are capped.** Note (8) above keeps "an accessor
+  without `bufferView` is zeros", but its `count` is the only allocation not bounded by the file size (a one-integer
+  file asked for terabytes): such an accessor may hold at most `gltf.MAX_ZERO_ACCESSOR_COUNT = 3 · MESH_MAX_FACES`
+  elements (the largest index count a validated mesh can use), else `SceneError(accessors[k].count)`; the check runs
+  before any allocation. An all-zero accessor never yields a usable face, so no valid import is affected.
+- **[decision, implementation] (review fixes, loaders) External buffers are confined to the glTF's directory.**
+  §5.2.8's "external `.bin` relative to the file" is read literally (glTF 2.0 buffer URIs are relative references):
+  the `uri` is split as a URI and percent-decoded; a scheme (`file:`, `http:`), a network location, a query or
+  fragment, an empty path, an absolute path, or a normalised path that leaves the directory of the `.gltf` (`..`) is
+  `SceneError(buffers[k].uri, "... must be a relative path inside the file's directory")`; an existing path that is
+  not a regular file (a directory, `/dev/zero`) is the same field; a **missing** file is still the `OSError` of
+  §5.0.2 (exit 1). `byteLength` is validated first and at most `byteLength` bytes are read (a longer file is not
+  slurped; a shorter one is `buffers[k].byteLength`). §5.2.2's "absolute paths are used as given" concerns the
+  user-written `objects[i].path` of a scene and is unchanged. Before this, a third-party `.gltf` imported with
+  `--inline` could copy any readable file's bytes into the written scene as vertex coordinates.
+- **[decision, implementation] (review fixes, loaders) Linear glTF traversal.** `node_world_matrices` is iterative
+  (climb to the first resolved ancestor, then resolve downwards; same cycle error `nodes[k].children`), so a valid
+  chain deeper than Python's recursion limit loads. `gltf.gltf_context(doc) -> {order, world, first_named}` computes the
+  traversal order, the world matrices and the "first node in traversal order with that name" table once per file;
+  `gltf_raw(doc, buffers, node, *, ctx=None, selected=None)` / `load_gltf(..., ctx=None)` take it,
+  `import_gltf_parts` builds it once (and the parent map once; "an ancestor is already emitted" propagates in
+  traversal order, which visits parents first), and `expand_scene` caches it next to the parsed file, so importing a
+  file with `N` mesh nodes and expanding the importer's `N` `{path, node}` objects are `O(N)` instead of `O(N²)`
+  (2000 nodes: 34 s → well under a second). Results are unchanged (same selections, same ids, same bytes).
+- **[decision, implementation] (review fixes, loaders) trimesh face indices.** `trimesh_adapter.load_trimesh` range-checks
+  the stored face indices like the OBJ and glTF loaders (`face index K is out of range (the file has N vertices)`),
+  so a PLY face naming a missing or negative vertex is `SceneError(objects[i].path)` at expansion instead of
+  `objects[i].data.faces[k]` at validation.
+- **[decision, implementation] (review fixes, mesh) `scale_A` ignores unused vertices.** §5.2.3 step 1 reads
+  "`scale_A = max(1, max extent of the bounding box of V)`"; it is computed over the vertices of `V` **used by at least
+  one face** (`meshprep.used_vertices(V, faces)`, raw indices before the weld, which moves no vertex off its
+  representative's coordinates), in `preprocess_mesh` and in the §5.2.1 usable-face guard `has_usable_face` alike.
+  A vertex used by no face is removed by step 2 and enters neither the record's bbox nor the stage-A scene scale, so it
+  must not scale the degenerate (`1e-12·scale_A²`), zero-volume (`1e-12·scale_A³`) and fallback-area tolerances
+  either: before, a unit box with one stray vertex 1e7 m away was rejected with "no usable face" (and at 1e6 m its
+  tolerances were silently 1e6× looser). Every mesh whose vertices are all referenced (all conformance cases and
+  fixtures) is unchanged. The TypeScript port's `scale_A` must follow (§5.2.9).
+- **[decision, implementation] (review fixes, mesh) Receiver contact tolerance of a mesh object.** §2.3 / §2.8 use
+  `tol = 1e-9·scene_scale` for the receiver-plane predicates. For a `mesh` object a bottom that rests on the receiver
+  only up to import noise (float32 positions, baked glTF node matrices: `|z| ~ 1e-8 … 1e-7` m) straddles that band:
+  vertices below `−tol` were "below", the Sutherland–Hodgman cut of a concave, slightly non-planar bottom face put its
+  crossings at noise-ratio fractions of nearly-in-plane edges and chained a cap across the notch, so the outline of an
+  L-shaped footprint bridged the unshadowed notch (raster IoU 0.91–0.94 against the clean mesh, in 6 of 20 random
+  noise draws) and `OBJECT_BELOW_RECEIVER` was emitted for an object resting on the ground. The **contact tolerance**
+  of an object is now `pipeline._contact_tol(obj, tol) = max(tol, weld_tolerance)` for a `mesh` (its declared "same
+  point" scale, §5.2.1, metres after `scale`; `transform` carries no scale) and `tol` for every other object. It
+  replaces `tol` in exactly the receiver-plane contact predicates, on every receiver: the `OBJECT_BELOW_RECEIVER`
+  vertex test and `clip_mesh_to_plane` of the unbounded ground (`shadow_geometry`) and of `_clip_object`
+  (`obj["clipped"][r]`), the `above` test and the `shadow_loop(..., tol_clip=…)` clip of `_shadow_record`,
+  `_fallback_shadow_record` and `_caster_record` (new keyword `tol_contact`, passed for mesh objects by
+  `_bounded_object_record`; plates keep `tol`). Bounds clips, area tests and every other tolerance are unchanged.
+  A vertex inside the band is "on" the receiver (its own crossing, §2.3), so the noisy L renders the clean L's
+  outline (same names, world points within the noise). Meshes whose bottoms are exact or lifted, and all
+  primitives, are unchanged (no conformance case changes bytes). Known limit: a concave bottom that is non-planar by
+  **more** than `weld_tolerance` is still cut face by face (Sutherland–Hodgman), as any genuinely penetrating
+  geometry is. The TypeScript port's mesh path must use the same contact tolerance (§5.2.9).
+- **[decision, implementation] (review fixes, loaders, second pass) Running mesh size guard and import budget.** The
+  §5.2.1 size guard (`MESH_MAX_VERTICES` / `MESH_MAX_FACES`) is also applied by the glTF loader **while** it assembles
+  one mesh object: `gltf_raw` keeps running vertex / triangle totals and, before a primitive is transformed or
+  appended, raises `SceneError(nodes[k].mesh, "the selected geometry has more than N vertices | triangles (mesh size
+  guard)")` for the node `k` whose primitive crosses the limit (a `mesh` + `path` object reports it at
+  `objects[i].path`, as §5.2.1 asks for file sources). The capped zero accessor of the first pass could still be
+  referenced by any number of primitives or nodes (a 3 KB file allocated > 4 GB). A result over the limit was always
+  rejected by validation, so no valid import is lost; the error now names the glTF field instead of
+  `objects[i].path` / `objects[i].data.vertices` after the allocation. The field is never `node` (that field means
+  "points / lines only" and makes `import_gltf_parts` skip the node). Across objects, `import_gltf_parts` keeps an
+  **import budget** `gltf.IMPORT_MAX_TOTAL_VERTICES = IMPORT_MAX_TOTAL_FACES = 20 · 50000` (twenty objects at the
+  per-object limit): one file instancing a mesh on thousands of nodes would otherwise produce thousands of valid-sized
+  objects before validation (`SceneError(nodes[k].mesh, "... exceed the import budget ...")` at the node of the
+  object that crosses it). This is a new importer limit not in §5.2.8; `expand_scene` of a user-written scene is not
+  budgeted (it has no scene-wide limit). The reviewer's alternative of rejecting a POSITION / indices accessor without
+  `bufferView` was not taken: with the running guard it is bounded, and note (8)'s glTF semantics stay.
+- **[decision, implementation] (review fixes, loaders, second pass) Integers too large for a float.** `gltf._is_number`
+  is total: an integer literal outside the float range (309 to 4300 digits; longer ones are already the parser's
+  digit-limit error) is "not a finite number" at its glTF JSON path, and `OverflowError` joins the safety net's
+  exception list (a primitive parameter in `extras.castplane`, validated by `scene.py`, becomes `SceneError("",
+  "malformed glTF: OverflowError: ...")`). The same crash in `scene._number` for a scene file is outside the loaders.
+- **[decision, implementation] (review fixes, loaders, second pass) Symbolic links in buffer URIs.** The confinement of
+  external buffers compares **resolved** paths as well: `os.path.realpath` of the file's directory and of the
+  normalised buffer path must still be one inside the other, else `SceneError(buffers[k].uri, "... resolves (through a
+  symbolic link) outside the file's directory")`; the regular-file test and the read use the resolved path. A link
+  that stays inside the directory is accepted.
+- **[decision, implementation] (review fixes, loaders, second pass) Non-finite node transforms.** Finite node values
+  can still give a non-finite world matrix or transformed vertex (`matrix = [1e308]*16`, a `1e200` parent scale times a
+  `1e200` child scale); this was reported only at validation (`objects[0].data.vertices[1][0]`, `camera.target[0]`,
+  `lights[0].direction[0]`). Now a mesh node whose world matrix or transformed vertices are not finite is
+  `SceneError(nodes[k])`, a camera / directional light / `extras.castplane` node with a non-finite world matrix is
+  `SceneError(nodes[k])`, and one whose world matrix has a zero column (zero scale, no orientation) is
+  `SceneError(nodes[k].scale | nodes[k].matrix)` (for `extras.castplane` nodes this check precedes the "mirrored
+  node" test, which a zero determinant also failed). A zero-scale **mesh** node is unchanged ("no usable face" at
+  validation). The world-matrix products run under `np.errstate` so no `RuntimeWarning` is printed.
 
 ### 5.3 M6 — multiple lights (amendment to §2.0, §2.3, §2.5–2.10, §3, §3.1, §4)
 
@@ -2142,7 +2367,11 @@ shadow loops of concave prisms), the pairwise convex clip and the per-light unio
    (`np.lexsort`); for every group `g`, `w_g(k)` = Σ `dir` over the first `k + 1` ordered edges of group `g`; interval `k`
    (between ordered edges `k` and `k + 1`) is **inside** iff `w_g(k) ≠ 0` for every group.
 5. **Runs and clamp**: a maximal run of consecutive inside intervals `[k0, k1]` gives one raw piece bounded by edge `k0`
-   on the left and edge `k1 + 1` on the right (intermediate edges are interior to the filled region); with `x^l`, `x^r`
+   on the left and edge `k1 + 1` on the right (intermediate edges are interior to the filled region). **Zero-width
+   bridging** (M6 review, implementation note below): a valid interval `k` with `x_{k+1}(y_m) − x_k(y_m) ≤ tol_mm`
+   (coincident edges, e.g. an edge shared by two loops of one record) does not end a run — a run is a maximal sequence of
+   inside-or-zero-width intervals that holds at least one inside interval, trimmed to its first and last inside
+   interval (`k0`, `k1`); with `x^l`, `x^r`
    the two edges' abscissae: `x_a^lo = min(x^l(a), x^r(a))`, `x_a^hi = max(…)`, likewise at `b` (the per-end clamp absorbs
    a crossing that was merged into a slab boundary, which would otherwise give a bow-tie; the clamped lobe has height
    `≤ tol_mm` and area `≤ ½·tol_mm·D = tol_area/2`); the raw piece is dropped iff `x_a^hi − x_a^lo ≤ tol_mm` **and**
@@ -2369,7 +2598,9 @@ two active lights (`polygons == []`).
 #### 5.3.11 Compromises considered
 Accepted (exact up to `tol_mm`, deterministic, portable): snapping vertex `v` to merged events and the exact-endpoint rule
 (makes coincidences exact instead of ulp-dependent); the per-end clamp (bounded `tol_area/2` lobes); coalescing inside
-intervals and merging runs by line id (a partition with the complexity of the region, not of the slab grid); one
+intervals, bridging zero-width intervals and merging runs by line id (a partition whose size follows the region's runs
+per slab, not the slab grid and not the input edge set — the slab events of every input vertex still split it: an
+`n × n` grid of unit squares in one record gives `n` pieces); one
 intersection scan with a counter per light instead of a fold of pairwise clips (disjoint pieces, light-order independent
 set, no pair matrix); reusing the sampled curved drawables; not materialising penumbra polygons (derivable); `[]` for fewer
 than two active lights (the picture is the v1 one); projecting the union of unlit faces once; keeping the `construction`
@@ -2504,6 +2735,53 @@ dependency (shapely, pyclipper); `float32` or GPU paths.
   entries (`--rules-only` for the two `constructions` paths, then `--case` for the four cases) are numbered v6 / v7 in
   the worktree and collapse into the one v6 milestone entry at the M6 merge (§5.0.8 rule 1). The Python runner's
   `_MM_KEY_PATHS` literal gains the same two paths, so the `rules.json` equality test keeps cross-checking it.
+- **[decision, implementation] (final review, m6-umbra#0) Zero-width bridging in step 5 of §5.3.4.** Two loops of one
+  record that share an edge traverse it in opposite directions; ordered by `(x(y_m), edge index)` the winding passes
+  through 0 on the zero-width interval between the two coincident edges whenever the `−1` edge comes first, which ended
+  the run, and the run merge of step 6 (keyed on line ids) cannot rejoin the pieces. The partition then had the
+  complexity of the input edge set: an `n × n` grid of unit squares gave `n²` pieces, and an M5 per-face fallback mesh
+  (`MESH_NON_MANIFOLD`, all face loops in one record) under two lights gave 5 584 umbra pieces for 672 faces (one region
+  with 29 boundary vertices; 47 697 pieces and +36 MB of JSON at 2 752 faces). Step 5 now bridges such intervals (a valid
+  interval with `x_{k+1}(y_m) − x_k(y_m) ≤ tol_mm` belongs to a run when the run holds an inside interval; the run is
+  trimmed to its first and last inside interval). Measured: grid → `n` pieces (one per row), 672 faces → 27 umbra
+  pieces, 2 752 faces → 55. The filled set grows only by the bridged gaps: two non-crossing edges `≤ tol_mm` apart at
+  `y_m` are `≤ 2·tol_mm` apart on the whole slab, so each bridged sliver has area `≤ 2·tol_mm·D = 2·tol_area` (zero for
+  genuinely shared edges) — the same order as the step-5 clamp lobes. The four v6 conformance cases' `umbra[].polygons`
+  and the benchmark piece counts (3 637 / 3 652 record pieces, 3 514 umbra pieces with `--lights 2`) are bit-identical,
+  so no expected file changes. The TypeScript port of the kernel (M7 phase 2) must mirror the rule; it agrees with the
+  Python kernel on every conformance case either way. Tests: `tests/test_umbra.py::test_shared_edges_do_not_split_the_partition`,
+  `test_triangle_soup_square_is_one_piece`, `test_separate_regions_are_not_bridged`.
+- **[decision, implementation] (final review, m6-umbra#1) Labels of a light called `shadow` / `foot`.** The labels layer
+  applied the §5.0.4 part test to the whole name ("any part after the first equals `shadow` / `foot`"), so a light id
+  `shadow` or `foot` — valid by §5.0.1 / §5.3.11 — silently lost its `L.<light>`, `F.<light>[.<r>]` and
+  `<obj>.sil.<k>.<light>` labels. `svg._is_shadow_or_foot_name(name, lights, receivers, multi)` now parses the name from
+  the right against the document's light ids (keys of `constructions`, `shadows[].light`, `receivers[].lit`, the
+  `L.` / `F.` names) and receiver ids: after an optional trailing receiver id the name ends in `.foot` or in
+  `.shadow.<light>`; `L.<light>`, `F.<light>[.<r>]` and, in a multi-light document, the stems `<obj>.sil.<k>.<light>` /
+  `<obj>.g<k>.base|top.<light>` are never shadow / foot names. For every document whose light ids are not `shadow` /
+  `foot` the decision equals the old part test (checked on all 50 conformance cases and the examples, hidden lines on
+  and off: 8 312 names, 0 differences), so no golden or expected file changes. The §5.0.4 label sentence is amended
+  accordingly; the TS writer (§5.4.6) must use the same parse. Test:
+  `tests/test_multilight.py::test_light_ids_shadow_and_foot_keep_their_labels`.
+- **[decision, implementation] (final review, determinism-perf#2 / m4-hidden#1) Benchmark rows without a target.**
+  `benchmarks/bench.py` printed the single-light spec §8 verdicts (`target < 1000 ms FAIL`, `< 100 ms FAIL`, `soft target
+  < 5000 ms miss`) on the `--lights 2|3` and `--scene mesh10k` rows, to which §5.0.9 / §5.3.9 / §5.2.7 attach no target.
+  Those rows now print `no target (spec §8: the benchmark scene, one light)`; the `--json` output and the exit status
+  (`--gate`) are unchanged. The mesh10k hidden-lines row (≈ 5.8 s on the container, brute-force Möller–Trumbore in
+  `hidden._first_mesh`, which §5.1.6.2 permits) is recorded in `benchmarks/README.md` as informational; no BVH is added.
+  Tests: `tests/test_bench.py::test_bench_target_free_variants_print_no_target`,
+  `test_bench_readme_records_the_mesh10k_hidden_lines_row`.
+- **[decision, implementation] (final review, second pass of group 'misc') Cost of the bridged kernel; the mesh10k
+  occluder block.** Zero-width bridging (m6-umbra#0 above) fixes the piece count of a per-face fallback mesh under
+  `N ≥ 2` lights, not its time: the slab events of every input vertex remain, so the kernel still costs
+  O(events × active edges) — measured on the open UV-sphere shell under two point lights, umbra time in stage B 0.11 s
+  (672 faces), 0.38 s (1 488), 0.81 s (2 752; 1.69 s before the bridging) against 0.02 s for stage B without the umbra.
+  `project_scene(..., umbra=False)` (§5.3.3) stays the escape hatch for such meshes with 10k+ faces; no kernel change.
+  For the mesh10k hidden-lines row (determinism-perf#2 / m4-hidden#1 above) a smaller `hidden._MT_BLOCK` (2^17 instead
+  of 2^21) or a mesh-AABB-clipped per-block triangle cull are result-identical options measured at 2–3× faster
+  (`_MT_BLOCK = 1 << 17`: byte-identical document, 4.29 s instead of 5.93 s, peak RSS 120 MB instead of 468 MB); not
+  implemented, recorded in `benchmarks/README.md`. Tests: `tests/test_bench.py::test_bench_mesh10k_rows_print_no_target`,
+  `test_bench_readme_records_the_mesh10k_hidden_lines_row`.
 
 ### 5.4 M7 — TypeScript port of the core and the three.js web UI (spec §9 row "TypeScript 移植", spec §10 M7)
 
@@ -2858,7 +3136,10 @@ const out   = render(scene, camera?, hidden_lines?, hidden_style?, umbra?);   //
   they exist only for the current camera and their world coordinates move with it — verified on `examples/curved_demo.json`:
   6 of 8 `og` points differ between the scene camera and the test camera, every other point is identical — and the two key
   sets agree after removing those names; `edges[].{object, from, to, silhouette}`; `shadows[].{light, receiver, object,
-  outline, loops, unbounded}` and every `conics[].{conic, kind, arc, circle, map, which}`; `form_shadow[].{object, faces}`
+  outline, loops, unbounded}` and every `conics[].{arc, circle, map, which}` (not `conic` / `kind` / `sampled`: the image
+  conic depends on `P`, §2.6, §5.0.3; and only for an object without `POINT_BEHIND_CAMERA`: when the near plane cuts
+  an object's conics the entry list itself and `arc` change with the camera, §5.0.3, so a test compares entries by
+  index only when both lists have the same length and neither render warns `POINT_BEHIND_CAMERA` for the object); `form_shadow[].{object, faces}`
   and the terminator entries' `segment` names; `outlines[].object`; `construction.rays`; `warnings` restricted to the codes
   that are not camera predicates — `CAMERA_LOOKING_ALONG_UP`, `LIGHT_BEHIND_CAMERA`, `LIGHT_POINT_AT_INFINITY`,
   `SHADOW_VP_AT_INFINITY`, `POINT_BEHIND_CAMERA`, `CONSTRUCTION_CHECK_SKIPPED` are camera-dependent).
@@ -3771,6 +4052,17 @@ and the hidden-run SVG groups (§5.1.8). Nothing an M4–M6 case needs lies beyo
     hosted `ts` CI run decides it by the step-7 rule; at ≥ 70 ms `ci.yml` switches to `--gate full`, the number
     goes into `benchmarks/README.md`, and `test_ci_runs_the_port_and_the_web_ui_with_the_recorded_gate` changes
     in the same commit.
+- **[decision, implementation] (final review, second pass of group 'misc') Camera-free conic fields need the object in
+  front of the near plane.** The §5.0.3 / §5.4.7 lists called `conics[].{arc, circle, map, which}` camera-free, which
+  assumes both cameras produce the same entries. §2.6 restricts `arc` to the sub-arcs in front of the near plane and
+  stage B (`curved.arc_record` → `None`) drops an arc with nothing in front, so a camera whose near plane cuts an
+  object's conics changes that object's `conics[]` entry list and `arc` — e.g. `examples/curved_demo.json` with the
+  camera at `(0, 3, 0.4)` looking at `(3, 3, 0.4)` gives the drum's shadow 1 conic instead of 2 (its `top` arc cut to
+  `[−0.337, 0.402]`), and `examples/basic.json` loses both pillar shadow conics. Every such object carries
+  `POINT_BEHIND_CAMERA`. Code unchanged (this is the §2.6 drawing rule); both lists now restrict the claim to objects
+  without that warning, and a cross-implementation test compares conic entries by index only when both lists have the
+  same length and neither render warns `POINT_BEHIND_CAMERA` for the object. Test:
+  `tests/test_contract_wording.py::test_camera_free_conic_fields_need_an_object_in_front_of_the_near_plane`.
 
 ### 5.5 M8 — STEP import (spec §9 row "STEP", spec §10 M8) — a loader, outside the core
 
@@ -4360,3 +4652,61 @@ LGPL-2.1；確定性只到 OCC 版本；頂點重建誤差 1.4e-9 mm；OCP 8 的
   raises `SceneError("--id")` on a clash instead of renaming it (§5.2.8 (4): an explicit `--id` is never renamed).
   With `--into SCENE`, a present non-list `objects` is `SceneError("objects", "must be a non-empty list")` (the
   `validate_scene` message) before the import is assembled, not `objects[0]`.
+- **[decision, implementation] (final review fix m8-step#0, #3) Mesh fallback: which OCC solid, read once
+  (§5.5.6, §5.5.7).** The note "Mesh fallback in multi-solid files" above is **superseded**: OCC's
+  `TopAbs_SOLID` explorer order follows the assembly (`NEXT_ASSEMBLY_USAGE_OCCURRENCE`) structure, not the
+  entity ids, so a consistently renumbered file (the two `MANIFOLD_SOLID_BREP` ids exchanged) meshed the
+  *other* solid (one solid dropped, a recognised one emitted twice, silently). The unrecognised solid `ref`
+  is now transferred by itself: `STEPControl_Reader.TransferOne(record)` with `record` = the 1-based file
+  position of `ref` in `part21.parse`'s entity table (OCC numbers its model records by file position;
+  `TransferBRep` is not bound in cadquery-ocp 8.0.1.1.0 and `Model().IdentLabel()` returns 0, so the
+  id-based lookup is unavailable). Guards, each a `StepError` at the entity: `Model().NbEntities()` must
+  equal the number of parsed records and record `record` must be a `StepShape_ManifoldSolidBrep`
+  ("OCP numbers the records … differently"); every `VERTEX_POINT` reachable from `ref` (× cascade divisor /
+  `unit_divisor`) must lie within `max(tol · scale, 1e-9)` of a vertex of the transferred solid ("the OCP solid
+  does not match the file's vertex …"; one-way, because OCC rebuilds a `VERTEX_LOOP` sphere with two pole
+  vertices; the guard also fires for a hand-written multi-solid file whose `MANIFOLD_SOLID_BREP`s hang in no
+  shape representation, where OCC transfers the solid without its unit context — such a file already failed
+  before, `TransferRoots` finding nothing). A single-solid file is still tessellated whole (`TransferRoots` / `OneShape`), byte-identical to
+  `tessellate_step`. The file is read by OCP **once per `import_step` call** (lazily, at the first
+  unrecognised solid), not once per solid: 120 frustums 24.5 s → 1.9 s. The per-solid deflection rule is
+  unchanged and the meshes are byte-identical to the previous ones on every file whose explorer order equals
+  the entity order (all fixtures; two_solids 170 / 164 and 1447 / 2836).
+- **[decision, implementation] (final review fix m8-step#1, #2) Part 21 limits (§5.5.2).** Values nest at
+  most **64** levels deep (lists and typed values; real files nest ≤ 3): a deeper value is
+  `Part21SyntaxError(offset, "nesting too deep (more than 64 levels)")`, i.e. `StepError("syntax: …")`
+  (exit 2) instead of a `RecursionError` traceback (exit 1); `import_step` also maps a stray `RecursionError`
+  to `StepError("syntax: nesting too deep")`. An entity id has at most **18** digits (below 2⁶³): a longer
+  `#…` is `Part21SyntaxError("entity id too long …")`. An integer token (no `.` / `E`) becomes `int` only
+  when `|v| < 2⁵³` (exactly representable); otherwise the correctly rounded `float` (`inf` past 1e308) —
+  a deviation from the literal "otherwise with `int()`" of §5.5.2, needed because `int()` raises
+  `ValueError` beyond 4 300 digits and an `int` past 1e308 raises `OverflowError` in `float()`. Such a
+  number in a coordinate is then rejected by the non-finite checks (`_num`; `_tolerance`, next note).
+- **[decision, implementation] (final review fix m8-step#4, #5) Radii and non-finite coordinates
+  (§5.5.4).** A `CYLINDRICAL_SURFACE` / `SPHERICAL_SURFACE` radius ≤ 0, a `CONICAL_SURFACE` radius < 0
+  (ISO 10303-42 allows 0 for a cone placed at its apex; the verifier's "same check for the cone" would have
+  rejected that valid file) and a 3-D `CIRCLE` edge radius ≤ 0 are `StepError("#n: <SURFACE> radius must be
+  > 0 (≥ 0 for the cone), found …")` at that entity, raised while the faces are read (so also with
+  `fallback="mesh"`), instead of an emitted `radius ≤ 0` rejected later by `validate_scene` at an
+  `objects[i].radius` the user's `step` object does not have. A non-finite coordinate in **any**
+  `CARTESIAN_POINT` (also 2-D pcurve points, which §5.5.4's extent still scans) is `StepError("#n: non-finite
+  coordinate inf")` naming the point, instead of `tol = inf` blaming the geometry ("zero height").
+- **[decision, implementation] (second review of m8-step) The mesh fallback hands OCC only resolvable
+  references (§5.5.7).** cadquery-ocp 8.0.1.1.0 dereferences an unresolved reference during the transfer
+  without a check, and the interpreter dies with a segmentation fault (rc 139; not catchable): a missing
+  entity inside the solid, or an entity renumbered to `#0` (OCC reads id 0 as "no entity"). Before the
+  first OCP call of an unrecognised solid, `import_step` therefore checks the records OCC is about to
+  transfer: the whole file for a single-solid file (`TransferRoots`), the records reachable from the
+  `MANIFOLD_SOLID_BREP` for a multi-solid file (`TransferOne`). Each `#n` argument value must name a
+  defined entity by **numeric** id (`#091` defines `#91`, as in OCC) other than 0, else
+  `StepError("#m: unsupported: reference #n (does not exist)")` (`… (OCP numbers entities from #1)` for
+  `#0`) at the referring record `#m`. An unreferenced `#0` record and a dangling reference outside the
+  transferred records are accepted (OCC ignores them). The recognisers and `fallback="error"` are
+  unchanged. Known limit, not guarded: OCC also crashes on a reference to an entity of the **wrong
+  type** or a number / `$` / enumeration where a reference is required (e.g. `LINE('',#74,#74)` with
+  `#74` a `VECTOR`); catching that needs the ISO 10303-42 schema or running OCP in a child process, both
+  out of proportion for the prototype fallback; recorded in docs/STEP.md §9. The radius checks of
+  m8-step#4 stay ahead of the fallback decision (a reviewer asked whether a zero-radius degenerate
+  `CIRCLE` should be meshed instead): `CIRCLE.radius` is a `positive_length_measure` in ISO 10303-42, no
+  file in the repository has one, and OCC meshes a frustum whose 3-D top `CIRCLE` has radius 0 into 5
+  triangles without complaint, so the error is the safer answer.

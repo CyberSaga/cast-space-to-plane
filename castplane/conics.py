@@ -225,7 +225,8 @@ def classify(C, tol: float = CLASSIFY_TOL) -> str:
     An = A / amax
     det2 = float(An[0, 0] * An[1, 1] - An[0, 1] * An[1, 0])
     Cc, _centre = centred_conic(N)
-    det3 = float(np.linalg.det(Cc))
+    with np.errstate(all="ignore"):   # LU of a singular matrix with subnormal entries warns; det is then 0
+        det3 = float(np.linalg.det(Cc))
     if not math.isfinite(det3) or abs(det3) <= tol:
         return "degenerate"
     if abs(det2) <= tol:
@@ -248,8 +249,9 @@ def classify_and_condition(C, tol: float = CLASSIFY_TOL, normalized: bool = Fals
     Cc, _centre = centred_conic(N, normalized=True)
     if not np.all(np.isfinite(Cc)):
         return "degenerate", math.inf
-    det3 = float(np.linalg.det(Cc))
-    sv = np.linalg.svd(Cc, compute_uv=False)
+    with np.errstate(all="ignore"):   # LU of a singular matrix with subnormal entries warns; det is then 0
+        det3 = float(np.linalg.det(Cc))
+        sv = np.linalg.svd(Cc, compute_uv=False)
     cond = math.inf if sv[-1] <= 0.0 else float(sv[0] / sv[-1])
     if not math.isfinite(det3) or abs(det3) <= tol:
         return "degenerate", cond

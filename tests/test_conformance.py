@@ -756,6 +756,8 @@ def test_comparator_on_a_multi_light_document():
 
 M6_CASES = ("multilight_two_point_symmetric_box", "multilight_point_and_directional_curved",
             "multilight_three_lights_concave_prism", "multilight_second_light_inactive")
+#: v7 (final review fixes): the multi-light case added with the umbra bridging fix m6-umbra#0
+V7_MULTI_LIGHT_CASES = ("multilight_mesh_fallback_shared_edges",)
 
 
 def test_constructions_paths_are_image_paths():
@@ -782,7 +784,7 @@ def test_m6_cases_are_multi_light_documents():
         lights = load_scene(CASES / f"{name}.json")["lights"]
         multi = len(lights) >= 2
         assert all((k in doc) == multi for k in m6_keys), name
-        assert multi == (name in M6_CASES), name
+        assert multi == (name in M6_CASES or name in V7_MULTI_LIGHT_CASES), name
         if multi:
             assert doc["construction"] == doc["constructions"][lights[0]["id"]], name
             assert all("light" in e for e in doc["form_shadow"]) and all("silhouette_lights" in e for e in doc["edges"])

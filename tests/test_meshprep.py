@@ -517,3 +517,47 @@ def test_has_usable_face_is_the_validation_guard():
     from castplane import scene
     src = inspect.getsource(scene)
     assert "import numpy" not in src and "np." not in src          # one import style: scene.py stays numpy-free
+
+
+def test_usage_states_the_smoothing_group_rule_of_classify_edges():
+    """m5-mesh#2: inside one non-zero smoothing group every edge is smooth whatever the dihedral angle
+    (contract §5.2.3 step 7, D36); docs/USAGE.md must say so instead of "angle below AND same group"."""
+    import pathlib
+
+    from castplane.mesh import cylinder_mesh
+
+    cyl = cylinder_mesh(1.0, 1.0, 16)
+    data = {"vertices": cyl["vertices"].tolist(), "faces": cyl["faces"], "smooth_groups": [1] * len(cyl["faces"])}
+    mesh = preprocess_mesh(data, 1.0, 1e-6, 30.0, "m")[0]
+    assert bool(mesh["edge_smooth"].all())                     # incl. the 90-degree cap rims
+    data["smooth_groups"] = [0] * len(cyl["faces"])
+    assert int(preprocess_mesh(data, 1.0, 1e-6, 30.0, "m")[0]["edge_smooth"].sum()) == 16
+    usage = (pathlib.Path(__file__).resolve().parents[1] / "docs" / "USAGE.md").read_text(encoding="utf-8")
+    row = next(line for line in usage.splitlines() if line.startswith("| `smooth_angle_deg` |"))
+    assert "（且平滑群組相同）" not in row
+    assert "同一個非零平滑群組的邊一律平滑" in row and "兩面都無群組時" in row
+
+
+@pytest.mark.parametrize("far", [1e6, 1e7, 1e12])
+def test_an_unused_far_vertex_does_not_widen_scale_a(far):
+    """m5-mesh#1: ``scale_A`` is the bbox of the vertices used by a face; a stray vertex (dropped by
+    the weld's compaction, absent from the record bbox) must not make validation reject a unit box
+    ("no usable face") nor loosen the tolerances."""
+    import copy
+    import json
+    import pathlib
+
+    from castplane import load_scene, render
+
+    stray = CUBE_V + [[far, 0.0, 0.0]]
+    out = preprocess_mesh({"vertices": stray, "faces": CUBE_F}, 1.0, 1e-6, 30.0, "m", return_scale=True)
+    assert out[5] == 1.0 and out[4] == []
+    assert meshprep.has_usable_face(stray, CUBE_F, 1.0, 1e-6)
+    base = json.loads((pathlib.Path(__file__).resolve().parents[1] / "tests" / "conformance" / "cases"
+                       / "analytic_unit_box_point_light_overhead.json").read_text(encoding="utf-8"))
+    docs = []
+    for verts in (CUBE_V, stray):
+        sc = copy.deepcopy(base)
+        sc["objects"] = [{"id": "m", "type": "mesh", "data": {"vertices": verts, "faces": CUBE_F}}]
+        docs.append(render(load_scene(sc))["geometry"])
+    assert docs[0] == docs[1]

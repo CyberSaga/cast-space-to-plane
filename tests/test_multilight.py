@@ -1085,3 +1085,40 @@ def test_mesh_scenes_with_two_lights_bit_identical(case):
     doc = assert_per_light_bit_identical(raw)
     assert doc["umbra"][0]["lights"] == [first["id"], "second"] and doc["umbra"][0]["polygons"]
     assert umbra_from_document(json.loads(js(doc))) == doc["umbra"]
+
+
+# --- review fix m6-umbra#1: light ids `shadow` / `foot` keep their labels (names parsed from the right) ----
+
+def _label_texts(scene) -> list:
+    from castplane.output.svg import write_svg
+    doc = castplane.render(load_scene(scene))["geometry"]
+    return sorted(re.findall(r">([^<]*)</text>", write_svg(doc, layers=["labels"])))
+
+
+def _wall_two_lights():
+    s = json.loads((pathlib.Path(__file__).resolve().parents[1] / "examples" / "wall_and_ground.json").read_text())
+    extra = copy.deepcopy(s["lights"][0])
+    extra["id"] = "second"
+    extra["position"] = [p + d for p, d in zip(extra["position"], (0.7, -0.4, 0.3))]
+    s["lights"].append(extra)
+    return s
+
+
+@pytest.mark.parametrize("make", ["curved", "basic", "wall", "wall2"])
+@pytest.mark.parametrize("reserved", ["shadow", "foot"])
+def test_light_ids_shadow_and_foot_keep_their_labels(make, reserved):
+    """§5.0.4 / §5.3.11: `shadow` and `foot` are valid light ids and names are parsed from the right against
+    the known light ids, so renaming a light from `lampA` to `shadow` / `foot` renames its labels
+    (`sil.0.<light>`, `L.<light>`, `F.<light>[.<r>]`) and drops none."""
+    root = pathlib.Path(__file__).resolve().parents[1] / "examples"
+    base = {"curved": curved_scene, "basic": lambda: json.loads((root / "basic.json").read_text()),
+            "wall": lambda: json.loads((root / "wall_and_ground.json").read_text()), "wall2": _wall_two_lights}[make]
+
+    def labels(lid):
+        s = base()
+        s["lights"][0]["id"] = lid
+        return _label_texts(s)
+
+    plain = labels("lampA")
+    assert any("lampA" in t for t in plain)
+    assert labels(reserved) == sorted(t.replace("lampA", reserved) for t in plain)

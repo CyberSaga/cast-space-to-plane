@@ -1,6 +1,6 @@
 # 使用說明：命令列與 API 參考
 
-對應程式版本 `castplane 0.1.0`（M3）。概念與數學見 [`spec/spec-v0.1.md`](spec/spec-v0.1.md)，規範性的實作細節見 [`ARCHITECTURE.md`](ARCHITECTURE.md)。
+對應程式版本 `castplane 0.1.0`（M3–M6、M8）。概念與數學見 [`spec/spec-v0.1.md`](spec/spec-v0.1.md)，規範性的實作細節見 [`ARCHITECTURE.md`](ARCHITECTURE.md)。
 
 ## 1. 命令列
 
@@ -109,11 +109,12 @@ castplane import FILE [-o OUT.json] [--into SCENE] [--id ID] [-q]
 | `IMPORT_NO_CAMERA_DEFAULT` | 檔案沒有相機，用包圍盒預設相機 |
 | `IMPORT_NO_LIGHT_DEFAULT` | 檔案沒有光源，用預設平行光 |
 
-結束碼同上：0 成功；1 讀不到 FILE / SCENE 或寫不了輸出；2 `SceneError`（glTF 的錯誤欄位是 glTF JSON 路徑，例如 `error: nodes[3].scale: …`）、用法錯誤、或組好的場景驗證失敗（此時不寫檔）；3 缺 trimesh。在 M6 合併之前，場景驗證仍是 v1 的「恰好一盞光」，所以有兩盞以上光源的 glTF 要加 `--light NAME` 才能寫出。
+結束碼同上：0 成功；1 讀不到 FILE / SCENE 或寫不了輸出；2 `SceneError`（glTF 的錯誤欄位是 glTF JSON 路徑，例如 `error: nodes[3].scale: …`）、用法錯誤、或組好的場景驗證失敗（此時不寫檔）；3 缺 trimesh。glTF 的每一盞光都會寫出（M6 起場景可有任意多個光源）；`--light NAME` 只在想保留一盞時使用。
 
 ```sh
 castplane import tests/fixtures/meshes/box_split.obj -o scene.json
-castplane import tests/fixtures/meshes/import_scene.gltf -o scene.json --light Lamp
+castplane import tests/fixtures/meshes/import_scene.gltf -o scene.json
+castplane import tests/fixtures/meshes/import_scene.gltf -o scene_lamp_only.json --light Lamp
 castplane import tests/fixtures/meshes/box.glb --inline --into examples/basic.json -o with_box.json
 castplane import tests/fixtures/meshes/features.obj --node walls --scale 0.5 -o walls.json
 ```
@@ -171,8 +172,8 @@ castplane import tests/fixtures/step/two_solids.step --solid 1 -o sphere.json
 | `node` | 選用：字串或非負整數。glTF：深度優先遍歷中第一個同名節點（含子樹），找不到再找同名網格；整數為 `nodes[k]`。OBJ：`o` / `g` 名稱，整數為第 k 個不同名稱 |
 | `up` | 選用：`"z"`（預設）或 `"y"`；`"y"` 以精確軸映射 `(x, y, z) ↦ (x, −z, y)` 轉成 Z-up。glTF 檔一律是 Y-up，配 `up` 是錯誤（`objects[i].up`） |
 | `scale` | 選用：> 0，預設 1；乘在局部頂點上（檔案單位 → 公尺），在焊接之前 |
-| `weld_tolerance` | 選用：≥ 0，預設 1e-6（公尺，縮放之後） |
-| `smooth_angle_deg` | 選用：[0, 180]，預設 30；相鄰面法線夾角小於它（且平滑群組相同）的邊是平滑邊，只在成為相機輪廓時才畫 |
+| `weld_tolerance` | 選用：≥ 0，預設 1e-6（公尺，縮放之後）；同時是這個網格與受影面的接觸容差：離受影面不到 `max(tol, weld_tolerance)` 的頂點算「貼在受影面上」（匯入時 float32 造成的 1e-8 級底面雜訊不會被當成穿入地面而切出錯誤的影子，也不發 `OBJECT_BELOW_RECEIVER`） |
+| `smooth_angle_deg` | 選用：[0, 180]，預設 30；兩面同屬同一個非零平滑群組的邊一律平滑（不看夾角）；兩面都無群組時，法線夾角小於它（`n_a·n_b ≥ cos(smooth_angle_deg) − 1e-9`）的邊平滑；群組不同、或一面有群組一面沒有，一律是特徵邊。平滑邊只在成為相機輪廓時才畫 |
 | `transform` | 同其他物件（`scale` 鍵不在 `transform` 裡，用物件的 `scale`） |
 | 上限 | 面數、頂點數各 ≤ 50 000；焊接並移除退化面後至少要剩一個面（`objects[i].data.faces` / 檔案來源為 `objects[i].path`：「no usable face」） |
 
@@ -225,7 +226,7 @@ castplane import tests/fixtures/step/two_solids.step --solid 1 -o sphere.json
 | 函式 | 說明 |
 | --- | --- |
 | `SceneError(field, message)` | 見上 |
-| `WARNING_CODES` | 封閉的警告代碼表 `{代碼: 預設訊息}`（合約 §2.9 的 13 個代碼） |
+| `WARNING_CODES` | 封閉的警告代碼表 `{代碼: 預設訊息}`（18 個代碼：v1 的 13 個加 M4 的 `RECEIVER_UNLIT` 與 M5 的四個 `MESH_*`，合約 §5.0.5） |
 | `make_warning(code, ids=(), message=None) -> dict` | 見上 |
 | `merge_warnings(*lists) -> list` | 見上 |
 | `warning_codes(warnings) -> set` | 警告清單中出現的代碼集合 |
@@ -327,7 +328,9 @@ castplane import tests/fixtures/step/two_solids.step --solid 1 -o sphere.json
 | `shadow_w(pi, L, P)` | M·P 的 w 分量（≤ tol 表示頂點不低於光源） |
 | `clip_loop_to_plane(points4, pi, tol=0.0, sources=None)` | 封閉齊次迴圈對 πᵀX ≥ 0 的 Sutherland–Hodgman 裁切（地面裁切的退路） |
 | `clip_mesh_to_plane(mesh, pi, tol=0.0) -> (mesh, origins)` | 封閉網格被平面切成實體：平面正側的部分加上切面；`origins` 對應新頂點到原頂點或交點 |
-| `shadow_loop(points4, M, pi, tol=0.0, tol_clip=None, frame=None, F=None) -> dict` | 一個光輪廓迴圈的影子多邊形：`{vertices (齊次，含方向頂點), sources, unbounded}`；M4：非地面受影面傳入 `frame` 與光源垂足 `F`（無窮遠弧在受影面座標系中繞 n 逆時針；地面 `frame=None` 保留 v2 算式） |
+| `shadow_loop(points4, M, pi, tol=0.0, tol_clip=None, frame=None, F=None, turns=0) -> dict` | 一個光輪廓迴圈的影子多邊形：`{vertices (齊次，含方向頂點), sources, unbounded}`；M4：非地面受影面傳入 `frame` 與光源垂足 `F`（無窮遠弧在受影面座標系中繞 n 逆時針；地面 `frame=None` 保留 v2 算式）；`loops` 每個分量另帶 `arcs`（`(θ_out, 帶號掃角)`）；`turns` 把 `2π·turns` 加到第一段弧（基準層級修正，§5.1 實作註記「Base level of the arcs at infinity」） |
+| `light_plane_level(mesh, lit, L, pi, tol, frame=None) -> (theta_ref, count) or None` | 基準層級：過光源、平行受影面的平面上一條參考射線（避開所有邊交點的最大角隙中點）穿過的受光面數；點光源且有受光面跨越該平面時才有值 |
+| `arc_level(arcs, theta) -> int` | `shadow_loop` 分量的 `arcs` 在無窮遠方向 `theta` 的環繞數（逆時針弧加、順時針弧減，掃角超過 2π 計多次） |
 | `ARC_STEP_DEG` | 無窮遠弧每段最大角度 60° |
 | `receiver_frame(n) -> (e1, e2)` | M4：受影面座標系，`e1 = normalize(z × n)`、`e2 = n × e1`（n 平行 z 時 `e1 = x`）；地面即 (x, y)（合約 §5.1.2） |
 | `bounds_functionals(bounds, n) -> ndarray` | M4：有界面 bounds 的邊泛函 `ψ_k = (m_k, −m_k·b_k)`，`m_k` 為單位向內法線（合約 §5.1.2） |
@@ -423,7 +426,7 @@ castplane import tests/fixtures/step/two_solids.step --solid 1 -o sphere.json
 | `geometry_json.write_geometry_json(doc, path)` | 寫檔（UTF-8、結尾換行） |
 | `svg.write_svg(doc, layers=None, hidden_style="dashed") -> str` | 規格 §6.1 分圖層 SVG；`layers` 選子集，順序固定；未知 id 拋 `ValueError`；M4：`hidden_style`（`dashed` / `omit`）決定隱藏線子群組的畫法，`hidden_lines` 關閉的文件與 v2 輸出位元相同 |
 | `svg.LAYER_ORDER`、`svg.STYLE` | 圖層順序與預設樣式屬性字串 |
-| `svg.HIDDEN_STYLES`、`svg.HIDDEN_STROKE`、`svg.OUTLINE_STYLE` | M4：`hidden_style` 的允許值、各層 `*.hidden` 群組的線色（`#111` / `#335` / `#000`）、開啟消隱時影子輪廓群組 `cast_shadow.<light>.<object>.outline` 的描邊 |
+| `svg.HIDDEN_STYLES`、`svg.HIDDEN_STROKE`、`svg.OUTLINE_STYLE` | M4：`hidden_style` 的允許值、各層 `*.hidden` 群組的線色（`#111` / `#335` / `#000`）、開啟消隱時影子輪廓群組 `cast_shadow.<light>.<object>.outline` 的描邊（`receivers[0]` 以外的受影面 `r` 上的影子：`cast_shadow.<light>.<object>.<r>.outline`，`….conics` 同理） |
 | `svg_multilight.layer_form_shadow(doc, cv, hidden_style=None)`、`svg_multilight.layer_cast_shadow(doc, cv, hidden_style=None)`、`svg_multilight.layer_construction(doc, cv)` | M6：多光源文件（有 `constructions` 鍵）的三個圖層：每個光源一個子群組（光源 id 碼位順序，`fill-opacity` 為 `0.18 / N_act`、`0.3 / N_act`）、`form_shadow.core`（被所有光源背光的面，各光源群組不再畫它們）、`cast_shadow.umbra`（每筆 `umbra[]` 一個 `<path>`，每塊碎片一個 `M … Z` 子路徑）、`construction.<light>`；開啟消隱時 `*.hidden` 群組在最前（合約 §5.3.6、§5.0.6）。`svg.write_svg` 自動分派 |
 | `svg_multilight.is_multi_light(doc)`、`svg_multilight.n_active(doc)`、`svg_multilight.light_ids(doc)`、`svg_multilight.UMBRA_STYLE` | M6：多光源文件判定、`N_act = max(1, umbra[].lights 聯集的 id 數)`、光源 id（碼位順序）、本影群組樣式 |
 | `png.write_png(svg_str, dpi=300) -> bytes` | 以 cairosvg（或 resvg）柵格化；沒有後端時拋 `ImportError` |
@@ -481,7 +484,7 @@ C 段在 `hidden_lines` 開啟時呼叫；純 numpy、確定性（取樣位置�
 | --- | --- |
 | `preprocess_mesh(data, scale, weld_tolerance, smooth_angle_deg, object_id="", return_scale=False)` | 整條前處理 → `(mesh, triangles, fallback, smooth_groups, warnings)`（`return_scale=True` 時多一項 `scale_A`）：縮放 → 焊接 → 退化面 → 鄰接／流形／方向 → 共面合併 → 邊分類；非流形時走逐面退路 |
 | `has_usable_face(vertices, faces, scale, weld_tolerance) -> bool` | 驗證用的「至少一個可用面」檢查：在 `scale · vertices` 上焊接並移除退化面後是否還有面（合約 §5.2.1） |
-| `mesh_scale(V) -> float` | `scale_A = max(1, 包圍盒最大邊長)`，本節所有容差的長度尺度 |
+| `mesh_scale(V) -> float`、`used_vertices(V, faces)` | `scale_A = max(1, 包圍盒最大邊長)`，本節所有容差的長度尺度；包圍盒只取至少被一個面用到的頂點（`used_vertices`），沒被任何面用到的離群頂點不會放寬容差 |
 | `weld_map(V, tol, fast=True)`、`weld_vertices(V, faces, tol, fast=True)` | 焊接（27 鄰格、輸入索引最低的代表、取代表點原座標、依首次出現編號）；`fast` 為結果相同的向量化路徑 → `(W, faces_w, index)` |
 | `prepare_faces(faces, index=None)` | 面轉成 int 串列並依 `index` 重新編號 |
 | `drop_degenerate_faces(V, faces, scale_A)` | 折疊連續重複、丟掉頂點不兩兩相異或 Newell 法線 ≤ 1e-12·scale_A² 的面 → `(kept_faces, kept_index)` |
@@ -492,7 +495,7 @@ C 段在 `hidden_lines` 開啟時呼叫；純 numpy、確定性（取樣位置�
 | `signed_volume(V, tris)`、`winding_number(V, tris, x)` | 依三角形順序逐項累加的有號體積與廣義纏繞數 |
 | `point_inside_mesh(verts, tris, x, tol=0.0)` | `\|w\| > 0.75` 且到每個三角形的距離 `> tol` 才算在內部 |
 | `merge_coplanar(V, faces, normals, adjacency, cos_tol)` | 依種子順序的區域生長共面合併 → `(new_faces, origin)` |
-| `classify_edges(mesh, smooth_angle_deg, smooth_groups)` | 平滑邊／特徵邊（平滑群組不同即為特徵邊） |
+| `classify_edges(mesh, smooth_angle_deg, smooth_groups)` | 平滑邊／特徵邊（同一非零群組一律平滑；都無群組時看夾角；群組不同即為特徵邊） |
 | `fallback_mesh(V, faces, vertex_names=None)` | 非流形退路的 §2.4 形網格（`edge_faces = [f_min, f_max]`） |
 | `inherit_edge_smooth(loop_mesh, origins, mesh, edge_smooth)` | 受影面切割後的網格繼承原始邊的平滑旗標（切面上的邊為特徵邊） |
 | `COPLANAR_TOL_RAD`、`WELD_TOLERANCE_DEFAULT`、`SMOOTH_ANGLE_DEFAULT`、`MESH_MAX_RAYS`、`SMOOTH_BAND`、`INSIDE_WINDING` | 合約 §5.2.3 的常數（1e-3 rad、1e-6 m、30°、64、1e-9、0.75） |
@@ -523,11 +526,12 @@ C 段在 `hidden_lines` 開啟時呼叫；純 numpy、確定性（取樣位置�
 
 | 函式 | 說明 |
 | --- | --- |
-| `read_gltf(path) -> (json, buffers)` | GLB 容器（`glTF` 魔數、版本 2、JSON 區塊與選用的 BIN 區塊）或 `.gltf`（base64 `data:` URI、相對於檔案的外部 `.bin`）；不支援的必要擴充（Draco、meshopt、量化）報錯 |
-| `gltf_raw(doc, buffers, node=None) -> raw`、`load_gltf(path, node=None, parsed=None)` | 所有網格節點（或選取節點的子樹）的三角形：存取器支援 `byteStride` / `byteOffset`、POSITION 只接受 5126、索引 5121 / 5123 / 5125、模式 5 / 6 展開、0–3 略過；頂點乘世界矩陣（行列式 < 0 時反轉面）後做精確軸映射 `(x, y, z) ↦ (x, −z, y)`；帶 `extras.castplane` 基元的節點上的網格忽略 |
-| `traversal_order(doc)`、`node_world_matrices(doc)` | 預設場景的深度優先遍歷順序（定義「第一個同名節點」）；每個節點的世界矩陣 `parent · T·R·S`（`matrix` 為行主序） |
+| `read_gltf(path) -> (json, buffers)` | GLB 容器（`glTF` 魔數、版本 2、JSON 區塊與選用的 BIN 區塊）或 `.gltf`（base64 `data:` URI、相對於檔案的外部 `.bin`）；不支援的必要擴充（Draco、meshopt、量化）報錯。外部緩衝區的 URI 必須是留在檔案所在目錄內的相對路徑（不可有 scheme、絕對路徑或以 `..` 跳出；符號連結解析後也必須留在目錄內）、指向一般檔案，且只讀前 `byteLength` 個位元組；型別錯誤的 JSON 值一律是帶 glTF JSON 路徑的 `SceneError`（例如 `nodes[0].rotation`），不會丟出 Python traceback |
+| `gltf_raw(doc, buffers, node=None, *, ctx=None, selected=None) -> raw`、`load_gltf(path, node=None, parsed=None, *, ctx=None)` | 所有網格節點（或選取節點的子樹）的三角形：存取器支援 `byteStride` / `byteOffset`（沒有 `bufferView` 的全零存取器最多 `3 · MESH_MAX_FACES` 個元素；組裝時累計頂點／三角形數，超過 `MESH_MAX_VERTICES` / `MESH_MAX_FACES` 即在變換前報 `nodes[k].mesh`；世界矩陣或變換後頂點非有限值報 `nodes[k]`）、POSITION 只接受 5126、索引 5121 / 5123 / 5125、模式 5 / 6 展開、0–3 略過；頂點乘世界矩陣（行列式 < 0 時反轉面）後做精確軸映射 `(x, y, z) ↦ (x, −z, y)`；帶 `extras.castplane` 基元的節點上的網格忽略 |
+| `traversal_order(doc)`、`node_world_matrices(doc)` | 預設場景的深度優先遍歷順序（定義「第一個同名節點」）；每個節點的世界矩陣 `parent · T·R·S`（`matrix` 為行主序；以迭代計算，節點鏈的深度不受遞迴上限限制） |
+| `gltf_context(doc) -> {order, world, first_named}` | 每個檔案只算一次的遍歷順序、世界矩陣與「名稱 → 第一個同名節點」表；傳給 `gltf_raw(..., ctx=...)` 可省去每個物件重算（匯入與展開 N 個網格節點是 O(N)） |
 | `euler_zyx(R) -> [rx, ry, rz]` | `R = Rz·Ry·Rx` 的分解（弧度；`hypot(R00, R10) ≤ 1e-12` 時 `rx = 0`） |
-| `import_gltf_parts(path, *, ref=None, inline=False, node=None, camera=None, light=None, mesh_keys=None, parsed=None)` | 合約 §5.2.8 的對應表：網格節點 → `mesh` 物件（名稱唯一且非空時 `node` 寫名稱，否則寫索引）、`extras.castplane` → 基元物件、透視相機 → `camera` 區塊與畫布、`KHR_lights_punctual` 的每一盞光（聚光燈 → 點光並記 `IMPORT_SPOT_AS_POINT`）→ `({"objects", "lights", "camera", "canvas_mm", "raw"}, notes)` |
+| `import_gltf_parts(path, *, ref=None, inline=False, node=None, camera=None, light=None, mesh_keys=None, parsed=None)` | 合約 §5.2.8 的對應表：網格節點 → `mesh` 物件（名稱唯一且非空時 `node` 寫名稱，否則寫索引）、`extras.castplane` → 基元物件、透視相機 → `camera` 區塊與畫布、`KHR_lights_punctual` 的每一盞光（聚光燈 → 點光並記 `IMPORT_SPOT_AS_POINT`）→ `({"objects", "lights", "camera", "canvas_mm", "raw"}, notes)`；所有網格物件合計最多 `IMPORT_MAX_TOTAL_VERTICES` / `IMPORT_MAX_TOTAL_FACES`（各 20 · 50 000）個頂點／三角形，超過時報 `nodes[k].mesh` |
 | `import_gltf_scene(path, *, ref=None, inline=False, node=None, camera=None, light=None, mesh_keys=None) -> (scene, notes)` | 同上再組成完整的原始場景：檔案沒有相機／光源時用包圍盒預設相機與預設平行光並記備註，受影面固定為地面 |
 
 `castplane.io.trimesh_adapter`：`load_trimesh(path, node=None) -> raw` 用選用的 trimesh（`pip install 'castplane[mesh]'`）讀 STL / PLY 等格式，`trimesh.load(..., force="mesh", process=False)`，面與頂點照檔案儲存的順序（不合併、不修法線）；沒有 trimesh 時拋 `ImportError("install castplane[mesh]")`（CLI 結束碼 3）。

@@ -1,6 +1,6 @@
 # STEP 匯入：可行性報告與原型（M8）
 
-對應規格 §9「STEP」列與 §10 M8（「可行性報告、原型解析器」）；規範性的細節是 [`ARCHITECTURE.md`](ARCHITECTURE.md) §5.5（以下「合約」），本文件說明為什麼這樣做、量到了什麼、還缺什麼。命令列與 API 見 [`USAGE.md`](USAGE.md) 的「`castplane import` 的 STEP 檔」與 §2.19。
+對應規格 §9「STEP」列與 §10 M8（「可行性報告、原型解析器」）；規範性的細節是 [`ARCHITECTURE.md`](ARCHITECTURE.md) §5.5（以下「合約」），本文件說明為什麼這樣做、量到了什麼、還缺什麼。命令列與 API 見 [`USAGE.md`](USAGE.md) 的「`castplane import` 的 STEP 檔」與 §2.22。
 
 ## 1. 目的與結論
 
@@ -141,4 +141,5 @@ OCC 把每個端面圓寫成 `SURFACE_CURVE`、把圓柱面的接縫寫成 `SEAM
 - **單位宣告缺失**：沒有單位時假設 mm 並記 `STEP_UNIT_ASSUMED_MM`；若檔案其實是公尺，物件會小 1000 倍——備註是唯一的提示。
 - **OCC 版本漂移**：網格退路與夾具產生器的輸出依 OCC 版本；解析路徑只讀檔案位元，不受影響。夾具以 cadquery-ocp 8.0.1.1.0 寫出並提交，`tools/make_step_fixtures.py --check` 只在同一版本時要求逐位元相同。
 - **PRODUCT 名稱的程序計數器**：OCC 在 `PRODUCT` 名稱裡寫入每個程序遞增的計數器（`'Open CASCADE STEP translator 8.0 8.1'`），同一組夾具在不同的寫出順序下位元組不同；產生器因此固定寫出順序並把名稱改寫成 `'castplane <fixture>'`。STEP 的產品名稱從不當作物件 id。
+- **網格退路與損壞的檔案**：OCC（cadquery-ocp 8.0.1.1.0）在轉換時遇到無法解析的參照會直接讓直譯器崩潰（segmentation fault，無法以例外攔截）。`import_step(fallback="mesh")` 因此在呼叫 OCP 之前檢查要轉換的紀錄（單一實體檔為整個檔案、多實體檔為該實體可達的紀錄）：每個 `#n` 參照都必須指向已定義且編號不為 0 的實體，否則回報 `StepError`。**已知限制**：參照指向**型別錯誤**的實體，或必須是參照的位置寫成數字、`$`、列舉值（例如 `LINE('',#74,#74)`，`#74` 是 `VECTOR`），仍可能讓 OCC 崩潰；要擋下這類檔案需要 ISO 10303-42 綱要或在子程序裡執行 OCP。來源不明的 STEP 檔若要使用網格退路，請在獨立的程序裡執行 `castplane import`。
 - **Euler 角的 libm 依賴**：旋轉過的實體的 `rotation_deg` 經 `atan2`，最後一位依 libm 而定（與一致性 expected 檔同樣的「每個建置確定」規則）；未旋轉的實體在任何平台都逐位元相同。

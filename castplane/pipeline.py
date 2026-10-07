@@ -138,7 +138,8 @@ from .output.geometry_json import canonical
 from .output.svg import write_svg
 from .primitives import build_object, point_inside_solid
 from .scene import validate_camera
-from .shadow import (bounds_functionals, clip_mesh_to_plane, clip_polygon_bounds, foot, plate_loop, receiver_frame,
+from .shadow import (arc_level, bounds_functionals, clip_mesh_to_plane, clip_polygon_bounds, foot, light_plane_level,
+                     plate_loop, receiver_frame,
                      shadow_loop, shadow_matrix, shadow_w)
 
 _ORIGIN_H = np.array([0.0, 0.0, 1.0])
@@ -270,14 +271,27 @@ def _loop_entries(sh: dict, loop_vertex_ids, origins, oid: str, lid: str, ground
     return entries
 
 
+def _contact_tol(obj: dict, tol: float) -> float:
+    """Receiver-contact tolerance of an object (review fix m5-mesh#0, ARCHITECTURE §5.2 implementation
+    notes): ``max(tol, weld_tolerance)`` for a ``mesh`` object -- its declared "same point" scale, so a
+    bottom that rests on the receiver up to import noise (float32 / baked node matrices) is in contact
+    instead of being Sutherland-Hodgman-cut by its noise -- and ``tol`` for every other object.  Used
+    only by the receiver-plane predicates: the vertex "below" / "above" tests and the plane clips."""
+    if obj.get("type") == "mesh":
+        return max(float(tol), float(obj.get("shape", {}).get("weld_tolerance", 0.0)))
+    return tol
+
+
 def _shadow_record(obj: dict, ol: dict, lt: dict, pi: np.ndarray, tol: float, receiver_id: str) -> tuple[dict, list]:
     """Camera-independent shadow data of one polyhedral object under one active light (§5.2/5.3, contract §2.5)."""
+    tol_c = _contact_tol(obj, tol)
     mesh = obj["mesh"]
     oid, lid = obj["id"], lt["id"]
     V4 = to_homogeneous(mesh["vertices"])
     ground_mesh = obj.get("ground_mesh")
     if ground_mesh is None:
         loop_mesh, origins, sil_loops = mesh, None, ol["loops"]
+        lit_c = ol["lit"]
         sil = ol["silhouette_vertices"]
         edge_sil = ol["edge_silhouette"]
     else:  # contract §2.3: silhouette of the part above the ground (see module docstring)
@@ -293,7 +307,7 @@ def _shadow_record(obj: dict, ol: dict, lt: dict, pi: np.ndarray, tol: float, re
     P4 = V4[sil]
     w_S = np.asarray(shadow_w(pi, lt["L"], P4), dtype=np.float64).reshape(-1)
     finite = w_S > lt["tol_w"]
-    above = (P4 @ pi) >= -tol
+    above = (P4 @ pi) >= -tol_c
     keep = finite & above
     warnings = []
     if sil.shape[0] and not bool(np.all(finite)):
@@ -306,12 +320,18 @@ def _shadow_record(obj: dict, ol: dict, lt: dict, pi: np.ndarray, tol: float, re
     V4c = to_homogeneous(loop_mesh["vertices"])
     loops, ground = [], {}
     unbounded = False
-    for loop in sil_loops:
-        sh = shadow_loop(V4c[loop], lt["M"], pi, lt["tol_w"], tol_clip=tol)
-        entries = _loop_entries(sh, loop, origins, oid, lid, ground)
-        unbounded = unbounded or bool(sh["unbounded"])
-        loops.append({"vertices": sh["vertices"], "sources": sh["sources"], "entries": entries,
-                      "unbounded": bool(sh["unbounded"])})
+    loop_shs = [shadow_loop(V4c[loop], lt["M"], pi, lt["tol_w"], tol_clip=tol_c) for loop in sil_loops]
+    fix = _base_turns(loop_mesh, lit_c, lt, pi, None, loop_shs)
+    if fix is not None:   # §5.1 implementation note "Base level of the arcs at infinity"
+        i, turns = fix
+        loop_shs[i] = shadow_loop(V4c[sil_loops[i]], lt["M"], pi, lt["tol_w"], tol_clip=tol_c, turns=turns)
+    for loop, loop_sh in zip(sil_loops, loop_shs):
+        # every component of the loop's shadow (several when the loop crosses the light plane 4+ times)
+        for sh in loop_sh["loops"]:
+            entries = _loop_entries(sh, loop, origins, oid, lid, ground)
+            unbounded = unbounded or bool(sh["unbounded"])
+            loops.append({"vertices": sh["vertices"], "sources": sh["sources"], "entries": entries,
+                          "unbounded": bool(sh["unbounded"])})
     ground_points = list(ground.values())
     # M5 §5.2.4: rays / checks only for the first MESH_MAX_RAYS feature silhouette vertices of a mesh
     # (silhouette-loop order); every other record draws the rays of all its silhouette vertices
@@ -338,6 +358,27 @@ def _shadow_record(obj: dict, ol: dict, lt: dict, pi: np.ndarray, tol: float, re
         "loops": loops,
         "unbounded": unbounded,
     }, warnings
+
+
+def _base_turns(loop_mesh: dict, lit, lt: dict, pi, frame, loop_shs: list):
+    """Base-level correction of one record (review fix, §5.1 implementation note "Base level of the arcs at
+    infinity"): ``None`` when no loop result of ``loop_shs`` (:func:`shadow.shadow_loop` outputs, one per
+    silhouette loop of ``loop_mesh``) is unbounded or when the drawn winding number at infinity already
+    equals the number of lit faces of ``loop_mesh`` crossed by the light-plane ray of
+    :func:`shadow.light_plane_level`; otherwise ``(i, turns)``: re-run ``shadow_loop`` of loop ``i`` (the
+    first unbounded one) with ``turns`` (the record's loops are filled together, nonzero, so one arc
+    carries the whole correction)."""
+    first = next((i for i, r in enumerate(loop_shs) if r["unbounded"]), None)
+    if first is None:
+        return None
+    ref = light_plane_level(loop_mesh, lit, lt["L"], pi, lt["tol_w"], frame)
+    if ref is None:
+        return None
+    theta, count = ref
+    drawn = sum(arc_level(c["arcs"], theta) for r in loop_shs for c in r["loops"])
+    if count == drawn:
+        return None
+    return first, count - drawn
 
 
 def _mesh_ray_vertices(obj: dict, sil, sil_loops, loop_mesh: dict, origins, edge_sil):
@@ -400,9 +441,10 @@ def _fallback_shadow_record(obj: dict, ol: dict, lt: dict, pi: np.ndarray, tol: 
     V4 = to_homogeneous(mesh["vertices"])
     ids = np.array(sorted({int(v) for f in mesh["faces"] for v in f}), dtype=np.int64)
     P4 = V4[ids]
+    tol_c = _contact_tol(obj, tol)
     w_S = np.asarray(shadow_w(pi, lt["L"], P4), dtype=np.float64).reshape(-1)
     finite = w_S > lt["tol_w"]
-    above = (P4 @ pi) >= -tol
+    above = (P4 @ pi) >= -tol_c
     keep = finite & above
     warnings = []
     # the fallback analogue of "some silhouette vertex": a vertex of a face that is not parallel to
@@ -426,41 +468,43 @@ def _fallback_shadow_record(obj: dict, ol: dict, lt: dict, pi: np.ndarray, tol: 
             continue
         cyc = [int(v) for v in face] if lit_flags[fi] else [int(face[0])] + [int(v) for v in face[1:]][::-1]
         if rcv is None:
-            sh = shadow_loop(V4[cyc], lt["M"], pi, lt["tol_w"], tol_clip=tol)
+            face_sh = shadow_loop(V4[cyc], lt["M"], pi, lt["tol_w"], tol_clip=tol_c)
         else:
-            sh = shadow_loop(V4[cyc], lt["M"], pi, lt["tol_w"], tol_clip=tol, frame=rcv["frame"], F=lt["F"])
-        if bounded:
-            V, src = clip_polygon_bounds(sh["vertices"], sh["sources"], rcv["psi"], rcv["bounds"], tol)
-            sh = {"vertices": V, "sources": src, "unbounded": False}
-        verts = sh["vertices"]
-        if verts.shape[0] < 3:
-            continue
-        if not sh["unbounded"]:
-            X = verts[:, :3] / verts[:, 3:4]
-            area = 0.5 * float(n @ np.sum(np.cross(X, np.roll(X, -1, axis=0)), axis=0))
-            if abs(area) <= area_tol:
+            face_sh = shadow_loop(V4[cyc], lt["M"], pi, lt["tol_w"], tol_clip=tol_c, frame=rcv["frame"], F=lt["F"])
+        # every component of the face's shadow (several when a concave face crosses the light plane 4+ times)
+        for sh in face_sh["loops"]:
+            if bounded:
+                V, src = clip_polygon_bounds(sh["vertices"], sh["sources"], rcv["psi"], rcv["bounds"], tol)
+                sh = {"vertices": V, "sources": src, "unbounded": False}
+            verts = sh["vertices"]
+            if verts.shape[0] < 3:
                 continue
-        entries = []
-        for row, src in enumerate(sh["sources"]):
-            if isinstance(src, tuple):
-                if src[0] in ("ground", "bounds"):
-                    if src[0] == "ground":
-                        i, j = cyc[int(src[1])], cyc[int(src[2])]
-                        key = (min(i, j), max(i, j))
-                    else:   # a bounds-clip crossing or anchor (M4 §5.1.3.3): a point of its own
-                        key = ("clip", len(ground))
-                    if key not in ground:
-                        X = verts[row]
-                        ground[key] = (f"{oid}.s{len(ground)}.{lid}{sfx}", X[:3] / X[3])
-                    entries.append(ground[key][0])
-                else:  # ("dir", i, j) or ("arc", k): a direction vertex (w = 0)
-                    d = verts[row]
-                    entries.append({"direction": [float(d[0]) + 0.0, float(d[1]) + 0.0, float(d[2]) + 0.0]})
-            else:
-                entries.append(f"{oid}.v{cyc[int(src)]}.shadow.{lid}{sfx}")
-        unbounded = unbounded or bool(sh["unbounded"])
-        loops.append({"vertices": verts, "sources": sh["sources"], "entries": entries,
-                      "unbounded": bool(sh["unbounded"])})
+            if not sh["unbounded"]:
+                X = verts[:, :3] / verts[:, 3:4]
+                area = 0.5 * float(n @ np.sum(np.cross(X, np.roll(X, -1, axis=0)), axis=0))
+                if abs(area) <= area_tol:
+                    continue
+            entries = []
+            for row, src in enumerate(sh["sources"]):
+                if isinstance(src, tuple):
+                    if src[0] in ("ground", "bounds"):
+                        if src[0] == "ground":
+                            i, j = cyc[int(src[1])], cyc[int(src[2])]
+                            key = (min(i, j), max(i, j))
+                        else:   # a bounds-clip crossing or anchor (M4 §5.1.3.3): a point of its own
+                            key = ("clip", len(ground))
+                        if key not in ground:
+                            X = verts[row]
+                            ground[key] = (f"{oid}.s{len(ground)}.{lid}{sfx}", X[:3] / X[3])
+                        entries.append(ground[key][0])
+                    else:  # ("dir", i, j) or ("arc", k): a direction vertex (w = 0)
+                        d = verts[row]
+                        entries.append({"direction": [float(d[0]) + 0.0, float(d[1]) + 0.0, float(d[2]) + 0.0]})
+                else:
+                    entries.append(f"{oid}.v{cyc[int(src)]}.shadow.{lid}{sfx}")
+            unbounded = unbounded or bool(sh["unbounded"])
+            loops.append({"vertices": verts, "sources": sh["sources"], "entries": entries,
+                          "unbounded": bool(sh["unbounded"])})
     rec = {
         "light": lid,
         "receiver": receiver_id,
@@ -533,13 +577,14 @@ def shadow_geometry(scene: dict) -> dict:
             shadows.extend(_curved.stage_a_object(obj, lights, default, tol, warnings,
                                                   multi=_multilight.is_multi(scene["lights"])))
             continue
-        below = (to_homogeneous(obj["mesh"]["vertices"]) @ pi) < -tol
+        tol_c = _contact_tol(obj, tol)
+        below = (to_homogeneous(obj["mesh"]["vertices"]) @ pi) < -tol_c
         obj["ground_mesh"] = None
         if bool(np.any(below)):
             warnings.append(make_warning("OBJECT_BELOW_RECEIVER", [obj["id"]]))
             try:
                 # M5 §5.2.5: a fallback mesh is never cut (the cut would close its open rim into caps)
-                obj["ground_mesh"] = None if obj.get("fallback") else clip_mesh_to_plane(obj["mesh"], pi, tol)
+                obj["ground_mesh"] = None if obj.get("fallback") else clip_mesh_to_plane(obj["mesh"], pi, tol_c)
             except ValueError:  # degenerate contact: fall back to clipping the silhouette loops
                 obj["ground_mesh"] = None
         _clip_object_to_receivers(obj, receivers, tol)
@@ -662,11 +707,12 @@ def _clip_object(obj: dict, rcv: dict, tol: float):
     closed manifold (the silhouette loops are then clipped edge by edge, silently)."""
     if obj.get("fallback"):   # M5 §5.2.5 [decision, synthesis]: clip_mesh_to_plane is never called on a fallback mesh
         return None
-    below = (to_homogeneous(obj["mesh"]["vertices"]) @ rcv["pi"]) < -tol
+    tol_c = _contact_tol(obj, tol)
+    below = (to_homogeneous(obj["mesh"]["vertices"]) @ rcv["pi"]) < -tol_c
     if not bool(np.any(below)):
         return None
     try:
-        return clip_mesh_to_plane(obj["mesh"], rcv["pi"], tol)
+        return clip_mesh_to_plane(obj["mesh"], rcv["pi"], tol_c)
     except ValueError:
         return None
 
@@ -706,20 +752,24 @@ def _empty_shadow_record(lid: str, rid: str, oid: str) -> dict:
 
 
 def _caster_record(oid: str, lt: dict, rcv: dict, tol: float, sil, P4, vertex_names: list, loops: list, origins,
-                   vertex_prefix: str) -> tuple[dict, list]:
+                   vertex_prefix: str, tol_contact: float | None = None, level_mesh=None) -> tuple[dict, list]:
     """Shadow record of one caster (an object part or a plate) on one receiver under one active light
     (contract §5.1.3).  ``sil`` are the original vertex indices of the silhouette vertices and ``P4``
     their homogeneous points; ``loops`` lists ``(loop4, loop_vertex_ids)`` (the ids index ``origins``
     when given).  On a bounded receiver every loop goes through :func:`shadow.clip_polygon_bounds`
     (empty results are dropped), ``unbounded`` is false, ``VERTEX_NOT_BELOW_LIGHT`` is not emitted and
-    rays / checks exist only for shadow points inside the bounds (``ray_keep``)."""
+    rays / checks exist only for shadow points inside the bounds (``ray_keep``).  ``tol_contact`` (default
+    ``tol``) is the receiver-contact tolerance of the "above" test and the plane clip (:func:`_contact_tol`).
+    ``level_mesh = (mesh, lit)`` (the closed mesh whose silhouette loops ``loops`` are, with its lit flags)
+    enables the base-level correction of :func:`_base_turns`; ``None`` (a plate: planar, never needed) skips it."""
     lid, rid, sfx = lt["id"], rcv["id"], rcv["suffix"]
     pi = rcv["pi"]
+    tol_c = tol if tol_contact is None else tol_contact
     sil = np.asarray(sil, dtype=np.int64).reshape(-1)
     P4 = np.asarray(P4, dtype=np.float64).reshape(-1, 4)
     w_S = np.asarray(shadow_w(pi, lt["L"], P4), dtype=np.float64).reshape(-1)
     finite = w_S > lt["tol_w"]
-    above = (P4 @ pi) >= -tol
+    above = (P4 @ pi) >= -tol_c
     keep = finite & above
     warnings = []
     if not rcv["bounded"] and sil.shape[0] and not bool(np.all(finite)):
@@ -735,17 +785,25 @@ def _caster_record(oid: str, lt: dict, rcv: dict, tol: float, sil, P4, vertex_na
         ray_keep = keep & inside
     out_loops, ground = [], {}
     unbounded = False
-    for loop4, loop_ids in loops:
-        sh = shadow_loop(loop4, lt["M"], pi, lt["tol_w"], tol_clip=tol, frame=rcv["frame"], F=lt["F"])
-        if rcv["bounded"]:
-            V, src = clip_polygon_bounds(sh["vertices"], sh["sources"], rcv["psi"], rcv["bounds"], tol)
-            if V.shape[0] == 0:
-                continue
-            sh = {"vertices": V, "sources": src, "unbounded": False}
-        entries = _loop_entries(sh, loop_ids, origins, oid, lid, ground, suffix=sfx, vertex_prefix=vertex_prefix)
-        unbounded = unbounded or bool(sh["unbounded"])
-        out_loops.append({"vertices": sh["vertices"], "sources": sh["sources"], "entries": entries,
-                          "unbounded": bool(sh["unbounded"])})
+    loop_shs = [shadow_loop(loop4, lt["M"], pi, lt["tol_w"], tol_clip=tol_c, frame=rcv["frame"], F=lt["F"])
+                for loop4, _ids in loops]
+    fix = None if level_mesh is None else _base_turns(level_mesh[0], level_mesh[1], lt, pi, rcv["frame"], loop_shs)
+    if fix is not None:   # §5.1 implementation note "Base level of the arcs at infinity"
+        i, turns = fix
+        loop_shs[i] = shadow_loop(loops[i][0], lt["M"], pi, lt["tol_w"], tol_clip=tol_c, frame=rcv["frame"], F=lt["F"],
+                                  turns=turns)
+    for (loop4, loop_ids), loop_sh in zip(loops, loop_shs):
+        # every component of the loop's shadow (several when the loop crosses the light plane 4+ times)
+        for sh in loop_sh["loops"]:
+            if rcv["bounded"]:
+                V, src = clip_polygon_bounds(sh["vertices"], sh["sources"], rcv["psi"], rcv["bounds"], tol)
+                if V.shape[0] == 0:
+                    continue
+                sh = {"vertices": V, "sources": src, "unbounded": False}
+            entries = _loop_entries(sh, loop_ids, origins, oid, lid, ground, suffix=sfx, vertex_prefix=vertex_prefix)
+            unbounded = unbounded or bool(sh["unbounded"])
+            out_loops.append({"vertices": sh["vertices"], "sources": sh["sources"], "entries": entries,
+                              "unbounded": bool(sh["unbounded"])})
     return {
         "light": lid,
         "receiver": rid,
@@ -780,6 +838,7 @@ def _bounded_object_record(obj: dict, ol: dict, lt: dict, rcv: dict, tol: float)
     clipped = obj["clipped"].get(rid)
     if clipped is None:
         loop_mesh, origins, sil_loops = mesh, None, ol["loops"]
+        lit_c = ol["lit"]
         sil = ol["silhouette_vertices"]
         edge_sil = ol["edge_silhouette"]
     else:
@@ -795,7 +854,7 @@ def _bounded_object_record(obj: dict, ol: dict, lt: dict, rcv: dict, tol: float)
     V4c = to_homogeneous(loop_mesh["vertices"])
     loops = [(V4c[loop], loop) for loop in sil_loops]
     rec, warnings = _caster_record(oid, lt, rcv, tol, sil, V4[sil], [obj["point_names"][int(k)] for k in sil], loops,
-                                   origins, "v")
+                                   origins, "v", tol_contact=_contact_tol(obj, tol), level_mesh=(loop_mesh, lit_c))
     if obj["type"] == "mesh":
         # M5 §5.2.4: the feature-vertex ray selection on the loop mesh actually used (per object, light, receiver)
         rec["ray_vertices"], capped = _mesh_ray_vertices(obj, sil, sil_loops, loop_mesh, origins, edge_sil)

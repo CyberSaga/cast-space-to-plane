@@ -1,0 +1,111 @@
+{
+ "description": "v7 (final review m4-geometry#0, D70): U-prism lying on its side 2 m above the ground (rotation_deg [-90,0,0]), lamp in the notch; the ground path with two excursions to infinity, two ground loops, IoU 1.00 with the ray cast",
+ "version": "0.1",
+ "units": "m",
+ "up": "z",
+ "objects": [
+  {
+   "id": "u",
+   "type": "prism",
+   "polygon": [
+    [
+     -1,
+     -1
+    ],
+    [
+     1,
+     -1
+    ],
+    [
+     1,
+     1
+    ],
+    [
+     0.5,
+     1
+    ],
+    [
+     0.5,
+     -0.5
+    ],
+    [
+     -0.5,
+     -0.5
+    ],
+    [
+     -0.5,
+     1
+    ],
+    [
+     -1,
+     1
+    ]
+   ],
+   "height": 1.0,
+   "transform": {
+    "position": [
+     0,
+     0,
+     3.0
+    ],
+    "rotation_deg": [
+     -90,
+     0,
+     0
+    ]
+   }
+  }
+ ],
+ "lights": [
+  {
+   "id": "lamp",
+   "type": "point",
+   "position": [
+    0,
+    0.7,
+    2.8
+   ]
+  }
+ ],
+ "receivers": [
+  {
+   "id": "ground",
+   "type": "plane",
+   "normal": [
+    0,
+    0,
+    1
+   ],
+   "offset": 0
+  }
+ ],
+ "camera": {
+  "position": [
+   0,
+   -8,
+   3
+  ],
+  "target": [
+   0,
+   0,
+   0.5
+  ],
+  "roll_deg": 0.0,
+  "focal_length_mm": 35,
+  "frame_mm": [
+   36,
+   24
+  ],
+  "shift_mm": [
+   0.0,
+   0.0
+  ],
+  "near_m": 0.05
+ },
+ "output": {
+  "canvas_mm": [
+   360,
+   240
+  ]
+ }
+}

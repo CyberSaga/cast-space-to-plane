@@ -199,7 +199,8 @@ def layer_construction(doc: dict, cv) -> list:
     light's construction block and its ``construction.<light>.LP`` / ``.FQ`` / ``.PQ`` groups."""
     body = []
     for lid in light_ids(doc):
-        inner = _svg._layer_construction({"construction": doc["constructions"][lid]}, cv)
+        inner = _svg._layer_construction({"construction": doc["constructions"][lid],
+                                          "receivers": doc.get("receivers")}, cv)
         renamed = []
         for item in inner:
             for kind in ("LP", "FQ", "PQ"):

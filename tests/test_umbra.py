@@ -394,3 +394,44 @@ def test_chunk_sizes_are_invisible_in_the_output(monkeypatch, entries, pairs):
     monkeypatch.setattr(U, "_CHUNK_ENTRIES", entries)
     monkeypatch.setattr(U, "_CHUNK_PAIRS", pairs)
     assert _chunk_outputs(per_light, loop) == default
+
+
+# --- review fix m6-umbra#0: zero-width intervals between coincident edges do not end a run -----------
+
+def _unit_grid(n):
+    return [[[i, j], [i + 1, j], [i + 1, j + 1], [i, j + 1]] for j in range(n) for i in range(n)]
+
+
+@pytest.mark.parametrize("n", [2, 8, 32])
+def test_shared_edges_do_not_split_the_partition(n):
+    """An ``n × n`` grid of CCW unit squares in one record (the M5 per-face fallback shape: every
+    interior edge is traversed once in each direction) is one square region: one piece per row,
+    not one per square (a coincident ``+1`` / ``−1`` edge pair leaves a zero-width interval of
+    winding 0 that must not end the run).  Same for the intersection scan of two such lights."""
+    loops = _unit_grid(n)
+    pieces, sides = record_pieces(loops, TOL_MM, TOL_AREA)
+    assert len(pieces) == n and sides.shape == (n, 2)
+    assert total(pieces) == float(n * n)
+    for j, p in enumerate(pieces):
+        assert p.tolist() == [[0.0, float(j)], [float(n), float(j)], [float(n), j + 1.0], [0.0, j + 1.0]]
+    umbra = umbra_pieces([[loops], [loops]], CANVAS)
+    assert len(umbra) == n and total(umbra) == float(n * n)
+
+
+def test_triangle_soup_square_is_one_piece():
+    """A square split along its diagonal into two CCW triangles of one record gives the square."""
+    tris = [[[0, 0], [1, 0], [1, 1]], [[0, 0], [1, 1], [0, 1]]]
+    for loops in (tris, tris[::-1]):
+        pieces, _ = record_pieces(loops, TOL_MM, TOL_AREA)
+        assert [p.tolist() for p in pieces] == [[[0.0, 0.0], [1.0, 0.0], [1.0, 1.0], [0.0, 1.0]]]
+
+
+def test_separate_regions_are_not_bridged():
+    """Bridging needs a zero-width interval: two squares a gap ``> tol_mm`` apart stay two pieces;
+    two squares touching along an edge become one."""
+    a = [[0, 0], [1, 0], [1, 1], [0, 1]]
+    far = [[1 + 1e-3, 0], [2, 0], [2, 1], [1 + 1e-3, 1]]
+    touch = [[1, 0], [2, 0], [2, 1], [1, 1]]
+    assert len(record_pieces([a, far], TOL_MM, TOL_AREA)[0]) == 2
+    pieces, _ = record_pieces([a, touch], TOL_MM, TOL_AREA)
+    assert [p.tolist() for p in pieces] == [[[0.0, 0.0], [2.0, 0.0], [2.0, 1.0], [0.0, 1.0]]]

@@ -1,0 +1,183 @@
+{
+ "description": "v7 (final review m5-mesh#0): concave L prism mesh (inline data) whose bottom vertices v3, v5 sit 1e-7 m below the ground, inside the 1e-6 weld tolerance; the mesh receiver-contact tolerance max(tol, weld_tolerance) keeps the clean L outline (no chord across the notch) and emits no OBJECT_BELOW_RECEIVER",
+ "camera": {
+  "focal_length_mm": 35,
+  "frame_mm": [
+   36,
+   24
+  ],
+  "near_m": 0.05,
+  "position": [
+   4.0,
+   -8.0,
+   5.0
+  ],
+  "roll_deg": 0,
+  "shift_mm": [
+   0.0,
+   0.0
+  ],
+  "target": [
+   0.0,
+   0.0,
+   0.5
+  ]
+ },
+ "lights": [
+  {
+   "id": "lamp",
+   "position": [
+    1.0,
+    0.7,
+    3.5
+   ],
+   "type": "point"
+  }
+ ],
+ "objects": [
+  {
+   "data": {
+    "faces": [
+     [
+      5,
+      4,
+      3,
+      2,
+      1,
+      0
+     ],
+     [
+      6,
+      7,
+      8,
+      9,
+      10,
+      11
+     ],
+     [
+      0,
+      1,
+      7,
+      6
+     ],
+     [
+      1,
+      2,
+      8,
+      7
+     ],
+     [
+      2,
+      3,
+      9,
+      8
+     ],
+     [
+      3,
+      4,
+      10,
+      9
+     ],
+     [
+      4,
+      5,
+      11,
+      10
+     ],
+     [
+      5,
+      0,
+      6,
+      11
+     ]
+    ],
+    "vertices": [
+     [
+      -1.0,
+      -1.0,
+      0.0
+     ],
+     [
+      1.0,
+      -1.0,
+      0.0
+     ],
+     [
+      1.0,
+      0.0,
+      0.0
+     ],
+     [
+      0.0,
+      0.0,
+      -1e-07
+     ],
+     [
+      0.0,
+      1.0,
+      0.0
+     ],
+     [
+      -1.0,
+      1.0,
+      -1e-07
+     ],
+     [
+      -1.0,
+      -1.0,
+      0.7
+     ],
+     [
+      1.0,
+      -1.0,
+      0.7
+     ],
+     [
+      1.0,
+      0.0,
+      0.7
+     ],
+     [
+      0.0,
+      0.0,
+      0.7
+     ],
+     [
+      0.0,
+      1.0,
+      0.7
+     ],
+     [
+      -1.0,
+      1.0,
+      0.7
+     ]
+    ]
+   },
+   "id": "m",
+   "type": "mesh"
+  }
+ ],
+ "output": {
+  "canvas_mm": [
+   360,
+   240
+  ],
+  "png_dpi": 150
+ },
+ "receivers": [
+  {
+   "id": "ground",
+   "normal": [
+    0,
+    0,
+    1
+   ],
+   "offset": 0.0,
+   "type": "plane"
+  }
+ ],
+ "units": "m",
+ "up": "z",
+ "version": "0.1"
+}

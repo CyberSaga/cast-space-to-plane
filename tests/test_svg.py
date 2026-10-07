@@ -553,3 +553,16 @@ def test_m6_layers_subset_and_hidden_style_omit():
     assert ids[0] == "cast_shadow" and ids[1] == "cast_shadow.hidden" and "cast_shadow.umbra" in ids
     assert not any(i.startswith(("form_shadow", "construction")) for i in ids)
     assert "stroke-dasharray" in _g_tags(svg)["cast_shadow.hidden"]
+
+
+def test_subnormal_pitch_camera_renders_without_numpy_warnings():
+    """Regression (merge of the final review fixes): a pitch of 1.1e-308 deg with roll -180 makes a centred
+    image conic singular with subnormal entries; ``np.linalg.det`` then warned "divide by zero" inside
+    ``conics.classify_and_condition`` and the warnings-as-errors fuzz above failed.  The conic is degenerate
+    (sampled), the render must not warn."""
+    cam = {"position": [0.0, 0.0, 0.0], "roll_deg": -180.0, "focal_length_mm": 5000.0, "frame_mm": [36, 24],
+           "shift_mm": [0.0, 0.0], "near_m": 1e-06, "yaw_deg": 0.0, "pitch_deg": 1.1125369292536007e-308}
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        result = castplane.render(SCENE_FOR_FUZZ, camera=cam)
+    assert all(math.isfinite(x) for x in walk_numbers(result["geometry"]))

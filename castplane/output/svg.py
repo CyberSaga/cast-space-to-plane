@@ -512,10 +512,13 @@ def _layer_construction(doc: dict, cv: _Canvas) -> list:
         body.append(cv.diamond(fp, 1.0, 'fill="none" stroke="#36c"'))
         body.append(cv.text(fp, "F′", 'font-size="2.5" fill="#36c" font-family="sans-serif" stroke="none"', dx=1.4))
     # M4 (contract §5.0.6): every other receiver's F'_r marker (labelled F′<receiver id>) and its rays go to
-    # the same three groups (no per-receiver sub-group)
+    # the same three groups (no per-receiver sub-group), in receivers[] document order — never in the
+    # dict order of per_receiver, which the canonical JSON writer sorts (final review, m4-hidden#0)
     per_receiver = con.get("per_receiver") or {}
     segments = list(con.get("segments", []) or [])
-    for rid, blk in per_receiver.items():
+    order = {r.get("id"): k for k, r in enumerate(doc.get("receivers", []) or [])}
+    for rid in sorted(per_receiver, key=lambda r: (order.get(r, len(order)), r)):
+        blk = per_receiver[rid]
         fpr = blk.get("shadow_vp")
         if fpr is not None:
             body.append(cv.diamond(fpr, 1.0, 'fill="none" stroke="#36c"'))
@@ -547,10 +550,43 @@ def _is_labelled(parts: list) -> bool:
     return True
 
 
-def _has_shadow_or_foot_part(name: str) -> bool:
-    """Some part after the first of the dotted name is ``shadow`` or ``foot`` (contract §5.0.4)."""
-    parts = name.split(".")[1:]
-    return "shadow" in parts or "foot" in parts
+def _name_ids(doc: dict) -> tuple:
+    """``(light ids, receiver ids, multi-light)`` of a document, for the right-to-left parse of the
+    point names (contract §5.0.4): the light ids are the keys of ``constructions``, ``shadows[].light``,
+    ``receivers[].lit`` and the ``L.<light>`` / ``F.<light>[.<r>]`` names."""
+    lights = set(doc.get("constructions") or {})
+    lights.update(sh.get("light") for sh in doc.get("shadows", []) or [])
+    receivers = set()
+    for r in doc.get("receivers") or []:
+        receivers.add(r.get("id"))
+        lights.update((r.get("lit") or {}).keys())
+    for n in doc.get("points", {}):
+        if n[:2] in ("L.", "F."):
+            lights.add(n.split(".")[1])
+    return lights, receivers, "constructions" in doc
+
+
+def _is_shadow_or_foot_name(name: str, lights, receivers, multi: bool) -> bool:
+    """Contract §5.0.4 parsed from the right against the known light and receiver ids: ``name`` is a
+    shadow point ``<base>.shadow.<light>[.<r>]`` or a foot ``<base>.foot[.<r>]`` (final review,
+    m6-umbra#1: a light called ``shadow`` / ``foot`` is a light id, not a marker).  ``L.<light>`` /
+    ``F.<light>[.<r>]`` and the light-dependent curved stems of a multi-light document
+    (``<obj>.sil.<k>.<light>``, ``<obj>.g<k>.base|top.<light>``) are never shadow / foot names."""
+    parts = name.split(".")
+    q = parts[1:]
+    if parts[0] in ("L", "F") and q and q[0] in lights and (
+            len(q) == 1 or (len(q) == 2 and parts[0] == "F" and q[1] in receivers)):
+        return False
+    if multi and len(q) == 3 and q[2] in lights and (
+            (q[0] == "sil" and q[1].isdigit())
+            or (q[0][:1] == "g" and q[0][1:].isdigit() and q[1] in ("base", "top"))):
+        return False
+    for tail in ((q, q[:-1]) if len(q) >= 3 and q[-1] in receivers else (q,)):
+        if len(tail) >= 2 and tail[-1] == "foot":
+            return True
+        if len(tail) >= 3 and tail[-2] == "shadow" and tail[-1] in lights:
+            return True
+    return False
 
 
 def _layer_labels(doc: dict, cv: _Canvas) -> list:
@@ -558,11 +594,13 @@ def _layer_labels(doc: dict, cv: _Canvas) -> list:
     top = {}
     pts, labels = [], []
     lf_pts, lf_labels = [], []
-    # contract §5.0.4: a name is unlabelled iff a part after the first is "shadow" or "foot" (the receiver
-    # suffix may follow "foot"); the C-level substring pre-filter only lets such names through to the
-    # exact part test below
+    # contract §5.0.4: shadow and foot points are unlabelled, the names parsed from the right against the
+    # known light and receiver ids (a light may be called "shadow" / "foot", §5.3.11); the C-level
+    # substring pre-filter only lets candidate names through to the exact parse
+    lights, receivers, multi = _name_ids(doc)
     for name in sorted(n for n in points
-                       if not ((".shadow" in n or ".foot" in n) and _has_shadow_or_foot_part(n))):
+                       if not ((".shadow" in n or ".foot" in n)
+                               and _is_shadow_or_foot_name(n, lights, receivers, multi))):
         p = points[name]
         img = p["image"]
         if img is None:

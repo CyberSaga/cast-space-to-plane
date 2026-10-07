@@ -464,3 +464,31 @@ Both scenes re-render in about 1–5 ms per camera, far inside the 100 ms frame 
 (`--lights 2` on the Python side: 3514 umbra pieces in both implementations) takes about 0.5–0.6 s for a full
 TypeScript render, of which the umbra is 0.3–0.4 s (§5.4 implementation notes, part 4). The web UI skips the umbra
 during a drag (§5.4.11).
+
+## Final review (2026-10-07): target-free rows, the umbra bridging rule, the mesh10k hidden-lines row
+
+- **Labels of the target-free variants.** Spec §8 attaches its targets to the benchmark scene with one
+  light (and §5.1.6.6 its 5 s hidden-lines soft target to the same scene). `bench.py` used to print the
+  single-light `target < 1000 ms` / `< 100 ms` verdicts (often `FAIL`) on the `--lights 2|3` and
+  `--scene mesh10k` rows while ending with `RESULT: PASS (gate: none)`; those rows (full render,
+  camera-only, hidden lines on) now print `no target (spec §8: the benchmark scene, one light)`. The
+  JSON output and the exit status are unchanged (`--gate none` remains the way to run these variants).
+- **Umbra zero-width bridging** (contract §5.3.4 step 5, final review m6-umbra#0): the benchmark piece
+  counts are unchanged — `record_pieces` per light `lamp` 3637, `lamp_mx` 3652, `lamp_my` 3651; umbra
+  3514 (`--lights 2`) / 4129 (`--lights 3`); 2000-edge loop 1998. On a per-face fallback mesh (open UV
+  sphere shell, two point lights, not a benchmark scene) the umbra goes from 5584 to 27 pieces at 672
+  faces and from 47 697 to 55 at 2752 faces. Its time only halves (2752 faces: 1.69 s → 0.81 s of
+  umbra in stage B, against 0.02 s for stage B without it; 672 faces 0.11 s, 1488 faces 0.38 s): a
+  per-face fallback mesh under N ≥ 2 lights still costs O(events × active edges), because every input
+  vertex is a slab event. `project_scene(..., umbra=False)` stays the escape hatch for such meshes with
+  10k+ faces.
+- **mesh10k with hidden lines** (informational, no target: §5.1.6.6's soft target is for the spec §8
+  scene only, §5.2.7 attaches no gate to mesh10k): `python3 benchmarks/bench.py --scene mesh10k
+  --hidden-lines -n 2 --gate none` → full render with hidden lines on **5797 ms (6236)**, SVG 619 kB,
+  JSON 5863 kB (14 510 drawn edges); the review measured 5.9–8.3 s and a peak RSS of ≈ 460 MB. The cost
+  is the brute-force Möller–Trumbore occluder test of `hidden._first_mesh` (every sampled ray against all
+  10 000 triangles), which §5.1.6.2 allows ("a BVH is an optional result-identical optimisation"). A
+  smaller `_MT_BLOCK` (2^17 instead of 2^21) or a mesh-AABB-clipped per-block triangle cull are
+  result-identical options that the review measured at 2–3× faster; on this container `_MT_BLOCK = 1 << 17`
+  gives a byte-identical document in 4.29 s instead of 5.93 s (min of 2) with a peak RSS of 120 MB instead
+  of 468 MB. Not implemented (no BVH or grid either).
