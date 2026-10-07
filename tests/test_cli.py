@@ -355,3 +355,15 @@ def test_m4_info_lists_receivers(tmp_path, capsys):
     assert "wall: bounded, 4 vertices, plane [0, -1, 0, 6]; lit: lamp=yes; casts: lamp=yes" in out
     assert main(["info", BASIC]) == EXIT_OK
     assert "receivers: 1" in capsys.readouterr().out
+
+
+def test_usage_warning_table_lists_every_warning_code():
+    """docs/USAGE.md §3 is the user-facing copy of the contract §2.9 / §5.0.5 warning table: every
+    code of :data:`castplane.errors.WARNING_CODES` needs its own row there."""
+    from castplane.errors import WARNING_CODES
+
+    usage = (ROOT / "docs" / "USAGE.md").read_text(encoding="utf-8")
+    section = usage.split("\n## 3. ", 1)[1].split("\n## 4", 1)[0]
+    rows = {m.group(1) for m in re.finditer(r"^\| `([A-Z_]+)` \|", section, re.M)}
+    missing = sorted(set(WARNING_CODES) - rows)
+    assert not missing, f"warning codes without a docs/USAGE.md §3 row: {missing}"

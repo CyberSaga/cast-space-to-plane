@@ -488,3 +488,32 @@ def test_scale_is_applied_before_the_weld():
     mesh, _t, _fb, _g, warnings = prep(near, [[8, 3, 2, 1]] + CUBE_F[1:])
     assert mesh["faces"][0] == [0, 3, 2, 1] and warnings == []
     assert mesh_from_faces(mesh["vertices"], mesh["faces"])["edges"].shape == (12, 2)
+
+
+def test_preprocess_mesh_return_scale_and_prepared_mesh_reuse_it(monkeypatch):
+    """``preprocess_mesh(..., return_scale=True)`` appends the ``scale_A`` its steps used; the 5-tuple
+    form is unchanged, and :func:`castplane.primitives.prepared_mesh` takes the value from there
+    instead of converting the vertices a second time."""
+    from castplane import primitives
+    data = {"vertices": [[3 * c for c in v] for v in SPLIT_V], "faces": SPLIT_F}
+    five = meshprep.preprocess_mesh(data, 2.0, 1e-6, 30.0, "m")
+    six = meshprep.preprocess_mesh(data, 2.0, 1e-6, 30.0, "m", return_scale=True)
+    assert len(five) == 5 and len(six) == 6 and six[5] == 6.0
+    assert six[0]["faces"] == five[0]["faces"] and six[1].tolist() == five[1].tolist()
+    calls = []
+    real = meshprep.mesh_scale
+    monkeypatch.setattr(meshprep, "mesh_scale", lambda V: calls.append(1) or real(V))
+    rec = primitives.prepared_mesh({"id": "m", "type": "mesh", "data": data, "scale": 2.0})
+    assert rec["scale_A"] == 6.0 and len(calls) == 1
+
+
+def test_has_usable_face_is_the_validation_guard():
+    assert meshprep.has_usable_face(CUBE_V, CUBE_F, 1.0, 1e-6)
+    # every face collapses under a weld tolerance larger than the box
+    assert not meshprep.has_usable_face(CUBE_V, CUBE_F, 1.0, 10.0)
+    # a single sliver whose Newell norm is below 1e-12 * scale_A^2
+    assert not meshprep.has_usable_face([[0, 0, 0], [1, 0, 0], [2, 1e-14, 0]], [[0, 1, 2]], 1.0, 0.0)
+    import inspect
+    from castplane import scene
+    src = inspect.getsource(scene)
+    assert "import numpy" not in src and "np." not in src          # one import style: scene.py stays numpy-free

@@ -1873,6 +1873,11 @@ unordered world pairs with equal `silhouette` / `back` flags and `segment` endpo
   position, so when step 5 flipped any face it runs on `build_adjacency` of the **oriented** faces (the undirected edge set
   and its numbering are unchanged by flips; only `face_edge_at` / `edge_dirs` differ). A direct `preprocess_mesh` call
   whose faces are all degenerate raises `ValueError("no usable face ...")` (unreachable on a validated scene).
+- **[decision, implementation] (M5) Shared helpers.** `preprocess_mesh(..., return_scale=False)`: with `return_scale=True`
+  the contract's 5-tuple gains a sixth item, the step-1 `scale_A`, which `primitives.prepared_mesh` stores as
+  `mesh_scale_A` instead of recomputing it. The §5.2.1 usable-face guard is `meshprep.has_usable_face(vertices, faces,
+  scale, weld_tolerance)` (steps 2–3 on `scale · vertices`), so `scene.py` keeps no numpy import. The §5.2.4 ray
+  selection reuses the edge-silhouette mask the shadow record already computed (receiver-clipped or not).
 
 ### 5.3 M6 — multiple lights (amendment to §2.0, §2.3, §2.5–2.10, §3, §3.1, §4)
 

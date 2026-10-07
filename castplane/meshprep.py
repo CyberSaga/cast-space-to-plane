@@ -49,6 +49,7 @@ __all__ = [
     "inherit_edge_smooth",
     "point_inside_mesh",
     "preprocess_mesh",
+    "has_usable_face",
 ]
 
 #: Coplanar-merge angle (contract §5.2.3 step 6).
@@ -678,8 +679,10 @@ def inherit_edge_smooth(loop_mesh: dict, origins, mesh: dict, edge_smooth) -> np
 # ---------------------------------------------------------------------------
 
 def preprocess_mesh(data: dict, scale: float, weld_tolerance: float, smooth_angle_deg: float,
-                    object_id: str = ""):
-    """Contract §5.2.3 -> ``(mesh, triangles, fallback, smooth_groups, warnings)``.
+                    object_id: str = "", return_scale: bool = False):
+    """Contract §5.2.3 -> ``(mesh, triangles, fallback, smooth_groups, warnings)``; with
+    ``return_scale=True`` the tuple gains a sixth item, ``scale_A`` (:func:`mesh_scale` of
+    ``scale · vertices``, the §5.2.3 length scale the steps used), so callers need not recompute it.
 
     ``data`` is the validated ``objects[i].data`` (Z-up, file units); the result is in the object's
     local frame (``scale`` applied, ``transform`` not).  ``mesh`` is the §2.4 dict plus
@@ -712,7 +715,8 @@ def preprocess_mesh(data: dict, scale: float, weld_tolerance: float, smooth_angl
                + ("; inconsistent winding" if conflict else "") + "); per-face shadow fallback")
         warnings.append(make_warning("MESH_NON_MANIFOLD", [object_id], msg))
         mesh = fallback_mesh(W, faces, names)
-        return mesh, triangulate(faces), True, groups, warnings
+        out = (mesh, triangulate(faces), True, groups, warnings)
+        return out + (scale_A,) if return_scale else out
     oriented, flipped_volume = _orient_components(W, oriented, components, scale_A)
     if bool(np.any(flipped)) or flipped_volume:
         warnings.append(make_warning("MESH_WINDING_FIXED", [object_id]))
@@ -726,4 +730,16 @@ def preprocess_mesh(data: dict, scale: float, weld_tolerance: float, smooth_angl
     merged_groups = [groups[k] for k in origin]
     mesh = mesh_from_faces(W, merged, names)
     mesh["edge_smooth"] = classify_edges(mesh, smooth_angle_deg, merged_groups)
-    return mesh, triangles, False, merged_groups, warnings
+    out = (mesh, triangles, False, merged_groups, warnings)
+    return out + (scale_A,) if return_scale else out
+
+
+def has_usable_face(vertices, faces, scale: float, weld_tolerance: float) -> bool:
+    """The usable-face guard of :func:`castplane.scene.validate_object` (contract §5.2.1 [decision]):
+    whether at least one face survives the weld (§5.2.3 step 2) and the degenerate-face removal
+    (step 3) on ``scale · vertices`` -- exactly the steps :func:`preprocess_mesh` runs first, so a
+    validated mesh never makes it raise."""
+    V = float(scale) * np.asarray(vertices, dtype=np.float64).reshape(-1, 3)
+    W, faces_w, _index = weld_vertices(V, faces, float(weld_tolerance))
+    kept, _kept_idx = drop_degenerate_faces(W, faces_w, mesh_scale(V))
+    return bool(kept)

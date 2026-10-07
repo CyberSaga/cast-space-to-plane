@@ -347,7 +347,8 @@ C 段在 `hidden_lines` 開啟時呼叫；純 numpy、確定性（取樣位置�
 
 | 函式 | 說明 |
 | --- | --- |
-| `preprocess_mesh(data, scale, weld_tolerance, smooth_angle_deg, object_id="")` | 整條前處理 → `(mesh, triangles, fallback, smooth_groups, warnings)`：縮放 → 焊接 → 退化面 → 鄰接／流形／方向 → 共面合併 → 邊分類；非流形時走逐面退路 |
+| `preprocess_mesh(data, scale, weld_tolerance, smooth_angle_deg, object_id="", return_scale=False)` | 整條前處理 → `(mesh, triangles, fallback, smooth_groups, warnings)`（`return_scale=True` 時多一項 `scale_A`）：縮放 → 焊接 → 退化面 → 鄰接／流形／方向 → 共面合併 → 邊分類；非流形時走逐面退路 |
+| `has_usable_face(vertices, faces, scale, weld_tolerance) -> bool` | 驗證用的「至少一個可用面」檢查：在 `scale · vertices` 上焊接並移除退化面後是否還有面（合約 §5.2.1） |
 | `mesh_scale(V) -> float` | `scale_A = max(1, 包圍盒最大邊長)`，本節所有容差的長度尺度 |
 | `weld_map(V, tol, fast=True)`、`weld_vertices(V, faces, tol, fast=True)` | 焊接（27 鄰格、輸入索引最低的代表、取代表點原座標、依首次出現編號）；`fast` 為結果相同的向量化路徑 → `(W, faces_w, index)` |
 | `prepare_faces(faces, index=None)` | 面轉成 int 串列並依 `index` 重新編號 |
@@ -384,5 +385,11 @@ C 段在 `hidden_lines` 開啟時呼叫；純 numpy、確定性（取樣位置�
 | `CONIC_SAMPLED` | 某圓錐曲線退化或條件數 > 1e8 | `[物件]` | 以取樣折線取代橢圓／弧 |
 | `CONSTRUCTION_CHECK_SKIPPED` | 自我驗證的兩線其一為零向量、兩線平行或 S′ 在無窮遠 | `[點名]` | 該點不列入 `checks` |
 | `RECEIVER_UNLIT` | M4：有界受影面收不到某光源（點光源在板的背側或板面上、平行光平行板面或從背側照來，或光源在無界地面之下——地面不透光）；唯一刻意的「資訊性」代碼（合約 §5.1.9） | `[光源, 受影面]` | 該板對該光源的影子紀錄存在但為空，`receivers[].lit[光源]` 為 false；板仍可對其他受影面投影 |
+| `MESH_NON_MANIFOLD` | 某條邊不是恰好兩個相異面，或繞向不一致且無法以傳播修正（合約 §5.2.6） | `[物件]` | 逐面後備影子（§5.2.5）；不畫作圖線、不做 checks、不做光源在內判定 |
+| `MESH_WINDING_FIXED` | 傳播翻轉了某些面，或某連通分量的有號體積正負號與其巢狀深度不符 | `[物件]` | 面已重新定向 |
+| `MESH_DEGENERATE_FACES` | §5.2.3 第 3 步丟棄了退化面（訊息給數量） | `[物件]` | 忽略那些面 |
+| `MESH_RAYS_CAPPED` | 同一（物件、光源、受影面）的特徵輪廓頂點超過 64 個 | `[物件]` | 只對迴圈順序的前 64 個畫作圖線、做 checks |
 
 M4 改變的適用範圍（合約 §5.1.9）：`LIGHT_BELOW_RECEIVER`、`DIRECTIONAL_HORIZONTAL`、`VERTEX_NOT_BELOW_LIGHT`、`OBJECT_BELOW_RECEIVER` 只用於無界受影面（有界板的背後裁切是靜默的，裁切點命名為 `<物件>.s<k>.<光源>.<受影面>`）；`POINT_BEHIND_CAMERA` 的 ids 可以是受影面 id（其 `b<k>` 頂點或影子點）；`SHADOW_VP_AT_INFINITY` 對 `receivers[0]` 為 `[光源]`、其他受影面為 `[光源, 受影面]`；`CONSTRUCTION_CHECK_SKIPPED` 的點名帶受影面後綴。影子沒落在板上、物件在板後、板側對光源或相機、共平面施影體、以及任何消隱情況都**不**發警告。
+
+以上四個 `MESH_*` 代碼由 M5 加入；合併後在警告清單中接在 M4 的 `RECEIVER_UNLIT` 之後（合約 §5.0.5）。

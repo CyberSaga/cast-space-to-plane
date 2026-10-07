@@ -69,11 +69,10 @@ def prepared_mesh(obj: dict) -> dict:
     """The preprocessed local mesh of a validated ``mesh`` object (contract §5.2.3):
     ``{mesh, triangles, fallback, smooth_groups, warnings, scale_A}`` from
     :func:`castplane.meshprep.preprocess_mesh` (``scale`` applied, ``transform`` not)."""
-    from .meshprep import mesh_scale, preprocess_mesh
-    mesh, triangles, fallback, groups, warnings = preprocess_mesh(
+    from .meshprep import preprocess_mesh
+    mesh, triangles, fallback, groups, warnings, scale_A = preprocess_mesh(
         obj["data"], obj.get("scale", 1.0), obj.get("weld_tolerance", 1e-6), obj.get("smooth_angle_deg", 30.0),
-        obj["id"])
-    scale_A = mesh_scale(float(obj.get("scale", 1.0)) * np.asarray(obj["data"]["vertices"], dtype=np.float64))
+        obj["id"], return_scale=True)
     return {"mesh": mesh, "triangles": triangles, "fallback": fallback, "smooth_groups": groups,
             "warnings": warnings, "scale_A": scale_A}
 

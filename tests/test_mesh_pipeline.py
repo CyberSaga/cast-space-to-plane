@@ -599,3 +599,27 @@ def test_polyhedral_cases_rewritten_as_meshes_are_unchanged(name):
         if w["code"] == "LIGHT_INSIDE_OBJECT":
             w["message"] = "inside"
     assert dumps(doc) == dumps(ref)
+
+
+def test_buried_mesh_rays_reuse_the_shadow_record_silhouette(monkeypatch):
+    """A receiver-clipped (buried) mesh evaluates ``face_lit_flags`` on the clipped mesh exactly as often
+    as the parametric box does: the §5.2.4 ray selection reuses the silhouette mask of the shadow record
+    instead of recomputing it, and still selects the same rays."""
+    from castplane import pipeline
+
+    def counted(scene):
+        calls = []
+        real = pipeline.face_lit_flags
+        monkeypatch.setattr(pipeline, "face_lit_flags", lambda *a, **k: calls.append(1) or real(*a, **k))
+        doc = doc_of(scene)
+        monkeypatch.setattr(pipeline, "face_lit_flags", real)
+        return len(calls), doc
+
+    box = analytic_box_scene()
+    box["objects"][0]["transform"] = {"position": [0.0, 0.0, -0.5]}
+    n_box, ref = counted(box)
+    n_mesh, doc = counted(mesh_box_scene(transform={"position": [0.0, 0.0, -0.5]}))
+    assert n_box >= 1 and n_mesh == n_box
+    assert ("OBJECT_BELOW_RECEIVER", ("cube",)) in warning_set(doc)
+    assert doc["construction"]["rays"] == ref["construction"]["rays"] != []
+    assert dumps(strip_mesh_keys(doc)) == dumps(ref)

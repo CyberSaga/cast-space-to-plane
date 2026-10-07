@@ -172,3 +172,23 @@ document has the same 9030 drawn edges and 15171 named points. With hidden lines
 takes ≈ 1 s, a fifth of the soft target: every edge, generator, conic interval and shadow-polygon
 edge is sampled at 1 mm (≥ 8 samples) against the exact occluders of the 100 primitives, with the
 image-bounds cull of §5.1.6.4.
+
+## M5 part 1 (2026-10-07): features-off delta of the mesh pipeline
+
+`python3 benchmarks/bench.py -n 5 --gate full` on the committed `scenes/benchmark_100.json` (no `mesh`
+object, so this measures what the M5 hooks cost a scene that does not use them), three interleaved
+runs on the same container: "before" is the tree at `fb17986` (the branch point of `wt/m5`), "after"
+is `wt/m5` with steps 1–4 and 7. The document is byte-identical (same sizes, `warnings []`). Minimum
+over the repetitions, the median in brackets.
+
+| path | before run 1 | before run 2 | before run 3 | after run 1 | after run 2 | after run 3 |
+| --- | --- | --- | --- | --- | --- | --- |
+| full render | 507 ms (561) | 516 ms (531) | 531 ms (549) | 513 ms (565) | 535 ms (549) | 545 ms (573) |
+| camera-only re-render | 149 ms (152) | 150 ms (184) | 154 ms (166) | 148 ms (153) | 149 ms (150) | 151 ms (154) |
+| stage A only | 145 ms | 152 ms | 147 ms | 144 ms | 143 ms | 146 ms |
+| SVG writer only | 52 ms | 52 ms | 53 ms | 50 ms | 50 ms | 51 ms |
+| JSON dumps only | 215 ms | 210 ms | 207 ms | 215 ms | 203 ms | 206 ms |
+
+The deltas (full render +1 to +4 %, the other rows −2 to +1 %) are inside the container's run-to-run
+drift; the full-render gate passes 6/6. The `--scene mesh10k` rows (stage A including the weld, and
+the full render) come with PLAN-v2 M5 step 8 (part 2), which adds the scene to `bench.py`.

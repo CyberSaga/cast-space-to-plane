@@ -278,6 +278,7 @@ def _shadow_record(obj: dict, ol: dict, lt: dict, pi: np.ndarray, tol: float, re
     if ground_mesh is None:
         loop_mesh, origins, sil_loops = mesh, None, ol["loops"]
         sil = ol["silhouette_vertices"]
+        edge_sil = ol["edge_silhouette"]
     else:  # contract §2.3: silhouette of the part above the ground (see module docstring)
         loop_mesh, origins = ground_mesh
         lit_c, _parallel = face_lit_flags(loop_mesh, lt["L"], lt["tol_lit"])
@@ -315,7 +316,7 @@ def _shadow_record(obj: dict, ol: dict, lt: dict, pi: np.ndarray, tol: float, re
     # (silhouette-loop order); every other record draws the rays of all its silhouette vertices
     ray_vertices = np.ones(sil.shape[0], dtype=bool)
     if obj["type"] == "mesh":
-        ray_vertices, capped = _mesh_ray_vertices(obj, ol, lt, sil, sil_loops, loop_mesh, origins)
+        ray_vertices, capped = _mesh_ray_vertices(obj, sil, sil_loops, loop_mesh, origins, edge_sil)
         if capped:
             warnings.append(make_warning("MESH_RAYS_CAPPED", [oid]))
     return {
@@ -338,7 +339,7 @@ def _shadow_record(obj: dict, ol: dict, lt: dict, pi: np.ndarray, tol: float, re
     }, warnings
 
 
-def _mesh_ray_vertices(obj: dict, ol: dict, lt: dict, sil, sil_loops, loop_mesh: dict, origins):
+def _mesh_ray_vertices(obj: dict, sil, sil_loops, loop_mesh: dict, origins, edge_sil):
     """``(ray_vertices, capped)`` of a mesh shadow record (contract §5.2.4 [decision]).
 
     Candidates are the original silhouette vertices that are endpoints of at least one **feature**
@@ -347,17 +348,14 @@ def _mesh_ray_vertices(obj: dict, ol: dict, lt: dict, sil, sil_loops, loop_mesh:
     edges are feature; crossing vertices are never candidates).  The first ``MESH_MAX_RAYS`` in
     silhouette-loop order (loops in order, vertices in loop order, first occurrence) are selected;
     the mask is aligned with ``vertex_ids`` (ascending original index), so the emission order is
-    unchanged."""
+    unchanged.  ``edge_sil`` is the light-silhouette mask of the edges of ``loop_mesh`` that
+    :func:`_shadow_record` already computed (``ol["edge_silhouette"]`` without a receiver clip)."""
     mesh = obj["mesh"]
     if origins is None:
-        edge_sil = np.asarray(ol["edge_silhouette"], dtype=bool)
         smooth = np.asarray(mesh["edge_smooth"], dtype=bool)
     else:
-        lit_c, _parallel = face_lit_flags(loop_mesh, lt["L"], lt["tol_lit"])
-        ef = loop_mesh["edge_faces"]
-        edge_sil = lit_c[ef[:, 0]] != lit_c[ef[:, 1]]
         smooth = inherit_edge_smooth(loop_mesh, origins, mesh, mesh["edge_smooth"])
-    feature = edge_sil & ~smooth
+    feature = np.asarray(edge_sil, dtype=bool) & ~smooth
     candidates = set(np.unique(np.asarray(loop_mesh["edges"], dtype=np.int64)[feature]).tolist())
     order, seen = [], set()
     for loop in sil_loops:

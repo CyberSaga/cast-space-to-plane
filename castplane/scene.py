@@ -559,8 +559,9 @@ def validate_mesh_object(o: dict, field: str) -> dict:
     ``data`` is required ("expand first" for a ``path``-only object, which is a loader-level object
     like ``step``: ``castplane.io.expand_scene`` fills ``data``); both together mean "already
     expanded".  ``up: "y"`` converts ``data`` with the exact :func:`to_z_up` and is rewritten to
-    ``"z"``; the usable-face guard runs :func:`castplane.meshprep.weld_vertices` and
-    :func:`castplane.meshprep.drop_degenerate_faces` on ``scale · vertices`` (the validated ``data``
+    ``"z"``; the usable-face guard (:func:`castplane.meshprep.has_usable_face`) runs
+    :func:`castplane.meshprep.weld_vertices` and :func:`castplane.meshprep.drop_degenerate_faces` on
+    ``scale · vertices`` (the validated ``data``
     stays the raw, unwelded data).  Returns the mesh keys of the validated object."""
     from . import meshprep  # numpy-only core module; imported here to keep scene.py light
 
@@ -590,11 +591,7 @@ def validate_mesh_object(o: dict, field: str) -> dict:
     if up == "y":
         data["vertices"] = to_z_up(data["vertices"])
     # usable-face guard (contract §5.2.1 [decision]): "validated => renders"
-    import numpy as np
-    V = scale * np.asarray(data["vertices"], dtype=np.float64).reshape(-1, 3)
-    _W, faces_w, _index = meshprep.weld_vertices(V, data["faces"], weld)
-    kept, _kept_idx = meshprep.drop_degenerate_faces(_W, faces_w, meshprep.mesh_scale(V))
-    if not kept:
+    if not meshprep.has_usable_face(data["vertices"], data["faces"], scale, weld):
         raise SceneError(source_field or f"{field}.data.faces", "no usable face")
     return {
         "path": path,
