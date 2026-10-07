@@ -423,7 +423,7 @@ castplane import tests/fixtures/step/two_solids.step --solid 1 -o sphere.json
 | `geometry_json.write_geometry_json(doc, path)` | 寫檔（UTF-8、結尾換行） |
 | `svg.write_svg(doc, layers=None, hidden_style="dashed") -> str` | 規格 §6.1 分圖層 SVG；`layers` 選子集，順序固定；未知 id 拋 `ValueError`；M4：`hidden_style`（`dashed` / `omit`）決定隱藏線子群組的畫法，`hidden_lines` 關閉的文件與 v2 輸出位元相同 |
 | `svg.LAYER_ORDER`、`svg.STYLE` | 圖層順序與預設樣式屬性字串 |
-| `svg.HIDDEN_STYLES`、`svg.HIDDEN_STROKE`、`svg.OUTLINE_STYLE` | M4：`hidden_style` 的允許值、各層 `*.hidden` 群組的線色（`#111` / `#335` / `#000`）、開啟消隱時影子輪廓群組 `cast_shadow.<light>.<object>.outline` 的描邊 |
+| `svg.HIDDEN_STYLES`、`svg.HIDDEN_STROKE`、`svg.OUTLINE_STYLE` | M4：`hidden_style` 的允許值、各層 `*.hidden` 群組的線色（`#111` / `#335` / `#000`）、開啟消隱時影子輪廓群組 `cast_shadow.<light>.<object>.outline` 的描邊（`receivers[0]` 以外的受影面 `r` 上的影子：`cast_shadow.<light>.<object>.<r>.outline`，`….conics` 同理） |
 | `svg_multilight.layer_form_shadow(doc, cv, hidden_style=None)`、`svg_multilight.layer_cast_shadow(doc, cv, hidden_style=None)`、`svg_multilight.layer_construction(doc, cv)` | M6：多光源文件（有 `constructions` 鍵）的三個圖層：每個光源一個子群組（光源 id 碼位順序，`fill-opacity` 為 `0.18 / N_act`、`0.3 / N_act`）、`form_shadow.core`（被所有光源背光的面，各光源群組不再畫它們）、`cast_shadow.umbra`（每筆 `umbra[]` 一個 `<path>`，每塊碎片一個 `M … Z` 子路徑）、`construction.<light>`；開啟消隱時 `*.hidden` 群組在最前（合約 §5.3.6、§5.0.6）。`svg.write_svg` 自動分派 |
 | `svg_multilight.is_multi_light(doc)`、`svg_multilight.n_active(doc)`、`svg_multilight.light_ids(doc)`、`svg_multilight.UMBRA_STYLE` | M6：多光源文件判定、`N_act = max(1, umbra[].lights 聯集的 id 數)`、光源 id（碼位順序）、本影群組樣式 |
 | `png.write_png(svg_str, dpi=300) -> bytes` | 以 cairosvg（或 resvg）柵格化；沒有後端時拋 `ImportError` |

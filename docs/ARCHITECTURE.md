@@ -586,7 +586,7 @@ All rows are additive: every v2 scene validates unchanged. Field paths are as wr
 | --- | --- | --- |
 | `objects[i].type` | one of `box, cylinder, sphere, cone, prism, mesh` (`OBJECT_TYPES`); the loader-only type `step` (`LOADER_TYPES = ("step",)`) is rejected by `validate_object` **before** the `OBJECT_TYPES` test with `SceneError(f"{field}.type", "loader object type 'step' must be expanded first (castplane.io.expand_scene or 'castplane import')")`; unknown types keep the "must be one of …" message | M5, M8 |
 | `objects[i]` (`mesh`) | `data` (inline geometry, §5.2.1) is **required by validation**; `path` / `node` / `up` / `scale` / `weld_tolerance` / `smooth_angle_deg` as §5.2.1. **[decision, synthesis]** A `mesh` object written with `path` and no `data` is a loader-level object exactly like `step`: `validate_object` raises `SceneError(f"{field}.path", "mesh file must be expanded first (castplane.io.expand_scene or 'castplane import')")`; `castplane.io.expand_scene` (§5.0.2) reads the file and fills `data`, keeping `path` as written (informational). In the scene as written at least one of `path` / `data` is present (neither → `SceneError(f"{field}.data", "required")` from `validate_object`); an object carrying **both** is taken as already expanded (`data` is used, `path` is informational) — there is no "both given" error, which is what keeps `expand_scene` idempotent. The usable-face guard and the `up: "y"` axis map of §5.2.1 run in `validate_object` on `data` (numpy only, no file) | M5, M8 |
-| `objects[i].id` / `receivers[i].id` / `lights[i].id` | **[decision, synthesis] reserved ids**: `hidden` is never a valid object, receiver or light id (it is the id of the `objects.hidden` / `form_shadow.hidden` / `cast_shadow.hidden` sub-groups of §5.1.8); in a **multi-light** scene (`len(lights) ≥ 2`) `umbra` and `core` are rejected as light ids (M6, §5.3.0) **and** `core` also as an object id (kept symmetric with the light-id rule so that the prefix `form_shadow.core` names the core group alone; `form_shadow.<light>.<obj>` itself cannot collide with it because a light id is never `core`). Message `"reserved id"`, field the id's own path. Receiver ids are disjoint from object ids (M4) **and from light ids** (§5.0.4: the point-name grammar is parsed from the right against the known light ids and receiver ids) | M4, M6 |
+| `objects[i].id` / `receivers[i].id` / `lights[i].id` | **[decision, synthesis] reserved ids**: `hidden` is never a valid object, receiver or light id (it is the id of the `objects.hidden` / `form_shadow.hidden` / `cast_shadow.hidden` sub-groups of §5.1.8); in a **multi-light** scene (`len(lights) ≥ 2`) `umbra` and `core` are rejected as light ids (M6, §5.3.0) **and** `core` also as an object id (kept symmetric with the light-id rule so that the prefix `form_shadow.core` names the core group alone; `form_shadow.<light>.<obj>` itself cannot collide with it because a light id is never `core`). Message `"reserved id"` for `hidden` (any id kind) and for the object id `core`; `"reserved id in a multi-light scene"` for the light ids `umbra` / `core` (§5.3.0; one string per row, M6 implementation note; final review docs-contract#6); field the id's own path. Receiver ids are disjoint from object ids (M4) **and from light ids** (§5.0.4: the point-name grammar is parsed from the right against the known light ids and receiver ids) | M4, M6 |
 | `receivers` | non-empty list; ids unique, non-empty, no `.`; §5.1.1 rows (`normal` any unit vector, `offset` any number, `bounds` as there, unbounded only at index 0 and only for the ground) | M4 |
 | `lights` | non-empty list of any length; ids unique, non-empty, no `.`; §5.3.0 | M6 |
 | `output.hidden_lines` | boolean, default `false` | M4 |
@@ -706,12 +706,14 @@ only when `project_scene(..., umbra=False)` was used. Serialisation unchanged (�
 **Camera-free parts** (byte-identical for two cameras; amends the M7 list of §5.4.7 for the final format):
 `hidden_lines`, `receivers[]`, `points[*].world / direction / at_infinity` for every name except the camera outline points
 `/\.og\d+\.(base|top)$/`, `edges[].{object, from, to, silhouette, silhouette_lights, smooth}`,
-`shadows[].{light, receiver, object, outline, loops, unbounded}` and `conics[].{conic, kind, arc, circle, map, which}`,
+`shadows[].{light, receiver, object, outline, loops, unbounded}` and `conics[].{arc, circle, map, which}`,
 `form_shadow[].{object, faces, light}` and `form_shadow_core[].{object, faces}` of **object** entries (a plate's entries exist
 iff the camera faces its unlit side, §5.1.8, so their *presence* is camera-dependent; their `faces` are not), `outlines[].object`,
 `construction.rays` / `per_receiver[*].rays` / `constructions[*].rays`, `umbra[].{receiver, lights}`, the camera-independent
 warning codes. Camera-dependent: everything drawn (`image`, `depth`, `segment`, `polygons`, `polylines`, `arcs`,
 `ellipses`, `visible`, `hidden_polylines`), `back`, `camera_silhouette`, every `visibility` / `runs` / `polygon_edges`,
+`conics[].{conic, kind, sampled}` (the **image** conic `adj(H)ᵀ·C·adj(H)` with `H = P·M·E` for shadows, `P·E` for outlines,
+§2.6, so its class can change with the camera; final review determinism-perf#1),
 `umbra[].polygons`, the rest of `construction*`, `horizon`, `camera`, `outlines[].generators`, the `og` points.
 
 #### 5.0.4 Point-name grammar (unified; amends §3.1)
@@ -730,8 +732,11 @@ L.<light>   F.<light>[.<r>]                 light point, light foot per receiver
 The trailing receiver suffix exists only for receivers other than `receivers[0]` (M4); the light suffix on curved stems
 only when `N ≥ 2` (M6); the light id of a multi-light curved shadow therefore appears twice on purpose
 (`<obj>.sil.0.<light>.shadow.<light>[.<r>]`). Receiver ids are disjoint from object ids and light ids (§5.0.1), so the
-parse is unambiguous. **Labels (SVG)**: a name is unlabelled iff any part **after the first** (the object / receiver id) equals `shadow` or
-`foot`, or its head (the part after the id) is `s<k>` / `og<k>` (so an object called `foot` keeps its labels, as in v2); `L.<light>` and `F.<light>[.<r>]` are labelled through the L/F branch and never set an object's top
+parse is unambiguous. **Labels (SVG)**: a name is unlabelled iff, parsed from the right as above, it is a shadow point
+`<base>.shadow.<light>[.<r>]` or a foot `<base>.foot[.<r>]` (equivalently: a part **after the first** (the object /
+receiver id) equals `shadow` or `foot` as a marker, never as a light id — a light called `shadow` / `foot` keeps its
+`L.`/`F.` and stem labels, §5.3.11; final review m6-umbra#1), or its head (the part after the id) is `s<k>` / `og<k>`
+(so an object called `foot` keeps its labels, as in v2); `L.<light>` and `F.<light>[.<r>]` are labelled through the L/F branch and never set an object's top
 label; `<r>.b<k>` is labelled `b<k>` with the receiver id bold at its highest vertex; a light-dependent curved stem is
 labelled with its `rest` (`sil.0.lamp`).
 
@@ -758,8 +763,8 @@ Layer order and default styles of §2.10 are unchanged. Inside a layer the sub-g
 | --- | --- |
 | `objects` | `objects.hidden` (*iff* `doc.hidden_lines`; sub-groups `objects.hidden.<id>`, §5.1.8), then `objects.<id>` / `.front` / `.back` for every object **and every bounded receiver** (its bounds edges), document order |
 | `form_shadow` | `form_shadow.hidden` (*iff* hidden lines; `form_shadow.hidden.<id>`); then, for `N = 1`: `form_shadow.<id>` / `.terminator`; for `N ≥ 2`: per light `form_shadow.<light>` (`fill-opacity = 0.18 / N_act`) holding `form_shadow.<light>.<obj>` (that light's unlit faces **minus the core faces**) and `.terminator`, then `form_shadow.core` holding `form_shadow.core.<obj>` (§5.3.6). Plates (`<obj>` = receiver id) are ordinary entries |
-| `cast_shadow` | `cast_shadow.hidden` (*iff* hidden lines; `cast_shadow.hidden.<light>`); then per light `cast_shadow.<light>` (`fill-opacity = 0.3 / N_act` *iff* `N ≥ 2`) with `cast_shadow.<light>.<object>.conics` and, *iff* hidden lines, `cast_shadow.<light>.<object>.outline` (§5.1.8: the paths then carry `stroke="none"`); then `cast_shadow.umbra` (*iff* `N ≥ 2`; `fill="#000" fill-opacity="0.3" stroke="none"`, one `<path>` per `umbra[]` entry with non-empty polygons) |
-| `construction` | for `N = 1`: `construction.LP` / `.FQ` / `.PQ` (markers `L'`, `F'` and — M4 — every receiver's `F'_r` marker and its rays in the same three groups; **[decision, synthesis]** no per-receiver sub-group); for `N ≥ 2`: per light `construction.<light>` holding that light's markers and `construction.<light>.LP` / `.FQ` / `.PQ` |
+| `cast_shadow` | `cast_shadow.hidden` (*iff* hidden lines; `cast_shadow.hidden.<light>`); then per light `cast_shadow.<light>` (`fill-opacity = 0.3 / N_act` *iff* `N ≥ 2`) with `cast_shadow.<light>.<object>.conics` and, *iff* hidden lines, `cast_shadow.<light>.<object>.outline` (§5.1.8: the paths then carry `stroke="none"`) for a record on `receivers[0]` (and every record of a v2 document), `cast_shadow.<light>.<object>.<r>.conics` / `cast_shadow.<light>.<object>.<r>.outline` for a record on any other receiver `r` (M4 implementation note "object casting on several receivers"; final review docs-contract#5); then `cast_shadow.umbra` (*iff* `N ≥ 2`; `fill="#000" fill-opacity="0.3" stroke="none"`, one `<path>` per `umbra[]` entry with non-empty polygons) |
+| `construction` | for `N = 1`: `construction.LP` / `.FQ` / `.PQ` (markers `L'`, `F'` and — M4 — every receiver's `F'_r` marker and its rays in the same three groups; **[decision, synthesis]** no per-receiver sub-group; the receivers' markers and rays follow `receivers[]` document order, never the key order of `per_receiver`, which the canonical JSON sorts — final review m4-hidden#0); for `N ≥ 2`: per light `construction.<light>` holding that light's markers and `construction.<light>.LP` / `.FQ` / `.PQ` |
 | `horizon`, `labels` | unchanged (labels per §5.0.4) |
 Light sub-groups are ordered by light id in code-point order (as `cast_shadow.<light>` already is); hidden-run style
 `stroke-width="0.15" stroke-dasharray="0.5 0.5" fill="none"` with the layer's stroke colour; `hidden_style == "omit"`
@@ -1204,7 +1209,9 @@ infinity (eye level) whether or not a ground receiver exists. `stages` (CLI) ser
   `stroke-width="0.15" stroke-dasharray="0.5 0.5" fill="none"` with the layer's stroke colour (`#111`, `#335`, `#000`).
   `hidden_style == "omit"` writes those groups empty (ids kept, nothing drawn) — true hidden-line removal. Cast-shadow
   paths are then written `stroke="none"` and their outline runs stroked in `cast_shadow.<light>.<object>.outline`
-  (`stroke="#000" stroke-width="0.25"`); the fill is unchanged (regions are not subject, §5.1.6.1).
+  (`cast_shadow.<light>.<object>.<r>.outline` for a record on a receiver `r` other than `receivers[0]`, like the
+  `.conics` groups — M4 implementation note "ids with several receivers", final review docs-contract#5;
+  `stroke="#000" stroke-width="0.25"`); the fill is unchanged (regions are not subject, §5.1.6.1).
   `write_svg(doc, layers=None, hidden_style="dashed")`; the hidden groups exist iff `doc["hidden_lines"]` is true.
 
 #### 5.1.9 Warning codes (§2.9 amendment: the closed list grows by one; the table is in §5.0.5)
@@ -1373,7 +1380,7 @@ worktree and the merge rule are in `docs/PLAN-v2.md`.
   the camera's side; a sphere's light-silhouette circle just behind its rim). The same happens on a **face seen
   edge-on**: in the contract's own case `hidden_lines_vp_in_canvas` the camera (`z = 3`) lies exactly in the plane of
   the tower's top face, so the pixel-centre rays beside the hidden top edges see `Z = inf` through the zero-width face.
-  Measured with `guard=False` over the 28 depth-buffer scenes of `tests/test_hidden.py` (77,529 decided samples, 273
+  Measured with `guard=False` over the 29 depth-buffer scenes of `tests/test_hidden.py` (77,529 decided samples, 273
   disagreements): the bare rule fails the ≥ 99 % gate on `hidden_lines_vp_in_canvas` (543 / 618 = 87.9 %),
   `hidden_lines_curved_unbounded` (973 / 984 = 98.9 %), `random_1` (98.7 %) and `random_3` (97.9 %), and it fails the
   **100 % rule on box / prism `edges[]`** ("no silhouette ambiguity there") on `hidden_lines_vp_in_canvas` (467 / 535;
@@ -1449,6 +1456,15 @@ worktree and the merge rule are in `docs/PLAN-v2.md`.
   on` (`hidden_lines_full_render_s: {min, median, target: 5.0, soft_pass}`, `hidden_lines_svg_bytes`,
   `hidden_lines_json_bytes` in `--json`); every other row, `pass` and the exit status stay the switch-off measurement,
   so `--gate full` is unchanged with or without the option.
+- **[decision, implementation] (final review, m4-hidden#0) Receiver order of the construction layer.** `_layer_construction`
+  iterated `construction.per_receiver` in dict order: scene order in memory, code-point order after the canonical JSON
+  round trip (`sort_keys`), so `write_svg(json.loads(dumps(doc)))` differed from `write_svg(doc)` (the `F′wall` /
+  `F′panel` markers and rays swapped) whenever two bounded receivers were not in code-point order — the writer must be a
+  pure function of the document's content (§3, §5.4.6). The F′_r markers and rays are now emitted in `receivers[]`
+  document order (ids missing from `receivers[]`, not produced by the pipeline, last in code-point order); the
+  multi-light path passes `receivers` to the per-light sub-document. The in-memory order was already scene order, so no
+  golden or expected SVG changes. §5.0.6 states the order. Test:
+  `tests/test_receivers.py::test_construction_layer_is_independent_of_per_receiver_key_order`.
 
 ### 5.2 M5 — mesh import (spec §9 rows 網格匯入 / 匯入格式, spec §10 M5, spec §11.3)
 
@@ -2526,6 +2542,18 @@ dependency (shapely, pyclipper); `float32` or GPU paths.
   so no expected file changes. The TypeScript port of the kernel (M7 phase 2) must mirror the rule; it agrees with the
   Python kernel on every conformance case either way. Tests: `tests/test_umbra.py::test_shared_edges_do_not_split_the_partition`,
   `test_triangle_soup_square_is_one_piece`, `test_separate_regions_are_not_bridged`.
+- **[decision, implementation] (final review, m6-umbra#1) Labels of a light called `shadow` / `foot`.** The labels layer
+  applied the §5.0.4 part test to the whole name ("any part after the first equals `shadow` / `foot`"), so a light id
+  `shadow` or `foot` — valid by §5.0.1 / §5.3.11 — silently lost its `L.<light>`, `F.<light>[.<r>]` and
+  `<obj>.sil.<k>.<light>` labels. `svg._is_shadow_or_foot_name(name, lights, receivers, multi)` now parses the name from
+  the right against the document's light ids (keys of `constructions`, `shadows[].light`, `receivers[].lit`, the
+  `L.` / `F.` names) and receiver ids: after an optional trailing receiver id the name ends in `.foot` or in
+  `.shadow.<light>`; `L.<light>`, `F.<light>[.<r>]` and, in a multi-light document, the stems `<obj>.sil.<k>.<light>` /
+  `<obj>.g<k>.base|top.<light>` are never shadow / foot names. For every document whose light ids are not `shadow` /
+  `foot` the decision equals the old part test (checked on all 50 conformance cases and the examples, hidden lines on
+  and off: 8 312 names, 0 differences), so no golden or expected file changes. The §5.0.4 label sentence is amended
+  accordingly; the TS writer (§5.4.6) must use the same parse. Test:
+  `tests/test_multilight.py::test_light_ids_shadow_and_foot_keep_their_labels`.
 
 ### 5.4 M7 — TypeScript port of the core and the three.js web UI (spec §9 row "TypeScript 移植", spec §10 M7)
 
@@ -2880,7 +2908,8 @@ const out   = render(scene, camera?, hidden_lines?, hidden_style?, umbra?);   //
   they exist only for the current camera and their world coordinates move with it — verified on `examples/curved_demo.json`:
   6 of 8 `og` points differ between the scene camera and the test camera, every other point is identical — and the two key
   sets agree after removing those names; `edges[].{object, from, to, silhouette}`; `shadows[].{light, receiver, object,
-  outline, loops, unbounded}` and every `conics[].{conic, kind, arc, circle, map, which}`; `form_shadow[].{object, faces}`
+  outline, loops, unbounded}` and every `conics[].{arc, circle, map, which}` (not `conic` / `kind` / `sampled`: the image
+  conic depends on `P`, §2.6, §5.0.3); `form_shadow[].{object, faces}`
   and the terminator entries' `segment` names; `outlines[].object`; `construction.rays`; `warnings` restricted to the codes
   that are not camera predicates — `CAMERA_LOOKING_ALONG_UP`, `LIGHT_BEHIND_CAMERA`, `LIGHT_POINT_AT_INFINITY`,
   `SHADOW_VP_AT_INFINITY`, `POINT_BEHIND_CAMERA`, `CONSTRUCTION_CHECK_SKIPPED` are camera-dependent).
