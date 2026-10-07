@@ -205,10 +205,10 @@ def test_ts_render_equals_the_reference_on_the_examples(built_port, tmp_path):
     examples = sorted((ROOT / "examples").glob("*.json"))
     # M7 phase 2 (contract §5.4.0): the examples whose geometry belongs to a phase-2 part that has not landed yet
     # (hidden lines, meshes, N >= 2); each part shrinks this list, the final part leaves it empty
-    todo = {"mesh_demo.json", "two_lights.json", "wall_and_ground.json"}
+    todo = {"mesh_demo.json", "two_lights.json"}
     assert todo <= {p.name for p in examples}
     examples = [p for p in examples if p.name not in todo]
-    assert len(examples) == 5
+    assert len(examples) == 6
     proc = subprocess.run([NODE, str(TS / "scripts" / "render.mjs"), *map(str, examples), str(tmp_path)],
                           capture_output=True, text=True, timeout=300)
     assert proc.returncode == 0, proc.stderr[-2000:]

@@ -90,9 +90,19 @@ function interpolate(a: readonly number[], b: readonly number[], fa: number, fb:
  * antipodal directions is no projective point).
  */
 export function clip_segment_halfspace<T extends readonly number[]>(a: T, b: T, fa: number, fb: number): [number[], number[]] | null {
+  if (!(fa >= 0.0 || fb >= 0.0)) return null;
+  const [a2, b2, keep] = clip_segment_halfspace_keep(a, b, fa, fb);
+  return keep ? [a2, b2] : null;
+}
+
+/**
+ * One row of the reference's batched `clip_segments_halfspace`: `[a2, b2, keep]` with the interpolation and the
+ * zero-row filter of `clip_segment_halfspace` (its single implementation); a dropped row (`keep == false`) carries
+ * meaningless values, as the batched reference's do. Used by `hidden.ts::drawn_segments_4d`.
+ */
+export function clip_segment_halfspace_keep(a: readonly number[], b: readonly number[], fa: number, fb: number): [number[], number[], boolean] {
   const a_in = fa >= 0.0;
   const b_in = fb >= 0.0;
-  if (!(a_in || b_in)) return null;
   const scale = Math.max(row_max_abs(a), row_max_abs(b));
   let a2: readonly number[] = a;
   let b2: readonly number[] = b;
@@ -101,8 +111,8 @@ export function clip_segment_halfspace<T extends readonly number[]>(a: T, b: T, 
     if (!a_in) a2 = x;
     if (!b_in) b2 = x;
   }
-  if (!(nonzero(a2, scale) && nonzero(b2, scale))) return null;
-  return [[...a2], [...b2]];
+  const keep = (a_in || b_in) && nonzero(a2, scale) && nonzero(b2, scale);
+  return [[...a2], [...b2], keep];
 }
 
 /**

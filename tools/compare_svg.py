@@ -121,33 +121,34 @@ def main(argv: list[str] | None = None) -> int:
         return 2
     # render.mjs names its outputs by the file stem: scenes sharing a stem (tests/conformance/cases/wall_and_ground.json
     # and examples/wall_and_ground.json) go to separate output directories, one node run per directory
-    batches: list[list[pathlib.Path]] = []
-    for path in scenes:
+    # batches hold positions into scenes, so the output-directory map does not depend on object identity
+    batches: list[list[int]] = []
+    for i, path in enumerate(scenes):
         for batch in batches:
-            if all(p.stem != path.stem for p in batch):
-                batch.append(path)
+            if all(scenes[j].stem != path.stem for j in batch):
+                batch.append(i)
                 break
         else:
-            batches.append([path])
+            batches.append([i])
     with tempfile.TemporaryDirectory() as tmp:
-        outdir: dict[int, pathlib.Path] = {}
+        outdir: list[pathlib.Path] = [pathlib.Path(tmp)] * len(scenes)
         stderr = []
         for k, batch in enumerate(batches):
             out = pathlib.Path(tmp) / str(k)
-            run = subprocess.run([node, str(RENDER), *map(str, batch), str(out)], capture_output=True, text=True, check=False)
+            run = subprocess.run([node, str(RENDER), *(str(scenes[j]) for j in batch), str(out)], capture_output=True, text=True, check=False)
             if run.returncode not in (0, 1):
                 print(run.stderr, file=sys.stderr)
                 return 2
             stderr.append(run.stderr)
-            for path in batch:
-                outdir[id(path)] = out
+            for j in batch:
+                outdir[j] = out
         boundary, mismatch, failed = [], [], []
-        for path in scenes:
-            error = outdir[id(path)] / f"{path.stem}.error"
+        for i, path in enumerate(scenes):
+            error = outdir[i] / f"{path.stem}.error"
             if error.exists():
                 failed.append(f"{path.stem}: {error.read_text(encoding='utf-8').strip()}")
                 continue
-            svg_file = outdir[id(path)] / f"{path.stem}.svg"
+            svg_file = outdir[i] / f"{path.stem}.svg"
             if not svg_file.exists():
                 print("".join(stderr), file=sys.stderr)
                 return 2

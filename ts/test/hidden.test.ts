@@ -9,12 +9,13 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
-import { project } from "../src/camera.js";
+import { clip_segment_rect_h, project, rect_functionals } from "../src/camera.js";
 import {
   HLR_BISECTIONS, HLR_MAX_SAMPLES, HLR_MIN_SAMPLES, HLR_RAY_EPS, HLR_SPACING_MM, classify_curve, classify_document, clip_polygon_4d,
   drawn_segment_4d, first_hit, hlr_sample_count, hlr_tol_mm, image_bounds, mesh_occluder, occluded, occluder, scene_occluders,
 } from "../src/hidden.js";
 import type { Occluder } from "../src/hidden.js";
+import { clip_segment_halfspace, clip_segment_halfspace_keep } from "../src/homogeneous.js";
 import { dumps } from "../src/output/geometry_json.js";
 import { write_svg } from "../src/output/svg.js";
 import { compose, project_scene, render, shadow_geometry } from "../src/pipeline.js";
@@ -396,8 +397,15 @@ test("wall_and_ground_hidden: the hand values of contract §5.1.11 through the p
   const poly = sh.polygons[0], recs = sh.polygon_edges[0];
   assert.equal(recs.length, poly.length);
   const n = poly.length;
-  const k = poly.findIndex((p: number[], i: number) => Math.abs(p[0]! - 32.405452361298636) < 1e-6
-    && Math.abs(poly[(i + 1) % n][0] - 26.078616180680637) < 1e-6);
+  // the edge is located through the record's names (§5.1.11: crate.v5.shadow.lamp = (0.75, 5, 0), v6 -> (0.75, 6.5, 0))
+  // and mapped to the drawn polygon by the named points' image coordinates
+  const near = (u: number[], v: number[], tol: number) => u.length === v.length && u.every((x, i) => Math.abs(x - v[i]!) <= tol);
+  const o: string[] = sh.outline;
+  const j = o.findIndex((nm: string, i: number) => near(doc.points[nm].world, [0.75, 5, 0], 1e-9)
+    && near(doc.points[o[(i + 1) % o.length]!].world, [0.75, 6.5, 0], 1e-9));
+  assert.ok(j >= 0);
+  const img_a = doc.points[o[j]!].image, img_b = doc.points[o[(j + 1) % o.length]!].image;
+  const k = poly.findIndex((p: number[], i: number) => near(p, img_a, 1e-6) && near(poly[(i + 1) % n], img_b, 1e-6));
   assert.ok(k >= 0);
   const rec = recs[k];
   assert.equal(rec.visibility, "partial");
@@ -749,4 +757,41 @@ test("examples/wall_and_ground.json (hidden lines on in the scene) renders with 
   assert.equal((out.geometry as any).hidden_lines, true);
   assert.ok(out.svg.includes('id="objects.hidden"'));
   assert.equal(render(load_scene(clone(read_json(repo_path("examples", "wall_and_ground.json"))))).svg, out.svg);
+});
+
+// --------------------------------------------------------------------------- one homogeneous half-space clip
+test("the batched-row clip, the scalar clip and the scalar rectangle clip are one formula", () => {
+  // drawn_segments_4d uses clip_segment_halfspace_keep (the reference's batched clip_segments_halfspace row); it must
+  // agree bit for bit with clip_segment_halfspace and, applied with the four rect_functionals rows, with the
+  // allocation-free camera.clip_segment_rect_h of stage B (review finding: a third hand copy of the formula)
+  let seed = 12345;
+  const rnd = (): number => {
+    seed = (seed * 1103515245 + 12345) % 2147483648;
+    return seed / 2147483648 * 2 - 1;
+  };
+  const rect = [-18, 18, -12, 12];
+  let kept = 0, dropped = 0;
+  for (let i = 0; i < 2000; i++) {
+    const w = (): number => (i % 7 === 0 ? 0.0 : rnd());           // some directions (w = 0)
+    const a = [40 * rnd(), 30 * rnd(), w()], b = i % 11 === 0 ? a.map((x) => -x) : [40 * rnd(), 30 * rnd(), w()];
+    const fa = rnd(), fb = i % 5 === 0 ? 0.0 : rnd();
+    const [a2, b2, keep] = clip_segment_halfspace_keep(a, b, fa, fb);
+    const one = clip_segment_halfspace(a, b, fa, fb);
+    assert.equal(keep, one !== null);
+    if (one !== null) assert.deepEqual([a2, b2], one);
+    let xa: number[] = a, xb: number[] = b, k = true;
+    for (const row of rect_functionals(rect)) {
+      const ga = xa[0]! * row[0] + xa[1]! * row[1] + xa[2]! * row[2], gb = xb[0]! * row[0] + xb[1]! * row[1] + xb[2]! * row[2];
+      let k1: boolean;
+      [xa, xb, k1] = clip_segment_halfspace_keep(xa, xb, ga, gb);
+      k = k && k1;
+      if (!k) break;
+    }
+    const r = clip_segment_rect_h(a, b, rect);
+    assert.equal(k, r !== null, `row ${i}`);
+    if (r !== null) assert.deepEqual([xa, xb], r, `row ${i}`);
+    if (k) kept++;
+    else dropped++;
+  }
+  assert.ok(kept > 100 && dropped > 100, `${kept} ${dropped}`);
 });

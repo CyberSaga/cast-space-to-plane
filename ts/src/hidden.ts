@@ -35,7 +35,7 @@
 import { nu, project, rect_functionals } from "./camera.js";
 import type { CameraRecord } from "./camera.js";
 import { conic_point, ellipse_arc_params, sample_arc, sample_count } from "./conics.js";
-import { ZERO_REL, row_max_abs } from "./homogeneous.js";
+import { ZERO_REL, clip_segment_halfspace_keep, row_max_abs } from "./homogeneous.js";
 import { degrees } from "./transform.js";
 import type { Mat3, Vec2, Vec3, Vec4 } from "./types.js";
 
@@ -613,22 +613,9 @@ export function classify_batch(p0: readonly number[], p1: readonly number[], len
 // drawn 4-D geometry (contract §5.1.6.4)
 // ---------------------------------------------------------------------------
 
-/** One row of the reference `clip_segments_halfspace` (the batched clip): `[a2, b2, keep]`; the interpolation and the
- * zero-row filter are those of `homogeneous.clip_segment_halfspace`, and a dropped row keeps meaningless values. */
-function halfspace_row(a: readonly number[], b: readonly number[], fa: number, fb: number): [number[], number[], boolean] {
-  const a_in = fa >= 0.0, b_in = fb >= 0.0;
-  let keep = a_in || b_in;
-  const scale = Math.max(row_max_abs(a), row_max_abs(b));
-  let a2: number[] = [...a], b2: number[] = [...b];
-  if (a_in !== b_in) {
-    const den = fa - fb;
-    const x = a.map((ak, k) => (fa * (b[k] as number) - fb * ak) / den);
-    if (!a_in) a2 = x;
-    if (!b_in) b2 = [...x];
-  }
-  keep = keep && row_max_abs(a2) > ZERO_REL * scale && row_max_abs(b2) > ZERO_REL * scale;
-  return [a2, b2, keep];
-}
+/** One row of the reference `clip_segments_halfspace` (the batched clip): `[a2, b2, keep]`, i.e.
+ * `homogeneous.clip_segment_halfspace_keep` (one implementation of the interpolation and the zero-row filter). */
+const halfspace_row = clip_segment_halfspace_keep;
 
 /**
  * 4-D endpoints of drawn segments: the near clip of contract §2.2 step 1 (as in stage B), then the four

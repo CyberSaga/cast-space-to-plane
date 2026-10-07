@@ -3486,12 +3486,32 @@ and the hidden-run SVG groups (§5.1.8). Nothing an M4–M6 case needs lies beyo
   `polygon_edges` agree with its own polygon, the two extra degenerate edges are clip edges, `"visible"`); (2)
   `zbuffer_random_scene(28)` has a terminator ellipse with `ry ≈ 0.053 mm`, `rx ≈ 14.2 mm` whose `rx` differs by
   ≈ 1e-4 mm with the switch **off** as well — `ellipse_params` on the identical normalised matrix gives `rx` 14.2012087
-  (numpy) vs 14.2012251 (port): `p r − q²` cancels to ≈ 1e-3 of its terms. Neither scene is in the conformance set;
-  both are ulp-amplifying by construction (§5.4.14 (f) would give such a case a `case_overrides` entry).
+  (numpy) vs 14.2012251 (port): `p r − q²` cancels to ≈ 1e-3 of its terms; (3) (found in review) a point light within
+  rounding of the camera centre (`wall_and_ground` with the lamp at the camera position `(0, −1, 1.6)`, switch on):
+  every shadow edge is then the image of a silhouette edge seen from `C`, so every sample ray grazes its caster and the
+  slab / quadric touch test `t_in <= t_out` decides by ulps — the crate's wall-shadow edge 0 is `"hidden"` in Python
+  and `"partial"` with 5 runs in the port, and Python alone flips to `"partial"` (8 runs) when the lamp moves by
+  1e-15 in `y`. No predicate changes; no conformance case may put the light at the camera centre with the switch on
+  (`degenerate_light_at_camera_centre` has it off). None of the three scenes is in the conformance set;
+  all are ulp-amplifying by construction (§5.4.14 (f) would give such a case a `case_overrides` entry), and the next
+  part's scratch differential re-measures them.
 - **[implementation] (M7 phase 2, part 2) Cost.** On the CI container (node 22.22.0) `render` of
   `benchmark_100.json` takes ≈ 0.18 s with the switch off and ≈ 0.65 s with it on (Python reference ≈ 0.36 s / 1.15 s
   on the same machine); informational only, like the Python `--hidden-lines` row (§5.1.6.6), and not part of the TS
   benchmark gate (§5.4.9).
+- **[implementation] (M7 phase 2, part 2, review fixes)** (a) The hand cases of §5.1.11 (`wall_and_ground`) live in
+  `ts/test/receivers.test.ts` (switch off: 223.1516 mm, the fold point) and `ts/test/hidden.test.ts` (switch on: the
+  base-edge runs 0 / 23/60 / 37/60 / 1 with mm 85.5415 / 137.6102, the ground-shadow edge boundary s = 0.713073 at
+  t = 2/3 located through the record's point names, 5 hidden / 7 visible crate edges, wall top visible), not in
+  `analytic.test.ts` as the §5.4.13 bullet says; the coverage is the bullet's. (b) The homogeneous half-space clip
+  of `drawn_segments_4d` is `homogeneous.ts::clip_segment_halfspace_keep` (the reference's batched row with its keep
+  flag), which `clip_segment_halfspace` also calls; `camera.ts::clip_segment_rect_h` stays the allocation-free scalar
+  copy of stage B, and `ts/test/hidden.test.ts` checks the three bit for bit on 2000 rows. (c) `tests/test_ts_port.py`
+  diffs `examples/wall_and_ground.json` again (its todo list mirrors `TODO_EXAMPLES`). (d) Closing checklist of the
+  multi-light part: `svg.ts::layer_form_shadow_hidden` / `layer_cast_shadow_hidden` must branch to the
+  `svg_multilight` builders with `hidden_style` for a document with `constructions` (as `svg.py` does), with a test
+  that a two-light document with the switch on writes `form_shadow.hidden` and then `form_shadow.<light>` /
+  `form_shadow.core` per §5.0.6.
 
 ### 5.5 M8 — STEP import (spec §9 row "STEP", spec §10 M8) — a loader, outside the core
 
