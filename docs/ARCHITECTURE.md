@@ -219,7 +219,7 @@ Curved objects carry `analytic = {kind, base (b), axis (a), e1, e2, radius, heig
 where `(e1, e2, a)` is the rotated local frame.
 
 ### 2.5 Shadow outlines of polyhedra (spec §5.1, §5.7)
-*Amended by §5.1.2 ("counter-clockwise in ground `(x, y)`" reads "counter-clockwise about `n`" in the receiver frame; the ground keeps the literal v2 code) and §5.1.3.3 (bounds clip, anchor rule).*
+*Amended by §5.1.2 ("counter-clockwise in ground `(x, y)`" reads "counter-clockwise about `n`" in the receiver frame; the ground keeps the literal v2 code) and §5.1.3.3 (bounds clip, anchor rule); and, for a loop that crosses the plane through the light four or more times, by the §5.1 implementation note "Arc pairing for a loop with several excursions to infinity" (D70): "the next incoming direction" is then the one matched by the angular order of the loop's crossings, not the loop-order next one, and the polygon splits into one loop per cycle.*
 - Silhouette edges: edges whose two adjacent faces have different `lit`. `silhouette_loops` walks
   them into closed loops oriented with the **lit face on the left** when seen from the light; under `M` such a
   loop maps to a polygon that is **counter-clockwise in ground `(x,y)`** (verified), and the shadow region is
@@ -1468,6 +1468,85 @@ worktree and the merge rule are in `docs/PLAN-v2.md`.
   multi-light path passes `receivers` to the per-light sub-document. The in-memory order was already scene order, so no
   golden or expected SVG changes. §5.0.6 states the order. Test:
   `tests/test_receivers.py::test_construction_layer_is_independent_of_per_receiver_key_order`.
+- **[decision, implementation] (review fix, D70) Arc pairing for a loop with several excursions to infinity.** §2.5 /
+  D7 pair each outgoing direction `D_out` with "the next incoming direction" in **loop order** and sweep counter-clockwise
+  by `Δθ ∈ (0, 2π]`. That is exact only when the plane through the light parallel to the receiver cuts the loop twice
+  (every convex caster, every vertical prism on the unbounded ground, the light-in-notch cases with the plate beyond the
+  closed arm: loop order and angular order coincide). When the plane cuts the loop `2p ≥ 4` times — a concave caster
+  with the light between its arms: an arch standing on the ground with the lamp below the lintel, a U-prism on its side
+  with the lamp in the notch, a U on the ground with a wall beyond its **opening**, a U straddling the plane through the
+  lamp parallel to a wall — the crossings of the pairs interleave in angle, the loop-order arcs sweep e.g. 289° + 242°
+  and cover the whole circle, and the nonzero fill blackens the entire ground / plate (review findings m4-geometry#0,
+  determinism-perf#0; on a bounded receiver the §5.1.3.3 anchor rule then faithfully fills the plate, with no warning).
+  Mathematics: the loop is a closed curve on the sphere of directions from the light with the shadow on its left and the
+  light plane as equator; walking the equator counter-clockwise about `n`, the number of solid hits rises by one at every
+  outgoing crossing and falls by one at every incoming one, so the shadowed directions at infinity — the arcs — are fixed
+  by the loop's own crossings and by nothing else (no origin, no reference point). `shadow.shadow_loop` therefore:
+  (1) keeps the literal v1/v2 code for `p ≤ 1` (byte identity; the 50 conformance cases contain no loop with `p ≥ 2`,
+  dry run 0 changes); (2) for `p ≥ 2` sorts the `2p` crossings by angle about `n` (`atan2` in ground `(x, y)`, or in
+  `(e1, e2)` for a receiver with a frame, reduced to `[0, 2π)`; an incoming crossing sorts before an outgoing one at equal
+  angles), starts at the first crossing of minimal running level and matches outgoing (`(`) with incoming (`)`) crossings
+  like parentheses — for a loop that is simple on the sphere this pairs every `D_out` with the **angularly next** `D_in`;
+  (3) sweeps each arc counter-clockwise from `D_out` to its matched `D_in` by the literal v1 expression
+  `(θ_in − θ_out) mod 2π` on the raw `atan2` angles (`2π` when `≤ 1e-12`) plus `2π·round((unwrapped sorted difference −
+  that) / 2π)` whole turns (zero for every loop-order-equivalent pairing, so such loops are bit-identical to the v1 code;
+  second-pass review fix, see the note "Base level of the arcs at infinity" below), subdivided with the unchanged
+  `ceil(Δθ / 60°)` rule and `("arc", k)` sources;
+  (4) re-links the finite chains `in → … → out` through the matched arcs and emits **one loop per cycle** of chains (the
+  cycle holding the loop's start vertex first, in the loop's own vertex order; then the others, each starting at its
+  lowest chain in loop order), every one `{"vertices", "sources", "unbounded": true}` under the new result key `"loops"`
+  (for `p ≤ 1` a one-element list aliasing the top-level arrays, also when the result is empty; the top-level arrays are
+  always the first component). `_shadow_record`, `_fallback_shadow_record` and `_caster_record` draw every component as a
+  loop of the record (its own `clip_polygon_bounds` on a bounded receiver, its own `entries`; crossing names `s<k>` keep
+  first-appearance order over the components; `shadows[].loops` / `polygons` / `polygon_edges` stay parallel). The
+  reviewer's proposal — a signed sum of the dropped vertices' `S[:3]` azimuths — is **not** used: that azimuth is measured
+  from the receiver-frame origin, and the identical arch translated by `(0, 6, 0)` came out as the complement of its
+  shadow; the matching above uses directions only, so the result is translation and rotation invariant
+  (`tests/test_arc_pairing.py`). Only the total sweep of a loop's arcs enters the winding number of a finite point, so the
+  fill is exact for every loop whose region leaves some equator direction free (the minimal level is the outside); a loop
+  whose region covers the whole equator needs an external base level — this **is** reachable with one prism (a spiral
+  prism with the lamp inside at mid-height, `p = 1` or `p ≥ 2`) and is handled by the note "Base level of the arcs at
+  infinity" below. `curved.shadow_polygon_h` is unchanged: a convex solid's silhouette meets the equator at most twice.
+  §2.5 and D7 are amended by reference; the TypeScript port (`src/shadow.ts`) must mirror steps (1)–(4) literally (same
+  sort key, tie rule, minimum-level start, cycle order). Acceptance (ray cast, `tests/test_arc_pairing.py`,
+  `tests/test_raycast.py::test_multi_crossing_loops_match_raycast_reference`): `arch_ground` IoU 1.000 (was 0.075, the
+  whole plane), `u_on_side` 1.000 (was 0.458), `u_notch_wall` 0.994 (was 0.456, the whole plate), `u_wall` wall shadow
+  empty (was the whole 15 m² plate), a concave star with a wall 1.000 (was 0.299); the four scenes are v7 candidates
+  (`tests/fixtures/v7_candidates/`).
+- **[decision, implementation] (second-pass review fix, D70 revision) Base level of the arcs at infinity.** The arcs of
+  `shadow_loop` fix the winding number of the directions at infinity only **relative** to each other: the `p = 1` sweep
+  `(θ_in − θ_out) mod 2π ∈ (0, 2π]` and the `p ≥ 2` minimal-level start both assume that some direction of the light
+  plane (through `L`, parallel to the receiver) misses the lit patch. A spiral prism with the lamp inside at mid-height
+  violates that with primitives only: upright (`p = 1`, the unchanged v1 code) the 1.3-turn arc came out as 108° (ground
+  IoU 0.26 with the ray cast, also on the M8 merge), tilted 15° (`p = 2`) the two matched arcs swept 8° + 36° while every
+  light-plane direction hits the solid (IoU 0.03–0.07; 7 of 331 configurations of the review scan), and on a raised
+  bounded floor plate 0.27. Fix, per record built from the silhouette loops of a closed mesh (`_shadow_record`,
+  `_bounded_object_record` → `_caster_record`; plates and the per-face fallback are planar and never need it, curved
+  records are convex): (1) every `shadow_loop` component now carries `"arcs"`, its `(θ_out, signed sweep)` list in
+  emission order (`_arc_angle` angles); (2) `shadow.light_plane_level(loop mesh, its lit flags, L, π, tol_w, frame)`
+  classifies the vertices like `shadow_loop` (`shadow_w > tol_w` is below the light), takes the `t* = w_a / (w_a − w_b)`
+  crossing of every edge adjacent to a lit face that straddles the light plane, picks `θ_ref` = midpoint of the largest
+  angular gap between their azimuths (sorted `atan2 mod 2π`, wrap gap included, first maximum; the ray then meets no
+  edge), and counts the lit faces the ray `L + t·u(θ_ref)` crosses: a lit face is crossed iff `n_f · u < 0` (its plane
+  is ahead) and an odd number of its straddling edges have their crossing on the left of the ray (`cos θ·y − sin θ·x >
+  0`); `None` for a directional light or when no lit face straddles; (3) `shadow.arc_level(arcs, θ)` is the drawn winding
+  at infinity (a counter-clockwise arc adds `ceil((sweep − r) / 2π)` when `sweep > r = (θ − θ_out) mod 2π`, a clockwise
+  one subtracts the mirrored count); (4) when the record has an unbounded loop and `c = count − Σ arc_level ≠ 0`, the
+  first unbounded loop (silhouette-loop order) is recomputed with `shadow_loop(..., turns=c)`, which adds `2π·c` to the
+  signed sweep of its **first arc emitted** (the start vertex's chain); `_sweep_arc` takes a signed sweep (`ceil(|Δ| /
+  60°)` steps, clockwise when negative; unchanged for `Δ > 0`). The record's loops are one nonzero path (§2.5, the umbra
+  kernel too), so one arc can carry the whole correction; `clip_polygon_bounds` handles sweeps over `2π` (winding is
+  preserved by Sutherland–Hodgman). `c = 0` for every conformance case (byte identity, full suite green without
+  regeneration). Results: upright, tilted and floor-plate spirals IoU 1.000; the review scan 331/331 and the 300-scene
+  concave fuzz (ground + plate) all ≥ 0.98. **Known limit:** a record with **no** unbounded loop cannot carry the
+  correction — a genus-≥ 1 imported mesh (a closed ring) with the lamp in its hole at mid-height, whose top silhouette
+  loop lies entirely above the light and whose bottom loop is bounded, is drawn as the complement of its shadow
+  (`VERTEX_NOT_BELOW_LIGHT` is the only warning; strict xfail
+  `tests/test_arc_base_level.py::test_closed_ring_mesh_with_the_lamp_in_the_hole_is_a_known_limit`); it would need a
+  loop made of directions only. The TypeScript port must mirror (1)–(4) literally (gap rule, parity rule, first
+  unbounded loop, first arc). Fixtures (v7 candidates): `spiral_upright`, `spiral_tilted`, `spiral_floor`,
+  `u_closed_arm_wall` (the `p = 2` loop-order-equivalent wall loop, bit-identical to the v1 code; the previous
+  unwrapped-difference sweep differed in the last ulp of the anchor points). Tests: `tests/test_arc_base_level.py`.
 
 ### 5.2 M5 — mesh import (spec §9 rows 網格匯入 / 匯入格式, spec §10 M5, spec §11.3)
 

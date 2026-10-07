@@ -448,3 +448,41 @@ def test_multi_light_cases_have_umbra():
         doc = castplane.render(load_scene(multi_light_scene(seed, n_lights)))["geometry"]
         with_umbra += bool(doc["umbra"][0]["polygons"])
     assert with_umbra >= len(MULTI_LIGHT_CASES) // 2
+
+
+# --------------------------------------------------------------------------- arc pairing (review fix, D70)
+def multi_component_records(A: dict) -> list:
+    """Stage-A shadow records whose unbounded component loops outnumber the caster's silhouette loops:
+    some silhouette loop crossed the light plane four or more times and was split by the angular arc
+    pairing (``shadow.shadow_loop`` ``loops``, contract §2.5 as amended in §5.1 / D70)."""
+    objects = {o["id"]: o for o in A["objects"]}
+    out = []
+    for rec in A["shadows"]:
+        obj = objects.get(rec["object"])
+        if obj is None or rec["light"] not in obj["lights"]:
+            continue
+        n_unbounded = sum(1 for loop in rec["loops"] if loop["unbounded"])
+        if n_unbounded > len(obj["lights"][rec["light"]]["loops"]):
+            out.append(rec)
+    return out
+
+
+def multi_crossing(seed):
+    return random_scenes.make_multi_crossing_scene(seed)
+
+
+MULTI_CROSSING_CASES = cases(multi_crossing, range(12))
+
+
+@pytest.mark.parametrize("builder, seed", MULTI_CROSSING_CASES)
+def test_multi_crossing_loops_match_raycast_reference(builder, seed):
+    """Review fix (D70): a single silhouette loop crossing the light plane four times (an arch-shaped
+    prism, upright or floating, turned about ``z``, lamp in the opening below the lintel) is split into
+    two unbounded loops by the angular arc pairing and matches the ray caster at IoU >= 0.99; before the
+    fix the loop-order pairing swept the whole circle and the document covered the entire ground."""
+    scene = builder(seed)
+    A = castplane.shadow_geometry(load_scene(scene))
+    assert multi_component_records(A), "the family must produce a loop with several excursions to infinity"
+    out = render_and_compare(scene)
+    assert out["ref"].any(), "the reference mask is empty: the scene casts no shadow on the window"
+    assert "VERTEX_NOT_BELOW_LIGHT" in {w["code"] for w in out["doc"]["warnings"]}
