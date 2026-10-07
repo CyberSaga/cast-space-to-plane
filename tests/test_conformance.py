@@ -22,6 +22,12 @@ The comparator constants are shared with the TypeScript runner through ``tests/c
 (contract §5.4.8, set v3): this module keeps its own constants and asserts that they equal the file,
 and it reads the per-case ``case_overrides`` from the file (an absolute tolerance for the numbers below
 the named path prefixes of one case only; non-numbers, key sets and warnings are never relaxed).
+
+M4 (contract §5.0.8, §5.1.11): ``rules.json["runs_rule"]`` applies to every number inside a ``runs`` list
+entry (edges, generators, terminator segments, conic entries, ``polygon_edges``): ``mm`` within 0.05 mm
+absolute, ``s`` / ``t`` / ``theta`` within 1e-3 absolute, ``visible`` / ``interval`` exact (the run count is
+a list length, exact anyway); it overrides ``arc_non_mm`` for ``theta`` inside runs.  ``hidden_polylines``
+is an mm key, ``construction.per_receiver.*.segments.*.points`` an mm path and ``interval`` an int key.
 """
 
 from __future__ import annotations
@@ -47,19 +53,22 @@ REL_TOL = 1e-9
 MAX_REPORTED = 25
 
 #: Keys below which every number is an image coordinate / length in canvas mm.
-_MM_KEYS = frozenset({"image", "segment", "polygons", "polylines", "light_point", "shadow_vp", "v_mm",
+_MM_KEYS = frozenset({"image", "segment", "polygons", "polylines", "hidden_polylines", "light_point", "shadow_vp", "v_mm",
                       "vanishing_points", "principal_point", "canvas_mm", "max_error_mm"})
 #: Inside ``arcs`` / ``ellipses`` entries these keys are angles / flags, not mm.
 _ARC_NON_MM = frozenset({"rotation_deg", "theta", "large_arc", "sweep"})
 #: Containers whose entries are drawables in canvas mm (except the :data:`_ARC_NON_MM` keys).
 _DRAWABLE_CONTAINERS = ("arcs", "ellipses")
 #: Path prefixes below which every number is in canvas mm (``*`` matches any one list index or key).
-_MM_KEY_PATHS = (("construction", "segments", "*", "points"),)
+_MM_KEY_PATHS = (("construction", "segments", "*", "points"),
+                 ("construction", "per_receiver", "*", "segments", "*", "points"))
 #: The only keys whose numbers the writer emits as integers (``INT_KEYS`` of contract §5.4.5).
-_INT_KEYS = ("large_arc", "sweep")
+_INT_KEYS = ("large_arc", "sweep", "interval")
 #: The comparator constants shared with the TypeScript runner (contract §5.4.8, §5.0.8).
 RULES_FILE = CONFORMANCE / "rules.json"
 RULES = json.loads(RULES_FILE.read_text(encoding="utf-8"))
+#: M4 (contract §5.0.8): the tolerances inside ``runs`` entries, read from ``rules.json``.
+_RUNS_RULE = RULES["runs_rule"]
 #: Spec §5.7 rows 1-6 must each be represented by at least one case (contract §4).
 _DEGENERATE_ROW_CODES = ("LIGHT_BEHIND_CAMERA", "LIGHT_POINT_AT_INFINITY", "DIRECTIONAL_HORIZONTAL",
                          "VERTEX_NOT_BELOW_LIGHT", "POINT_BEHIND_CAMERA", "FACE_PARALLEL_TO_LIGHT")
@@ -108,6 +117,23 @@ def _override_tol(path: tuple, overrides) -> float | None:
     return None
 
 
+def runs_tol(path: tuple) -> float | None:
+    """The absolute tolerance of the number at ``path`` when it lies inside a ``runs`` list entry
+    (``rules.json["runs_rule"]``, contract §5.0.8): ``mm_abs`` below ``mm``, ``param_abs`` below a
+    ``param_keys`` key, ``0`` (exact) below an ``exact_keys`` key; ``None`` outside runs (default rules)."""
+    for i in range(len(path) - 3, -1, -1):
+        if path[i] == "runs" and isinstance(path[i + 1], int):
+            key = path[i + 2]
+            if key == "mm":
+                return float(_RUNS_RULE["mm_abs"])
+            if key in _RUNS_RULE["param_keys"]:
+                return float(_RUNS_RULE["param_abs"])
+            if key in _RUNS_RULE["exact_keys"]:
+                return 0.0
+            return None
+    return None
+
+
 def _fmt(path: tuple) -> str:
     out = ""
     for key in path:
@@ -135,9 +161,12 @@ def _walk(exp, act, path: tuple, out: list, overrides=()) -> None:
     if _is_number(exp) and _is_number(act):
         image = is_image_path(path)
         abs_tol = _override_tol(path, overrides) if overrides else None
+        source = "case override"
+        if abs_tol is None:
+            abs_tol, source = runs_tol(path), "runs rule"
         if not _numbers_match(float(exp), float(act), image, abs_tol):
             if abs_tol is not None:
-                tol = f"{abs_tol:g} absolute, case override"
+                tol = f"{abs_tol:g} absolute, {source}"
             else:
                 tol = f"{IMAGE_TOL_MM:g} mm" if image else f"{REL_TOL:g} relative"
             out.append(f"{_fmt(path)}: expected {exp!r}, got {act!r} (tolerance {tol})")
@@ -391,7 +420,7 @@ def test_rules_json_matches_constants():
     """``tests/conformance/rules.json`` is the single source of the comparator constants shared with the
     TypeScript runner; the constants of this module must equal it (contract §5.4.8, §5.0.8)."""
     assert set(RULES) == {"image_tol_mm", "rel_tol", "mm_keys", "drawable_containers", "arc_non_mm", "mm_key_paths",
-                          "int_keys", "max_reported", "case_overrides"}
+                          "runs_rule", "int_keys", "max_reported", "case_overrides"}
     assert RULES["image_tol_mm"] == IMAGE_TOL_MM and RULES["rel_tol"] == REL_TOL
     assert RULES["max_reported"] == MAX_REPORTED
     assert set(RULES["mm_keys"]) == _MM_KEYS and len(RULES["mm_keys"]) == len(_MM_KEYS)
@@ -545,3 +574,121 @@ def test_regen_rules_only_mode(tmp_path, monkeypatch, capsys):
     with pytest.raises(SystemExit) as exc:
         regen.main(["--reason", "x", "--rules-only", "--case", "example_basic"])
     assert exc.value.code == 2
+
+
+# --------------------------------------------------------------------------- M4 (contract §5.0.8, §5.1.11)
+M4_CASES = ("wall_and_ground", "wall_and_ground_hidden", "receiver_unlit_wall", "receiver_directional_wall",
+            "fold_curved_cylinder", "bounded_default_receiver", "hidden_lines_curved_unbounded",
+            "hidden_lines_vp_in_canvas", "concave_prism_on_plate")
+
+
+def test_runs_rule_values_and_paths():
+    """``rules.json["runs_rule"]`` is the §5.0.8 literal; ``runs_tol`` finds the number's key inside a runs
+    entry wherever the runs list sits (edges, generators, terminator segments, conic entries, polygon_edges)."""
+    assert _RUNS_RULE == {"mm_abs": 0.05, "param_abs": 1e-3, "param_keys": ["s", "t", "theta"],
+                          "exact_keys": ["visible", "interval"]}
+    assert runs_tol(("edges", 12, "runs", 1, "mm", 0)) == 0.05
+    assert runs_tol(("edges", 12, "runs", 1, "s", 1)) == 1e-3 == runs_tol(("edges", 0, "runs", 0, "t", 0))
+    assert runs_tol(("outlines", 0, "conics", 1, "runs", 2, "theta", 0)) == 1e-3
+    assert runs_tol(("form_shadow", 0, "terminator", 0, "runs", 0, "interval")) == 0.0
+    assert runs_tol(("shadows", 3, "polygon_edges", 0, 2, "runs", 1, "mm", 1)) == 0.05
+    assert runs_tol(("shadows", 3, "polygons", 0, 2, 1)) is None and runs_tol(("edges", 0, "segment", 0, 0)) is None
+    assert is_image_path(("shadows", 0, "conics", 0, "hidden_polylines", 0, 3, 1))
+    assert is_image_path(("construction", "per_receiver", "wall", "segments", 2, "points", 0, 1))
+    assert not is_image_path(("construction", "per_receiver", "wall", "checks", 0, "point", 0))
+
+
+def test_runs_rule_tolerances_on_the_hidden_case():
+    """The comparator applies the runs rule to ``wall_and_ground_hidden``: 0.05 mm on ``mm``, 1e-3 on ``s`` /
+    ``t`` / ``theta``, exact ``visible`` / ``interval`` / run count; ``hidden_polylines`` at 1e-6 mm."""
+    name = "wall_and_ground_hidden"
+    doc = load_expected(name)
+    i = next(k for k, e in enumerate(doc["edges"]) if (e["from"], e["to"]) == ("wall.b0", "wall.b1"))
+    runs = doc["edges"][i]["runs"]
+    assert [r["visible"] for r in runs] == [True, False, True]
+    assert abs(runs[0]["s"][1] - 23 / 60) <= 1e-3 and abs(runs[1]["s"][1] - 37 / 60) <= 1e-3
+    assert abs(runs[0]["mm"][1] - 85.5415) <= 0.05 and abs(runs[1]["mm"][1] - 137.6102) <= 0.05
+    ok = json.loads(json.dumps(doc))
+    ok["edges"][i]["runs"][1]["mm"][0] += 0.04
+    ok["edges"][i]["runs"][1]["s"][0] += 9e-4
+    ok["edges"][i]["runs"][1]["t"][1] -= 9e-4
+    assert compare_documents(doc, ok, name) == []
+    bad = json.loads(json.dumps(doc))
+    bad["edges"][i]["runs"][1]["mm"][0] += 0.06
+    bad["edges"][i]["runs"][2]["s"][0] += 2e-3
+    msgs = compare_documents(doc, bad, name)
+    assert len(msgs) == 2 and all("runs rule" in m for m in msgs), msgs
+    bad = json.loads(json.dumps(doc))
+    bad["edges"][i]["runs"][1]["visible"] = True
+    bad["edges"][i]["runs"].pop()
+    assert len(compare_documents(doc, bad, name)) == 1          # the run count (list length) is exact
+    # conic runs: theta at 1e-3 (overrides arc_non_mm), interval exact
+    cdoc = load_expected("hidden_lines_curved_unbounded")
+    hit = next((path, c) for path, c in _conic_entries(cdoc) if c["runs"])
+    path, entry = hit
+    moved = json.loads(json.dumps(cdoc))
+    target = _get(moved, path)
+    target["runs"][0]["theta"][1] += 5e-4
+    assert compare_documents(cdoc, moved, "hidden_lines_curved_unbounded") == []
+    target["runs"][0]["interval"] += 1
+    assert any("runs rule" in m for m in compare_documents(cdoc, moved, "hidden_lines_curved_unbounded"))
+    assert isinstance(entry["runs"][0]["interval"], int)
+    hidden_poly = next((p, c) for p, c in _conic_entries(cdoc) if c["hidden_polylines"])
+    moved = json.loads(json.dumps(cdoc))
+    _get(moved, hidden_poly[0])["hidden_polylines"][0][0][0] += 2e-6
+    (msg,) = compare_documents(cdoc, moved, "hidden_lines_curved_unbounded")
+    assert "hidden_polylines" in msg and "1e-06 mm" in msg
+
+
+def _conic_entries(doc):
+    for i, o in enumerate(doc.get("outlines", [])):
+        for j, c in enumerate(o["conics"]):
+            yield ("outlines", i, "conics", j), c
+    for i, s in enumerate(doc.get("shadows", [])):
+        for j, c in enumerate(s["conics"]):
+            yield ("shadows", i, "conics", j), c
+    for i, f in enumerate(doc.get("form_shadow", [])):
+        for j, c in enumerate(f["terminator"]):
+            if "segment" not in c:
+                yield ("form_shadow", i, "terminator", j), c
+
+
+def _get(doc, path):
+    for key in path:
+        doc = doc[key]
+    return doc
+
+
+def test_m4_cases_cover_the_required_sources():
+    """§5.0.8: after M4 the set holds ``RECEIVER_UNLIT``, a bounded receiver, an anchor-rule case and a ``w = 0``
+    HLR endpoint case; every M4 case is present, and the hidden-line cases carry partial runs."""
+    from castplane import hidden
+
+    names = set(case_names())
+    assert set(M4_CASES) <= names, sorted(set(M4_CASES) - names)
+    codes = {w["code"] for n in M4_CASES for w in load_expected(n)["warnings"]}
+    assert "RECEIVER_UNLIT" in codes
+    assert any(r["bounds"] is not None for n in M4_CASES for r in load_expected(n)["receivers"])
+    assert load_expected("bounded_default_receiver")["receivers"][0]["bounds"] is not None
+    assert ("SHADOW_VP_AT_INFINITY", ("sun", "wall")) in {
+        (w["code"], tuple(w["ids"])) for w in load_expected("receiver_directional_wall")["warnings"]}
+    # the anchor rule fires in stage A of concave_prism_on_plate, and its polygon is the whole plate
+    scene = load_scene(CASES / "concave_prism_on_plate.json")
+    A = castplane.shadow_geometry(scene)
+    assert any(isinstance(s, tuple) and s[-1] == "anchor"
+               for rec in A["shadows"] for loop in rec["loops"] for s in loop["sources"])
+    # a drawn shadow-polygon edge with a w = 0 endpoint inside the extended canvas, hidden lines on
+    scene = load_scene(CASES / "hidden_lines_vp_in_canvas.json")
+    assert scene["output"]["hidden_lines"] is True
+    A = castplane.shadow_geometry(scene)
+    B = castplane.project_scene(scene, A)
+    pts, _ids = hidden.clip_polygon_4d(B["camera"], A["shadows"][0]["loops"][0]["vertices"])
+    assert int(numpy.sum(pts[:, 3] == 0.0)) >= 1
+    for n in ("wall_and_ground_hidden", "hidden_lines_curved_unbounded", "hidden_lines_vp_in_canvas"):
+        doc = load_expected(n)
+        assert doc["hidden_lines"] is True
+        records = (list(doc["edges"]) + [c for _p, c in _conic_entries(doc)]
+                   + [r for s in doc["shadows"] for poly in s["polygon_edges"] for r in poly])
+        assert any(r["visibility"] == "partial" and r["runs"] for r in records), n
+    for n in set(M4_CASES) - {"wall_and_ground_hidden", "hidden_lines_curved_unbounded", "hidden_lines_vp_in_canvas"}:
+        assert load_expected(n)["hidden_lines"] is False, n

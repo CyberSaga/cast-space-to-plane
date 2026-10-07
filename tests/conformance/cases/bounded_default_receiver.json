@@ -1,0 +1,92 @@
+{
+ "description": "contract 5.1.2: no ground receiver; receivers[0] is a bounded floor plate that owns the short point names and the flat construction keys; the crate shadow is clipped by the plate bounds at y = 5.5",
+ "version": "0.1",
+ "units": "m",
+ "up": "z",
+ "objects": [
+  {
+   "id": "crate",
+   "type": "box",
+   "size": [
+    1,
+    1,
+    1
+   ],
+   "transform": {
+    "position": [
+     0,
+     4.5,
+     0
+    ]
+   }
+  }
+ ],
+ "lights": [
+  {
+   "id": "lamp",
+   "type": "point",
+   "position": [
+    0,
+    2,
+    3
+   ]
+  }
+ ],
+ "receivers": [
+  {
+   "id": "floor",
+   "type": "plane",
+   "normal": [
+    0,
+    0,
+    1
+   ],
+   "offset": 0,
+   "bounds": [
+    [
+     -2,
+     2,
+     0
+    ],
+    [
+     2,
+     2,
+     0
+    ],
+    [
+     2,
+     5.5,
+     0
+    ],
+    [
+     -2,
+     5.5,
+     0
+    ]
+   ]
+  }
+ ],
+ "camera": {
+  "position": [
+   0,
+   -1,
+   1.6
+  ],
+  "target": [
+   0,
+   6,
+   0.8
+  ],
+  "focal_length_mm": 35,
+  "frame_mm": [
+   36,
+   24
+  ]
+ },
+ "output": {
+  "canvas_mm": [
+   273,
+   182
+  ]
+ }
+}

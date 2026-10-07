@@ -1,0 +1,102 @@
+{
+ "description": "contract 5.1.5: wall_and_ground lit by a directional sun, level camera: F.sun.wall is a direction point whose image is at infinity, SHADOW_VP_AT_INFINITY with ids [sun, wall] in construction.per_receiver.wall",
+ "version": "0.1",
+ "units": "m",
+ "up": "z",
+ "objects": [
+  {
+   "id": "crate",
+   "type": "box",
+   "size": [
+    1,
+    1,
+    1
+   ],
+   "transform": {
+    "position": [
+     0,
+     4.5,
+     0
+    ]
+   }
+  }
+ ],
+ "lights": [
+  {
+   "id": "sun",
+   "type": "directional",
+   "direction": [
+    0.3030457633656632,
+    -0.5050762722761053,
+    0.8081220356417687
+   ]
+  }
+ ],
+ "receivers": [
+  {
+   "id": "ground",
+   "type": "plane",
+   "normal": [
+    0,
+    0,
+    1
+   ],
+   "offset": 0
+  },
+  {
+   "id": "wall",
+   "type": "plane",
+   "normal": [
+    0,
+    -1,
+    0
+   ],
+   "offset": 6,
+   "bounds": [
+    [
+     -3,
+     6,
+     0
+    ],
+    [
+     3,
+     6,
+     0
+    ],
+    [
+     3,
+     6,
+     2.5
+    ],
+    [
+     -3,
+     6,
+     2.5
+    ]
+   ]
+  }
+ ],
+ "camera": {
+  "position": [
+   0,
+   -1,
+   1.6
+  ],
+  "target": [
+   0,
+   6,
+   1.6
+  ],
+  "focal_length_mm": 35,
+  "frame_mm": [
+   36,
+   24
+  ]
+ },
+ "output": {
+  "canvas_mm": [
+   273,
+   182
+  ]
+ }
+}

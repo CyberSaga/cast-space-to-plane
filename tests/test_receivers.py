@@ -83,6 +83,13 @@ def test_strip_new_keys_mode_of_the_regen_tool():
                        capture_output=True, text=True, cwd=ROOT)
     assert r.returncode == 0, r.stderr
     assert "2 of 2 case(s) with zero mismatches" in r.stdout
+    # an M4 case's expected file already carries the M4 keys: compared unstripped (step 10), so the mode can run
+    # on the whole set before the v4 regeneration
+    r = subprocess.run([sys.executable, str(ROOT / "tools" / "regen_conformance.py"), "--reason", "check",
+                        "--strip-new-keys", "--case", "wall_and_ground_hidden", "--case", "example_basic"],
+                       capture_output=True, text=True, cwd=ROOT)
+    assert r.returncode == 0, r.stderr
+    assert "2 of 2 case(s) with zero mismatches" in r.stdout
     r = subprocess.run([sys.executable, str(ROOT / "tools" / "regen_conformance.py"), "--reason", "check",
                         "--strip-new-keys", "--rules-only"], capture_output=True, text=True, cwd=ROOT)
     assert r.returncode == 2

@@ -30,7 +30,9 @@ regeneration): every selected case is rendered, the keys M4 adds to every docume
 ``visibility`` + ``runs``, conic-entry ``visibility`` / ``runs`` / ``hidden_polylines``,
 ``shadows[].polygon_edges``) are checked to carry their switch-off values and deleted, and the result is
 compared with the committed expected file by the spec §7.5 comparator (``tests/test_conformance.py``);
-it reports the cases whose stripped JSON is also byte-identical to the expected file.  Nothing is
+it reports the cases whose stripped JSON is also byte-identical to the expected file.  A case whose
+expected file already carries the M4 keys (``hidden_lines`` present: the nine M4 cases, and every file after
+the v4 regeneration) is compared unstripped, so the mode can run on the whole set.  Nothing is
 written; ``--reason`` is still required (it is the reason the v4 entry will record).  Exit 0 when every
 case passes with zero mismatches, 1 otherwise.
 
@@ -259,8 +261,10 @@ def strip_new_keys_check(selected: list[str]) -> int:
         except Exception as exc:  # noqa: BLE001 - report the case
             print(f"error: case {name!r} failed to render: {exc}", file=sys.stderr)
             return 1
-        doc, problems = strip_new_keys(doc)
         expected_text = path.read_text(encoding="utf-8")
+        problems = []
+        if '"hidden_lines":' not in expected_text:     # a pre-v4 file: strip the M4 switch-off keys
+            doc, problems = strip_new_keys(doc)
         mismatches = problems + compare_documents(json.loads(expected_text), doc, name)
         if mismatches:
             failed.append(name)
@@ -270,7 +274,7 @@ def strip_new_keys_check(selected: list[str]) -> int:
         elif dumps(doc) + "\n" == expected_text:
             identical.append(name)
     print(f"strip-new-keys: {len(selected) - len(failed)} of {len(selected)} case(s) with zero mismatches; "
-          f"{len(identical)} byte-identical after stripping")
+          f"{len(identical)} byte-identical to the expected file (pre-v4 files after stripping)")
     return 1 if failed else 0
 
 
