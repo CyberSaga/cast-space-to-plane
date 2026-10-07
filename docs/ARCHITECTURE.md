@@ -4115,6 +4115,23 @@ and the hidden-run SVG groups (§5.1.8). Nothing an M4–M6 case needs lies beyo
     `tools/compare_svg.py` reports 0 boundary differences and 0 mismatches on the 60 cases and the 8 examples; the
     rendered JSON documents of both implementations have the same structure on all 60 cases (every number within
     1.7e-8 relative/absolute).
+- **[implementation] (M7, review of the ported final-review fixes) The umbra partition condition re-checked on the
+  arc-pairing scenes.** An adversarial run of 204 new scenes with 4+ light-plane crossings (combs, arches, spirals,
+  U-prisms with walls, floor plates, hidden lines, open-shell meshes, directional light) found comparator differences
+  only on three two-light combs whose teeth stand on the ground (`umbra[0].polygons`: 12 vs 13, 11 vs 10, 11 vs 12
+  pieces; the SVGs differ only in the `cast_shadow.umbra` path). The cause is the one recorded in the note "The umbra
+  across implementations: the region, not the partition, when casters stand on the receiver" above, not a port defect:
+  `shadows[].polygons` of the two documents agree within 1.2e-13 mm, `castplane.umbra.umbra_from_document` of the
+  port's document equals the port's `umbra[]` bit for bit (and of the reference document the reference's), and the union
+  areas agree within 4.2e-16 (relative). The event that flips comes from a pair of collinear overlapping ground-contact
+  edges of the two lights: §5.3.4 step 3 rejects a pair only on `den == 0.0` exactly, and for such a pair `den` is ulp
+  noise (`|den| / (|r| |s|)` ≈ 7e-16 in the traced scene), so `t` lands anywhere in `[0, 1]` and the extra slab cut
+  appears in whichever build's ulps make `den` non-zero. Extra cuts only split pieces, so both partitions are valid ones
+  of the same region. Nothing changed: the kernel follows §5.3.4 literally in both implementations, the 60 cases (the
+  four `multilight_*` ones with casters off the receiver) are unaffected, and the open proposal stands unchanged:
+  a near-parallel cut-off in step 3 or a region rule for `umbra[].polygons` would each be a versioned amendment
+  (§5.0.8) that both runners must carry, required before a multi-light conformance case with casters on the receiver
+  is added.
 
 ### 5.5 M8 — STEP import (spec §9 row "STEP", spec §10 M8) — a loader, outside the core
 
