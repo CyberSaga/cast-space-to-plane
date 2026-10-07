@@ -3682,6 +3682,26 @@ and the hidden-run SVG groups (§5.1.8). Nothing an M4–M6 case needs lies beyo
   no target for `N >= 2`. The single-light TS benchmark gate is unchanged and passes (`npm run -w ts bench`). The web
   UI needed no change: it already calls `project_scene(scene, A, cam, !dragging)` (§5.4.10), so a drag frame of a
   multi-light scene writes the per-light groups and an empty `cast_shadow.umbra`, and the resting frame the umbra.
+- **[implementation] (M7 phase 2, part 4 review fixes) Which multi-light scenes keep byte identity is build
+  dependent.** The 29 / 6 split of the cross-implementation note above was measured on one numpy / BLAS build; most
+  of the 29 scenes also have casters standing on the receiver, so another build may move any of them across. The
+  allow-list `_UMBRA_REGION_ONLY` is gone: `test_ts_multilight_scenes_equal_the_reference` now requires, for every
+  scene, either byte-identical SVG and a comparator-equal document, or the region rule (comparator differences only
+  under `umbra[`, the same umbra region, the SVG equal once the `cast_shadow.umbra` path lines are removed). Strict
+  byte identity stays with the four `multilight_*` conformance cases (`conformance.test.ts`). The list gains a 36th
+  scene, `int_ids_two_walls` (a crate and a ball on the ground, lights `"9"` / `"10"`, the bounded receivers `wall_b`
+  before `wall_a`), which exercises the `per_receiver` marker order and the sorting of integer-like light ids; on the
+  CI container it falls back to the region rule (76 vs 102 ground pieces), as do the six scenes named above.
+- **[implementation, deferred] (M7 phase 2, part 4 review fixes) `write_svg` parity holds for documents from `render`,
+  not for every reloaded document.** Python's `_layer_construction` and `svg_multilight.layer_construction` write
+  the `F′<r>` markers and rays in the dict order of `per_receiver`; the port writes them in `doc.receivers` order (the
+  part-1 note above). For a document produced by `render` both orders are scene order, so the §5.4.6 parity holds;
+  for the same document reloaded from its JSON (`sort_keys`) with a scene receiver order that is not code-point
+  sorted, Python's writer follows the sorted keys and the port the scene order, so the two texts differ in the order
+  of those markers and rays (single- and multi-light alike; an M4-era property of the Python writer). The fix belongs
+  on the Python side (order `per_receiver` by `doc["receivers"]`, which leaves every `render` output unchanged), in
+  files M7 may not touch (`docs/PLAN-v2.md` ownership table); it is deferred to the owner of `svg.py` /
+  `svg_multilight.py`.
 
 ### 5.5 M8 — STEP import (spec §9 row "STEP", spec §10 M8) — a loader, outside the core
 

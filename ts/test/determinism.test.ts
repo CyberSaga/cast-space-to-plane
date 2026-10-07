@@ -30,7 +30,7 @@ const OG = /\.og\d+\.(base|top)$/;
 
 function pick(o: any, keys: string[]): any {
   const out: any = {};
-  for (const k of keys) out[k] = o[k];
+  for (const k of keys) if (k in o) out[k] = o[k]; // keys absent from single-light documents are left out
   return out;
 }
 
@@ -47,21 +47,30 @@ function camera_free(doc: any, rays = true): string {
     hidden_lines: doc.hidden_lines,
     receivers: doc.receivers,
     points,
-    edges: doc.edges.map((e: any) => pick(e, ["object", "from", "to", "silhouette"])),
+    edges: doc.edges.map((e: any) => pick(e, ["object", "from", "to", "silhouette", "silhouette_lights", "smooth"])),
     shadows: doc.shadows.map((s: any) => ({
       ...pick(s, ["light", "receiver", "object", "outline", "loops", "unbounded"]),
       conics: s.conics.map((c: any) => pick(c, ["kind", "arc", "circle", "map", "which"])),
     })),
     form_shadow: doc.form_shadow.map((f: any) => ({
-      ...pick(f, ["object", "faces"]),
+      ...pick(f, ["object", "faces", "light"]),
       terminator: f.terminator.filter((t: any) => "segment" in t).map((t: any) => t.segment),
     })),
+    // the multi-light keys of §5.0.3 (part 4 review): the core, the umbra's receiver / lights
+    form_shadow_core: (doc.form_shadow_core ?? []).map((c: any) => pick(c, ["object", "faces"])),
+    umbra: (doc.umbra ?? []).map((e: any) => pick(e, ["receiver", "lights"])),
     outlines: doc.outlines.map((o: any) => o.object),
     // rays are camera-free only without POINT_BEHIND_CAMERA: the nu >= 0 row filter of §2.7 / §5.1.5 is a camera
     // predicate (§5.4 implementation notes, qualifying the §5.0.3 list)
     rays: rays ? doc.construction.rays : null,
     per_receiver_rays: rays
       ? Object.keys(doc.construction.per_receiver).sort().map((r) => [r, doc.construction.per_receiver[r].rays]) : null,
+    // every light's block of a multi-light document (`construction` is the first light's alias, §5.3.6)
+    constructions: doc.constructions === undefined ? null : Object.keys(doc.constructions).sort().map((l) => [
+      l,
+      rays ? doc.constructions[l].rays : null,
+      rays ? Object.keys(doc.constructions[l].per_receiver).sort().map((r) => [r, doc.constructions[l].per_receiver[r].rays]) : null,
+    ]),
     warnings: doc.warnings.filter((w: any) => !CAMERA_CODES.has(w.code)).map((w: any) => [w.code, w.ids]),
   });
 }
@@ -77,6 +86,24 @@ test("rays are camera-dependent when a point is behind the camera (§5.1.5 nu >=
   assert.equal(d1.construction.rays.length, 16); // the Python reference gives 16 / 20 as well
   assert.equal(d2.construction.rays.length, 20);
   assert.equal(camera_free(d1, false), camera_free(d2, false));
+});
+
+test("camera_free covers every multi-light camera-free key of §5.0.3 (part 4 review)", () => {
+  const d = render(load_scene(read_example("two_lights.json"))).geometry as any;
+  const base = camera_free(d);
+  const mutations: Array<(x: any) => void> = [
+    (x) => { x.constructions.right.rays.pop(); },
+    (x) => { x.edges.find((e: any) => e.silhouette_lights.length > 0).silhouette_lights = []; },
+    (x) => { x.form_shadow[x.form_shadow.length - 1].light = "left"; },
+    (x) => { x.form_shadow_core[0].faces = x.form_shadow_core[0].faces.slice(1); },
+    (x) => { x.umbra[0].lights = x.umbra[0].lights.slice(1); },
+  ];
+  assert.ok(d.constructions.right.rays.length > 0 && d.form_shadow_core.length > 0 && d.umbra.length > 0);
+  for (const mutate of mutations) {
+    const x = structuredClone(d);
+    mutate(x);
+    assert.notEqual(camera_free(x), base, mutate.toString());
+  }
 });
 
 for (const file of examples) {
