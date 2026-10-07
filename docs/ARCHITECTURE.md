@@ -3606,6 +3606,82 @@ and the hidden-run SVG groups (§5.1.8). Nothing an M4–M6 case needs lies beyo
   identity matrix; without `A` it falls back to `prepared_mesh` in the local frame. To test it under node,
   `web/tsconfig.test.json` compiles `src/mesh3d.ts` besides `src/orbit.ts` and `src/download.ts` (an addition to the
   §5.4.1 file list of that config).
+- **[implementation] (M7 phase 2, part 4) Multiple lights in the port: what lands.** `src/umbra.ts` carries every
+  public name of §5.3.9 (`tolerances`, `scan_pieces`, `record_pieces`, `umbra_pieces`, `umbra_from_document`) and
+  `src/multilight.ts` every name of `multilight.__all__` (`is_multi`, `is_light_dependent_stem`, `curved_stem_name`,
+  `multi_light_name`, `silhouette_lights`, `plate_silhouette_lights`, `unlit_union`, `form_table`, `split_form`,
+  `plate_form_lights`, `assemble_form_shadow`, `construction_block`, `construction_blocks`, `construction_doc`,
+  `active_lights`, `umbra_entries`), exported as the namespaces `umbra` / `multilight`. `pipeline.ts` gets the M6
+  hooks of the reference: `project_polyhedron(o, cam, tol, light_ids)` (OR silhouette, `silhouette_lights`, the faces
+  unlit by at least one light projected once and split into `form_by_light` / `form_core`), `plate_multi`,
+  `constructions` (`construction` is the first light's block, the same object), `umbra` (computed in stage B from the
+  stage-B drawables after `+ 0`, as the reference's stage-B polygons are canonical; `project_scene(..., umbra = false)`
+  leaves `polygons` `null`), and compose's light-major `form_shadow[]` with `light`, the per-light curved terminator
+  entries, `edges[].silhouette_lights`, `form_shadow_core`, `constructions` and `umbra`. `svg.ts` gets the
+  `svg_multilight.py` builders (§5.4.2 maps that file into `svg.ts`) behind the same five `constructions` branches
+  as the reference (three layer builders and the two hidden-line builders): `form_shadow.<light>` at
+  `_f(0.18 / N_act)` without the core faces, `form_shadow.core`, `cast_shadow.<light>` at `_f(0.3 / N_act)` (the
+  single-light builder on the document without `constructions`, the attribute spliced into the group head),
+  `cast_shadow.umbra` and `construction.<light>`; the closing checklist (d) of the part-2 review is met
+  (`ts/test/multilight.test.ts`: hidden groups first, then the light groups, then core / umbra). Port-only exported
+  names of `svg.ts`: `UMBRA_STYLE`, `is_multi_light`, `n_active` and `multi_light_ids` (the reference's
+  `svg_multilight.light_ids`, renamed because the builders share one module with the writer). `TODO_CASES` of
+  `ts/test/conformance.test.ts` is empty (a test asserts it), and so are `TODO_EXAMPLES` and the examples todo list
+  of `tests/test_ts_port.py`: every case of set v6 and every example passes from TypeScript.
+- **[decision, implementation] (M7 phase 2, part 4) Literal readings of the umbra and multi-light port.** (1) The
+  readings (1)–(6) of the M6 step-2 note are implemented as written: `tol_area = 1e-9 * (D * D)`, consecutive edges by
+  their index in the input polygon decided before horizontal edges are dropped (`pyimod` of the local indices), line
+  ids and `base_{k,r}` counting every polygon's `n_i`, equal `(line_left, line_right)` keys of one slab paired by rank,
+  crossing pairs `(min, max)` of the table indices, `umbra_from_document` always computing. (2) The reference's
+  chunking (`_CHUNK_ENTRIES`, `_CHUNK_PAIRS`) is a memory device whose invisibility is tested in Python; the port
+  sweeps the slabs once (edges enter at their first slab and leave after their last) and enumerates the crossing pairs
+  in one pass. The vectorised greedy merge is replaced by the sequential rule it implements (`fl(a − b)` is monotone in
+  both operands, so a gap `> tol` always starts a kept value and a cluster whose span is `<= tol` keeps nothing more:
+  the two are result-identical). `np.minimum` / `np.maximum` keep the first operand on ties (signed zeros) and
+  propagate NaN; the slab order is `(x(y_m), edge index)` with numpy's float order (NaN last); in `x(y)` the `y == v1`
+  test wins over `y == v0` (the reference's second `np.where`). (3) `construction_block` keeps the phase-1 / §5.4.14 (c)
+  argument order `(light, shadows, receiver_lights, default_id)`; the reference's `multilight.construction_block` is
+  `(light, receiver_lights, shadows, default_id)`. The function moved from `pipeline.ts` to `multilight.ts` (type-only
+  imports, no runtime cycle) and `pipeline.ts` re-exports it, so the §5.4.2 "port-only `construction_block`" row still
+  resolves. (4) `form_table` returns the face vertex-index lists (`form_idx`) and name lists, not the padded numpy
+  tables (§5.4.2); `split_form` returns the per-light lists as a `Map` in scene order. (5) Evidence of bit identity of
+  the kernel: `umbra_from_document` of the port reproduces the `umbra[]` of the four expected multi-light documents
+  bit for bit (`ts/test/umbra.test.ts`), and `tests/test_ts_port.py::test_ts_umbra_pieces_equal_the_reference`
+  compares `record_pieces` (pieces and sides) and `umbra_pieces` of both implementations bit for bit on 40 random
+  two- to four-light inputs (star, self-intersecting and lattice loops; a scratch run of 60 inputs / 376 records
+  agreed as well).
+- **[decision, implementation] (M7 phase 2, part 4) The umbra across implementations: the region, not the partition,
+  when casters stand on the receiver.** §5.3.5 (c) holds inside each implementation bit for bit, and across them in
+  the strong form "the reference kernel applied to the port's own `shadows[].polygons` gives the port's `umbra[]` bit
+  for bit". The two implementations' drawables are not bit-identical in general (stage B's `project` is BLAS
+  `X @ P.T` in Python and a left-to-right 4-term sum in the port, §5.3.2 / §5.4.4; the acceptance case happens to be
+  bit-identical), and where casters stand on the receiver (cross-light vertex pairs within rounding of each other,
+  collinear ground-contact edges of different lights: the M6 notes "(M6 step 8)" / "(M6 review fixes)") those ulps
+  change the piece partition. `tests/test_ts_port.py::test_ts_multilight_scenes_equal_the_reference` renders 35
+  multi-light scenes with both implementations (the `tests/test_multilight.py` scenes, mesh cases with a second light,
+  `make_scene(seed, n_lights = 2 | 3)` for seeds 0–2 and 4–8, twelve with hidden lines on, dashed and `omit`): 29 give
+  byte-identical SVGs and comparator-equal documents; the six of `_UMBRA_REGION_ONLY` (the three-light concave scene on
+  the ground in two light orders and with hidden lines, `plate_two_lights([-1.5, 2.5, 3])` whose crate stands on the
+  ground, `make_scene(7, n_lights = 3)`) differ only in the umbra partition (19 vs 15 pieces on the three-light scene)
+  while the union areas agree within 1e-15 (relative; the test bound is 1e-9), the union corners within 1e-6 mm (checked
+  for the scenes with at most 40 pieces), the SVGs only in the
+  `cast_shadow.umbra` path and the documents only under `umbra`. This is the condition the M6 part-3 note already put
+  on the conformance set (`multilight_three_lights_concave_prism` lifts its casters 0.2 m and passes index-wise from
+  TypeScript): **a multi-light conformance case whose casters stand on the receiver would need a region rule for
+  `umbra[].polygons`, which neither comparator has** — such a case must not be added without that versioned
+  comparator amendment (§5.4.14 (f)). `make_scene(3, n_lights = 3)` is left out of the committed scene list: its
+  `constructions.light2` FQ ray of `obj3.g1.base.light2` (a generator foot 1e-6 m above the ground,
+  `|S′ − Q′| / |F′ − Q′|` ≈ 1.7e-7) differs by 1.05e-6 mm — the deferred ill-conditioned `covering_segments` case of
+  the part-3 notes, not a multi-light defect. No Python-side defect was found.
+- **[implementation] (M7 phase 2, part 4) Cross-implementation evidence and cost.** Set v6: 50 of 50 cases pass
+  `compare_documents` from TypeScript; `tools/compare_svg.py` reports 0 boundary differences, 0 mismatches and 0
+  render failures on the 50 cases and on the eight examples (`two_lights.json` included, `mesh_demo.json` through its
+  expansion). On the CI container (node 22.22.0) the benchmark scene with the mirrored second light (the `--lights 2`
+  row of §5.3.9) gives 3 514 umbra pieces in both implementations; the port's `render` takes ≈ 0.5–0.6 s of which the
+  umbra ≈ 0.3–0.4 s (`project_scene` with and without it), the Python reference ≈ 0.75 s; informational, as §5.3.9 sets
+  no target for `N >= 2`. The single-light TS benchmark gate is unchanged and passes (`npm run -w ts bench`). The web
+  UI needed no change: it already calls `project_scene(scene, A, cam, !dragging)` (§5.4.10), so a drag frame of a
+  multi-light scene writes the per-light groups and an empty `cast_shadow.umbra`, and the resting frame the umbra.
 
 ### 5.5 M8 — STEP import (spec §9 row "STEP", spec §10 M8) — a loader, outside the core
 

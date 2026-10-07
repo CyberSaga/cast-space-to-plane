@@ -668,6 +668,8 @@ const out   = render(scene, camera, hidden_lines, hidden_style); // {geometry: d
 
 網格前處理（合約 §5.2.3–§5.2.5）由 `src/meshprep.ts` 移植，公開名稱與 `castplane.meshprep` 相同（`import { meshprep } from "castplane"`：`weld_map`、`weld_vertices`、`drop_degenerate_faces`、`build_adjacency`、`fix_orientation`、`merge_coplanar`、`classify_edges`、`fallback_mesh`、`inherit_edge_smooth`、`point_inside_mesh`、`preprocess_mesh` 等），另有 `mesh.triangulate_faces` 與 `primitives.prepared_mesh`。`mesh` 物件必須帶內嵌的 `data`：核心不讀檔，只有 `path` 的物件會拋 `SceneError("objects[i].path", "mesh file must be expanded first …")`；先用 `castplane import FILE -o scene.json --inline` 或 `castplane.io.expand_scene` 展開。
 
+多光源（合約 §5.3）由 `src/umbra.ts`（本影掃描線核心：`tolerances`、`scan_pieces`、`record_pieces`、`umbra_pieces`、`umbra_from_document`；`import { umbra } from "castplane"`）與 `src/multilight.ts`（`silhouette_lights`、`unlit_union`、`form_table`、`split_form`、`plate_form_lights`、`assemble_form_shadow`、`construction_block`、`construction_blocks`、`construction_doc`、`active_lights`、`umbra_entries`、`multi_light_name` 等；`import { multilight } from "castplane"`）移植；兩盞以上光源時文件與 SVG 帶 `constructions`、`umbra`、`form_shadow_core`、`form_shadow.<光源>`、`cast_shadow.umbra` 等（見第 1 節「多光源場景」）。`project_scene(scene, A, camera, umbra)` 與 `render(scene, camera, hidden_lines, hidden_style, umbra)` 的 `umbra = false` 讓 `umbra[].polygons` 為 `null`（網頁 UI 拖曳中即如此），其餘不變。本影由畫出的 `shadows[].polygons` 計算：兩個實作的這些多邊形可差幾個 ulp，因此本影碎片在比較器容差內相同，若物體立在受影面上（不同光源的接地頂點與共線邊在捨入範圍內），碎片的切分方式可能不同而區域相同（合約 §5.4 實作附註）。
+
 與 Python 的差異：
 
 | 項目 | TypeScript |
