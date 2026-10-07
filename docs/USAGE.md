@@ -172,7 +172,7 @@ castplane import tests/fixtures/step/two_solids.step --solid 1 -o sphere.json
 | `up` | 選用：`"z"`（預設）或 `"y"`；`"y"` 以精確軸映射 `(x, y, z) ↦ (x, −z, y)` 轉成 Z-up。glTF 檔一律是 Y-up，配 `up` 是錯誤（`objects[i].up`） |
 | `scale` | 選用：> 0，預設 1；乘在局部頂點上（檔案單位 → 公尺），在焊接之前 |
 | `weld_tolerance` | 選用：≥ 0，預設 1e-6（公尺，縮放之後） |
-| `smooth_angle_deg` | 選用：[0, 180]，預設 30；相鄰面法線夾角小於它（且平滑群組相同）的邊是平滑邊，只在成為相機輪廓時才畫 |
+| `smooth_angle_deg` | 選用：[0, 180]，預設 30；兩面同屬同一個非零平滑群組的邊一律平滑（不看夾角）；兩面都無群組時，法線夾角小於它（`n_a·n_b ≥ cos(smooth_angle_deg) − 1e-9`）的邊平滑；群組不同、或一面有群組一面沒有，一律是特徵邊。平滑邊只在成為相機輪廓時才畫 |
 | `transform` | 同其他物件（`scale` 鍵不在 `transform` 裡，用物件的 `scale`） |
 | 上限 | 面數、頂點數各 ≤ 50 000；焊接並移除退化面後至少要剩一個面（`objects[i].data.faces` / 檔案來源為 `objects[i].path`：「no usable face」） |
 
@@ -481,7 +481,7 @@ C 段在 `hidden_lines` 開啟時呼叫；純 numpy、確定性（取樣位置�
 | --- | --- |
 | `preprocess_mesh(data, scale, weld_tolerance, smooth_angle_deg, object_id="", return_scale=False)` | 整條前處理 → `(mesh, triangles, fallback, smooth_groups, warnings)`（`return_scale=True` 時多一項 `scale_A`）：縮放 → 焊接 → 退化面 → 鄰接／流形／方向 → 共面合併 → 邊分類；非流形時走逐面退路 |
 | `has_usable_face(vertices, faces, scale, weld_tolerance) -> bool` | 驗證用的「至少一個可用面」檢查：在 `scale · vertices` 上焊接並移除退化面後是否還有面（合約 §5.2.1） |
-| `mesh_scale(V) -> float` | `scale_A = max(1, 包圍盒最大邊長)`，本節所有容差的長度尺度 |
+| `mesh_scale(V) -> float`、`used_vertices(V, faces)` | `scale_A = max(1, 包圍盒最大邊長)`，本節所有容差的長度尺度；包圍盒只取至少被一個面用到的頂點（`used_vertices`），沒被任何面用到的離群頂點不會放寬容差 |
 | `weld_map(V, tol, fast=True)`、`weld_vertices(V, faces, tol, fast=True)` | 焊接（27 鄰格、輸入索引最低的代表、取代表點原座標、依首次出現編號）；`fast` 為結果相同的向量化路徑 → `(W, faces_w, index)` |
 | `prepare_faces(faces, index=None)` | 面轉成 int 串列並依 `index` 重新編號 |
 | `drop_degenerate_faces(V, faces, scale_A)` | 折疊連續重複、丟掉頂點不兩兩相異或 Newell 法線 ≤ 1e-12·scale_A² 的面 → `(kept_faces, kept_index)` |
@@ -492,7 +492,7 @@ C 段在 `hidden_lines` 開啟時呼叫；純 numpy、確定性（取樣位置�
 | `signed_volume(V, tris)`、`winding_number(V, tris, x)` | 依三角形順序逐項累加的有號體積與廣義纏繞數 |
 | `point_inside_mesh(verts, tris, x, tol=0.0)` | `\|w\| > 0.75` 且到每個三角形的距離 `> tol` 才算在內部 |
 | `merge_coplanar(V, faces, normals, adjacency, cos_tol)` | 依種子順序的區域生長共面合併 → `(new_faces, origin)` |
-| `classify_edges(mesh, smooth_angle_deg, smooth_groups)` | 平滑邊／特徵邊（平滑群組不同即為特徵邊） |
+| `classify_edges(mesh, smooth_angle_deg, smooth_groups)` | 平滑邊／特徵邊（同一非零群組一律平滑；都無群組時看夾角；群組不同即為特徵邊） |
 | `fallback_mesh(V, faces, vertex_names=None)` | 非流形退路的 §2.4 形網格（`edge_faces = [f_min, f_max]`） |
 | `inherit_edge_smooth(loop_mesh, origins, mesh, edge_smooth)` | 受影面切割後的網格繼承原始邊的平滑旗標（切面上的邊為特徵邊） |
 | `COPLANAR_TOL_RAD`、`WELD_TOLERANCE_DEFAULT`、`SMOOTH_ANGLE_DEFAULT`、`MESH_MAX_RAYS`、`SMOOTH_BAND`、`INSIDE_WINDING` | 合約 §5.2.3 的常數（1e-3 rad、1e-6 m、30°、64、1e-9、0.75） |

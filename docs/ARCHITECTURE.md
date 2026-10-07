@@ -2013,6 +2013,15 @@ unordered world pairs with equal `silhouette` / `back` flags and `segment` endpo
   the stored face indices like the OBJ and glTF loaders (`face index K is out of range (the file has N vertices)`),
   so a PLY face naming a missing or negative vertex is `SceneError(objects[i].path)` at expansion instead of
   `objects[i].data.faces[k]` at validation.
+- **[decision, implementation] (review fixes, mesh) `scale_A` ignores unused vertices.** §5.2.3 step 1 reads
+  "`scale_A = max(1, max extent of the bounding box of V)`"; it is computed over the vertices of `V` **used by at least
+  one face** (`meshprep.used_vertices(V, faces)`, raw indices before the weld, which moves no vertex off its
+  representative's coordinates), in `preprocess_mesh` and in the §5.2.1 usable-face guard `has_usable_face` alike.
+  A vertex used by no face is removed by step 2 and enters neither the record's bbox nor the stage-A scene scale, so it
+  must not scale the degenerate (`1e-12·scale_A²`), zero-volume (`1e-12·scale_A³`) and fallback-area tolerances
+  either: before, a unit box with one stray vertex 1e7 m away was rejected with "no usable face" (and at 1e6 m its
+  tolerances were silently 1e6× looser). Every mesh whose vertices are all referenced (all conformance cases and
+  fixtures) is unchanged. The TypeScript port's `scale_A` must follow (§5.2.9).
 
 ### 5.3 M6 — multiple lights (amendment to §2.0, §2.3, §2.5–2.10, §3, §3.1, §4)
 
