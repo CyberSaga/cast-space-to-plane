@@ -3784,3 +3784,40 @@ LGPL-2.1；確定性只到 OCC 版本；頂點重建誤差 1.4e-9 mm；OCP 8 的
   raises `SceneError("--id")` on a clash instead of renaming it (§5.2.8 (4): an explicit `--id` is never renamed).
   With `--into SCENE`, a present non-list `objects` is `SceneError("objects", "must be a non-empty list")` (the
   `validate_scene` message) before the import is assembled, not `objects[0]`.
+- **[decision, implementation] (final review fix m8-step#0, #3) Mesh fallback: which OCC solid, read once
+  (§5.5.6, §5.5.7).** The note "Mesh fallback in multi-solid files" above is **superseded**: OCC's
+  `TopAbs_SOLID` explorer order follows the assembly (`NEXT_ASSEMBLY_USAGE_OCCURRENCE`) structure, not the
+  entity ids, so a consistently renumbered file (the two `MANIFOLD_SOLID_BREP` ids exchanged) meshed the
+  *other* solid (one solid dropped, a recognised one emitted twice, silently). The unrecognised solid `ref`
+  is now transferred by itself: `STEPControl_Reader.TransferOne(record)` with `record` = the 1-based file
+  position of `ref` in `part21.parse`'s entity table (OCC numbers its model records by file position;
+  `TransferBRep` is not bound in cadquery-ocp 8.0.1.1.0 and `Model().IdentLabel()` returns 0, so the
+  id-based lookup is unavailable). Guards, each a `StepError` at the entity: `Model().NbEntities()` must
+  equal the number of parsed records and record `record` must be a `StepShape_ManifoldSolidBrep`
+  ("OCP numbers the records … differently"); every `VERTEX_POINT` reachable from `ref` (× cascade divisor /
+  `unit_divisor`) must lie within `max(tol · scale, 1e-9)` of a vertex of the transferred solid ("the OCP solid
+  does not match the file's vertex …"; one-way, because OCC rebuilds a `VERTEX_LOOP` sphere with two pole
+  vertices). A single-solid file is still tessellated whole (`TransferRoots` / `OneShape`), byte-identical to
+  `tessellate_step`. The file is read by OCP **once per `import_step` call** (lazily, at the first
+  unrecognised solid), not once per solid: 120 frustums 24.5 s → 1.9 s. The per-solid deflection rule is
+  unchanged and the meshes are byte-identical to the previous ones on every file whose explorer order equals
+  the entity order (all fixtures; two_solids 170 / 164 and 1447 / 2836).
+- **[decision, implementation] (final review fix m8-step#1, #2) Part 21 limits (§5.5.2).** Values nest at
+  most **64** levels deep (lists and typed values; real files nest ≤ 3): a deeper value is
+  `Part21SyntaxError(offset, "nesting too deep (more than 64 levels)")`, i.e. `StepError("syntax: …")`
+  (exit 2) instead of a `RecursionError` traceback (exit 1); `import_step` also maps a stray `RecursionError`
+  to `StepError("syntax: nesting too deep")`. An entity id has at most **18** digits (below 2⁶³): a longer
+  `#…` is `Part21SyntaxError("entity id too long …")`. An integer token (no `.` / `E`) becomes `int` only
+  when `|v| < 2⁵³` (exactly representable); otherwise the correctly rounded `float` (`inf` past 1e308) —
+  a deviation from the literal "otherwise with `int()`" of §5.5.2, needed because `int()` raises
+  `ValueError` beyond 4 300 digits and an `int` past 1e308 raises `OverflowError` in `float()`. Such a
+  number in a coordinate is then rejected by the non-finite checks (`_num`; `_tolerance`, next note).
+- **[decision, implementation] (final review fix m8-step#4, #5) Radii and non-finite coordinates
+  (§5.5.4).** A `CYLINDRICAL_SURFACE` / `SPHERICAL_SURFACE` radius ≤ 0, a `CONICAL_SURFACE` radius < 0
+  (ISO 10303-42 allows 0 for a cone placed at its apex; the verifier's "same check for the cone" would have
+  rejected that valid file) and a 3-D `CIRCLE` edge radius ≤ 0 are `StepError("#n: <SURFACE> radius must be
+  > 0 (≥ 0 for the cone), found …")` at that entity, raised while the faces are read (so also with
+  `fallback="mesh"`), instead of an emitted `radius ≤ 0` rejected later by `validate_scene` at an
+  `objects[i].radius` the user's `step` object does not have. A non-finite coordinate in **any**
+  `CARTESIAN_POINT` (also 2-D pcurve points, which §5.5.4's extent still scans) is `StepError("#n: non-finite
+  coordinate inf")` naming the point, instead of `tol = inf` blaming the geometry ("zero height").

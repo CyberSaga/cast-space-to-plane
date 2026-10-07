@@ -1442,3 +1442,178 @@ def test_step_report_has_the_required_structure():
     row = next(line for line in (ROOT / "README.md").read_text(encoding="utf-8").splitlines()
                if line.startswith("| M8 "))
     assert "原型完成（Part-21 解析器、四種基元、`castplane import`）；網格退路經 M5 內嵌網格型別" in row
+
+
+# =========================================================================== final review fixes (group "step")
+def _swap_refs(text: str, a: str, b: str) -> str:
+    """A consistent renumbering: entity ids ``a`` and ``b`` exchanged everywhere."""
+    return re.sub(r"#\d+\b", lambda m: {a: b, b: a}.get(m.group(), m.group()), text)
+
+
+def _bbox_min(obj: dict) -> list:
+    return np.asarray(obj["data"]["vertices"]).min(axis=0).round(6).tolist()
+
+
+def test_mesh_fallback_tessellates_the_solid_of_its_entity_not_the_assembly_position(tmp_path, monkeypatch):
+    """m8-step#0: OCC orders the solids of a compound by the assembly structure, not by entity id;
+    the fallback must mesh the unrecognised solid itself whatever the numbering."""
+    pytest.importorskip("OCP")
+
+    def no_sphere(faces, ud, tol):
+        raise S._Reject("forced")
+
+    monkeypatch.setattr(S, "_recognise_sphere", no_sphere)       # the sphere becomes "unrecognised"
+    sphere_min, cylinder = [0.5, 1.5, 0.0], {k: v for k, v in PILLAR.items() if k != "id"}
+    plain = import_step(FIX / "two_solids.step", fallback="mesh", obj_id="part")
+    assert [(s["entity"], s["kind"]) for s in plain["solids"]] == [("#37", "cylinder"), ("#154", "mesh")]
+    assert _bbox_min(plain["objects"][1]) == pytest.approx(sphere_min, abs=1e-3)
+    swapped = write(tmp_path, _swap_refs(fixture_text("two_solids"), "#37", "#154"), "swapped.step")
+    rep = import_step(swapped, fallback="mesh", obj_id="part")
+    assert [(s["entity"], s["kind"]) for s in rep["solids"]] == [("#37", "mesh"), ("#154", "cylinder")]
+    assert _bbox_min(rep["objects"][0]) == pytest.approx(sphere_min, abs=1e-3)     # the sphere, not the cylinder
+    assert rep["objects"][0]["data"] == plain["objects"][1]["data"]
+    assert strip_id(rep["objects"][1]) == cylinder
+    assert rep["notes"][-1] == make_step_warning("STEP_SOLID_TESSELLATED", ["#37"])
+    # solid selection goes through the same entity -> OCC solid mapping
+    (one,) = import_step(swapped, fallback="mesh", solid=0, obj_id="s")["objects"]
+    assert one["data"] == plain["objects"][1]["data"]
+
+
+def test_mesh_fallback_solid_guard_rejects_a_mismatching_ocp_solid():
+    """The entity -> OCC solid mapping is checked against the file's vertex points."""
+    pytest.importorskip("OCP")
+    ocp_file = S._OcpFile(str(FIX / "two_solids.step"))
+    entities = parse(fixture_text("two_solids"))["entities"]
+    record = list(entities).index("#154") + 1
+    good = S._solid_vertices(entities, "#154")
+    assert ocp_file.solid("#154", record, len(entities), good, 1.0, 1e-3) is not None
+    with pytest.raises(StepError, match=r"#37: .*does not match"):
+        ocp_file.solid("#37", record, len(entities), S._solid_vertices(entities, "#37"), 1.0, 1e-3)
+    with pytest.raises(StepError, match="numbers the records"):
+        ocp_file.solid("#154", record, len(entities) + 1, good, 1.0, 1e-3)
+
+
+def test_mesh_fallback_reads_the_file_once(monkeypatch):
+    """m8-step#3: one OCP read per import, however many solids are tessellated (was one per solid)."""
+    pytest.importorskip("OCP")
+    reads = []
+    real_init = S._OcpFile.__init__
+
+    def counting_init(self, path):
+        reads.append(path)
+        real_init(self, path)
+
+    def reject(faces, ud, tol):
+        raise S._Reject("forced")
+
+    monkeypatch.setattr(S._OcpFile, "__init__", counting_init)
+    monkeypatch.setattr(S, "_recognise_sphere", reject)
+    monkeypatch.setattr(S, "_recognise_cylinder", reject)
+    rep = import_step(FIX / "two_solids.step", fallback="mesh", obj_id="part")
+    assert [s["kind"] for s in rep["solids"]] == ["mesh", "mesh"] and len(reads) == 1
+    # the per-solid meshes are those of the single-solid fixtures (same deflection rule per solid)
+    assert rep["objects"][0]["data"]["faces"] == S.tessellate_step(FIX / "cylinder.step")["faces"]
+    assert [len(o["data"]["faces"]) for o in rep["objects"]] == [164, 2836]
+
+
+def _deep_file(depth: int, typed: bool = False) -> str:
+    inner = "LENGTH_MEASURE(" * depth + "1." + ")" * depth if typed else "(" * depth + "1" + ")" * depth
+    return p21(f"#1 = FOO({inner});")
+
+
+def test_part21_nesting_is_capped_with_a_syntax_error():
+    """m8-step#1: a hostile nesting depth is a Part21SyntaxError, not a RecursionError."""
+    assert parse(_deep_file(64))["entities"]["#1"][0] == "FOO"
+    assert parse(_deep_file(64, typed=True))["entities"]["#1"][0] == "FOO"
+    for text in (_deep_file(65), _deep_file(2000), _deep_file(2000, typed=True)):
+        with pytest.raises(Part21SyntaxError, match="nesting too deep"):
+            parse(text)
+
+
+def test_deeply_nested_step_file_is_a_step_error_exit_2(tmp_path, capsys):
+    path = write(tmp_path, _deep_file(2000), "deep.step")
+    with pytest.raises(StepError, match=r"^step: syntax: nesting too deep .* at offset \d+$"):
+        import_step(path)
+    assert cli.main(["import", str(path), "-o", str(tmp_path / "o.json")]) == 2
+    assert "error: step: syntax: nesting too deep" in capsys.readouterr().err
+
+
+def test_part21_numbers_beyond_int_and_float_limits():
+    """m8-step#2: integers are ``int`` only while exactly representable as doubles; beyond, the
+    correctly rounded ``float`` (``inf`` past 1e308), never ``int()``'s 4300-digit ValueError."""
+    def value(tok):
+        return parse(p21(f"#1 = FOO({tok});"))["entities"]["#1"][1][0]
+
+    assert value(str(2 ** 53 - 1)) == 2 ** 53 - 1 and type(value(str(2 ** 53 - 1))) is int
+    assert value("-7") == -7 and type(value("-7")) is int
+    assert value(str(2 ** 53)) == float(2 ** 53) and type(value(str(2 ** 53))) is float
+    assert value("1" + "0" * 400) == math.inf and value("-" + "9" * 5000) == -math.inf
+    assert value("1E999") == math.inf
+    with pytest.raises(Part21SyntaxError, match="entity id too long"):
+        parse(p21("#1 = FOO(#" + "9" * 19 + ");"))
+    with pytest.raises(Part21SyntaxError, match="entity id too long"):
+        parse(p21("#" + "1" * 5000 + " = FOO(1);"))
+    assert "#" + "9" * 18 in parse(p21("#" + "9" * 18 + " = FOO(1);"))["entities"]
+
+
+def test_huge_integer_in_an_unrelated_record_is_harmless(tmp_path):
+    text = add_entities(fixture_text("cylinder"), "#1000000 = FOO(" + "9" * 5000 + ");")
+    assert strip_id(import_step(write(tmp_path, text))["objects"][0]) == strip_id(PILLAR)
+
+
+@pytest.mark.parametrize("old, new, match", [
+    ("#15 = MANIFOLD_SOLID_BREP('',#16);", "#15 = MANIFOLD_SOLID_BREP('',#16);\n#2 = FOO(#" + "9" * 5000 + ");",
+     r"^step: syntax: entity id too long"),
+    ("#66 = CARTESIAN_POINT('',(6.28318530718,-0.));", "#66 = CARTESIAN_POINT('',(1" + "0" * 400 + ",-0.));",
+     r"^step: #66: non-finite coordinate"),
+], ids=["5000-digit-entity-id", "401-digit-integer-coordinate"])
+def test_huge_numbers_in_a_step_file_are_step_errors(tmp_path, old, new, match):
+    """m8-step#2: ValueError / OverflowError tracebacks (exit 1) became StepErrors (exit 2)."""
+    path = write(tmp_path, edit(fixture_text("cylinder"), old, new))
+    with pytest.raises(StepError, match=match):
+        import_step(path)
+    assert cli.main(["import", str(path), "-q", "-o", str(tmp_path / "o.json")]) == 2
+
+
+def test_non_finite_coordinate_anywhere_is_named(tmp_path):
+    """m8-step#5: a 1E999 pcurve point made tol = inf and the cylinder was blamed ('zero height')."""
+    text = edit(fixture_text("cylinder"), "#66 = CARTESIAN_POINT('',(6.28318530718,-0.));",
+                "#66 = CARTESIAN_POINT('',(1E999,-0.));")
+    with pytest.raises(StepError, match=r"^step: #66: non-finite coordinate inf$") as exc:
+        import_step(write(tmp_path, text))
+    assert exc.value.entity == "#66"
+
+
+@pytest.mark.parametrize("fixture, old, new, entity", [
+    ("cylinder", "#31 = CYLINDRICAL_SURFACE('',#32,300.);", "#31 = CYLINDRICAL_SURFACE('',#32,-300.);", "#31"),
+    ("cylinder", "#31 = CYLINDRICAL_SURFACE('',#32,300.);", "#31 = CYLINDRICAL_SURFACE('',#32,0.);", "#31"),
+    ("sphere", "#22 = SPHERICAL_SURFACE('',#23,500.);", "#22 = SPHERICAL_SURFACE('',#23,-500.);", "#22"),
+    ("cylinder", "#80 = CIRCLE('',#81,300.);", "#80 = CIRCLE('',#81,-300.);", "#80"),
+], ids=["cylinder-negative", "cylinder-zero", "sphere-negative", "circle-negative"])
+def test_non_positive_radius_is_a_step_error_at_the_entity(tmp_path, fixture, old, new, entity):
+    """m8-step#4: a radius <= 0 was emitted into the scene and rejected later at a field the user's
+    ``step`` object does not have (``objects[i].radius``)."""
+    path = write(tmp_path, edit(fixture_text(fixture), old, new))
+    with pytest.raises(StepError, match=rf"^objects\[0\]\.path: {entity}: \w+ radius must be > 0") as exc:
+        expand(path)
+    assert exc.value.entity == entity and exc.value.field == "objects[0].path"
+
+
+def test_conical_surface_radius_may_be_zero_but_not_negative(tmp_path):
+    """ISO 10303-42 allows ``radius = 0`` for a conical surface placed at its apex."""
+    b = Builder()
+    b.units()
+    r, h, semi = 400.0, 1200.0, math.atan(1.0 / 3.0)
+    vb, va = b.vertex((r, 0.0, 0.0)), b.vertex((0.0, 0.0, h))
+    eb = b.edge(vb, vb, b.add(f"CIRCLE('',{b.axis((0.0, 0.0, 0.0))},{f(r)})"))
+    line = b.add(f"LINE('',{b.point((r, 0.0, 0.0))},"
+                 f"{b.add(f'VECTOR({chr(39)}{chr(39)},{b.direction((-r, 0, h))},1.)')})")
+    seam = b.edge(vb, va, line)
+    side = b.face([eb, seam], b.add(f"CONICAL_SURFACE('',{b.axis((0.0, 0.0, h), (0, 0, -1))},0.,{semi!r})"))
+    base = b.face([eb], b.add(f"PLANE('',{b.axis((0.0, 0.0, 0.0), (0, 0, -1))})"))
+    b.solid([side, base])
+    (obj,) = import_step(write(tmp_path, b.text()), obj_id="c")["objects"]
+    assert strip_id(obj) == CONE | {"transform": {"position": [0.0, 0.0, 0.0], "rotation_deg": [0.0, 0.0, 0.0]}}
+    negative = b.text().replace(",0.,", ",-1.,")
+    with pytest.raises(StepError, match=r"CONICAL_SURFACE radius must be ≥ 0"):
+        import_step(write(tmp_path, negative, "neg.step"))
