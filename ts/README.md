@@ -14,6 +14,7 @@ npm run -w ts build         # tsc -p tsconfig.json && tsc -p tsconfig.test.json 
 npm run -w ts test          # build + node --test build/test/*.test.js
 node ts/scripts/render.mjs examples/basic.json out/   # dev helper: out/basic.svg + out/basic.json
 python3 tools/compare_svg.py                          # dev tool: SVG text of both implementations, case by case
+node ts/build/bench/camera_only.js --gate both --reps 20   # spec §8 benchmark (benchmarks/README.md, TS table)
 ```
 
 Test suites (`test/`, `node:test`): `conformance` (the 34 cases with the rules of `tests/conformance/rules.json`,

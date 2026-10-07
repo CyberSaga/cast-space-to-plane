@@ -3296,6 +3296,16 @@ and the hidden-run SVG groups (§5.1.8). Nothing an M4–M6 case needs lies beyo
   half-way, in exact decimal arithmetic; a genuine 1e-4 drift is a mismatch. Over the 215 differential scenes of the
   review this flags one non-set line (`poly_7`, a line clipped at the extended rectangle whose reference value lies
   1.6e-9 mm below the half-way; the JSON documents agree within tolerance) — reported for review, not a CI gate.
+- **[implementation] (M7 step 7) Benchmark measurement and the CI gate literal.** `ts/bench/camera_only.ts` follows
+  the §5.4.9 protocol (3 warm-up full renders, 20 timed repetitions, min / median, the `bench.py --json` field names
+  plus `engine`; `--gate both|full|camera|none`, exit 2 on a usage error). Three runs of `node
+  ts/build/bench/camera_only.js --gate both --reps 20` on the CI container (node 22.22.0) measured camera-only minima
+  of 55 / 60 / 63 ms and full-render minima of 340 / 339 / 317 ms (all exit 0; table in `benchmarks/README.md`).
+  These replace the §5.4.7 estimates. The camera-only minimum is below the 70 ms margin line in every run, so
+  `ci.yml` gates `--gate both`. The §5.4.9 rule names "the GitHub runner": no hosted runner is reachable from this
+  workspace, so the decision rests on the container measurement. If the first hosted `ts` job is slower, the literal
+  changes only with a new recorded measurement (§5.4.12). No `Float64Array` scratch buffer is used (§5.4.2: no
+  measured need).
 
 ### 5.5 M8 — STEP import (spec §9 row "STEP", spec §10 M8) — a loader, outside the core
 

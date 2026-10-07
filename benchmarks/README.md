@@ -289,3 +289,40 @@ equal): M6 adds nothing to the single-light path but a `len(lights) ≥ 2` test.
 The deltas are inside the container's run-to-run drift (the v5 and M6 minima overlap on every row); the
 camera-only row is at 100–114 ms for both trees today (the M5 part 2 reading above was 94–100 ms on a
 quieter container), so it is not an M6 regression.
+## TypeScript port (M7 step 7, 2026-10-07): `ts/bench/camera_only.ts`
+
+The TypeScript benchmark (contract §5.4.9) reads the same committed file
+`scenes/benchmark_100.json`, uses the same second camera (`camera_override(scene.camera, [6, -28, 12],
+[0, 0, 0.5], 3)`, the explicit lens-field construction of §5.4.7), warms up with 3 full renders (JIT)
+and then times 20 repetitions of each path with `performance.now()`:
+
+```sh
+npm ci && npm run -w ts build
+node ts/build/bench/camera_only.js --gate both --reps 20     # the spec §10 M7 acceptance command
+node ts/build/bench/camera_only.js --json                      # the bench.py --json record + engine {node, v8}
+node ts/build/bench/camera_only.js --gate full                 # also: camera, none
+```
+
+Measured with the acceptance command, three consecutive runs on the CI container (node 22.22.0,
+V8 12.4.254.21-node.33; the minimum over the 20 repetitions, the median in brackets). The document is
+the one of the Python rows above (100 primitives, 10726 mesh edges, 9030 drawn edges, 15171 named
+points, no warnings; SVG 1915 kB, JSON 10239 kB) — byte-identical SVG to the Python writer
+(`tools/compare_svg.py`) and the JSON within the conformance tolerances.
+
+| path | run 1 | run 2 | run 3 | target | status |
+| --- | --- | --- | --- | --- | --- |
+| full render (A+B+C+SVG+JSON) | 340 ms (409) | 339 ms (445) | 317 ms (389) | < 1 s | **PASS** (3/3) |
+| camera-only re-render (B+C+SVG) | 55 ms (68) | 60 ms (87) | 63 ms (87) | < 100 ms | **PASS** (3/3) |
+| stage A only | 17 ms (21) | 19 ms (32) | 16 ms (26) | – | – |
+| SVG writer only | 30 ms (34) | 26 ms (35) | 32 ms (40) | – | – |
+| JSON dumps only | 236 ms (309) | 247 ms (304) | 221 ms (289) | – | – |
+
+All three runs exit 0 with `--gate both`. **CI gate decision (§5.4.9 margin rule)**: the camera-only
+minimum is below 70 ms in every run (55 / 60 / 63 ms, ≥ 1.1× below the 70 ms margin line and ≥ 1.6×
+below the 100 ms target), so the `ts` job of `.github/workflows/ci.yml` gates
+`node ts/build/bench/camera_only.js --gate both --reps 20` and the D17 deferral of the camera-only
+target is closed on the TypeScript side (the Python job keeps `--gate full`, D17). The measurement was
+taken on the container this repository's CI runs in, not on a GitHub-hosted runner; if the hosted
+runner turns out slower, the literal is changed only with a new recorded measurement here (§5.4.12),
+never loosened to absorb a regression. The JSON writer is not on the camera-only path; `Float64Array`
+scratch buffers (§5.4.2) are not used (no measured need).

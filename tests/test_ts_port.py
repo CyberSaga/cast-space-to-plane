@@ -14,6 +14,12 @@ absent (M7 phase 1 adds ``ts/`` on its own branch); the others guard the shared 
   ``ts/src/index.ts``'s ``__version__``, and no file under ``ts/src/`` touches node-only APIs.
 
 The ``benchmarks/scenes/benchmark_100.json`` lock rule lives in ``tests/test_bench.py``.
+
+When ``node`` is on the PATH the TypeScript runner is exercised from here as well (rebuilt first when the
+workspace's ``typescript`` is installed, ``npm ci``): the port's ``node:test`` suite, the conformance runner of
+§5.4.8 included, must pass; the port's SVG of every example must equal the Python writer's text and its JSON
+document must pass the comparator; the benchmark's ``--json`` record carries the ``bench.py`` field names.
+Without node (or without a built port) those tests are skipped; the ``ts`` CI job runs the suite anyway.
 """
 
 from __future__ import annotations
@@ -21,6 +27,8 @@ from __future__ import annotations
 import json
 import pathlib
 import re
+import shutil
+import subprocess
 
 import pytest
 
@@ -148,3 +156,78 @@ def test_compare_svg_tolerates_only_differences_at_a_rounding_boundary():
     assert len(real) == len(exact)
     assert [len(cs.split_numbers(a)[1]) for a in real] == [len(cs.split_numbers(e)[1]) for e in exact]
     assert exact != real and all(cs.split_numbers(a)[0] == cs.split_numbers(e)[0] for a, e in zip(real, exact))
+
+
+# ---------------------------------------------------------------------------
+# the TypeScript runner, exercised from pytest when node is present (M7 step 7)
+# ---------------------------------------------------------------------------
+
+NODE = shutil.which("node")
+TSC = ROOT / "node_modules" / "typescript" / "bin" / "tsc"
+BUILT = TS / "build" / "src" / "index.js"
+needs_node = pytest.mark.skipif(NODE is None or not (TS / "package.json").exists(),
+                                reason="node is not installed (the ts CI job runs the TypeScript suite)")
+
+
+@pytest.fixture(scope="module")
+def built_port():
+    """``ts/build``, rebuilt from ``ts/src`` when the workspace's typescript is installed (``npm ci``), so the
+    tests below never run a stale build; skipped when neither a compiler nor a build is available."""
+    if TSC.is_file():
+        for config in ("tsconfig.json", "tsconfig.test.json"):
+            proc = subprocess.run([NODE, str(TSC), "-p", config], cwd=TS, capture_output=True, text=True, timeout=600)
+            assert proc.returncode == 0, proc.stdout[-4000:] + proc.stderr[-2000:]
+    if not BUILT.is_file():
+        pytest.skip("the TypeScript port is not built (npm ci && npm run -w ts build)")
+    return TS / "build"
+
+
+@needs_node
+def test_ts_suite_passes(built_port):
+    """The port's ``node:test`` suite (the §5.4.8 conformance runner on every case of the set included)."""
+    tests = sorted(str(p) for p in (built_port / "test").glob("*.test.js"))
+    assert any(p.endswith("conformance.test.js") for p in tests)
+    proc = subprocess.run([NODE, "--test", *tests], cwd=TS, capture_output=True, text=True, timeout=900)
+    tail = "\n".join(proc.stdout.splitlines()[-40:])
+    assert proc.returncode == 0, tail + proc.stderr[-2000:]
+    m = re.search(r"^# fail (\d+)$", proc.stdout, re.M)
+    assert m and m.group(1) == "0", tail
+    m = re.search(r"^# pass (\d+)$", proc.stdout, re.M)
+    assert m and int(m.group(1)) >= len(tc.case_names()), tail
+
+
+@needs_node
+def test_ts_render_equals_the_reference_on_the_examples(built_port, tmp_path):
+    """``node ts/scripts/render.mjs``: the port's SVG of every example is the Python writer's text byte for byte
+    (§5.4.6) and its JSON document passes the conformance comparator against the Python document (§5.4.8)."""
+    from castplane.output import geometry_json
+
+    examples = sorted((ROOT / "examples").glob("*.json"))
+    assert len(examples) == 5
+    proc = subprocess.run([NODE, str(TS / "scripts" / "render.mjs"), *map(str, examples), str(tmp_path)],
+                          capture_output=True, text=True, timeout=300)
+    assert proc.returncode == 0, proc.stderr[-2000:]
+    for path in examples:
+        ref = castplane.render(castplane.load_scene(path))
+        assert (tmp_path / f"{path.stem}.svg").read_text(encoding="utf-8") == ref["svg"], path.name
+        port_doc = json.loads((tmp_path / f"{path.stem}.json").read_text(encoding="utf-8"))
+        assert tc.compare_documents(json.loads(geometry_json.dumps(ref["geometry"])), port_doc) == [], path.name
+
+
+@needs_node
+def test_ts_bench_reports_the_bench_py_record(built_port):
+    """``ts/bench/camera_only.ts --json`` (§5.4.9): the field names of ``bench.py --json`` plus ``engine``, the
+    document size of the committed benchmark scene, and ``--gate none`` exits 0."""
+    proc = subprocess.run([NODE, str(built_port / "bench" / "camera_only.js"), "--json", "--reps", "1", "--gate", "none"],
+                          cwd=ROOT, capture_output=True, text=True, timeout=600)
+    assert proc.returncode == 0, proc.stderr[-2000:]
+    rec = json.loads(proc.stdout)
+    assert set(rec) == {"objects", "mesh_edges", "document_edges", "points", "svg_bytes", "json_bytes", "warnings",
+                        "reps", "full_render_s", "camera_only_s", "stage_a_s", "svg_s", "json_s", "pass", "gate",
+                        "engine"}
+    assert rec["objects"] == 100 and rec["mesh_edges"] == 10726 and rec["reps"] == 1 and rec["gate"] == "none"
+    assert rec["full_render_s"]["target"] == 1.0 and rec["camera_only_s"]["target"] == 0.1
+    assert set(rec["pass"]) == {"full_render", "camera_only"} and set(rec["engine"]) == {"node", "v8"}
+    bad = subprocess.run([NODE, str(built_port / "bench" / "camera_only.js"), "--gate", "sometimes"],
+                         cwd=ROOT, capture_output=True, text=True, timeout=60)
+    assert bad.returncode == 2 and "unknown gate" in bad.stderr
