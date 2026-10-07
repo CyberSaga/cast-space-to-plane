@@ -303,7 +303,7 @@ castplane render examples/wall_and_ground.json -o out --hidden-lines --hidden-st
 | --- | --- |
 | `main(argv=None) -> int` | 命令列進入點，回傳結束碼（見第 1 節） |
 | `build_parser() -> ArgumentParser` | argparse 解析器 |
-| `cmd_render(args)`、`cmd_validate(args)`、`cmd_stages(args)`、`cmd_info(args)` | 各子指令 |
+| `cmd_render(args)`、`cmd_validate(args)`、`cmd_stages(args)`、`cmd_info(args)` | 各子指令（`import` 在 `castplane.io.cli`） |
 | `warning_table(warnings) -> str` | `info` 用的固定寬度警告表（code / ids / message） |
 | `EXIT_OK`、`EXIT_IO`、`EXIT_INPUT`、`EXIT_MISSING_DEPENDENCY`、`FORMATS` | 結束碼 0 / 1 / 2 / 3 與可用格式 |
 
@@ -366,6 +366,41 @@ C 段在 `hidden_lines` 開啟時呼叫；純 numpy、確定性（取樣位置�
 | `COPLANAR_TOL_RAD`、`WELD_TOLERANCE_DEFAULT`、`SMOOTH_ANGLE_DEFAULT`、`MESH_MAX_RAYS`、`SMOOTH_BAND`、`INSIDE_WINDING` | 合約 §5.2.3 的常數（1e-3 rad、1e-6 m、30°、64、1e-9、0.75） |
 
 警告代碼增加 `MESH_NON_MANIFOLD`、`MESH_WINDING_FIXED`、`MESH_DEGENERATE_FACES`、`MESH_RAYS_CAPPED`（合約 §5.0.5，接在 M4 的 `RECEIVER_UNLIT` 之後）。
+
+### 2.18 `castplane.io` — 載入器與場景展開（只在 Python；合約 §5.0.2、§5.2.2、§5.2.8）
+
+載入器只在「展開」這一步使用，`validate_scene` 與 A/B/C 段永遠只看內嵌的 `data`。
+
+| 名稱 | 說明 |
+| --- | --- |
+| `load_expanded_scene(path_or_dict, base_dir=None) -> (scene, notes)` | `scene.read_json`（給路徑時）→ `expand_scene` → `validate_scene`；CLI 的 `render` / `validate` / `stages` / `info` / `import --into` 都用它。`base_dir` 預設為場景檔所在目錄，給 dict 時為目前工作目錄 |
+| `expand_scene(scene, base_dir=None) -> (scene, notes)` | 回傳新的 dict：`EXPANDERS` 裡有的物件型別換成展開器回傳的物件（位置不變），其他元素深拷貝；對已展開的場景是冪等的；同一次呼叫內同一個檔案只解析一次 |
+| `expand_mesh_object(obj, field, base_dir) -> (objects, notes)` | `EXPANDERS["mesh"]`：只處理有 `path`、沒有 `data` 的 `mesh` 物件，讀檔填入 `data`、保留原來的 `path` 字串；載入錯誤 → `SceneError(objects[i].path)`（節點找不到 → `objects[i].node`），glTF 配 `up` → `SceneError(objects[i].up)`，讀不到檔 → `OSError`（訊息含欄位路徑），缺 trimesh → `ImportError` |
+| `load_mesh_file(path, node=None) -> raw` | 依副檔名（小寫）分派：`.obj` → `io.obj`、`.gltf` / `.glb` → `io.gltf`、其他 → `io.trimesh_adapter`；回傳 `{"vertices", "faces", "smooth_groups"}`（glTF 已轉 Z-up 並烘焙節點變換，其他為檔案原本的軸與單位） |
+| `EXPANDERS`、`SUPPORTED_EXTENSIONS`、`IMPORT_NOTE_CODES` | 展開器登錄表（`{"mesh": expand_mesh_object}`；M8 加 `step`）、文件化的副檔名 `(".obj", ".gltf", ".glb", ".stl", ".ply")`、匯入備註代碼（`IMPORT_SPOT_AS_POINT`、`IMPORT_CAMERA_DROPPED`、`IMPORT_NO_CAMERA_DEFAULT`、`IMPORT_NO_LIGHT_DEFAULT` → 預設訊息）。備註 `{code, ids, message}` 不是 §3 的警告，永遠不會進文件的 `warnings` |
+
+`castplane.io.obj`（純 stdlib）：
+
+| 函式 | 說明 |
+| --- | --- |
+| `parse_obj(text) -> dict` | 解析 OBJ 文字：`v`、`f`（`v`、`v/vt`、`v//vn`、`v/vt/vn`、負的相對索引、≥ 3 個頂點的多邊形）、`o` / `g`、`s N` / `s off`、行尾 `\` 接續；`#`、`vt`、`vn`、`l`、`p`、`mtllib`、`usemtl` 與未知關鍵字略過。錯誤為 `SceneError("line N", …)` |
+| `select_obj(parsed, node=None) -> raw` | 選取一個 `o` / `g` 名稱（字串）或第 k 個不同名稱（整數）的面；有選取時丟掉沒用到的頂點 |
+| `read_obj(path)`、`load_obj(path, node=None, parsed=None)` | 讀檔後解析／選取 |
+
+`castplane.io.gltf`（numpy + stdlib）：
+
+| 函式 | 說明 |
+| --- | --- |
+| `read_gltf(path) -> (json, buffers)` | GLB 容器（`glTF` 魔數、版本 2、JSON 區塊與選用的 BIN 區塊）或 `.gltf`（base64 `data:` URI、相對於檔案的外部 `.bin`）；不支援的必要擴充（Draco、meshopt、量化）報錯 |
+| `gltf_raw(doc, buffers, node=None) -> raw`、`load_gltf(path, node=None, parsed=None)` | 所有網格節點（或選取節點的子樹）的三角形：存取器支援 `byteStride` / `byteOffset`、POSITION 只接受 5126、索引 5121 / 5123 / 5125、模式 5 / 6 展開、0–3 略過；頂點乘世界矩陣（行列式 < 0 時反轉面）後做精確軸映射 `(x, y, z) ↦ (x, −z, y)`；帶 `extras.castplane` 基元的節點上的網格忽略 |
+| `traversal_order(doc)`、`node_world_matrices(doc)` | 預設場景的深度優先遍歷順序（定義「第一個同名節點」）；每個節點的世界矩陣 `parent · T·R·S`（`matrix` 為行主序） |
+| `euler_zyx(R) -> [rx, ry, rz]` | `R = Rz·Ry·Rx` 的分解（弧度；`hypot(R00, R10) ≤ 1e-12` 時 `rx = 0`） |
+| `import_gltf_parts(path, *, ref=None, inline=False, node=None, camera=None, light=None, mesh_keys=None, parsed=None)` | 合約 §5.2.8 的對應表：網格節點 → `mesh` 物件（名稱唯一且非空時 `node` 寫名稱，否則寫索引）、`extras.castplane` → 基元物件、透視相機 → `camera` 區塊與畫布、`KHR_lights_punctual` 的每一盞光（聚光燈 → 點光並記 `IMPORT_SPOT_AS_POINT`）→ `({"objects", "lights", "camera", "canvas_mm", "raw"}, notes)` |
+| `import_gltf_scene(path, *, ref=None, inline=False, node=None, camera=None, light=None, mesh_keys=None) -> (scene, notes)` | 同上再組成完整的原始場景：檔案沒有相機／光源時用包圍盒預設相機與預設平行光並記備註，受影面固定為地面 |
+
+`castplane.io.trimesh_adapter`：`load_trimesh(path, node=None) -> raw` 用選用的 trimesh（`pip install 'castplane[mesh]'`）讀 STL / PLY 等格式，`trimesh.load(..., force="mesh", process=False)`，面與頂點照檔案儲存的順序（不合併、不修法線）；沒有 trimesh 時拋 `ImportError("install castplane[mesh]")`（CLI 結束碼 3）。
+
+`castplane.io.cli`：`add_import_parser(sub)` 註冊 `import` 子指令、`cmd_import(args) -> int` 執行它（第 1 節）。
 
 ## 3. 警告代碼（合約 §2.9）
 

@@ -810,8 +810,9 @@ def test_vertices_above_the_light_only_warn(scene):
     bottom = min(random_scenes.lowest_z(o) for o in scene["objects"])
     if top > light[2]:
         assert "VERTEX_NOT_BELOW_LIGHT" in codes(doc)
-    if bottom < light[2] < top:
-        # some vertex below and some above the light: at least one outline reaches infinity
+    if any(random_scenes.lowest_z(o) < light[2] < random_scenes.highest_z(o) for o in scene["objects"]):
+        # some object with a vertex below and a vertex above the light: at least one outline reaches
+        # infinity (two separate objects, one wholly below and one wholly above, have none)
         assert any(s["unbounded"] for s in doc["shadows"])
     if bottom > light[2]:
         # the whole scene is above the light: no ray reaches the ground, so no shadow at all

@@ -1,4 +1,4 @@
-"""``castplane`` command line (contract §1): render / validate / stages / info.
+"""``castplane`` command line (contract §1, §5.0.2): render / validate / stages / info / import.
 
     castplane render   scene.json -o OUTDIR [--camera cam.json] [--formats svg,json,png]
                                             [--layers a,b] [--dpi N] [--quiet]
@@ -6,6 +6,7 @@
     castplane validate scene.json [--quiet]
     castplane stages   scene.json [--camera cam.json] [-o stages.json] [--quiet]
     castplane info     scene.json [--camera cam.json]
+    castplane import   FILE [-o OUT.json] [--into SCENE] [--id ID] [-q] [mesh options]  (castplane.io.cli)
 
 ``render`` writes ``<scene stem>.svg`` / ``.json`` / ``.png`` into ``OUTDIR`` for the
 requested formats (default ``svg,json``; PNG only on request, through the optional
@@ -17,6 +18,9 @@ stage A / stage B intermediates (contract §3) as one canonical JSON object
 the vanishing points, the construction points, the receivers (``lit`` / ``casts`` per light) and the
 warning table.  ``--hidden-lines`` / ``--no-hidden-lines`` / ``--hidden-style`` override the scene's
 ``output.hidden_lines`` / ``hidden_style`` for ``render`` (contract §5.1.6.6; the scene is not rewritten).
+``render`` / ``validate`` / ``stages`` / ``info`` load the scene with ``castplane.io.load_expanded_scene``
+(``mesh`` objects with a ``path`` are read relative to the scene file) and print the importer
+notes to stderr as ``note: <CODE> [ids]: message``.
 
 Exit codes:
 
@@ -25,7 +29,8 @@ Exit codes:
 * ``2`` invalid input: a :class:`SceneError` (the message names the JSON field path, e.g.
   ``error: objects[1].size[2]: must be > 0``), an unknown ``--formats`` / ``--layers`` entry,
   or a command-line usage error (argparse's own convention);
-* ``3`` a missing optional dependency (PNG requested without ``cairosvg`` / ``resvg``).
+* ``3`` a missing optional dependency (PNG requested without ``cairosvg`` / ``resvg``, an STL /
+  PLY mesh without ``trimesh``).
 
 Warnings of the rendered document go to stderr as ``warning: <CODE> [ids]: message``
 (suppressed by ``--quiet``); errors always go to stderr.
@@ -39,11 +44,13 @@ import sys
 
 from . import __version__
 from .errors import SceneError
+from .io import load_expanded_scene
+from .io.cli import add_import_parser
 from .output.geometry_json import dumps
 from .output.png import write_png
 from .output.svg import HIDDEN_STYLES, LAYER_ORDER, write_svg
 from .pipeline import compose, project_scene, shadow_geometry
-from .scene import load_camera, load_scene
+from .scene import load_camera
 
 FORMATS = ("svg", "json", "png")
 
@@ -70,12 +77,21 @@ def _split(value, allowed, what: str):
     return items
 
 
-def _run(scene_path, camera_path, hidden_lines=None):
-    scene = load_scene(scene_path)
+def _run(scene_path, camera_path, hidden_lines=None, quiet=False):
+    scene, notes = load_expanded_scene(scene_path)
+    _print_notes(notes, quiet)
     camera = load_camera(camera_path) if camera_path else None
     A = shadow_geometry(scene)
     B = project_scene(scene, A, camera=camera)
     return scene, compose(scene, B, hidden_lines=hidden_lines)
+
+
+def _print_notes(notes: list, quiet: bool) -> None:
+    """Importer notes of the scene expansion (contract §5.0.2): stderr, ``note:`` prefix."""
+    if quiet:
+        return
+    for n in notes:
+        print(f"note: {n['code']} {n['ids']}: {n['message']}", file=sys.stderr)
 
 
 def _print_warnings(doc: dict, quiet: bool) -> None:
@@ -88,7 +104,7 @@ def _print_warnings(doc: dict, quiet: bool) -> None:
 def cmd_render(args) -> int:
     formats = _split(args.formats, FORMATS, "formats") or ["svg", "json"]
     layers = _split(args.layers, LAYER_ORDER, "layers")
-    scene, doc = _run(args.scene, args.camera, hidden_lines=args.hidden_lines)
+    scene, doc = _run(args.scene, args.camera, hidden_lines=args.hidden_lines, quiet=args.quiet)
     if layers is None:
         layers = scene["output"]["layers"]
     dpi = scene["output"]["png_dpi"] if args.dpi is None else args.dpi
@@ -121,7 +137,8 @@ def cmd_render(args) -> int:
 
 
 def cmd_validate(args) -> int:
-    scene = load_scene(args.scene)
+    scene, notes = load_expanded_scene(args.scene)
+    _print_notes(notes, args.quiet)
     if not args.quiet:
         print(f"ok: {len(scene['objects'])} object(s), {len(scene['lights'])} light(s), "
               f"{len(scene['receivers'])} receiver(s)")
@@ -129,7 +146,8 @@ def cmd_validate(args) -> int:
 
 
 def cmd_stages(args) -> int:
-    scene = load_scene(args.scene)
+    scene, notes = load_expanded_scene(args.scene)
+    _print_notes(notes, args.quiet)
     camera = load_camera(args.camera) if args.camera else None
     A = shadow_geometry(scene)
     B = project_scene(scene, A, camera=camera)
@@ -258,6 +276,8 @@ def build_parser() -> argparse.ArgumentParser:
     p = sub.add_parser("info", parents=[camera], help="print horizon, vanishing points, L', F' and the warning table")
     p.add_argument("scene")
     p.set_defaults(func=cmd_info)
+
+    add_import_parser(sub)
     return parser
 
 

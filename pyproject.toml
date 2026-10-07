@@ -40,6 +40,7 @@ Documentation = "https://github.com/CyberSaga/cast-space-to-plane/blob/main/docs
 Specification = "https://github.com/CyberSaga/cast-space-to-plane/blob/main/docs/spec/spec-v0.1.md"
 
 [project.optional-dependencies]
+mesh = ["trimesh>=4"]
 png = ["cairosvg>=2.5"]
 dev = ["pytest>=7", "hypothesis>=6", "pillow>=9", "cairosvg>=2.5"]
 
