@@ -33,7 +33,7 @@
 
 **逐案例放寬（`rules.json` 的 `case_overrides`，v3）。** 一筆放寬只對一個案例、只對路徑符合其 `paths`（`*` 代表任一個串列索引或鍵，比對路徑前綴）之下的**數值**改用絕對容差 `abs_tol`；非數值、串列長度、鍵集合與警告一律不放寬。目前只有一筆：`degenerate_cylinder_cap_at_light_height` 的 `shadows[*].loops[*][*].direction` 與 `shadows[*].outline[*].direction`（四個葉節點）以 1e-6 絕對容差比對——頂蓋恰在光源高度，`w_S = 0` 的交點是重根，方向頂點對 `M`、`L` 一個 ulp 的擾動以平方根放大（實測每 ulp 1.5e-9），這是案例的目的而非實作錯誤（合約 §5.4.4 (1)、D60）。`compare_documents(expected, actual, case_name)` 依案例名稱套用。
 
-## 來源（目前版本 v6，見 `CHANGELOG.md`；共 34 個 v2 案例，M4 的 9 個見下方 `### M4 受影面與隱藏線`，M5 的 3 個見 `### M5 網格`，M6 的 4 個見 `### M6 多光源`）
+## 來源（目前版本 v7，見 `CHANGELOG.md`；共 60 個案例：34 個 v2 案例，M4 的 9 個見下方 `### M4 受影面與隱藏線`，M5 的 3 個見 `### M5 網格`，M6 的 4 個見 `### M6 多光源`，最終審查修正的 10 個見 `### v7 最終審查修正`）
 
 | 類別 | 案例 | 依據 |
 | --- | --- | --- |
@@ -81,6 +81,23 @@
 | `multilight_point_and_directional_curved` | 球 `ball`、圓柱 `pillar`、稜柱 `wedge`，點光源 `lamp` + 平行光 `sun`：曲面物件依光源命名的基點（`ball.sil.0.lamp`、`pillar.g0.base.sun` …，影子點 `ball.sil.0.sun.shadow.sun`）、每個 (光源, 曲面物件) 一筆明暗交界線 `form_shadow`、取樣曲面影子多邊形的本影、`wedge` 的 core 面 | 合約 §5.3.2、§5.3.10 |
 | `multilight_three_lights_concave_prism` | `N = 3`：`make_concavity_scene(1)` 的 U 形稜柱與方塊再加兩盞點光源；`light_b`、`light_c` 的影子迴圈自交，三盞光的區域重疊，本影 = 三個 nonzero 區域的交集（每盞光一個計數器）。兩個投影物**離地 0.2 m**：站在地上的物件在各光源的迴圈共用接地頂點與接地邊，會讓本影的**分片**（不是區域）隨建置的捨入而變（合約 §5.3 實作筆記），離地後每個判定都離門檻夠遠，可以逐片比對（`test_three_light_case_pieces_are_stable_under_rigid_motions` 檢查） | 合約 §5.3.4、§5.3.7、§5.3.10 |
 | `multilight_second_light_inactive` | 驗收立方體、`west` 有效、第二盞點光源 `under` 在地面以下：`LIGHT_BELOW_RECEIVER [under]`、它的紀錄為空、`receivers[0].lit = {west: true, under: false}`、`umbra[0].lights = [west]`、`polygons = []`（有效光源少於兩盞）；SVG 中唯一有效的光源群組 `fill-opacity="0.3"`，本影群組為空 | 合約 §5.3.8、§5.3.10 |
+
+### v7 最終審查修正
+
+M4–M8 合併後的最終審查修正（分支 `wt/fix-arc`、`wt/fix-loaders`、`wt/fix-misc`）留下的 10 個場景，各組先放在 `tests/fixtures/v7_candidates/`（不執行工具），合併時以 `regen_conformance.py --case` 一次加入，收成一筆 v7 條目；既有的 expected 檔一個都沒變（加入前 `--dry-run`：50 個 v6 案例 0 個會變）。
+
+| 案例 | 內容 | 依據 |
+| --- | --- | --- |
+| `arc_pairing_arch_ground` | 拱形稜柱立在地上、燈在橫梁下：一條輪廓迴圈穿過光平面 4 次，弧依角度括號配對，得到兩個無界地面迴圈（光線投射一致）；v1 依迴圈順序配對會塗黑整個地面 | 審查 m4-geometry#0、合約 §5.1 實作筆記「Arc pairing」、D70 |
+| `arc_pairing_u_wall` | 轉 25° 的 U 形稜柱跨過「過燈且平行於牆」的平面：牆上影子為**空**（修正前整塊 15 m² 牆板） | 同上 |
+| `arc_pairing_u_notch_wall` | U 形稜柱、燈在凹口內、牆在**開口**後方：牆上兩個迴圈（兩臂的影子），IoU ≥ 0.99 | 同上 |
+| `arc_pairing_u_on_side` | 同一個 U 側躺在離地 2 m 處、燈在凹口內：地面路徑有兩段延伸到無窮遠，兩個地面迴圈 | 同上 |
+| `arc_pairing_u_closed_arm_wall` | 牆在**封閉**臂後方：`p = 2` 的牆上迴圈，角度配對與迴圈順序一致，與 v1 的掃角位元相同 | 審查 m4-geometry#0 第二輪 |
+| `arc_base_level_spiral_upright` | 1.3 圈的螺旋稜柱、燈在內部半高：光平面的每個方向都打到物體，`p = 1` 迴圈的弧在基準層修正後掃過一整圈以上（地面 IoU 1.00，修正前 0.26） | 合約 §5.1 實作筆記「Base level of the arcs at infinity」 |
+| `arc_base_level_spiral_tilted` | 同一螺旋先轉 30° 再繞 x 傾斜 15°：`p = 2`，第一段弧多加一圈 | 同上 |
+| `arc_base_level_spiral_floor` | 直立螺旋加 `z = 0.25` 的有界水平板：受影面座標框上的基準層修正，加上超過 2π 的弧經邊界裁切 | 同上 |
+| `mesh_noisy_l_ground_contact` | 凹 L 形網格（內嵌 `data`），底面頂點 v3、v5 在地面下 1e-7 m（在 1e-6 的焊接容差內）：網格的受影面接觸容差 `max(tol, weld_tolerance)` 保持乾淨的 L 形輪廓，沒有 `OBJECT_BELOW_RECEIVER` | 審查 m5-mesh#0、合約 §5.2 實作筆記 |
+| `multilight_mesh_fallback_shared_edges` | 開口的 UV 球殼（144 面，走 M5 逐面備援）在兩盞點光源下：本影核心第 5 步橋接零寬區間，共用邊不再切開分割，本影 14 片（修正前 514 片） | 審查 m6-umbra#0、合約 §5.3.4 |
 
 **M8（STEP 匯入）不新增、不改動任何案例或 expected 檔**（合約 §5.0.8、§5.5.10）：案例永遠不含只存在於載入器層的物件（`type: "step"`、帶 `path` 的 `mesh`），它們都是展開後的場景；STEP 的驗收（`cylinder.step` 展開後渲染與 `expected/example_basic.json` 逐位元相同、`cylinder_tilted.step` 通過 `expected/buried_cylinder_tilted.json` 的比對）在 `tests/test_step.py` 裡以既有的 expected 檔做。
 

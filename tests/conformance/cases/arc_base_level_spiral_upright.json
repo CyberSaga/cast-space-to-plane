@@ -1,4 +1,5 @@
 {
+ "description": "v7 (final review m4-geometry#0 second pass, base level of the arcs at infinity): 1.3-turn spiral prism on the ground, lamp inside at mid-height; every light-plane direction hits the solid, one p = 1 loop whose arc sweeps more than a full turn after the base-level correction (ground IoU 1.00; 0.26 before)",
  "version": "0.1",
  "units": "m",
  "up": "z",
@@ -268,38 +269,6 @@
     1
    ],
    "offset": 0
-  },
-  {
-   "id": "floor",
-   "type": "plane",
-   "normal": [
-    0,
-    0,
-    1
-   ],
-   "offset": -0.25,
-   "bounds": [
-    [
-     -6,
-     -6,
-     0.25
-    ],
-    [
-     6,
-     -6,
-     0.25
-    ],
-    [
-     6,
-     6,
-     0.25
-    ],
-    [
-     -6,
-     6,
-     0.25
-    ]
-   ]
   }
  ],
  "camera": {

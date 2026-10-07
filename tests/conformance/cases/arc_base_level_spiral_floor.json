@@ -1,4 +1,5 @@
 {
+ "description": "v7 (final review m4-geometry#0 second pass, base level of the arcs at infinity): the upright spiral with a bounded horizontal plate at z = 0.25; base-level correction on a receiver frame plus the bounds clip of an arc over 2 pi (97 % of the plate, IoU 1.00; 0.27 before)",
  "version": "0.1",
  "units": "m",
  "up": "z",
@@ -268,6 +269,38 @@
     1
    ],
    "offset": 0
+  },
+  {
+   "id": "floor",
+   "type": "plane",
+   "normal": [
+    0,
+    0,
+    1
+   ],
+   "offset": -0.25,
+   "bounds": [
+    [
+     -6,
+     -6,
+     0.25
+    ],
+    [
+     6,
+     -6,
+     0.25
+    ],
+    [
+     6,
+     6,
+     0.25
+    ],
+    [
+     -6,
+     6,
+     0.25
+    ]
+   ]
   }
  ],
  "camera": {

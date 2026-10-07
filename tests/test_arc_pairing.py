@@ -28,7 +28,15 @@ from tests.reference import raster, raycast
 from tests.test_raycast import multi_component_records, render_and_compare
 from tests.test_receivers import plate_masks, shadow_of
 
-FIXTURES = Path(__file__).parent / "fixtures" / "v7_candidates"
+#: The scenes were v7 candidates (tests/fixtures/v7_candidates/) and are conformance cases since v7.
+FIXTURES = Path(__file__).parent / "conformance" / "cases"
+#: candidate file name -> v7 conformance case file
+CASE_FILE = {"arch_ground.json": "arc_pairing_arch_ground.json", "u_wall.json": "arc_pairing_u_wall.json",
+             "u_notch_wall.json": "arc_pairing_u_notch_wall.json", "u_on_side.json": "arc_pairing_u_on_side.json",
+             "u_closed_arm_wall.json": "arc_pairing_u_closed_arm_wall.json",
+             "spiral_upright.json": "arc_base_level_spiral_upright.json",
+             "spiral_tilted.json": "arc_base_level_spiral_tilted.json",
+             "spiral_floor.json": "arc_base_level_spiral_floor.json"}
 GROUND = np.array([0.0, 0.0, 1.0, 0.0])
 TWO_PI = 2.0 * math.pi
 #: An arch-shaped plate outline in the vertical plane ``y = 1`` as ``(x, z)`` pairs, counter-clockwise as
@@ -40,7 +48,7 @@ LIGHT = np.array([0.0, -2.0, 1.0])   # in front of the opening, below the lintel
 
 
 def fixture(name: str) -> dict:
-    return load_scene(json.loads((FIXTURES / name).read_text(encoding="utf-8")))
+    return load_scene(json.loads((FIXTURES / CASE_FILE[name]).read_text(encoding="utf-8")))
 
 
 def rot_z(deg: float) -> np.ndarray:

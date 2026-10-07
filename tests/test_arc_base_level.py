@@ -31,13 +31,21 @@ from tests.reference import raster, raycast, random_scenes
 from tests.test_raycast import compare, multi_component_records
 from tests.test_receivers import plate_masks
 
-FIXTURES = Path(__file__).parent / "fixtures" / "v7_candidates"
+#: The scenes were v7 candidates (tests/fixtures/v7_candidates/) and are conformance cases since v7.
+FIXTURES = Path(__file__).parent / "conformance" / "cases"
+#: candidate file name -> v7 conformance case file
+CASE_FILE = {"arch_ground.json": "arc_pairing_arch_ground.json", "u_wall.json": "arc_pairing_u_wall.json",
+             "u_notch_wall.json": "arc_pairing_u_notch_wall.json", "u_on_side.json": "arc_pairing_u_on_side.json",
+             "u_closed_arm_wall.json": "arc_pairing_u_closed_arm_wall.json",
+             "spiral_upright.json": "arc_base_level_spiral_upright.json",
+             "spiral_tilted.json": "arc_base_level_spiral_tilted.json",
+             "spiral_floor.json": "arc_base_level_spiral_floor.json"}
 GROUND = np.array([0.0, 0.0, 1.0, 0.0])
 TWO_PI = 2.0 * math.pi
 
 
 def fixture(name: str) -> dict:
-    return json.loads((FIXTURES / name).read_text(encoding="utf-8"))
+    return json.loads((FIXTURES / CASE_FILE[name]).read_text(encoding="utf-8"))
 
 
 def big_window_fractions(scene: dict, half: float = 20.0, n: int = 240) -> tuple[float, float, float]:

@@ -1547,6 +1547,22 @@ worktree and the merge rule are in `docs/PLAN-v2.md`.
   unbounded loop, first arc). Fixtures (v7 candidates): `spiral_upright`, `spiral_tilted`, `spiral_floor`,
   `u_closed_arm_wall` (the `p = 2` loop-order-equivalent wall loop, bit-identical to the v1 code; the previous
   unwrapped-difference sweep differed in the last ulp of the anchor points). Tests: `tests/test_arc_base_level.py`.
+- **[decision, implementation] (merge of the final review fixes) Conformance v7 and the merged shadow-record code.** The
+  five fix branches (`wt/fix-docs`, `wt/fix-step`, `wt/fix-loaders`, `wt/fix-misc`, `wt/fix-arc`) were merged in that
+  order. `_shadow_record`, `_fallback_shadow_record` and `_caster_record` combine both edits: every component of
+  `shadow_loop(...)["loops"]` (arc pairing, base-level `turns` re-run) is computed with `tol_clip = tol_c`, the mesh
+  receiver-contact tolerance `max(tol, weld_tolerance)` of the §5.2 note (m5-mesh#0); `_caster_record` takes both
+  `tol_contact` and `level_mesh`. The §5.0.8 table gains one row by this note: **v7** — final review merge — expected
+  files: none of the 50 v6 cases change (dry run 0 of 50) — cases added: 10 (`arc_pairing_arch_ground`,
+  `arc_pairing_u_wall`, `arc_pairing_u_notch_wall`, `arc_pairing_u_on_side`, `arc_pairing_u_closed_arm_wall`,
+  `arc_base_level_spiral_upright`, `arc_base_level_spiral_tilted`, `arc_base_level_spiral_floor`,
+  `mesh_noisy_l_ground_contact`, `multilight_mesh_fallback_shared_edges`) — `--case` only, one entry; the candidate
+  scenes of `tests/fixtures/v7_candidates/` were renamed with an `arc_pairing_` / `arc_base_level_` prefix, given a
+  `description`, and the directory removed. `multilight_mesh_fallback_shared_edges` is the first multi-light case
+  outside the four §5.3.10 cases (`tests/test_conformance.py::V7_MULTI_LIGHT_CASES`). The expected set is 2.7 MB of the
+  3 MiB limit of `test_expected_files_are_canonical_and_small`; the next additions should stay small. Also on the
+  merge: `conics.classify` / `classify_and_condition` evaluate `det` / `svd` under `np.errstate(all="ignore")` (a singular
+  centred conic with subnormal entries made numpy warn "divide by zero"; values unchanged, the conic is degenerate).
 
 ### 5.2 M5 — mesh import (spec §9 rows 網格匯入 / 匯入格式, spec §10 M5, spec §11.3)
 
