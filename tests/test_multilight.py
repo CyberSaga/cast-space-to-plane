@@ -1072,3 +1072,16 @@ def test_two_lights_example_matches_its_readme():
     assert 'fill-opacity="0.15"' in g_tag(svg, "cast_shadow.left")
     assert 'fill-opacity="0.09"' in g_tag(svg, "form_shadow.left")
     assert g_body(svg, "cast_shadow.umbra").count("<path") == 1
+
+
+@pytest.mark.parametrize("case", ["mesh_smooth_prism16", "mesh_open_bottom_box_fallback"])
+def test_mesh_scenes_with_two_lights_bit_identical(case):
+    """M5 x M6 (after the v5 merge): a mesh object (smooth edges, and the non-manifold per-face fallback) under two
+    lights keeps every light's records bit-identical to its single-light document, and the umbra is reproducible."""
+    raw = json.loads((ROOT / "tests" / "conformance" / "cases" / f"{case}.json").read_text(encoding="utf-8"))
+    first = raw["lights"][0]
+    x, y, z = first["position"]
+    raw["lights"].append(dict(first, id="second", position=[x + 1.0, y - 0.5, z]))
+    doc = assert_per_light_bit_identical(raw)
+    assert doc["umbra"][0]["lights"] == [first["id"], "second"] and doc["umbra"][0]["polygons"]
+    assert umbra_from_document(json.loads(js(doc))) == doc["umbra"]
