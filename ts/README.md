@@ -7,8 +7,10 @@ with folds and per-receiver records, sampled hidden-line removal (`src/hidden.ts
 preprocessing pipeline and its fallback (`src/meshprep.ts`), and several lights with per-light shadows, the umbra and
 the multi-light SVG groups (`src/umbra.ts`, `src/multilight.ts`). Python (`castplane/`) is the reference
 implementation; the port is accepted against the conformance set `tests/conformance/`: phase 1 34/34 cases at set
-v3; phase 2 (M7 step 11, contract §5.4.0 / §5.4.14) **50 of 50 cases at set v6**, both runners green, recorded in the
-v6 entry of `tests/conformance/CHANGELOG.md`. The runner `test/conformance.test.ts` is final: one `node:test` test
+v3; phase 2 (M7 step 11, contract §5.4.0 / §5.4.14) 50 of 50 cases at set v6; after the final-review merge (the
+angular arc pairing at infinity and its base level, the mesh contact tolerance, `scale_A` from the used vertices, the
+umbra's zero-width bridging, the right-to-left point-name parse; §5.4 note "Final review fixes ported") **60 of 60
+cases at set v7**, both runners green, recorded in the v6 and v7 entries of `tests/conformance/CHANGELOG.md`. The runner `test/conformance.test.ts` is final: one `node:test` test
 per case, no todo list (the five phase-2 parts shrank one, part 5 removed it). The SVG of every case and of every
 example (the M4–M6 ones `wall_and_ground`, `mesh_demo` and `two_lights` included) is byte-identical to the Python
 writer (`tests/test_ts_port.py`, `tools/compare_svg.py`). The core reads expanded scenes only: a `mesh` object carries its
@@ -42,7 +44,10 @@ classification, `point_inside_mesh`), `mesh_pipeline` (acceptance 1 and 2 of con
 64-ray cap, meshes on bounded receivers), `umbra` (the `tests/test_umbra.py` table of the scanline kernel, the
 acceptance pieces from the hand drawables, every expected `umbra[]` recomputed bit for bit), `multilight` (the
 `multilight.ts` helpers, the hand values of `multilight_two_point_symmetric_box`, the per-light bit identity, the
-multi-light SVG groups and opacities, `umbra = false`, hidden lines with two lights). `test/fixtures/mesh_demo.expanded.json` is the Python expansion of
+multi-light SVG groups and opacities, `umbra = false`, hidden lines with two lights), `arc_pairing` (the
+`tests/test_arc_pairing.py` / `test_arc_base_level.py` contract: arcs at infinity paired by the angular order of the
+crossings, one component per cycle, bit identity with the v1 loop-order code, `light_plane_level` against a
+brute-force ray count, `arc_level` and `turns`, the arch / U-wall / spiral scenes of set v7). `test/fixtures/mesh_demo.expanded.json` is the Python expansion of
 `examples/mesh_demo.json` that the determinism tests read (kept current by `tests/test_ts_port.py`).
 
 ## API

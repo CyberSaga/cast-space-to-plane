@@ -210,6 +210,19 @@ def test_v6_changelog_entry_records_both_runners_green():
     assert "ts/test/conformance.test.ts" in line and "# todo 0" in line and "# fail 0" in line
 
 
+
+def test_v7_changelog_entry_records_both_runners_green():
+    """After the final-review merge (conformance v7) the port mirrors the Python fixes: the v7 entry of the
+    conformance changelog records "both runners green on v7" with the TypeScript runner's result on all 60 cases."""
+    text = (ROOT / "tests" / "conformance" / "CHANGELOG.md").read_text(encoding="utf-8")
+    versions = [int(v) for v in re.findall(r"^## v(\d+) ", text, re.M)]
+    assert 7 in versions
+    v7 = re.split(r"^## v\d+ ", text, flags=re.M)[versions.index(7) + 1]
+    line = next((ln for ln in v7.splitlines() if ln.startswith("- both runners green on v7")), None)
+    assert line is not None, "the v7 entry lacks the 'both runners green on v7' line"
+    assert "60 of 60 cases" in line and "each of the 60" in line
+    assert "ts/test/conformance.test.ts" in line and "# todo 0" in line and "# fail 0" in line
+
 @needs_node
 def test_ts_conformance_runner_is_green_on_the_whole_set(built_port):
     """The final TypeScript conformance runner (contract §5.4.8, §5.4.0 phase 2: "both runners green on v6"): run

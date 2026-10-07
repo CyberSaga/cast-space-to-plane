@@ -492,3 +492,22 @@ during a drag (§5.4.11).
   result-identical options that the review measured at 2–3× faster; on this container `_MT_BLOCK = 1 << 17`
   gives a byte-identical document in 4.29 s instead of 5.93 s (min of 2) with a peak RSS of 120 MB instead
   of 468 MB. Not implemented (no BVH or grid either).
+
+## TypeScript port after the final-review merge (M7, 2026-10-07): `ts/bench/camera_only.ts`
+
+The port of the review fixes (angular arc pairing and its base level, mesh contact tolerance, umbra bridging) adds
+nothing to the benchmark scene's path: its records are bounded, so `base_turns` returns at the first test. The
+document is unchanged (9030 drawn edges, 15171 named points, `warnings []`, SVG 1915 kB, JSON 10379 kB as printed by
+the benchmark). `node ts/build/bench/camera_only.js --gate both --reps 20`, three consecutive runs on the same
+container (node 22.22.0; minimum, median in brackets):
+
+| path | run 1 | run 2 | run 3 | target | status |
+| --- | --- | --- | --- | --- | --- |
+| full render (A+B+C+SVG+JSON) | 384.0 ms (485.3) | 398.8 ms (477.4) | 400.5 ms (454.9) | < 1 s | **PASS** (3/3) |
+| camera-only re-render (B+C+SVG) | 72.8 ms (81.7) | 68.8 ms (87.5) | 63.5 ms (82.0) | < 100 ms | **PASS** (3/3) |
+| stage A only | 19.0 ms (30.0) | 18.1 ms (25.1) | 18.0 ms (24.7) | – | – |
+| SVG writer only | 39.6 ms (44.5) | 38.7 ms (46.2) | 35.8 ms (40.8) | – | – |
+| JSON dumps only | 268.5 ms (329.8) | 264.1 ms (287.3) | 260.3 ms (307.2) | – | – |
+
+All three runs exit 0 with `--gate both`. The camera-only minima (72.8 / 68.8 / 63.5 ms) are in the 62–72 ms band of
+the phase-2 closing rows; the gate literal stays `--gate both` (the step-7 rule for a hosted runner is unchanged).
