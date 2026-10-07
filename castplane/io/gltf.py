@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import base64
 import binascii
+import functools
 import json
 import math
 import os
@@ -30,10 +31,11 @@ import urllib.parse
 import numpy as np
 
 from ..errors import SceneError
-from ..scene import validate_object
+from .. import scene as _scene
+from ..scene import MESH_MAX_FACES, validate_object
 
 __all__ = ["read_gltf", "load_gltf", "gltf_raw", "node_world_matrices", "traversal_order", "euler_zyx",
-           "import_gltf_parts", "import_gltf_scene"]
+           "import_gltf_parts", "import_gltf_scene", "gltf_context"]
 
 GLB_MAGIC = b"glTF"
 CHUNK_JSON = 0x4E4F534A
@@ -50,6 +52,36 @@ UNSUPPORTED_EXTENSIONS = ("KHR_draco_mesh_compression", "EXT_meshopt_compression
 
 #: The exact axis map of contract §5.2.1 as a matrix (integer entries; applied by component swaps).
 AXIS_MAP = np.array([[1.0, 0.0, 0.0], [0.0, 0.0, -1.0], [0.0, 1.0, 0.0]])
+
+#: The largest element count of an accessor **without** ``bufferView`` (all zeros, glTF §3.6.2.1):
+#: such an accessor carries no geometry and is the only allocation not bounded by the file size, so
+#: it is capped at the largest index count a validated mesh can use (3 · ``MESH_MAX_FACES``).
+MAX_ZERO_ACCESSOR_COUNT = 3 * MESH_MAX_FACES
+
+#: Import budget (review fix): the total vertices / triangles of all mesh objects one
+#: :func:`import_gltf_parts` call may produce.  Each object is already held to the mesh size guard
+#: (``MESH_MAX_VERTICES`` / ``MESH_MAX_FACES``, checked while it is assembled), but one small file can
+#: instance the same mesh on any number of nodes; this bounds what such a file can make the importer
+#: allocate before validation (20 objects at the per-object limit).
+IMPORT_MAX_TOTAL_VERTICES = 20 * _scene.MESH_MAX_VERTICES
+IMPORT_MAX_TOTAL_FACES = 20 * _scene.MESH_MAX_FACES
+
+#: Exceptions that a malformed (wrongly typed) glTF value can still raise from numpy / the stdlib
+#: after the per-field checks; the public entry points turn them into ``SceneError("", ...)``.
+_MALFORMED = (TypeError, ValueError, KeyError, IndexError, AttributeError, OverflowError)
+
+
+def _malformed_as_scene_error(fn):
+    """Safety net (contract §5.2.8: every import error is a ``SceneError``, never a traceback)."""
+    @functools.wraps(fn)
+    def wrapper(*args, **kwargs):
+        try:
+            return fn(*args, **kwargs)
+        except SceneError:
+            raise
+        except _MALFORMED as exc:
+            raise SceneError("", f"malformed glTF: {type(exc).__name__}: {exc}") from None
+    return wrapper
 
 
 # --------------------------------------------------------------------------- container
@@ -81,7 +113,7 @@ def _parse_glb(blob: bytes):
 def _parse_json(raw: bytes) -> dict:
     try:
         doc = json.loads(raw.decode("utf-8"))
-    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+    except (ValueError, RecursionError) as exc:      # JSONDecodeError, UnicodeDecodeError, int digit limit
         raise SceneError("", f"invalid glTF JSON: {exc}") from None
     if not isinstance(doc, dict):
         raise SceneError("", "invalid glTF JSON: the top level must be an object")
@@ -102,8 +134,59 @@ def _entry(doc: dict, key: str, k, field: str) -> dict:
     return items[k]
 
 
+def _is_int(value) -> bool:
+    return isinstance(value, int) and not isinstance(value, bool)
+
+
+def _is_number(value) -> bool:
+    """A finite JSON number (bools rejected); total: an integer too large for a float is not one."""
+    if not isinstance(value, (int, float)) or isinstance(value, bool):
+        return False
+    try:
+        return math.isfinite(float(value))
+    except OverflowError:                            # e.g. a 401-digit integer literal
+        return False
+
+
+def _uint(value, field: str) -> int:
+    """A non-negative integer (bools and floats rejected) or ``SceneError(field)``."""
+    if not _is_int(value) or value < 0:
+        raise SceneError(field, "must be a non-negative integer")
+    return value
+
+
+def _number(value, field: str) -> float:
+    """A finite JSON number (bools rejected) as a float, or ``SceneError(field)``."""
+    if not _is_number(value):
+        raise SceneError(field, "must be a finite number")
+    return float(value)
+
+
+def _list_at(obj: dict, key: str, field: str) -> list:
+    """``obj[key]`` (``[]`` when absent) that must be a list, else ``SceneError(field.key)``."""
+    value = obj.get(key, [])
+    if not isinstance(value, list):
+        raise SceneError(f"{field}.{key}", "must be a list")
+    return value
+
+
+def _numbers(obj: dict, key: str, n: int, field: str, default: list) -> list:
+    """``obj[key]`` (``default`` when absent): a list of exactly ``n`` finite numbers."""
+    if key not in obj:
+        return default
+    value = obj[key]
+    if not isinstance(value, list) or len(value) != n or not all(_is_number(v) for v in value):
+        raise SceneError(f"{field}.{key}", f"must be {n} finite numbers")
+    return [float(v) for v in value]
+
+
+@_malformed_as_scene_error
 def read_gltf(path):
-    """Read a ``.gltf`` / ``.glb`` file: ``(json dict, [buffer bytes ...])`` (contract §5.2.8)."""
+    """Read a ``.gltf`` / ``.glb`` file: ``(json dict, [buffer bytes ...])`` (contract §5.2.8).
+
+    An external buffer must be a relative path inside the file's directory (no scheme, no absolute
+    path, no ``..`` escape) naming a regular file, and only its first ``byteLength`` bytes are read;
+    a missing file is an ``OSError`` (CLI exit 1)."""
     with open(path, "rb") as fh:
         blob = fh.read()
     if blob[:4] == GLB_MAGIC:
@@ -122,6 +205,9 @@ def read_gltf(path):
         field = f"buffers[{k}]"
         if not isinstance(buf, dict):
             raise SceneError(field, "must be an object")
+        length = buf.get("byteLength")
+        if not _is_int(length) or length < 0:
+            raise SceneError(f"{field}.byteLength", f"{length!r} must be a non-negative integer")
         uri = buf.get("uri")
         if uri is None:
             if k != 0 or bin_chunk is None:
@@ -138,13 +224,33 @@ def read_gltf(path):
             except (binascii.Error, ValueError):
                 raise SceneError(f"{field}.uri", "invalid base64 data") from None
         else:
-            with open(os.path.join(base, urllib.parse.unquote(uri)), "rb") as fh:
-                data = fh.read()
-        length = buf.get("byteLength")
-        if not isinstance(length, int) or isinstance(length, bool) or length < 0 or length > len(data):
+            full = _external_buffer_path(base, uri, f"{field}.uri")
+            with open(full, "rb") as fh:
+                data = fh.read(length)                # never more than the declared length
+        if length > len(data):
             raise SceneError(f"{field}.byteLength", f"{length!r} does not fit the {len(data)} bytes of the buffer")
         buffers.append(data)
     return doc, buffers
+
+
+def _external_buffer_path(base: str, uri: str, field: str) -> str:
+    """The file an external buffer ``uri`` names: a relative path (percent-decoded) that stays inside
+    ``base``; an existing path must be a regular file (a missing one is left to ``open``: OSError)."""
+    parts = urllib.parse.urlsplit(uri)
+    rel = urllib.parse.unquote(parts.path)
+    if parts.scheme or parts.netloc or parts.query or parts.fragment or not rel or "\0" in rel \
+            or os.path.isabs(rel) or rel.startswith(("/", "\\")):
+        raise SceneError(field, f"{uri!r} must be a relative path inside the file's directory")
+    full = os.path.normpath(os.path.join(base, rel))
+    if os.path.commonpath([base, full]) != base:
+        raise SceneError(field, f"{uri!r} must be a relative path inside the file's directory")
+    # symlinks resolved (review fix): a link next to the model must not lead outside the directory
+    real_base, real = os.path.realpath(base), os.path.realpath(full)
+    if os.path.commonpath([real_base, real]) != real_base:
+        raise SceneError(field, f"{uri!r} resolves (through a symbolic link) outside the file's directory")
+    if os.path.exists(real) and not os.path.isfile(real):
+        raise SceneError(field, f"{uri!r} is not a regular file")
+    return real
 
 
 def read_accessor(doc: dict, buffers: list, k: int) -> np.ndarray:
@@ -157,32 +263,33 @@ def read_accessor(doc: dict, buffers: list, k: int) -> np.ndarray:
     if acc.get("normalized", False):
         raise SceneError(f"{field}.normalized", "normalised accessors are not supported")
     ct = acc.get("componentType")
-    if ct not in COMPONENT_TYPES:
+    if not _is_int(ct) or ct not in COMPONENT_TYPES:
         raise SceneError(f"{field}.componentType", f"unknown component type {ct!r}")
     typ = acc.get("type")
-    if typ not in TYPE_SIZES:
+    if not isinstance(typ, str) or typ not in TYPE_SIZES:
         raise SceneError(f"{field}.type", f"unknown accessor type {typ!r}")
-    count = acc.get("count")
-    if not isinstance(count, int) or isinstance(count, bool) or count < 0:
-        raise SceneError(f"{field}.count", "must be a non-negative integer")
+    count = _uint(acc.get("count"), f"{field}.count")
     dtype, size = COMPONENT_TYPES[ct]
     ncomp = TYPE_SIZES[typ]
     if "bufferView" not in acc:
+        if count > MAX_ZERO_ACCESSOR_COUNT:          # checked before any allocation
+            raise SceneError(f"{field}.count", f"{count} elements without a bufferView exceed the limit of "
+                                               f"{MAX_ZERO_ACCESSOR_COUNT} (an all-zero accessor holds no geometry)")
         return np.zeros((count, ncomp), dtype=dtype)
     bv = _entry(doc, "bufferViews", acc["bufferView"], f"{field}.bufferView")
     vfield = f"bufferViews[{acc['bufferView']}]"
-    if not isinstance(bv.get("buffer"), int) or not 0 <= bv["buffer"] < len(buffers):
+    if not _is_int(bv.get("buffer")) or not 0 <= bv["buffer"] < len(buffers):
         raise SceneError(f"{vfield}.buffer", "buffer index out of range")
     buf = buffers[bv["buffer"]]
-    view_offset = bv.get("byteOffset", 0)
-    view_length = bv.get("byteLength")
-    if not isinstance(view_length, int) or view_offset + view_length > len(buf):
+    view_offset = _uint(bv.get("byteOffset", 0), f"{vfield}.byteOffset")
+    view_length = _uint(bv.get("byteLength"), f"{vfield}.byteLength")
+    if view_offset + view_length > len(buf):
         raise SceneError(f"{vfield}.byteLength", "the buffer view exceeds its buffer")
     elem = ncomp * size
-    stride = bv.get("byteStride") or elem
+    stride = _uint(bv.get("byteStride", 0), f"{vfield}.byteStride") or elem
     if stride < elem:
         raise SceneError(f"{vfield}.byteStride", f"{stride} is smaller than the element size {elem}")
-    offset = acc.get("byteOffset", 0)
+    offset = _uint(acc.get("byteOffset", 0), f"{field}.byteOffset")
     if count and offset + stride * (count - 1) + elem > view_length:
         raise SceneError(f"{field}.count", "the accessor exceeds its buffer view")
     if count == 0:
@@ -196,13 +303,11 @@ def read_accessor(doc: dict, buffers: list, k: int) -> np.ndarray:
 def _local_matrix(node: dict, k: int) -> np.ndarray:
     field = f"nodes[{k}]"
     if "matrix" in node:
-        m = node["matrix"]
-        if not isinstance(m, list) or len(m) != 16:
-            raise SceneError(f"{field}.matrix", "must be 16 numbers")
+        m = _numbers(node, "matrix", 16, field, None)
         return np.array(m, dtype=np.float64).reshape(4, 4).T          # column-major
-    t = np.array(node.get("translation", [0.0, 0.0, 0.0]), dtype=np.float64)
-    x, y, z, w = (float(v) for v in node.get("rotation", [0.0, 0.0, 0.0, 1.0]))
-    s = np.array(node.get("scale", [1.0, 1.0, 1.0]), dtype=np.float64)
+    t = np.array(_numbers(node, "translation", 3, field, [0.0, 0.0, 0.0]), dtype=np.float64)
+    x, y, z, w = _numbers(node, "rotation", 4, field, [0.0, 0.0, 0.0, 1.0])
+    s = np.array(_numbers(node, "scale", 3, field, [1.0, 1.0, 1.0]), dtype=np.float64)
     R = np.array([[1 - 2 * (y * y + z * z), 2 * (x * y - z * w), 2 * (x * z + y * w)],
                   [2 * (x * y + z * w), 1 - 2 * (x * x + z * z), 2 * (y * z - x * w)],
                   [2 * (x * z - y * w), 2 * (y * z + x * w), 1 - 2 * (x * x + y * y)]])
@@ -218,7 +323,7 @@ def _children(doc: dict) -> dict:
     for k, node in enumerate(nodes):
         if not isinstance(node, dict):
             raise SceneError(f"nodes[{k}]", "must be an object")
-        for c in node.get("children", []):
+        for c in _list_at(node, "children", f"nodes[{k}]"):
             if not isinstance(c, int) or isinstance(c, bool) or not 0 <= c < len(nodes):
                 raise SceneError(f"nodes[{k}].children", f"node index {c!r} is out of range")
             if c in parent:
@@ -232,17 +337,20 @@ def node_world_matrices(doc: dict) -> list:
     nodes = _list(doc, "nodes")
     parent = _children(doc)
     world = [None] * len(nodes)
-
-    def resolve(k, chain=()):
-        if world[k] is None:
-            if k in chain:
-                raise SceneError(f"nodes[{k}].children", "the node hierarchy has a cycle")
-            local = _local_matrix(nodes[k], k)
-            world[k] = local if k not in parent else resolve(parent[k], chain + (k,)) @ local
-        return world[k]
-
-    for k in range(len(nodes)):
-        resolve(k)
+    for k in range(len(nodes)):                       # iterative: no recursion limit on deep chains
+        chain, visiting, j = [], set(), k
+        while world[j] is None:                       # climb to a resolved ancestor or a root
+            if j in visiting:
+                raise SceneError(f"nodes[{j}].children", "the node hierarchy has a cycle")
+            visiting.add(j)
+            chain.append(j)
+            if j not in parent:
+                break
+            j = parent[j]
+        for j in reversed(chain):                     # resolve top-down
+            local = _local_matrix(nodes[j], j)
+            with np.errstate(over="ignore", invalid="ignore"):   # an overflow is reported where it is used
+                world[j] = local if j not in parent else world[parent[j]] @ local
     return world
 
 
@@ -251,7 +359,7 @@ def _roots(doc: dict) -> list:
     if scenes:
         s = doc.get("scene", 0)
         scene = _entry(doc, "scenes", s, "scene")
-        roots = scene.get("nodes", [])
+        roots = _list_at(scene, "nodes", f"scenes[{s}]")
         n = len(_list(doc, "nodes"))
         for r in roots:
             if not isinstance(r, int) or isinstance(r, bool) or not 0 <= r < n:
@@ -303,6 +411,8 @@ def _primitive_triangles(doc: dict, buffers: list, m: int, p: int, prim: dict):
     if prim.get("targets"):
         raise SceneError(f"{field}.targets", "morph targets are not supported")
     mode = prim.get("mode", 4)
+    if not _is_int(mode) or mode not in (0, 1, 2, 3, 4, 5, 6):
+        raise SceneError(f"{field}.mode", f"unknown primitive mode {mode!r}")
     if mode in (0, 1, 2, 3):
         return None
     if mode not in (4, 5, 6):
@@ -352,16 +462,29 @@ def _node_geometry(doc, buffers, k: int, world: np.ndarray, verts: list, faces: 
         raise SceneError(f"nodes[{k}].skin", "skins are not supported")
     m = node["mesh"]
     mesh = _entry(doc, "meshes", m, f"nodes[{k}].mesh")
+    if not np.all(np.isfinite(world)):
+        raise SceneError(f"nodes[{k}]", "the world transform is not finite (the node matrices overflow)")
     L, t = world[:3, :3], world[:3, 3]
     flip = float(np.linalg.det(L)) < 0.0
-    for p, prim in enumerate(mesh.get("primitives", [])):
+    for p, prim in enumerate(_list_at(mesh, "primitives", f"meshes[{m}]")):
         got = _primitive_triangles(doc, buffers, m, p, prim)
         if got is None:
             continue
         V, tris = got
-        W = V @ L.T + t[None, :]
-        offset = sum(len(v) for v in verts)
-        verts.append(W)
+        offset = verts[-1][0] if verts else 0     # running vertex count (no O(n) sum per primitive)
+        # mesh size guard (contract §5.2.1) as a running budget, checked before the primitive is
+        # transformed or appended: a mesh or primitive reused by many nodes cannot pile up copies
+        if offset + len(V) > _scene.MESH_MAX_VERTICES:
+            raise SceneError(f"nodes[{k}].mesh", f"the selected geometry has more than "
+                                                 f"{_scene.MESH_MAX_VERTICES} vertices (mesh size guard)")
+        if len(faces) + len(tris) > _scene.MESH_MAX_FACES:
+            raise SceneError(f"nodes[{k}].mesh", f"the selected geometry has more than "
+                                                 f"{_scene.MESH_MAX_FACES} triangles (mesh size guard)")
+        with np.errstate(over="ignore", invalid="ignore"):
+            W = V @ L.T + t[None, :]
+        if not np.all(np.isfinite(W)):
+            raise SceneError(f"nodes[{k}]", "the world transform gives non-finite vertices")
+        verts.append((offset + len(W), W))
         tri = tris[:, ::-1] if flip else tris
         faces.extend((tri + offset).tolist())
 
@@ -375,7 +498,7 @@ def _axis_map(W: np.ndarray) -> list:
     return (out + 0.0).tolist()
 
 
-def _select_nodes(doc: dict, node, order: list) -> list:
+def _select_nodes(doc: dict, node, order: list, first_named=None) -> list:
     nodes = _list(doc, "nodes")
     if node is None:
         return order
@@ -383,9 +506,13 @@ def _select_nodes(doc: dict, node, order: list) -> list:
         if not 0 <= node < len(nodes):
             raise SceneError("node", f"the file has {len(nodes)} node(s); index {node} is out of range")
         return _subtree(doc, node)
-    for k in order:
-        if nodes[k].get("name") == node:
-            return _subtree(doc, k)
+    if first_named is not None:                       # precomputed by gltf_context (same answer)
+        if node in first_named:
+            return _subtree(doc, first_named[node])
+    else:
+        for k in order:
+            if nodes[k].get("name") == node:
+                return _subtree(doc, k)
     meshes = _list(doc, "meshes")
     for k in order:
         m = nodes[k].get("mesh")
@@ -395,26 +522,49 @@ def _select_nodes(doc: dict, node, order: list) -> list:
     raise SceneError("node", f"no node or mesh named {node!r}")
 
 
-def gltf_raw(doc: dict, buffers: list, node=None) -> dict:
-    """The raw Z-up mesh ``{vertices, faces, smooth_groups}`` of a read glTF file: every mesh node of
-    the default scene (``node is None``), or the subtree of the selected node (contract §5.2.1
-    ``node`` row).  Meshes on nodes carrying ``extras.castplane`` primitives are ignored."""
+@_malformed_as_scene_error
+def gltf_context(doc: dict) -> dict:
+    """The scene-independent derived data of a read glTF document, computed once per file:
+    ``{"order": traversal_order, "world": node_world_matrices, "first_named": {name: first node
+    in traversal order}}`` (so that importing / expanding ``N`` mesh nodes is ``O(N)``, not
+    ``O(N²)``)."""
     order = traversal_order(doc)
     world = node_world_matrices(doc)
+    nodes = _list(doc, "nodes")
+    first_named = {}
+    for k in order:
+        name = nodes[k].get("name")
+        if isinstance(name, str) and name not in first_named:
+            first_named[name] = k
+    return {"order": order, "world": world, "first_named": first_named}
+
+
+@_malformed_as_scene_error
+def gltf_raw(doc: dict, buffers: list, node=None, *, ctx=None, selected=None) -> dict:
+    """The raw Z-up mesh ``{vertices, faces, smooth_groups}`` of a read glTF file: every mesh node of
+    the default scene (``node is None``), or the subtree of the selected node (contract §5.2.1
+    ``node`` row).  Meshes on nodes carrying ``extras.castplane`` primitives are ignored.  ``ctx``
+    (a :func:`gltf_context` of ``doc``) skips the per-call traversal; ``selected`` (node indices)
+    replaces the resolution of ``node`` when the caller already resolved it."""
+    ctx = gltf_context(doc) if ctx is None else ctx
+    order, world = ctx["order"], ctx["world"]
     verts, faces = [], []
-    for k in _select_nodes(doc, node, order):
+    sel = _select_nodes(doc, node, order, ctx.get("first_named")) if selected is None else selected
+    for k in sel:
         _node_geometry(doc, buffers, k, world[k], verts, faces)
     if not faces:
         raise SceneError("node" if node is not None else "meshes",
                          "no triangle in the selected node(s)" if node is not None else "the file holds no triangle")
-    W = np.concatenate(verts, axis=0)
+    W = np.concatenate([w for _, w in verts], axis=0)
     return {"vertices": _axis_map(W), "faces": faces, "smooth_groups": [0] * len(faces)}
 
 
-def load_gltf(path, node=None, parsed=None) -> dict:
-    """:func:`gltf_raw` of a file; ``parsed`` (a :func:`read_gltf` result) skips the read."""
+@_malformed_as_scene_error
+def load_gltf(path, node=None, parsed=None, *, ctx=None) -> dict:
+    """:func:`gltf_raw` of a file; ``parsed`` (a :func:`read_gltf` result) skips the read and
+    ``ctx`` (its :func:`gltf_context`) the traversal."""
     doc, buffers = read_gltf(path) if parsed is None else parsed
-    return gltf_raw(doc, buffers, node)
+    return gltf_raw(doc, buffers, node, ctx=ctx)
 
 
 # --------------------------------------------------------------------------- scene import
@@ -437,11 +587,24 @@ def _unit(v):
     return v / np.linalg.norm(v)
 
 
-def _rotation_part(world: np.ndarray):
+def _node_transform_field(doc: dict, k: int) -> str:
+    node = _list(doc, "nodes")[k]
+    return f"nodes[{k}].matrix" if isinstance(node, dict) and "matrix" in node else f"nodes[{k}].scale"
+
+
+def _rotation_part(world: np.ndarray, doc: dict | None = None, k: int | None = None):
     """``(R, s)``: the normalised rotation columns and the uniform scale of a world matrix (a
-    scale within 1e-12 of 1 is taken as exactly 1 so that unscaled nodes keep their numbers)."""
+    scale within 1e-12 of 1 is taken as exactly 1 so that unscaled nodes keep their numbers).
+    With a node index ``k``: a non-finite world matrix is ``SceneError(nodes[k])`` and a zero column
+    (a zero scale) ``SceneError(nodes[k].scale | .matrix)`` (review fix: both gave NaN directions
+    reported at the scene's fields)."""
     L = world[:3, :3]
-    norms = np.linalg.norm(L, axis=0)
+    with np.errstate(over="ignore", invalid="ignore"):
+        norms = np.linalg.norm(L, axis=0)
+    if k is not None and not (np.all(np.isfinite(world)) and np.all(np.isfinite(norms))):
+        raise SceneError(f"nodes[{k}]", "the world transform is not finite (the node matrices overflow)")
+    if k is not None and not np.all(norms > 0.0):
+        raise SceneError(_node_transform_field(doc, k), "the world transform has a zero scale (no orientation)")
     s = float(norms.mean())
     if abs(s - 1.0) <= 1e-12:
         s = 1.0
@@ -471,18 +634,21 @@ def _camera_block(doc: dict, k: int, world: np.ndarray):
     persp = cam.get("perspective")
     if not isinstance(persp, dict) or "yfov" not in persp:
         raise SceneError(f"cameras[{c}].perspective.yfov", "required")
-    yfov = float(persp["yfov"])
+    yfov = _number(persp["yfov"], f"cameras[{c}].perspective.yfov")
     if not 0.0 < yfov < math.pi:
         raise SceneError(f"cameras[{c}].perspective.yfov", "must be in (0, pi)")
-    a = float(persp.get("aspectRatio", 1.5))
+    a = _number(persp.get("aspectRatio", 1.5), f"cameras[{c}].perspective.aspectRatio")
     if not a > 0.0:
         raise SceneError(f"cameras[{c}].perspective.aspectRatio", "must be > 0")
-    znear = float(persp.get("znear", 0.05))
-    R, _, _ = _rotation_part(world)
+    znear = _number(persp.get("znear", 0.05), f"cameras[{c}].perspective.znear")
+    R, _, _ = _rotation_part(world, doc, k)
     position = AXIS_MAP @ world[:3, 3]
     forward = AXIS_MAP @ (R @ np.array([0.0, 0.0, -1.0]))
     up = AXIS_MAP @ (R @ np.array([0.0, 1.0, 0.0]))
-    target = position + forward
+    with np.errstate(over="ignore", invalid="ignore"):
+        target = position + forward
+    if not np.all(np.isfinite(target)):
+        raise SceneError(f"nodes[{k}]", "the camera's world transform is not finite")
     f = _unit(target - position)
     up_world = np.array([0.0, 0.0, 1.0])
     if np.linalg.norm(np.cross(f, up_world)) <= 1e-9:
@@ -498,15 +664,25 @@ def _camera_block(doc: dict, k: int, world: np.ndarray):
 
 def _light_block(doc: dict, k: int, world: np.ndarray):
     node = _list(doc, "nodes")[k]
-    li = node["extensions"]["KHR_lights_punctual"]["light"]
-    lights = doc.get("extensions", {}).get("KHR_lights_punctual", {}).get("lights", [])
-    if not isinstance(li, int) or not 0 <= li < len(lights):
+    li = node["extensions"]["KHR_lights_punctual"]["light"]       # _has_light checked the two objects
+    ext = doc.get("extensions", {})
+    if not isinstance(ext, dict):
+        raise SceneError("extensions", "must be an object")
+    khr = ext.get("KHR_lights_punctual", {})
+    if not isinstance(khr, dict):
+        raise SceneError("extensions.KHR_lights_punctual", "must be an object")
+    lights = _list_at(khr, "lights", "extensions.KHR_lights_punctual")
+    if not _is_int(li) or not 0 <= li < len(lights):
         raise SceneError(f"nodes[{k}].extensions.KHR_lights_punctual.light", f"light index {li!r} is out of range")
+    if not isinstance(lights[li], dict):
+        raise SceneError(f"extensions.KHR_lights_punctual.lights[{li}]", "must be an object")
     typ = lights[li].get("type")
+    if not np.all(np.isfinite(world)):
+        raise SceneError(f"nodes[{k}]", "the world transform is not finite (the node matrices overflow)")
     if typ in ("point", "spot"):
         return {"type": "point", "position": _vec(AXIS_MAP @ world[:3, 3])}, typ == "spot"
     if typ == "directional":
-        R, _, _ = _rotation_part(world)
+        R, _, _ = _rotation_part(world, doc, k)
         d = _unit(AXIS_MAP @ (R @ np.array([0.0, 0.0, 1.0])))
         return {"type": "directional", "direction": _vec(d)}, False
     raise SceneError(f"extensions.KHR_lights_punctual.lights[{li}].type", f"unknown light type {typ!r}")
@@ -525,9 +701,9 @@ def _primitive_object(doc: dict, k: int, world: np.ndarray, params: dict) -> dic
         raise SceneError(f"nodes[{k}].extras.castplane.type", "must be one of box, cylinder, sphere, cone, prism")
     field = f"nodes[{k}].matrix" if "matrix" in node else f"nodes[{k}].scale"
     L = world[:3, :3]
+    R, norms, s = _rotation_part(world, doc, k)
     if float(np.linalg.det(L)) <= 0.0:
         raise SceneError(field, "mirrored node cannot carry a primitive")
-    R, norms, s = _rotation_part(world)
     if not (norms.max() - norms.min() <= 1e-9 * norms.max()):
         raise SceneError(f"nodes[{k}].scale", f"non-uniform node scale {norms.tolist()} cannot carry a primitive")
     obj = {key: value for key, value in params.items() if key not in ("id", "transform")}
@@ -547,6 +723,7 @@ def _primitive_object(doc: dict, k: int, world: np.ndarray, params: dict) -> dic
     return obj
 
 
+@_malformed_as_scene_error
 def import_gltf_parts(path, *, ref=None, inline=False, node=None, camera=None, light=None, mesh_keys=None,
                       parsed=None):
     """The importable pieces of a glTF file (contract §5.2.8 mapping tables): ``{"objects",
@@ -560,12 +737,14 @@ def import_gltf_parts(path, *, ref=None, inline=False, node=None, camera=None, l
 
     doc, buffers = read_gltf(path) if parsed is None else parsed
     nodes = _list(doc, "nodes")
-    order = traversal_order(doc)
-    world = node_world_matrices(doc)
+    ctx = gltf_context(doc)                       # once per file (the per-object traversal was O(N²))
+    order, world = ctx["order"], ctx["world"]
+    parent = _children(doc)
     ref = str(path) if ref is None else ref
     keys = dict(mesh_keys or {})
     objects, raw, notes = [], {}, []
     taken = {"ground"}
+    total = [0, 0]                                # vertices, triangles of the mesh objects so far
     n_lights = 1 if light is not None else sum(1 for k in order if _has_light(nodes[k]))
 
     def object_base(name, k):
@@ -573,8 +752,14 @@ def import_gltf_parts(path, *, ref=None, inline=False, node=None, camera=None, l
         base = _node_id(name, k, "node")
         return base + "_object" if base == "hidden" or (base == "core" and n_lights >= 2) else base
 
-    def mesh_object(oid, selection):
-        data = gltf_raw(doc, buffers, selection)
+    def mesh_object(oid, selection, selected=None):
+        data = gltf_raw(doc, buffers, selection, ctx=ctx, selected=selected)
+        total[0] += len(data["vertices"])
+        total[1] += len(data["faces"])
+        if total[0] > IMPORT_MAX_TOTAL_VERTICES or total[1] > IMPORT_MAX_TOTAL_FACES:
+            raise SceneError(f"nodes[{selected[0]}].mesh" if selected else "meshes",
+                             f"the imported mesh objects exceed the import budget of {IMPORT_MAX_TOTAL_VERTICES} "
+                             f"vertices / {IMPORT_MAX_TOTAL_FACES} triangles in total")
         obj = {"id": oid, "type": "mesh"}
         if inline:
             obj["data"] = data
@@ -591,25 +776,34 @@ def import_gltf_parts(path, *, ref=None, inline=False, node=None, camera=None, l
         oid = _unique(object_base(name, sel[0]), taken)
         objects.append(mesh_object(oid, node))
     else:
-        names = [n.get("name") for n in nodes]
-        emitted = set()
+        name_count = {}
+        for n in nodes:
+            if isinstance(n.get("name"), str):
+                name_count[n["name"]] = name_count.get(n["name"], 0) + 1
+        emitted, covered = set(), set()
         for k in order:
             n = nodes[k]
+            # traversal order visits parents first, so "an ancestor is emitted" propagates downwards
+            under = parent.get(k) in emitted or parent.get(k) in covered
+            if under:
+                covered.add(k)
             params = _primitive_node(n)
             if params is not None:
                 obj = _primitive_object(doc, k, world[k], params)
                 obj = {"id": _unique(object_base(n.get("name"), k), taken), **obj}
                 objects.append(obj)
                 continue
-            if "mesh" not in n or any(j in emitted for j in _ancestors(doc, k)):
+            if "mesh" not in n or under:
                 continue
             name = n.get("name")
-            unique = isinstance(name, str) and name != "" and names.count(name) == 1
+            unique = isinstance(name, str) and name != "" and name_count[name] == 1
             selection = name if unique else k
-            try:
-                obj = mesh_object(_unique(object_base(name, k), set(taken)), selection)
+            oid = _unique(object_base(name, k), taken)
+            try:                                  # both selections resolve to the subtree of k
+                obj = mesh_object(oid, selection, _subtree(doc, k))
             except SceneError as exc:
                 if exc.field == "node":       # a mesh node with points / lines only
+                    taken.discard(oid)
                     continue
                 raise
             taken.add(obj["id"])
@@ -657,15 +851,6 @@ def import_gltf_parts(path, *, ref=None, inline=False, node=None, camera=None, l
             if spot:
                 notes.append(_note("IMPORT_SPOT_AS_POINT", [lid], "spot light imported as a point light at its position"))
     return {"objects": objects, "lights": lights, "camera": cam_block, "canvas_mm": canvas, "raw": raw}, notes
-
-
-def _ancestors(doc: dict, k: int) -> list:
-    parent = _children(doc)
-    out = []
-    while k in parent:
-        k = parent[k]
-        out.append(k)
-    return out
 
 
 def import_gltf_scene(path, *, ref=None, inline=False, node=None, camera=None, light=None, mesh_keys=None):

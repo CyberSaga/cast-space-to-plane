@@ -40,4 +40,7 @@ def load_trimesh(path, node=None) -> dict:
         raise SceneError("", "the file holds no face")
     if not np.all(np.isfinite(V)):
         raise SceneError("", "vertex coordinates must be finite")
+    if F.min() < 0 or F.max() >= len(V):          # as the OBJ / glTF loaders: an index names a vertex
+        bad = int(F.min()) if F.min() < 0 else int(F.max())
+        raise SceneError("", f"face index {bad} is out of range (the file has {len(V)} vertices)")
     return {"vertices": (V + 0.0).tolist(), "faces": F.tolist(), "smooth_groups": [0] * len(F)}

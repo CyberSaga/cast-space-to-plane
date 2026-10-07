@@ -12,7 +12,8 @@ not a closed, consistently orientable manifold takes the per-face fallback of §
 (:func:`fallback_mesh`).
 
 Every tolerance of this module is relative to ``scale_A = max(1, max extent of the bounding box
-of scale·vertices)`` (:func:`mesh_scale`).
+of the scale·vertices used by at least one face)`` (:func:`mesh_scale` of :func:`used_vertices`;
+an unused vertex never widens the tolerances).
 """
 
 from __future__ import annotations
@@ -33,6 +34,7 @@ __all__ = [
     "SMOOTH_BAND",
     "INSIDE_WINDING",
     "mesh_scale",
+    "used_vertices",
     "weld_map",
     "weld_vertices",
     "prepare_faces",
@@ -79,6 +81,19 @@ def mesh_scale(V) -> float:
     if V.shape[0] == 0:
         return 1.0
     return max(1.0, float(np.max(V.max(axis=0) - V.min(axis=0))))
+
+
+def used_vertices(V, faces) -> np.ndarray:
+    """The rows of ``V`` referenced by at least one face (input order): the vertex set whose
+    bounding box defines ``scale_A`` (contract §5.2.3 step 1 as amended by the review fixes; a
+    vertex used by no face is dropped by step 2 anyway and enters neither the record's bbox nor
+    the scene scale, so it must not loosen the degenerate / volume / area tolerances either)."""
+    V = np.asarray(V, dtype=np.float64).reshape(-1, 3)
+    used = np.zeros(V.shape[0], dtype=bool)
+    flat = [int(i) for f in faces for i in f]
+    if flat:
+        used[np.asarray(flat, dtype=np.int64)] = True
+    return V[used]
 
 
 # ---------------------------------------------------------------------------
@@ -691,7 +706,7 @@ def preprocess_mesh(data: dict, scale: float, weld_tolerance: float, smooth_angl
     ``MESH_*`` warnings with ids ``[object_id]``."""
     V = float(scale) * np.asarray(data["vertices"], dtype=np.float64).reshape(-1, 3)
     groups_in = list(data.get("smooth_groups") or [0] * len(data["faces"]))
-    scale_A = mesh_scale(V)
+    scale_A = mesh_scale(used_vertices(V, data["faces"]))
     warnings = []
     W, faces_w, _index = weld_vertices(V, data["faces"], float(weld_tolerance))
     kept, kept_idx = drop_degenerate_faces(W, faces_w, scale_A)
@@ -741,5 +756,5 @@ def has_usable_face(vertices, faces, scale: float, weld_tolerance: float) -> boo
     validated mesh never makes it raise."""
     V = float(scale) * np.asarray(vertices, dtype=np.float64).reshape(-1, 3)
     W, faces_w, _index = weld_vertices(V, faces, float(weld_tolerance))
-    kept, _kept_idx = drop_degenerate_faces(W, faces_w, mesh_scale(V))
+    kept, _kept_idx = drop_degenerate_faces(W, faces_w, mesh_scale(used_vertices(V, faces)))
     return bool(kept)

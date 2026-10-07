@@ -1965,6 +1965,117 @@ unordered world pairs with equal `silhouette` / `back` flags and `segment` endpo
   this is inside the conformance runs rule (1e-3 in `s`) and is not asserted byte-for-byte. (7) Conformance: the three
   mesh cases were regenerated on the merged branch (they now carry the M4 keys) and the CHANGELOG entry is the one M5
   milestone entry **v5** (0 existing files changed, 3 added; 43 v4 cases with zero drift), §5.0.8 rule 1.
+- **[decision, implementation] (review fixes, loaders) Typed glTF JSON values.** §5.2.8 says every import error is a
+  `SceneError` whose field is the glTF JSON path (exit 2); the loader now checks every JSON value it consumes before
+  numpy or `float()` sees it: `nodes[k].matrix` / `.translation` / `.rotation` / `.scale` must be lists of exactly 16 /
+  3 / 4 / 3 finite numbers (bools rejected; `null`, strings, nested lists, NaN and ±Infinity literals are errors at
+  that key); `nodes[k].children`, `scenes[s].nodes`, `meshes[m].primitives` and
+  `extensions.KHR_lights_punctual.lights` must be lists, `extensions`, its `KHR_lights_punctual` and each light
+  objects; `cameras[c].perspective.yfov` / `.aspectRatio` / `.znear` finite numbers; `primitives[p].mode`,
+  `accessors[k].componentType` integers and `accessors[k].type` a string; a buffer `uri` with a NUL byte is
+  `buffers[k].uri`. As a safety net `read_gltf`, `gltf_context`, `gltf_raw`, `load_gltf` and `import_gltf_parts`
+  turn any remaining `TypeError` / `ValueError` / `KeyError` / `IndexError` / `AttributeError` into
+  `SceneError("", "malformed glTF: <type>: <message>")` (a `mesh` + `path` object reports it at `objects[i].path`), so
+  a malformed file is never a traceback / exit 1. JSON that the parser itself rejects for depth (`RecursionError`)
+  or for the integer digit limit (`ValueError`) is `SceneError("", "invalid glTF JSON: ...")`, and
+  `scene.read_json` / `load_camera` treat every `ValueError` (incl. `UnicodeDecodeError` of a non-UTF-8 file) and
+  `RecursionError` like a `JSONDecodeError`: `SceneError("", "invalid JSON: ...")`.
+- **[decision, implementation] (review fixes, loaders) Accessor and bufferView integers.** `bufferViews[k].byteOffset`
+  / `.byteLength` / `.byteStride` and `accessors[k].byteOffset` must be non-negative integers (bools and floats
+  rejected), each reported at its own JSON path; a negative accessor offset that stayed inside the buffer used to read
+  the neighbouring view's bytes silently. `byteStride` keeps the existing "not smaller than the element size" rule
+  (no [4, 252] range check: an over-long stride is already caught by the "accessor exceeds its buffer view" bound).
+- **[decision, implementation] (review fixes, loaders) Zero accessors are capped.** Note (8) above keeps "an accessor
+  without `bufferView` is zeros", but its `count` is the only allocation not bounded by the file size (a one-integer
+  file asked for terabytes): such an accessor may hold at most `gltf.MAX_ZERO_ACCESSOR_COUNT = 3 · MESH_MAX_FACES`
+  elements (the largest index count a validated mesh can use), else `SceneError(accessors[k].count)`; the check runs
+  before any allocation. An all-zero accessor never yields a usable face, so no valid import is affected.
+- **[decision, implementation] (review fixes, loaders) External buffers are confined to the glTF's directory.**
+  §5.2.8's "external `.bin` relative to the file" is read literally (glTF 2.0 buffer URIs are relative references):
+  the `uri` is split as a URI and percent-decoded; a scheme (`file:`, `http:`), a network location, a query or
+  fragment, an empty path, an absolute path, or a normalised path that leaves the directory of the `.gltf` (`..`) is
+  `SceneError(buffers[k].uri, "... must be a relative path inside the file's directory")`; an existing path that is
+  not a regular file (a directory, `/dev/zero`) is the same field; a **missing** file is still the `OSError` of
+  §5.0.2 (exit 1). `byteLength` is validated first and at most `byteLength` bytes are read (a longer file is not
+  slurped; a shorter one is `buffers[k].byteLength`). §5.2.2's "absolute paths are used as given" concerns the
+  user-written `objects[i].path` of a scene and is unchanged. Before this, a third-party `.gltf` imported with
+  `--inline` could copy any readable file's bytes into the written scene as vertex coordinates.
+- **[decision, implementation] (review fixes, loaders) Linear glTF traversal.** `node_world_matrices` is iterative
+  (climb to the first resolved ancestor, then resolve downwards; same cycle error `nodes[k].children`), so a valid
+  chain deeper than Python's recursion limit loads. `gltf.gltf_context(doc) -> {order, world, first_named}` computes the
+  traversal order, the world matrices and the "first node in traversal order with that name" table once per file;
+  `gltf_raw(doc, buffers, node, *, ctx=None, selected=None)` / `load_gltf(..., ctx=None)` take it,
+  `import_gltf_parts` builds it once (and the parent map once; "an ancestor is already emitted" propagates in
+  traversal order, which visits parents first), and `expand_scene` caches it next to the parsed file, so importing a
+  file with `N` mesh nodes and expanding the importer's `N` `{path, node}` objects are `O(N)` instead of `O(N²)`
+  (2000 nodes: 34 s → well under a second). Results are unchanged (same selections, same ids, same bytes).
+- **[decision, implementation] (review fixes, loaders) trimesh face indices.** `trimesh_adapter.load_trimesh` range-checks
+  the stored face indices like the OBJ and glTF loaders (`face index K is out of range (the file has N vertices)`),
+  so a PLY face naming a missing or negative vertex is `SceneError(objects[i].path)` at expansion instead of
+  `objects[i].data.faces[k]` at validation.
+- **[decision, implementation] (review fixes, mesh) `scale_A` ignores unused vertices.** §5.2.3 step 1 reads
+  "`scale_A = max(1, max extent of the bounding box of V)`"; it is computed over the vertices of `V` **used by at least
+  one face** (`meshprep.used_vertices(V, faces)`, raw indices before the weld, which moves no vertex off its
+  representative's coordinates), in `preprocess_mesh` and in the §5.2.1 usable-face guard `has_usable_face` alike.
+  A vertex used by no face is removed by step 2 and enters neither the record's bbox nor the stage-A scene scale, so it
+  must not scale the degenerate (`1e-12·scale_A²`), zero-volume (`1e-12·scale_A³`) and fallback-area tolerances
+  either: before, a unit box with one stray vertex 1e7 m away was rejected with "no usable face" (and at 1e6 m its
+  tolerances were silently 1e6× looser). Every mesh whose vertices are all referenced (all conformance cases and
+  fixtures) is unchanged. The TypeScript port's `scale_A` must follow (§5.2.9).
+- **[decision, implementation] (review fixes, mesh) Receiver contact tolerance of a mesh object.** §2.3 / §2.8 use
+  `tol = 1e-9·scene_scale` for the receiver-plane predicates. For a `mesh` object a bottom that rests on the receiver
+  only up to import noise (float32 positions, baked glTF node matrices: `|z| ~ 1e-8 … 1e-7` m) straddles that band:
+  vertices below `−tol` were "below", the Sutherland–Hodgman cut of a concave, slightly non-planar bottom face put its
+  crossings at noise-ratio fractions of nearly-in-plane edges and chained a cap across the notch, so the outline of an
+  L-shaped footprint bridged the unshadowed notch (raster IoU 0.91–0.94 against the clean mesh, in 6 of 20 random
+  noise draws) and `OBJECT_BELOW_RECEIVER` was emitted for an object resting on the ground. The **contact tolerance**
+  of an object is now `pipeline._contact_tol(obj, tol) = max(tol, weld_tolerance)` for a `mesh` (its declared "same
+  point" scale, §5.2.1, metres after `scale`; `transform` carries no scale) and `tol` for every other object. It
+  replaces `tol` in exactly the receiver-plane contact predicates, on every receiver: the `OBJECT_BELOW_RECEIVER`
+  vertex test and `clip_mesh_to_plane` of the unbounded ground (`shadow_geometry`) and of `_clip_object`
+  (`obj["clipped"][r]`), the `above` test and the `shadow_loop(..., tol_clip=…)` clip of `_shadow_record`,
+  `_fallback_shadow_record` and `_caster_record` (new keyword `tol_contact`, passed for mesh objects by
+  `_bounded_object_record`; plates keep `tol`). Bounds clips, area tests and every other tolerance are unchanged.
+  A vertex inside the band is "on" the receiver (its own crossing, §2.3), so the noisy L renders the clean L's
+  outline (same names, world points within the noise). Meshes whose bottoms are exact or lifted, and all
+  primitives, are unchanged (no conformance case changes bytes). Known limit: a concave bottom that is non-planar by
+  **more** than `weld_tolerance` is still cut face by face (Sutherland–Hodgman), as any genuinely penetrating
+  geometry is. The TypeScript port's mesh path must use the same contact tolerance (§5.2.9).
+- **[decision, implementation] (review fixes, loaders, second pass) Running mesh size guard and import budget.** The
+  §5.2.1 size guard (`MESH_MAX_VERTICES` / `MESH_MAX_FACES`) is also applied by the glTF loader **while** it assembles
+  one mesh object: `gltf_raw` keeps running vertex / triangle totals and, before a primitive is transformed or
+  appended, raises `SceneError(nodes[k].mesh, "the selected geometry has more than N vertices | triangles (mesh size
+  guard)")` for the node `k` whose primitive crosses the limit (a `mesh` + `path` object reports it at
+  `objects[i].path`, as §5.2.1 asks for file sources). The capped zero accessor of the first pass could still be
+  referenced by any number of primitives or nodes (a 3 KB file allocated > 4 GB). A result over the limit was always
+  rejected by validation, so no valid import is lost; the error now names the glTF field instead of
+  `objects[i].path` / `objects[i].data.vertices` after the allocation. The field is never `node` (that field means
+  "points / lines only" and makes `import_gltf_parts` skip the node). Across objects, `import_gltf_parts` keeps an
+  **import budget** `gltf.IMPORT_MAX_TOTAL_VERTICES = IMPORT_MAX_TOTAL_FACES = 20 · 50000` (twenty objects at the
+  per-object limit): one file instancing a mesh on thousands of nodes would otherwise produce thousands of valid-sized
+  objects before validation (`SceneError(nodes[k].mesh, "... exceed the import budget ...")` at the node of the
+  object that crosses it). This is a new importer limit not in §5.2.8; `expand_scene` of a user-written scene is not
+  budgeted (it has no scene-wide limit). The reviewer's alternative of rejecting a POSITION / indices accessor without
+  `bufferView` was not taken: with the running guard it is bounded, and note (8)'s glTF semantics stay.
+- **[decision, implementation] (review fixes, loaders, second pass) Integers too large for a float.** `gltf._is_number`
+  is total: an integer literal outside the float range (309 to 4300 digits; longer ones are already the parser's
+  digit-limit error) is "not a finite number" at its glTF JSON path, and `OverflowError` joins the safety net's
+  exception list (a primitive parameter in `extras.castplane`, validated by `scene.py`, becomes `SceneError("",
+  "malformed glTF: OverflowError: ...")`). The same crash in `scene._number` for a scene file is outside the loaders.
+- **[decision, implementation] (review fixes, loaders, second pass) Symbolic links in buffer URIs.** The confinement of
+  external buffers compares **resolved** paths as well: `os.path.realpath` of the file's directory and of the
+  normalised buffer path must still be one inside the other, else `SceneError(buffers[k].uri, "... resolves (through a
+  symbolic link) outside the file's directory")`; the regular-file test and the read use the resolved path. A link
+  that stays inside the directory is accepted.
+- **[decision, implementation] (review fixes, loaders, second pass) Non-finite node transforms.** Finite node values
+  can still give a non-finite world matrix or transformed vertex (`matrix = [1e308]*16`, a `1e200` parent scale times a
+  `1e200` child scale); this was reported only at validation (`objects[0].data.vertices[1][0]`, `camera.target[0]`,
+  `lights[0].direction[0]`). Now a mesh node whose world matrix or transformed vertices are not finite is
+  `SceneError(nodes[k])`, a camera / directional light / `extras.castplane` node with a non-finite world matrix is
+  `SceneError(nodes[k])`, and one whose world matrix has a zero column (zero scale, no orientation) is
+  `SceneError(nodes[k].scale | nodes[k].matrix)` (for `extras.castplane` nodes this check precedes the "mirrored
+  node" test, which a zero determinant also failed). A zero-scale **mesh** node is unchanged ("no usable face" at
+  validation). The world-matrix products run under `np.errstate` so no `RuntimeWarning` is printed.
 
 ### 5.3 M6 — multiple lights (amendment to §2.0, §2.3, §2.5–2.10, §3, §3.1, §4)
 
