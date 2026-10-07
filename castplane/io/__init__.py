@@ -75,7 +75,10 @@ def _parse_file(path: str):
     elif ext in GLTF_EXTENSIONS:
         parsed = ("gltf", gltf.read_gltf(path))
     elif ext in EXTENSION_LOADERS:             # M8: .step / .stp -> tessellate_step (§5.5.7), no recognition
-        parsed = ("tessellated", _raw_from_triangles(EXTENSION_LOADERS[ext](path)))
+        try:
+            parsed = ("tessellated", _raw_from_triangles(EXTENSION_LOADERS[ext](path)))
+        except step.StepError as exc:          # the loader message without the standalone "step" field
+            raise SceneError("", exc.message) from None
     else:
         # trimesh files take no node selection, so the parsed form is the raw mesh itself
         parsed = ("trimesh", trimesh_adapter.load_trimesh(path, None))

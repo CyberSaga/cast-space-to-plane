@@ -4,6 +4,8 @@
     python tools/make_step_fixtures.py                 # (re)write the whole set into tests/fixtures/step/
     python tools/make_step_fixtures.py --out DIR       # into another directory
     python tools/make_step_fixtures.py --check         # regenerate into a temporary directory, compare bytes
+    python tools/make_step_fixtures.py --bench-solids 200 --bench-out /tmp/bench200.step
+                                                       # the benchmark compound (benchmarks/README.md)
 
 Needs OCP (``pip install 'castplane[step]'`` / ``pip install cadquery-ocp``).  The whole set is
 always written in the table order of contract §5.5.9 within one process (the PRODUCT names carry a
@@ -80,6 +82,24 @@ def build_shapes():
     return shapes
 
 
+def bench_compound(n: int, cols: int = 20):
+    """The informational benchmark file of ``benchmarks/README.md`` (not a fixture, never committed):
+    a compound of ``n`` cylinders (r 300 mm, h 2400 mm, axis +z) on a grid of ``cols`` columns with
+    a 1000 mm pitch, in row-major order (imports OCP lazily)."""
+    from OCP.BRep import BRep_Builder
+    from OCP.BRepPrimAPI import BRepPrimAPI_MakeCylinder
+    from OCP.gp import gp_Ax2, gp_Dir, gp_Pnt
+    from OCP.TopoDS import TopoDS_Compound
+
+    compound = TopoDS_Compound()
+    builder = BRep_Builder()
+    builder.MakeCompound(compound)
+    for k in range(n):
+        ax = gp_Ax2(gp_Pnt(1000 * (k % cols), 1000 * (k // cols), 0), gp_Dir(0, 0, 1))
+        builder.Add(compound, BRepPrimAPI_MakeCylinder(ax, 300, 2400).Shape())
+    return compound
+
+
 def write_step(shape, path: pathlib.Path) -> None:
     from OCP.IFSelect import IFSelect_RetDone
     from OCP.Interface import Interface_Static
@@ -129,7 +149,20 @@ def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("--out", default=str(FIXTURES), help="output directory (default tests/fixtures/step)")
     ap.add_argument("--check", action="store_true", help="regenerate into a temporary directory and compare bytes")
+    ap.add_argument("--bench-solids", type=int, metavar="N",
+                    help="instead of the fixtures, write the benchmark compound of N cylinders (20 columns) "
+                         "to --bench-out")
+    ap.add_argument("--bench-out", metavar="PATH", default="bench_solids.step",
+                    help="output file of --bench-solids (default bench_solids.step)")
     args = ap.parse_args(argv)
+    if args.bench_solids is not None:
+        if args.bench_solids < 1:
+            ap.error("--bench-solids needs N >= 1")
+        path = pathlib.Path(args.bench_out)
+        write_step(bench_compound(args.bench_solids), path)
+        path.write_bytes(normalise(path.read_text(encoding="utf-8"), path.stem).encode("utf-8"))
+        print(f"wrote {path}")
+        return 0
     if args.check:
         target = pathlib.Path(args.out)
         with tempfile.TemporaryDirectory() as tmp:

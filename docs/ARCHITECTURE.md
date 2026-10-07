@@ -3736,7 +3736,8 @@ LGPL-2.1；確定性只到 OCC 版本；頂點重建誤差 1.4e-9 mm；OCP 8 的
   `load_mesh_file("part.step")` returns the same raw form `{vertices (m), faces, smooth_groups: [0]*n}` as
   `mesh_object_from_triangles(...)["data"]`. A `mesh` object with a `.step` path gets **no** importer note
   (`STEP_SOLID_TESSELLATED` belongs to the `type: "step"` fallback, whose ids are entity ids); a `StepError` of
-  `tessellate_step` reaches the scene through M5's re-raise as `SceneError(objects[i].path, "step: unsupported: …")`;
+  `tessellate_step` is re-raised by `_parse_file` without its standalone `step` field, so M5's re-raise gives
+  `SceneError(objects[i].path, "unsupported: …")`, the bare loader message of §5.0.2 (review fix);
   `node` on a `.step` mesh is M5's `objects[i].node` error. `scene.LOADER_TYPES` sits directly above
   `validate_object` (its test is the first statement after the `type` lookup, before the `OBJECT_TYPES` test).
 - **[decision, implementation] (M8 part 2) `castplane import` of a STEP file (§5.5.8).** The written objects are
@@ -3748,7 +3749,10 @@ LGPL-2.1；確定性只到 OCC 版本；頂點重建誤差 1.4e-9 mm；OCP 8 的
   a negative or too large K is `SceneError("step.solid", …)`). **Added**: with `--into SCENE`, the ids that
   SCENE's own `step` objects expand to (`part_0`, …) are reserved like SCENE's raw ids, so an imported object is
   de-duplicated against them (`part_0_2`) instead of failing validation at `objects[j].id`; an explicit `--id`
-  equal to one of them is the usual `SceneError("--id")`.
+  equal to one of them is the usual `SceneError("--id")`. To get those ids before `_dedupe`, M5's line
+  `expanded, into_notes = expand_scene(base_scene, scene_dir)` was **moved** from the `if base_scene is not None:`
+  block into the `if args.into:` block of `cmd_import` (same call, same arguments; the one relocation of existing
+  M5 code in M8).
 - **[decision, implementation] (M8 part 2) "every face contributes ≥ 1 triangle" (§5.5.10).** Tested without a
   per-face API: the node blocks are unwelded, so each face's triangulation is its own connected component; the
   frustum's triangles form exactly 3 components and OCP's face explorer finds 3 faces. `tessellate_step` keeps the
@@ -3760,6 +3764,17 @@ LGPL-2.1；確定性只到 OCC 版本；頂點重建誤差 1.4e-9 mm；OCP 8 的
   `PYTHONPATH` (`tests/test_step.py`, `test_cli.py`, `test_loaders.py`: 186 passed, the 6 OCP tests skipped; CLI
   `--fallback mesh` exit 3). The scratch OCP venv has no pytest, so it was not used.
 - **[decision, implementation] (M8 part 2) Measurements.** Fixture `import_step` 0.45–4.1 ms (min of 5; table in
-  `benchmarks/README.md`); a 200-cylinder OCC assembly (1 244 553 bytes, 24 220 entities) 0.34–0.40 s (min of 3,
+  `benchmarks/README.md`); a 200-cylinder OCC assembly (`tools/make_step_fixtures.py --bench-solids 200`, 1 238 126 bytes, 24 220 entities) 0.31–0.40 s (min of 3,
   three runs), not the prototype's 0.63 s; Part 21 parsing is ≈ 85 % of the time. `part21.py` is 202 lines and
-  `step.py` 838 (the §5.5.12 "≈ 700 lines" estimate is exceeded by the error paths and the fallback).
+  `step.py` 842 (the §5.5.12 "≈ 700 lines" estimate is exceeded by the error paths and the fallback).
+- **[decision, implementation] (M8 part 2, review fixes) Tessellation guards and `--id` collisions (§5.5.7,
+  §5.2.8 (4)).** OCC's `ReadFile` returns `IFSelect_RetDone` for a file it cannot transfer (a syntactically broken
+  file, an empty `DATA` section); `TransferRoots()` then returns 0 and `OneShape()` is null, and `CornerMin()` of the
+  void box would raise OCP's `Standard_ConstructionError`. `_tessellate` therefore also raises `StepError("unsupported:
+  OCP cannot read … (no transferable shape)")` when no root transfers or the shape is null, and `StepError("unsupported:
+  OCP finds no geometry in …")` for a void bounding box (exit 2 at `objects[i].path` / `step`, never a traceback).
+  OCC's console printer is left as is (it writes `**** ERR StepFile …` to stdout only for such broken files).
+  `castplane import --id ID` on a multi-solid STEP file checks every derived `<ID>_<k>` against the taken ids and
+  raises `SceneError("--id")` on a clash instead of renaming it (§5.2.8 (4): an explicit `--id` is never renamed).
+  With `--into SCENE`, a present non-list `objects` is `SceneError("objects", "must be a non-empty list")` (the
+  `validate_scene` message) before the import is assembled, not `objects[0]`.

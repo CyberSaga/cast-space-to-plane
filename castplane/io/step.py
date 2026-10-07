@@ -775,8 +775,10 @@ def _tessellate(path, solid_index=None, deflection_mm=None) -> dict:
     reader = STEPControl_Reader()
     if reader.ReadFile(path) != IFSelect_RetDone:
         raise _err(f"unsupported: OCP cannot read {path}")
-    reader.TransferRoots()
+    n_roots = reader.TransferRoots()
     shape = reader.OneShape()
+    if n_roots == 0 or shape.IsNull():     # OCC returns RetDone for a file it cannot transfer (review fix)
+        raise _err(f"unsupported: OCP cannot read {path} (no transferable shape)")
     cascade_unit = Interface_Static.CVal_s("xstep.cascade.unit")
     divisor = {"MM": 1000.0, "M": 1.0}.get(cascade_unit)
     if divisor is None:
@@ -793,6 +795,8 @@ def _tessellate(path, solid_index=None, deflection_mm=None) -> dict:
     if deflection_mm is None:
         box = Bnd_Box()
         BRepBndLib.Add_s(shape, box)
+        if box.IsVoid():                   # CornerMin() of a void box raises Standard_ConstructionError
+            raise _err(f"unsupported: OCP finds no geometry in {path}")
         lo, hi = box.CornerMin(), box.CornerMax()
         diagonal = math.sqrt((hi.X() - lo.X()) ** 2 + (hi.Y() - lo.Y()) ** 2 + (hi.Z() - lo.Z()) ** 2)
         deflection_mm = max(0.01, 1e-3 * diagonal)

@@ -951,6 +951,24 @@ def test_axis_aligned_occ_box_is_exact(tmp_path):
                    "transform": {"position": [0.0, 0.0, 0.0], "rotation_deg": [0.0, 0.0, 0.0]}}
 
 
+def test_benchmark_compound_option_of_the_generator(tmp_path):
+    """Review fix: the informational 200-solid row of benchmarks/README.md is reproducible with
+    ``tools/make_step_fixtures.py --bench-solids N --bench-out PATH`` (here N = 3)."""
+    pytest.importorskip("OCP")
+    import subprocess
+    import sys
+
+    out = tmp_path / "bench3.step"
+    proc = subprocess.run([sys.executable, str(ROOT / "tools" / "make_step_fixtures.py"), "--bench-solids", "3",
+                           "--bench-out", str(out)], cwd=ROOT, capture_output=True, text=True, timeout=300)
+    assert proc.returncode == 0, proc.stderr[-2000:]
+    objects = import_step(out)["objects"]
+    assert [o["id"] for o in objects] == ["bench3_0", "bench3_1", "bench3_2"]
+    assert [o["type"] for o in objects] == ["cylinder"] * 3
+    assert [o["transform"]["position"] for o in objects] == [[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [2.0, 0.0, 0.0]]
+    assert "Open CASCADE STEP translator" not in out.read_text(encoding="utf-8")
+
+
 # --------------------------------------------------------------------------- registry, expansion (§5.0.2, §5.5.1)
 BASIC = ROOT / "examples" / "basic.json"
 STEP_PILLAR = {"id": "pillar", "type": "step", "path": "cylinder.step"}
@@ -1160,6 +1178,27 @@ def test_mesh_object_with_a_step_path_is_tessellated_directly(tmp_path):
     assert exc.value.field == "objects[0].node"
 
 
+def test_a_step_file_occ_cannot_transfer_is_a_scene_error(tmp_path, capsys):
+    """Review fix: OCC's ReadFile returns RetDone for a file it cannot transfer; that is a StepError /
+    SceneError at objects[i].path (exit 2), never OCP's Standard_ConstructionError (traceback, exit 1)."""
+    pytest.importorskip("OCP")
+    empty = tmp_path / "empty.step"
+    empty.write_text("ISO-10303-21;\nHEADER;ENDSEC;DATA;ENDSEC;END-ISO-10303-21;\n", encoding="utf-8")
+    with pytest.raises(StepError) as err:
+        S.tessellate_step(empty)
+    assert err.value.field == "step" and err.value.entity is None
+    assert re.fullmatch(r"unsupported: OCP cannot read .*\(no transferable shape\)", err.value.message)
+    scene = dict(copy.deepcopy(DEFAULT_SCENE_TEMPLATE), objects=[{"id": "m", "type": "mesh", "path": "empty.step"}])
+    with pytest.raises(SceneError) as exc:
+        cpio.expand_scene(scene, tmp_path)
+    assert type(exc.value) is SceneError and exc.value.field == "objects[0].path"
+    assert exc.value.message.startswith("unsupported: OCP cannot read ")       # the bare loader message (§5.0.2)
+    path = tmp_path / "m.json"
+    path.write_text(json.dumps(scene), encoding="utf-8")
+    code, _, stderr = run(capsys, "validate", path)
+    assert code == 2 and stderr.startswith("error: objects[0].path: unsupported: OCP cannot read ")
+
+
 def _without_ocp(monkeypatch):
     import builtins
 
@@ -1279,6 +1318,20 @@ def test_cli_import_into_a_scene_holding_a_step_object(tmp_path, capsys):
     assert code == 0 and [o["id"] for o in json.loads(stdout)["objects"]] == ["part", "part_0_2"]
     code, _, stderr = run(capsys, "import", stem, "--into", two, "--id", "part_1")
     assert code == 2 and stderr.startswith("error: --id: ")
+    # review fix: the <id>_<k> ids derived from an explicit --id are never renamed (§5.2.8 (4))
+    has = tmp_path / "has_part_0.json"
+    has.write_text(json.dumps(dict(copy.deepcopy(DEFAULT_SCENE_TEMPLATE), objects=[dict(SPHERE, id="part_0")])),
+                   encoding="utf-8")
+    code, stdout, stderr = run(capsys, "import", FIX / "two_solids.step", "--id", "part", "--into", has)
+    assert code == 2 and stdout == "" and stderr.startswith("error: --id: 'part_0' (derived from --id 'part') ")
+    code, stdout, _ = run(capsys, "import", FIX / "two_solids.step", "--into", has, "-q")    # a default id is renamed
+    assert code == 0 and [o["id"] for o in json.loads(stdout)["objects"]] == ["part_0", "two_solids_0",
+                                                                               "two_solids_1"]
+    # review fix: a non-list objects of SCENE is reported at objects, not objects[0]
+    bad = tmp_path / "bad_objects.json"
+    bad.write_text(json.dumps(dict(copy.deepcopy(DEFAULT_SCENE_TEMPLATE), objects={"a": 1})), encoding="utf-8")
+    code, _, stderr = run(capsys, "import", FIX / "cylinder.step", "--into", bad)
+    assert code == 2 and stderr == "error: objects: must be a non-empty list\n"
 
 
 def test_cli_import_solid_selection_and_quiet(capsys):

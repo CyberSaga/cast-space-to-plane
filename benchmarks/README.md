@@ -311,10 +311,12 @@ recognition; minimum of 5 runs, the median in brackets):
 | `frustum.step` (raises `StepError`) | 5 726 | 118 | 1.33 ms (1.38) | 1.21 ms |
 | `two_solids.step` | 9 304 | 176 | 2.12 ms (2.21) | 1.79 ms |
 
-Informational (not gated, not committed): a compound of 200 OCC cylinders on a 20 × 10 grid,
-written by `tools/make_step_fixtures.py`'s `write_step` (an identity assembly of 200 solids,
-1 244 553 bytes, 24 220 entities), imports to 200 `cylinder` objects in **0.34 s / 0.40 s / 0.35 s**
-(minimum of 3 per run, three runs; the prototype quoted 0.63 s for a 1.25 MB file). Parsing is about
+Informational (not gated, not committed): a compound of 200 OCC cylinders (r 300 mm, h 2400 mm) on a
+20 × 10 grid with a 1000 mm pitch, written by
+`python tools/make_step_fixtures.py --bench-solids 200 --bench-out /tmp/bench200.step` (an identity
+assembly of 200 solids, 1 238 126 bytes, 24 220 entities), imports to 200 `cylinder` objects in
+**0.40 s / 0.31 s / 0.38 s** (`import_step`, minimum of 3 per run, three runs; the prototype quoted
+0.63 s for a 1.25 MB file). Parsing is about
 85 % of the time on every file. The OCP tessellation fallback (§5.5.7, cadquery-ocp 8.0.1.1.0,
 minimum of 3): cylinder 4.0 ms (170 nodes / 164 triangles), frustum 7.8 ms (400 / 598), box 5.1 ms
 (24 / 12), sphere 17.2 ms (1447 / 2836).

@@ -225,11 +225,18 @@ def cmd_import(args) -> int:
         base_scene = read_json(args.into)
         if not isinstance(base_scene, dict):
             raise SceneError("--into", "the scene must be a JSON object")
+        if "objects" in base_scene and not isinstance(base_scene["objects"], list):   # review fix: not objects[0]
+            raise SceneError("objects", "must be a non-empty list")
         taken |= _ids(base_scene.get("objects")) | _ids(base_scene.get("receivers"))
         expanded, into_notes = expand_scene(base_scene, os.path.dirname(os.path.abspath(args.into)))
         taken |= _ids(expanded.get("objects"))     # M8: ids a step object of SCENE expands to (part_0, ...)
     if args.id is not None and args.id in taken:
         raise SceneError("--id", f"{args.id!r} is already an object or receiver id of the scene")
+    if args.id is not None:                    # M8 review fix: the <id>_<k> ids of an explicit --id are never renamed
+        for oid in (o["id"] for o in parts["objects"]):
+            if oid in taken:
+                raise SceneError("--id", f"{oid!r} (derived from --id {args.id!r}) is already an object or "
+                                         "receiver id of the scene")
     _dedupe(parts["objects"], raw, set(taken))
     if base_scene is not None:
         scene_dir = os.path.dirname(os.path.abspath(args.into))
