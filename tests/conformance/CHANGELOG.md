@@ -65,3 +65,22 @@ One entry per regeneration (newest last); see README.md.
 - cases added (3, contract §5.2.11 / §5.2.12; post-expansion scenes with inline mesh `data`): mesh_box_welded_triangulated, mesh_open_bottom_box_fallback, mesh_smooth_prism16
 - expected files: 0 of the 43 v4 cases changed (`tools/regen_conformance.py --dry-run` on the merged branch before this run: would change 3 of 46, the three new cases only); no comparator change (rules.json as recorded in v4)
 
+## v6 — 2026-10-07
+
+- reason: M6: the constructions mm paths (contract §5.3.5, §5.0.8 rule 3): constructions.*.segments[].points and constructions.*.per_receiver.*.segments[].points are canvas mm (1e-6 mm), the per-light form of the construction paths; worktree-local entry of the M6 worktree, collapsed with the M6 --case entry into the one v6 milestone entry at the M6 merge (contract §5.0.8 rule 1)
+- comparator amendment, no expected file changed
+- expected files: unchanged (50 cases; rendered by the build of the last entry with a build line)
+- rules diff (against the rules recorded in v4):
+  - changed `mm_key_paths`: + `["constructions", "*", "segments", "*", "points"]`, + `["constructions", "*", "per_receiver", "*", "segments", "*", "points"]`
+- rules (tests/conformance/rules.json at v6):
+
+```json
+{"arc_non_mm": ["rotation_deg", "theta", "large_arc", "sweep"], "case_overrides": {"degenerate_cylinder_cap_at_light_height": [{"abs_tol": 1e-06, "paths": [["shadows", "*", "loops", "*", "*", "direction"], ["shadows", "*", "outline", "*", "direction"]], "reason": "direction vertices at a tangent w_S = 0 crossing (curved._zero_shift, acos near |c| = 1): sqrt-type amplification, measured 1.5e-9 absolute per ulp of M or L"}]}, "drawable_containers": ["arcs", "ellipses"], "image_tol_mm": 1e-06, "int_keys": ["large_arc", "sweep", "interval"], "max_reported": 25, "mm_key_paths": [["construction", "segments", "*", "points"], ["construction", "per_receiver", "*", "segments", "*", "points"], ["constructions", "*", "segments", "*", "points"], ["constructions", "*", "per_receiver", "*", "segments", "*", "points"]], "mm_keys": ["image", "segment", "polygons", "polylines", "hidden_polylines", "light_point", "shadow_vp", "v_mm", "vanishing_points", "principal_point", "canvas_mm", "max_error_mm"], "rel_tol": 1e-09, "runs_rule": {"exact_keys": ["visible", "interval"], "mm_abs": 0.05, "param_abs": 0.001, "param_keys": ["s", "t", "theta"]}}
+```
+
+## v7 — 2026-10-07
+
+- reason: M6: multi-light cases (contract §5.3.10): multilight_two_point_symmetric_box (the hand-computed acceptance case), multilight_point_and_directional_curved (per-light curved names, terminators per light, umbra of sampled polygons, core), multilight_three_lights_concave_prism (N = 3, self-intersecting shadow loops; casters lifted 0.2 m so that no umbra predicate sits at its rounding threshold), multilight_second_light_inactive (LIGHT_BELOW_RECEIVER on the second light, empty umbra polygons); added with --case in the M6 worktree on top of v5, no existing expected file changed (dry run: 0 of the 46 v5 cases would change); worktree-local entry, collapsed with the M6 --rules-only entry into the one v6 milestone entry at the M6 merge (contract §5.0.8 rule 1)
+- build: Python 3.13.16, numpy 2.5.3
+- regenerated (selected cases, 4 changed): multilight_point_and_directional_curved, multilight_second_light_inactive, multilight_three_lights_concave_prism, multilight_two_point_symmetric_box
+

@@ -2480,6 +2480,24 @@ dependency (shapely, pyclipper); `float32` or GPU paths.
   `umbra[].polygons` at 1e-6 mm is fragile across libm / BLAS builds and in the TS runner, so either its `umbra`
   polygons are compared as a region (a `case_overrides` entry) or the case uses casters that do not stand on the
   receiver.
+- **[decision, implementation] (M6 part 3, step 9) The v6 cases.** (1) The worktree reached v5 by **merging** the M4 + M5
+  branch into `wt/m6` (PLAN says "rebase"; the history of parts 1–2 is kept, the conflicts were adjacent append-only
+  hunks resolved with the M5 hunk first). (2) `multilight_three_lights_concave_prism` is the U-prism and box of
+  `make_concavity_scene(1)` with the two extra point lights of `tests/test_multilight.py::three_light_scene`, **both
+  casters lifted 0.2 m** (`transform.position[2] = 0.2`): standing on the ground the case has cross-light vertex pairs
+  within rounding and collinear ground-contact edges (the notes above), so its piece partition is build dependent and an
+  index-wise comparison at 1e-6 mm would be fragile in another build or the TS runner; lifted, `light_b`'s and
+  `light_c`'s loops are still self-intersecting, the three regions overlap (18 pieces), and four rigid motions of the
+  whole scene reproduce the pieces index-wise within 2e-13 mm (`tests/test_conformance.py::test_three_light_case_pieces_are_stable_under_rigid_motions`).
+  No `case_overrides` entry was needed (the comparator has no region rule, and adding one would be a comparator
+  amendment that the TS runner must port). The test-suite scene `three_light_scene()` keeps the casters on the ground
+  (its tests compare regions). (3) `multilight_second_light_inactive` puts `under` at `(0.8, −1.3, −1.5)`: the position
+  `(1, 0.5, −2)` of `test_inactive_second_light` lies in the plane of the cube's `+y` face and adds
+  `FACE_PARALLEL_TO_LIGHT`, which the case should not be about. (4) The curved case reuses `curved_scene()` verbatim;
+  its 131 umbra pieces are stable under the same rigid motions (≤ 5e-13 mm). (5) The two worktree-local CHANGELOG
+  entries (`--rules-only` for the two `constructions` paths, then `--case` for the four cases) are numbered v6 / v7 in
+  the worktree and collapse into the one v6 milestone entry at the M6 merge (§5.0.8 rule 1). The Python runner's
+  `_MM_KEY_PATHS` literal gains the same two paths, so the `rules.json` equality test keeps cross-checking it.
 
 ### 5.4 M7 — TypeScript port of the core and the three.js web UI (spec §9 row "TypeScript 移植", spec §10 M7)
 

@@ -27,12 +27,13 @@
 | `warnings` | **代碼集合**必須相同（spec §7.5）；`(code, ids)` 的集合也必須相同（contract §2.9 規定 ids）；`message` 不比對 |
 | `runs` 項目內的數值（M4，`rules.json` 的 `runs_rule`，合約 §5.0.8 / §5.1.11） | 任何 `runs` 串列項目（邊、母線、明暗交界線段、圓錐曲線項目、`polygon_edges`）內：`mm` 絕對容差 **0.05 mm**，`s` / `t` / `theta` 絕對 **1e-3**（`theta` 在 runs 內不套 `arc_non_mm`），`visible`、`interval` 與段數完全相等。取樣式消隱的邊界本身只準到 `HLR_TOL_MM`，不能用 1e-6 mm 比對 |
 | M4 其他新鍵 | `hidden_polylines` 是畫面座標（1e-6 mm）；`construction.per_receiver.*.segments.*.points` 也是（`mm_key_paths`）；`interval` 是整數鍵（`int_keys`）；`receivers[].plane` / `bounds` 等其餘新數值照上面的 1e-9 相對容差 |
+| M6 多光源鍵（**只出現在多光源文件**，`len(lights) ≥ 2`，合約 §5.3.5） | `umbra[].polygons` 是畫面座標（`polygons` 本來就是 mm 鍵，1e-6 mm，逐片、逐頂點依索引比對）；`constructions.*.segments[].points` 與 `constructions.*.per_receiver.*.segments[].points` 是畫面座標（`rules.json` 的 `mm_key_paths`，v6），`constructions.*.light_point` / `shadow_vp` / `checks[].max_error_mm` 走既有的 mm 鍵；`umbra[].lights`、`edges[].silhouette_lights`、`form_shadow[].light` 完全相等；`constructions` 每個光源一個 M4 作圖區塊，`construction` 是第一個光源那一塊的別名。單光源文件沒有這些鍵（缺鍵或多鍵都是鍵集合不符） |
 
 失敗訊息會列出案例名稱與不符的路徑（例如 `points.crate.v0.image[0]: expected …, got …`），最多列 25 條。
 
 **逐案例放寬（`rules.json` 的 `case_overrides`，v3）。** 一筆放寬只對一個案例、只對路徑符合其 `paths`（`*` 代表任一個串列索引或鍵，比對路徑前綴）之下的**數值**改用絕對容差 `abs_tol`；非數值、串列長度、鍵集合與警告一律不放寬。目前只有一筆：`degenerate_cylinder_cap_at_light_height` 的 `shadows[*].loops[*][*].direction` 與 `shadows[*].outline[*].direction`（四個葉節點）以 1e-6 絕對容差比對——頂蓋恰在光源高度，`w_S = 0` 的交點是重根，方向頂點對 `M`、`L` 一個 ulp 的擾動以平方根放大（實測每 ulp 1.5e-9），這是案例的目的而非實作錯誤（合約 §5.4.4 (1)、D60）。`compare_documents(expected, actual, case_name)` 依案例名稱套用。
 
-## 來源（目前版本 v5，見 `CHANGELOG.md`；共 34 個 v2 案例，M4 的 9 個見下方 `### M4 受影面與隱藏線`，M5 的 3 個見 `### M5 網格`）
+## 來源（目前版本 v5，M6 工作樹中另有兩筆工作樹本地條目，合併時收成 v6，見 `CHANGELOG.md`；共 34 個 v2 案例，M4 的 9 個見下方 `### M4 受影面與隱藏線`，M5 的 3 個見 `### M5 網格`，M6 的 4 個見 `### M6 多光源`）
 
 | 類別 | 案例 | 依據 |
 | --- | --- | --- |
@@ -69,6 +70,17 @@
 | 平滑邊 | `mesh_smooth_prism16`：16 邊形稜柱；16 條側邊是平滑邊（二面角 22.5° < 30°），只有成為相機輪廓的 2 條會畫出（其餘 `segment: null`），頂底面的邊全是特徵邊 | 合約 §5.2.4 |
 
 **案例是展開後的場景，網格案例一律內嵌 `data`**（合約 §5.0.2、§5.2.9）：`cases/` 裡的 `mesh` 物件只有 `data`、沒有 `path` / `node`，也不會出現只在載入器層存在的 `step` 型別；TypeScript 移植因此不需要任何載入器（`test_cases_are_post_expansion_scenes_with_inline_mesh_data` 檢查）。M5 只用 `--case` 新增這三個案例，既有的 expected 檔一個都沒變。
+
+### M6 多光源
+
+合約 §5.3.10 的 4 個案例，在 M6 工作樹中（已合併 v5）以 `regen_conformance.py --case` 加入，既有的 expected 檔一個都沒變（加入前 `--dry-run`：46 個 v5 案例 0 個會變）。多光源的鍵是**有條件的**：只有 `len(lights) ≥ 2` 的文件才有 `constructions`、`umbra`、`form_shadow_core`、`form_shadow[].light`、`edges[].silhouette_lights`，所以單光源案例不受影響（`test_m6_cases_are_multi_light_documents` 檢查）。`rules.json` 加了 `constructions` 的兩條 mm 路徑（`--rules-only`）。
+
+| 案例 | 內容 | 依據 |
+| --- | --- | --- |
+| `multilight_two_point_symmetric_box` | 手算驗收案例：單位立方體、兩盞對 x 鏡射的點光源 `west` (−2, 0, 2) / `east` (2, 0, 2)；每盞光的影子紀錄與它單光源文件位元相同；本影 3 片（三角形、四邊形、三角形，影像面積 `132.85761502560047`、`1315.4880281807557`、`90.38709809014404` mm²，反投影回地面面積 7/6）；`form_shadow_core` = ±y 面與底面；`silhouette_lights` 逐邊；無警告（`test_acceptance_expected_file_holds_the_hand_values` 檢查手算值） | 合約 §5.3.10、spec §10 M6 |
+| `multilight_point_and_directional_curved` | 球 `ball`、圓柱 `pillar`、稜柱 `wedge`，點光源 `lamp` + 平行光 `sun`：曲面物件依光源命名的基點（`ball.sil.0.lamp`、`pillar.g0.base.sun` …，影子點 `ball.sil.0.sun.shadow.sun`）、每個 (光源, 曲面物件) 一筆明暗交界線 `form_shadow`、取樣曲面影子多邊形的本影、`wedge` 的 core 面 | 合約 §5.3.2、§5.3.10 |
+| `multilight_three_lights_concave_prism` | `N = 3`：`make_concavity_scene(1)` 的 U 形稜柱與方塊再加兩盞點光源；`light_b`、`light_c` 的影子迴圈自交，三盞光的區域重疊，本影 = 三個 nonzero 區域的交集（每盞光一個計數器）。兩個投影物**離地 0.2 m**：站在地上的物件在各光源的迴圈共用接地頂點與接地邊，會讓本影的**分片**（不是區域）隨建置的捨入而變（合約 §5.3 實作筆記），離地後每個判定都離門檻夠遠，可以逐片比對（`test_three_light_case_pieces_are_stable_under_rigid_motions` 檢查） | 合約 §5.3.4、§5.3.7、§5.3.10 |
+| `multilight_second_light_inactive` | 驗收立方體、`west` 有效、第二盞點光源 `under` 在地面以下：`LIGHT_BELOW_RECEIVER [under]`、它的紀錄為空、`receivers[0].lit = {west: true, under: false}`、`umbra[0].lights = [west]`、`polygons = []`（有效光源少於兩盞）；SVG 中唯一有效的光源群組 `fill-opacity="0.3"`，本影群組為空 | 合約 §5.3.8、§5.3.10 |
 
 每個案例刻意只放少量物件，讓 expected 檔可以人工審閱；整組 expected 的大小必須 < 3 MB（測試會檢查）。
 

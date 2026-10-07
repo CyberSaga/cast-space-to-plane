@@ -61,7 +61,10 @@ _ARC_NON_MM = frozenset({"rotation_deg", "theta", "large_arc", "sweep"})
 _DRAWABLE_CONTAINERS = ("arcs", "ellipses")
 #: Path prefixes below which every number is in canvas mm (``*`` matches any one list index or key).
 _MM_KEY_PATHS = (("construction", "segments", "*", "points"),
-                 ("construction", "per_receiver", "*", "segments", "*", "points"))
+                 ("construction", "per_receiver", "*", "segments", "*", "points"),
+                 # M6 (contract §5.3.5, §5.0.8): one construction block per light in multi-light documents
+                 ("constructions", "*", "segments", "*", "points"),
+                 ("constructions", "*", "per_receiver", "*", "segments", "*", "points"))
 #: The only keys whose numbers the writer emits as integers (``INT_KEYS`` of contract §5.4.5).
 _INT_KEYS = ("large_arc", "sweep", "interval")
 #: The comparator constants shared with the TypeScript runner (contract §5.4.8, §5.0.8).
@@ -250,8 +253,10 @@ def test_expected_files_are_canonical_and_small():
 def test_set_covers_the_required_sources():
     """Spec §7.5 sources: every §5.7 row, all five primitive types, both light types, both camera forms."""
     codes, kinds, lights, forms = set(), set(), set(), set()
+    n_lights = set()   # M6 (contract §5.0.8, §5.3.10): a case with N >= 2 and one with N >= 3
     for name in case_names():
         scene = load_scene(CASES / f"{name}.json")
+        n_lights.add(len(scene["lights"]))
         kinds.update(o["type"] for o in scene["objects"])
         lights.update(lt["type"] for lt in scene["lights"])
         forms.add("target" if "target" in scene["camera"] else "yaw_pitch")
@@ -259,6 +264,7 @@ def test_set_covers_the_required_sources():
     assert set(_DEGENERATE_ROW_CODES) <= codes, sorted(set(_DEGENERATE_ROW_CODES) - codes)
     # every object kind incl. ``mesh`` (the three M5 cases, contract §5.0.8, §5.2.11)
     assert kinds == set(OBJECT_TYPES) and lights == set(LIGHT_TYPES) and forms == {"target", "yaw_pitch"}
+    assert max(n_lights) >= 3 and any(n >= 2 for n in n_lights - {max(n_lights)}), sorted(n_lights)
 
 
 @pytest.mark.parametrize("name", case_names())
@@ -725,7 +731,7 @@ def test_welded_mesh_box_expected_equals_the_parametric_box_but_for_the_mesh_key
 def test_comparator_on_a_multi_light_document():
     """The multi-light keys (contract §5.3.5) go through the comparator: ``umbra[].polygons`` is an mm key
     (``polygons``), ``silhouette_lights`` / ``umbra[].lights`` are compared exactly, a missing M6 key is a key
-    mismatch.  (The ``constructions`` mm paths join ``rules.json`` with the v6 cases, PLAN step 9.)"""
+    mismatch; the ``constructions`` mm paths come from ``rules.json`` (v6)."""
     from tests.test_multilight import acceptance_scene
     doc = json.loads(dumps(castplane.render(castplane.load_scene(acceptance_scene()))["geometry"]))
     assert compare_documents(doc, json.loads(json.dumps(doc))) == []
@@ -746,3 +752,90 @@ def test_comparator_on_a_multi_light_document():
     bad = json.loads(json.dumps(doc))
     del bad["form_shadow_core"]
     assert any("key mismatch" in m and "form_shadow_core" in m for m in compare_documents(doc, bad))
+
+
+M6_CASES = ("multilight_two_point_symmetric_box", "multilight_point_and_directional_curved",
+            "multilight_three_lights_concave_prism", "multilight_second_light_inactive")
+
+
+def test_constructions_paths_are_image_paths():
+    """contract §5.3.5 / §5.3.10: ``constructions.*.segments[].points`` and its ``per_receiver`` form are canvas mm
+    (through ``rules.json``); the other numbers of a construction block keep their rules."""
+    assert is_image_path(("constructions", "east", "segments", 0, "points", 0, 1))
+    assert is_image_path(("constructions", "lamp", "per_receiver", "wall", "segments", 3, "points", 1, 0))
+    assert is_image_path(("constructions", "east", "light_point", 0))          # an mm key already
+    assert not is_image_path(("constructions", "east", "rays", 0, "P", 0))     # world coordinates stay relative
+    doc = load_expected("multilight_two_point_symmetric_box")
+    bad = json.loads(json.dumps(doc))
+    seg = bad["constructions"]["east"]["segments"][0]["points"][0]
+    seg[0] += 2e-6
+    assert any(m.startswith("constructions.east.segments[0].points[0][0]") for m in compare_documents(doc, bad))
+    seg[0] -= 1.5e-6
+    assert compare_documents(doc, bad) == []
+
+
+def test_m6_cases_are_multi_light_documents():
+    """The four v6 cases (contract §5.3.10) carry the M6 keys; every single-light case carries none (§5.3.5)."""
+    m6_keys = ("constructions", "umbra", "form_shadow_core")
+    for name in case_names():
+        doc = load_expected(name)
+        lights = load_scene(CASES / f"{name}.json")["lights"]
+        multi = len(lights) >= 2
+        assert all((k in doc) == multi for k in m6_keys), name
+        assert multi == (name in M6_CASES), name
+        if multi:
+            assert doc["construction"] == doc["constructions"][lights[0]["id"]], name
+            assert all("light" in e for e in doc["form_shadow"]) and all("silhouette_lights" in e for e in doc["edges"])
+    inactive = load_expected("multilight_second_light_inactive")
+    assert {(w["code"], tuple(w["ids"])) for w in inactive["warnings"]} == {("LIGHT_BELOW_RECEIVER", ("under",))}
+    assert inactive["umbra"] == [{"receiver": "ground", "lights": ["west"], "polygons": []}]
+    three = load_expected("multilight_three_lights_concave_prism")
+    assert three["umbra"][0]["lights"] == ["light", "light_b", "light_c"] and len(three["umbra"][0]["polygons"]) > 0
+    curved = load_expected("multilight_point_and_directional_curved")
+    assert "ball.sil.0.lamp" in curved["points"] and "ball.sil.0.sun.shadow.sun" in curved["points"]
+    assert sorted(curved["constructions"]) == ["lamp", "sun"]
+
+
+def test_acceptance_expected_file_holds_the_hand_values():
+    """contract §5.3.10: the expected file of ``multilight_two_point_symmetric_box`` holds the hand-computed
+    umbra pieces (index-wise within 1e-6 mm), their areas and the edge light lists."""
+    doc = load_expected("multilight_two_point_symmetric_box")
+    assert doc["warnings"] == [] and sorted(doc["constructions"]) == ["east", "west"]
+    (entry,) = doc["umbra"]
+    assert entry["receiver"] == "ground" and entry["lights"] == ["west", "east"]
+    a, b = 25.753937681885635, 22.944417207498113
+    hand = [[(0, -19.444444444444443), (a, -14.285714285714285), (-a, -14.285714285714285)],
+            [(-a, -14.285714285714285), (a, -14.285714285714285), (b, 12.727272727272727), (-b, 12.727272727272727)],
+            [(-b, 12.727272727272727), (b, 12.727272727272727), (0, 16.666666666666664)]]
+    assert len(entry["polygons"]) == 3
+    areas = []
+    for got, want in zip(entry["polygons"], hand):
+        assert len(got) == len(want)
+        for p, q in zip(got, want):
+            assert abs(p[0] - q[0]) <= IMAGE_TOL_MM and abs(p[1] - q[1]) <= IMAGE_TOL_MM, (got, want)
+        areas.append(0.5 * sum(got[i][0] * got[(i + 1) % len(got)][1] - got[(i + 1) % len(got)][0] * got[i][1]
+                               for i in range(len(got))))
+    for x, y in zip(areas, (132.85761502560047, 1315.4880281807557, 90.38709809014404)):
+        assert x == pytest.approx(y, rel=1e-9)
+    assert sum(areas) == pytest.approx(1538.7327412965, rel=1e-6)
+    lights = sorted(tuple(e["silhouette_lights"]) for e in doc["edges"])
+    assert lights.count(("west", "east")) == 2 and lights.count(("west",)) == 4 and lights.count(("east",)) == 4
+    assert lights.count(()) == 2 and sum(e["silhouette"] for e in doc["edges"]) == 10
+    (core,) = doc["form_shadow_core"]
+    assert core["object"] == "cube" and len(core["faces"]) == 3
+    assert [(e["light"], len(e["faces"])) for e in doc["form_shadow"]] == [("west", 4), ("east", 4)]
+
+
+def test_three_light_case_pieces_are_stable_under_rigid_motions():
+    """Why ``multilight_three_lights_concave_prism`` lifts its casters (ARCHITECTURE §5.3 implementation notes):
+    rigid motions of the whole scene change every input by rounding only, and the case's umbra pieces must then
+    agree index-wise within the 1e-6 mm conformance tolerance (the piece count included), so that the case is
+    comparable piece by piece on another build and in the TypeScript runner."""
+    from tests.test_multilight import rigid
+    scene = json.loads((CASES / "multilight_three_lights_concave_prism.json").read_text(encoding="utf-8"))
+    scene.pop("description")
+    want = load_expected("multilight_three_lights_concave_prism")["umbra"][0]["polygons"]
+    for angle, shift in ((37.0, (2.5, -1.25)), (-120.0, (-4.0, 3.0)), (180.0, (0.0, 0.0)), (90.0, (1.0, 1.0))):
+        got = castplane.render(load_scene(rigid(scene, angle, shift)))["geometry"]["umbra"][0]["polygons"]
+        assert [len(p) for p in got] == [len(p) for p in want], (angle, shift)
+        assert max(abs(x - y) for p, q in zip(got, want) for u, v in zip(p, q) for x, y in zip(u, v)) <= 1e-9
