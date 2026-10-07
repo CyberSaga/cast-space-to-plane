@@ -1112,7 +1112,7 @@ def shadow_polygon_h(outline, samples_per_circle: int = 64, frame=None) -> dict:
 # construction points (contract §2.7)
 # ---------------------------------------------------------------------------
 
-def construction_points(analytic: dict, L, tol: float = 0.0, obj_id: str = "obj") -> dict:
+def construction_points(analytic: dict, L, tol: float = 0.0, obj_id: str = "obj", light_id=None) -> dict:
     """Named homogeneous 4-vectors (``w = 1``) of the silhouette vertices that get
     construction rays (contract §2.7): sphere -> ``<obj>.c`` (centre) and
     ``<obj>.sil.0..3`` (silhouette circle centre ``+e1, -e1, +e2, -e2`` times its radius);
@@ -1120,9 +1120,14 @@ def construction_points(analytic: dict, L, tol: float = 0.0, obj_id: str = "obj"
     cone -> ``<obj>.g0.base``, ``<obj>.g1.base``, ``<obj>.apex``.  Only the points that
     exist for this ``L`` are returned (no generators when the silhouette is a full cap
     circle; nothing when the light is inside the sphere).  Insertion order is the order
-    listed here."""
+    listed here.
+
+    M6 (contract §5.3.2): with ``light_id`` given (a multi-light scene) the light-dependent stems
+    ``sil.<k>``, ``g<k>.base``, ``g<k>.top`` get ``.<light_id>`` as their last segment
+    (``<obj>.sil.0.<light>``); ``<obj>.c`` and ``<obj>.apex`` keep their names."""
     sil = silhouette(analytic, L, tol)
     pts: dict = {}
+    sfx = "" if light_id is None else f".{light_id}"
     if sil["kind"] == "sphere":
         if sil["light_inside"]:
             return pts
@@ -1131,18 +1136,18 @@ def construction_points(analytic: dict, L, tol: float = 0.0, obj_id: str = "obj"
         if circ is not None:
             c, rs = circ["centre"], circ["radius"]
             for k, v in enumerate((circ["e1"], -circ["e1"], circ["e2"], -circ["e2"])):
-                pts[f"{obj_id}.sil.{k}"] = _point4(c + rs * v)
+                pts[f"{obj_id}.sil.{k}{sfx}"] = _point4(c + rs * v)
         return pts
     gens = sil["generators"]
     if not gens:
         return pts
     if sil["kind"] == "cylinder":
         for k, g in enumerate(gens):
-            pts[f"{obj_id}.g{k}.base"] = _point4(g["base"])
-            pts[f"{obj_id}.g{k}.top"] = _point4(g["top"])
+            pts[f"{obj_id}.g{k}.base{sfx}"] = _point4(g["base"])
+            pts[f"{obj_id}.g{k}.top{sfx}"] = _point4(g["top"])
     else:
         for k, g in enumerate(gens):
-            pts[f"{obj_id}.g{k}.base"] = _point4(g["base"])
+            pts[f"{obj_id}.g{k}.base{sfx}"] = _point4(g["base"])
         pts[f"{obj_id}.apex"] = _point4(sil["apex"])
     return pts
 
@@ -1247,7 +1252,7 @@ _SIL_INDEX = {0: 0, 1: 2, 2: 1, 3: 3}   # quarter turn k (theta = k pi/2) -> <ob
 
 
 def _loop_entries(poly: dict, pieces: list, oid: str, lid: str, keep_names: set, samples_per_circle: int,
-                  suffix: str = "") -> tuple:
+                  suffix: str = "", multi: bool = False) -> tuple:
     """Contract §3.1 outline entries of a curved shadow polygon (see the pipeline docstring):
     direction vertices inline, the uncut shadows of generator endpoints / apex / silhouette
     quarter points by their construction-point shadow name, every other finite vertex as a
@@ -1256,7 +1261,12 @@ def _loop_entries(poly: dict, pieces: list, oid: str, lid: str, keep_names: set,
 
     M4 (contract §5.1.3.3 / §5.1.4): ``suffix`` (``".<receiver id>"`` for receivers other than
     ``receivers[0]``) ends every shadow / ground-point name, and the ``("bounds", ...)`` rows of the
-    bounds clip are ground points of the receiver."""
+    bounds clip are ground points of the receiver.
+
+    M6 (contract §5.3.2): the construction-point **base** names are composed by
+    ``multilight.curved_stem_name(oid, stem, lid, multi)`` (``.<light>`` on the light-dependent stems
+    iff ``multi``); only ``.shadow.<light>[.<r>]`` is appended to them."""
+    from .multilight import curved_stem_name
     V = poly["vertices"]
     n = len(pieces)
     ground: list = []
@@ -1274,7 +1284,7 @@ def _loop_entries(poly: dict, pieces: list, oid: str, lid: str, keep_names: set,
         if piece["cut"][end]:
             return None
         e = piece["ends"][end]
-        pname = f"{oid}.apex" if e == "apex" else f"{oid}.g{piece['gen']}.{e}"
+        pname = f"{oid}.apex" if e == "apex" else curved_stem_name(oid, f"g{piece['gen']}.{e}", lid, multi)
         return f"{pname}.shadow.{lid}{suffix}" if pname in keep_names else None
 
     for row, src in enumerate(poly["sources"]):
@@ -1301,7 +1311,7 @@ def _loop_entries(poly: dict, pieces: list, oid: str, lid: str, keep_names: set,
                 q = theta / (0.5 * math.pi)
                 qi = int(round(q))
                 if abs(q - qi) <= 1e-12:
-                    pname = f"{oid}.sil.{_SIL_INDEX[qi % 4]}"
+                    pname = curved_stem_name(oid, f"sil.{_SIL_INDEX[qi % 4]}", lid, multi)
                     if pname in keep_names:
                         name = f"{pname}.shadow.{lid}{suffix}"
         entries.append(name if name is not None else ground_name(row))
@@ -1334,7 +1344,7 @@ def _bounds_clip_pieces(pieces: list, psi, tol: float) -> list:
     return out
 
 
-def stage_a_object(obj: dict, lights: list, receiver: dict, tol: float, warnings: list) -> list:
+def stage_a_object(obj: dict, lights: list, receiver: dict, tol: float, warnings: list, multi: bool = False) -> list:
     """Stage A of one curved object on one receiver (spec §5.6, contract §2.6 / §2.7 / §3 / §5.1.4): per
     light the silhouette, terminator, construction points and the shadow record consumed by the
     pipeline's ``_project_shadow`` / ``compose`` exactly like a polyhedral record.  Called once per
@@ -1354,7 +1364,13 @@ def stage_a_object(obj: dict, lights: list, receiver: dict, tol: float, warnings
     Warnings (``LIGHT_INSIDE_OBJECT``, ``VERTEX_NOT_BELOW_LIGHT``, ``OBJECT_BELOW_RECEIVER``,
     ``FACE_PARALLEL_TO_LIGHT``) are appended with ``ids == [obj id]``; on a bounded receiver the two
     ground codes are dropped (the clip to the receiver's half-space is silent, contract §5.1.3).
-    Returns the list of shadow records (one per light)."""
+    Returns the list of shadow records (one per light).
+
+    M6 (contract §5.3.2): ``multi`` (the scene has at least two lights) passes ``light_id`` to
+    :func:`construction_points`, so the light-dependent base names carry the light id
+    (``<obj>.sil.<k>.<light>``, ``<obj>.g<k>.base|top.<light>``); shadow / foot names append
+    ``.shadow.<light>[.<r>]`` / ``.foot[.<r>]`` to the base names (``vertex_names``).  ``cd["multi"]``
+    records the flag for stage B (terminator segment names)."""
     an = obj["analytic"]
     oid = obj["id"]
     rid = receiver["id"]
@@ -1372,14 +1388,14 @@ def stage_a_object(obj: dict, lights: list, receiver: dict, tol: float, warnings
         L = np.asarray(lt["L"], dtype=np.float64)
         tol_L = lt["tol_lit"]
         sil = silhouette(an, L, tol_L)
-        pts = construction_points(an, L, tol_L, oid)
+        pts = construction_points(an, L, tol_L, oid, light_id=lid if multi else None)
         term = terminator(an, L, tol_L)
         if _cap_parallel(an, L, tol_L):
             warnings.append(make_warning("FACE_PARALLEL_TO_LIGHT", [oid]))
         for w in sil["warnings"]:
             warnings.append(make_warning(w["code"], [oid], w["message"]))
         cd = {"silhouette": sil, "terminator": term, "points": pts, "outline": None, "polygon": None,
-              "conic_pieces": None}
+              "conic_pieces": None, "multi": bool(multi)}
         per[lid] = cd
         rec = _empty_shadow_record(oid, lid, rid)
         records.append(rec)
@@ -1417,7 +1433,7 @@ def stage_a_object(obj: dict, lights: list, receiver: dict, tol: float, warnings
         loops = []
         ground: list = []
         if poly["vertices"].shape[0] >= 3:
-            entries, ground = _loop_entries(poly, out["pieces"], oid, lid, keep_names, 64, suffix=sfx)
+            entries, ground = _loop_entries(poly, out["pieces"], oid, lid, keep_names, 64, suffix=sfx, multi=multi)
             loops.append({"vertices": poly["vertices"], "sources": poly["sources"], "entries": entries,
                           "unbounded": bool(poly["unbounded"])})
         rec.update({
@@ -1584,7 +1600,8 @@ def _stage_b_prepare(obj: dict, cam: dict, tol: float) -> dict:
         for t in cd["terminator"]:
             if "segment" in t:
                 A4, B4 = t["segment"]
-                it = {"segment": _terminator_segment_names(oid, t, cd["silhouette"]), "segment_h": None, "keep": False,
+                it = {"segment": _terminator_segment_names(oid, t, cd["silhouette"], lid, cd.get("multi", False)),
+                      "segment_h": None, "keep": False,
                       "X4": (A4, B4)}   # M4 (contract §5.1.6.4): the stage-A world endpoints for stage C
                 items.append(it)
                 seg_A.append(A4)
@@ -1700,8 +1717,13 @@ def stage_b_object(obj: dict, rec: dict, cam: dict, tol: float, warnings: list) 
     stage_b_objects([obj], [rec], cam, tol, warnings)
 
 
-def _terminator_segment_names(oid: str, t: dict, sil: dict) -> list:
-    """Names of the two construction points at the ends of a terminator generator entry."""
+def _terminator_segment_names(oid: str, t: dict, sil: dict, light_id=None, multi: bool = False) -> list:
+    """Names of the two construction points at the ends of a terminator generator entry (M6, contract
+    §5.3.2: the light-dependent base names through ``multilight.curved_stem_name``)."""
+    from .multilight import curved_stem_name
+
+    def gname(stem):
+        return curved_stem_name(oid, stem, light_id, multi)
     theta = t.get("theta")
     gen = None
     for k, g in enumerate(sil["generators"]):
@@ -1710,12 +1732,12 @@ def _terminator_segment_names(oid: str, t: dict, sil: dict) -> list:
             break
     A4, B4 = t["segment"]
     if gen is None:
-        return [f"{oid}.g0.base", f"{oid}.g0.top"]
+        return [gname("g0.base"), gname("g0.top")]
 
     def end_of(X):
         g = sil["generators"][gen]
         # numpy.allclose verdict (|a - b| <= 1e-8 + 1e-5 |b| per component) in plain scalar arithmetic
         if all(abs(float(x) - float(b)) <= 1e-8 + 1e-5 * abs(float(b)) for x, b in zip(X[:3], g["base"])):
-            return f"{oid}.g{gen}.base"
-        return f"{oid}.apex" if sil["kind"] == "cone" else f"{oid}.g{gen}.top"
+            return gname(f"g{gen}.base")
+        return f"{oid}.apex" if sil["kind"] == "cone" else gname(f"g{gen}.top")
     return [end_of(A4), end_of(B4)]
