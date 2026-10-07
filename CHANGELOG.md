@@ -12,3 +12,4 @@
 - m5-loaders#7: STL / PLY faces read by trimesh are range-checked by the loader (`objects[i].path` error).
 - m5-mesh#1: the mesh length scale `scale_A` is the bounding box of the vertices used by a face, so a stray unused vertex no longer loosens the tolerances or makes validation reject a good mesh ("no usable face").
 - m5-mesh#2: docs/USAGE.md states the smoothing rule as the contract does (one shared non-zero group: always smooth; no groups: angle test; different groups: feature).
+- m5-mesh#0: a mesh object's receiver-contact tolerance is `max(tol, weld_tolerance)`: a concave mesh resting on the ground with float32-scale bottom noise keeps its clean shadow outline (no chord across the notch, no spurious `OBJECT_BELOW_RECEIVER`).

@@ -171,7 +171,7 @@ castplane import tests/fixtures/step/two_solids.step --solid 1 -o sphere.json
 | `node` | 選用：字串或非負整數。glTF：深度優先遍歷中第一個同名節點（含子樹），找不到再找同名網格；整數為 `nodes[k]`。OBJ：`o` / `g` 名稱，整數為第 k 個不同名稱 |
 | `up` | 選用：`"z"`（預設）或 `"y"`；`"y"` 以精確軸映射 `(x, y, z) ↦ (x, −z, y)` 轉成 Z-up。glTF 檔一律是 Y-up，配 `up` 是錯誤（`objects[i].up`） |
 | `scale` | 選用：> 0，預設 1；乘在局部頂點上（檔案單位 → 公尺），在焊接之前 |
-| `weld_tolerance` | 選用：≥ 0，預設 1e-6（公尺，縮放之後） |
+| `weld_tolerance` | 選用：≥ 0，預設 1e-6（公尺，縮放之後）；同時是這個網格與受影面的接觸容差：離受影面不到 `max(tol, weld_tolerance)` 的頂點算「貼在受影面上」（匯入時 float32 造成的 1e-8 級底面雜訊不會被當成穿入地面而切出錯誤的影子，也不發 `OBJECT_BELOW_RECEIVER`） |
 | `smooth_angle_deg` | 選用：[0, 180]，預設 30；兩面同屬同一個非零平滑群組的邊一律平滑（不看夾角）；兩面都無群組時，法線夾角小於它（`n_a·n_b ≥ cos(smooth_angle_deg) − 1e-9`）的邊平滑；群組不同、或一面有群組一面沒有，一律是特徵邊。平滑邊只在成為相機輪廓時才畫 |
 | `transform` | 同其他物件（`scale` 鍵不在 `transform` 裡，用物件的 `scale`） |
 | 上限 | 面數、頂點數各 ≤ 50 000；焊接並移除退化面後至少要剩一個面（`objects[i].data.faces` / 檔案來源為 `objects[i].path`：「no usable face」） |

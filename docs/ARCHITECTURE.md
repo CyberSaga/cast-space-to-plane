@@ -2022,6 +2022,25 @@ unordered world pairs with equal `silhouette` / `back` flags and `segment` endpo
   either: before, a unit box with one stray vertex 1e7 m away was rejected with "no usable face" (and at 1e6 m its
   tolerances were silently 1e6× looser). Every mesh whose vertices are all referenced (all conformance cases and
   fixtures) is unchanged. The TypeScript port's `scale_A` must follow (§5.2.9).
+- **[decision, implementation] (review fixes, mesh) Receiver contact tolerance of a mesh object.** §2.3 / §2.8 use
+  `tol = 1e-9·scene_scale` for the receiver-plane predicates. For a `mesh` object a bottom that rests on the receiver
+  only up to import noise (float32 positions, baked glTF node matrices: `|z| ~ 1e-8 … 1e-7` m) straddles that band:
+  vertices below `−tol` were "below", the Sutherland–Hodgman cut of a concave, slightly non-planar bottom face put its
+  crossings at noise-ratio fractions of nearly-in-plane edges and chained a cap across the notch, so the outline of an
+  L-shaped footprint bridged the unshadowed notch (raster IoU 0.91–0.94 against the clean mesh, in 6 of 20 random
+  noise draws) and `OBJECT_BELOW_RECEIVER` was emitted for an object resting on the ground. The **contact tolerance**
+  of an object is now `pipeline._contact_tol(obj, tol) = max(tol, weld_tolerance)` for a `mesh` (its declared "same
+  point" scale, §5.2.1, metres after `scale`; `transform` carries no scale) and `tol` for every other object. It
+  replaces `tol` in exactly the receiver-plane contact predicates, on every receiver: the `OBJECT_BELOW_RECEIVER`
+  vertex test and `clip_mesh_to_plane` of the unbounded ground (`shadow_geometry`) and of `_clip_object`
+  (`obj["clipped"][r]`), the `above` test and the `shadow_loop(..., tol_clip=…)` clip of `_shadow_record`,
+  `_fallback_shadow_record` and `_caster_record` (new keyword `tol_contact`, passed for mesh objects by
+  `_bounded_object_record`; plates keep `tol`). Bounds clips, area tests and every other tolerance are unchanged.
+  A vertex inside the band is "on" the receiver (its own crossing, §2.3), so the noisy L renders the clean L's
+  outline (same names, world points within the noise). Meshes whose bottoms are exact or lifted, and all
+  primitives, are unchanged (no conformance case changes bytes). Known limit: a concave bottom that is non-planar by
+  **more** than `weld_tolerance` is still cut face by face (Sutherland–Hodgman), as any genuinely penetrating
+  geometry is. The TypeScript port's mesh path must use the same contact tolerance (§5.2.9).
 
 ### 5.3 M6 — multiple lights (amendment to §2.0, §2.3, §2.5–2.10, §3, §3.1, §4)
 

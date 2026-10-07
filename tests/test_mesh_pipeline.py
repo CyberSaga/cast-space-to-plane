@@ -715,3 +715,62 @@ def test_manifold_mesh_on_bounded_receivers_equals_the_parametric_crate(floor):
     doc = doc_of(mesh_scene)
     assert ref["construction"]["per_receiver"]["wall"]["rays"]
     assert dumps(strip_mesh_keys(doc)) == dumps(ref)
+
+
+# --- review fix m5-mesh#0: ground contact within the weld tolerance --------------------------------
+
+L_POLY = [[-1, -1], [1, -1], [1, 0], [0, 0], [0, 1], [-1, 1]]
+
+
+def noisy_l_scene(noise, floor=False) -> dict:
+    """A concave L prism (height 0.7) resting on the receiver, its six bottom vertices moved by
+    ``noise`` (float32 / baked-matrix import noise, far below the 1e-6 m weld tolerance but above
+    the 1e-9 scene tolerance); lamp ``(1, 0.7, 3.5)``.  ``floor``: a bounded default receiver."""
+    from castplane.mesh import prism_mesh
+
+    L = prism_mesh(L_POLY, 0.7)
+    V = L["vertices"].tolist()
+    for k, dz in enumerate(noise):
+        V[k][2] = float(dz)
+    scene = analytic_box_scene()
+    scene["lights"][0]["position"] = [1.0, 0.7, 3.5]
+    scene["objects"] = [{"id": "m", "type": "mesh", "data": {"vertices": V, "faces": L["faces"]}}]
+    if floor:
+        scene["receivers"] = [{"id": "floor", "type": "plane", "normal": [0, 0, 1], "offset": 0,
+                               "bounds": [[-6, -6, 0], [6, -6, 0], [6, 6, 0], [-6, 6, 0]]}]
+    return scene
+
+
+def _noise(seed):
+    if seed == "det":                                            # two reflex-side bottom vertices at -1e-7
+        return [0.0, 0.0, 0.0, -1e-7, 0.0, -1e-7]
+    return np.random.default_rng(seed).uniform(-5e-8, 5e-8, 6).tolist()
+
+
+@pytest.mark.parametrize("floor", [False, True], ids=["ground", "bounded-floor"])
+@pytest.mark.parametrize("seed", [15, 2, 11, 19, "det"])
+def test_noisy_ground_contact_of_a_concave_mesh_keeps_the_clean_outline(seed, floor):
+    """m5-mesh#0: a bottom that rests on the receiver up to import noise is in contact (contact
+    tolerance = max(tol, weld_tolerance)); before, the 1e-9 clip cut the concave bottom by its noise
+    and the outline bridged the notch (raster IoU 0.91-0.94 against the clean mesh), with a spurious
+    ``OBJECT_BELOW_RECEIVER``."""
+    clean = doc_of(noisy_l_scene([0.0] * 6, floor))
+    doc = doc_of(noisy_l_scene(_noise(seed), floor))
+    assert warning_set(doc) == warning_set(clean)
+    assert ("OBJECT_BELOW_RECEIVER", ("m",)) not in warning_set(doc)
+    (sc,), (sn,) = clean["shadows"], doc["shadows"]
+    assert sn["outline"] == sc["outline"]
+    assert [len(loop) for loop in sn["loops"]] == [len(loop) for loop in sc["loops"]]
+    for name in sn["outline"]:
+        assert np.allclose(doc["points"][name]["world"], clean["points"][name]["world"], atol=1e-6), name
+    if not floor:
+        xs = np.linspace(-4.0, 4.0, 321) + 0.0037
+        masks = [raster.rasterize_polygons(raster.doc_ground_loops(d, np.zeros(2), 1e9), xs, xs) for d in (clean, doc)]
+        assert raster.iou(*masks) == 1.0
+
+
+def test_contact_tolerance_does_not_reach_a_buried_mesh():
+    """A mesh really below the receiver (by far more than its weld tolerance) is still cut and warned."""
+    doc = doc_of(noisy_l_scene([-0.2] * 6))
+    assert ("OBJECT_BELOW_RECEIVER", ("m",)) in warning_set(doc)
+    assert any(n.startswith("m.s") for n in doc["shadows"][0]["outline"])
