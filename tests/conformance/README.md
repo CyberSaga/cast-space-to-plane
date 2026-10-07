@@ -32,7 +32,7 @@
 
 **逐案例放寬（`rules.json` 的 `case_overrides`，v3）。** 一筆放寬只對一個案例、只對路徑符合其 `paths`（`*` 代表任一個串列索引或鍵，比對路徑前綴）之下的**數值**改用絕對容差 `abs_tol`；非數值、串列長度、鍵集合與警告一律不放寬。目前只有一筆：`degenerate_cylinder_cap_at_light_height` 的 `shadows[*].loops[*][*].direction` 與 `shadows[*].outline[*].direction`（四個葉節點）以 1e-6 絕對容差比對——頂蓋恰在光源高度，`w_S = 0` 的交點是重根，方向頂點對 `M`、`L` 一個 ulp 的擾動以平方根放大（實測每 ulp 1.5e-9），這是案例的目的而非實作錯誤（合約 §5.4.4 (1)、D60）。`compare_documents(expected, actual, case_name)` 依案例名稱套用。
 
-## 來源（目前版本 v3，見 `CHANGELOG.md`；共 34 個 v2 案例，M4 的 9 個見下方 `### M4 受影面與隱藏線`）
+## 來源（目前版本 v5，見 `CHANGELOG.md`；共 34 個 v2 案例，M4 的 9 個見下方 `### M4 受影面與隱藏線`，M5 的 3 個見 `### M5 網格`）
 
 | 類別 | 案例 | 依據 |
 | --- | --- | --- |
@@ -59,6 +59,16 @@
 | `hidden_lines_curved_unbounded` | 比光源高的球與圓柱（無界地面影子：雙曲線分支、開口的圓柱影子），消隱開啟：圓錐曲線 runs、`hidden_polylines`、母線 runs | 合約 §5.1.6 / §5.1.11 |
 | `hidden_lines_vp_in_canvas` | `degenerate_vertex_above_point_light` 開啟消隱：影子多邊形有一個頂點在擴大畫布內的地平線上，畫出的邊有 `w = 0` 端點 | 合約 §5.1.6.4 / §5.1.11 |
 | `concave_prism_on_plate` | U 形稜柱、光源在凹口內且低於臂頂、地板 [−3, 3] × [−4.5, −2] 在封閉臂之後：未裁切影子的無窮遠弧超過 180°，錨點規則讓結果是整塊板（面積 15） | 合約 §5.1.3.3（錨點規則） |
+
+### M5 網格
+
+| 類別 | 案例 | 依據 |
+| --- | --- | --- |
+| 焊接＋三角化的方塊 | `mesh_box_welded_triangulated`：`analytic_unit_box_point_light_overhead` 的方塊換成 24 個分裂頂點、12 個三角形的內嵌網格；焊接與共面合併後與參數化方塊完全相同，expected 檔除了 12 條邊上的 `smooth` / `camera_silhouette` 兩個網格專用鍵以外與 `analytic_unit_box_point_light_overhead` **逐字相同**（測試會檢查） | 合約 §5.2.12 驗收 1 |
+| 非流形退路 | `mesh_open_bottom_box_fallback`：沒有底面的方塊（頂面＋四個側面）→ `MESH_NON_MANIFOLD`、逐面影子 5 個迴圈、聯集為 ±0.75 的正方形、沒有作圖線與 checks | 合約 §5.2.5、§5.2.12 驗收 2 |
+| 平滑邊 | `mesh_smooth_prism16`：16 邊形稜柱；16 條側邊是平滑邊（二面角 22.5° < 30°），只有成為相機輪廓的 2 條會畫出（其餘 `segment: null`），頂底面的邊全是特徵邊 | 合約 §5.2.4 |
+
+**案例是展開後的場景，網格案例一律內嵌 `data`**（合約 §5.0.2、§5.2.9）：`cases/` 裡的 `mesh` 物件只有 `data`、沒有 `path` / `node`，也不會出現只在載入器層存在的 `step` 型別；TypeScript 移植因此不需要任何載入器（`test_cases_are_post_expansion_scenes_with_inline_mesh_data` 檢查）。M5 只用 `--case` 新增這三個案例，既有的 expected 檔一個都沒變。
 
 每個案例刻意只放少量物件，讓 expected 檔可以人工審閱；整組 expected 的大小必須 < 3 MB（測試會檢查）。
 

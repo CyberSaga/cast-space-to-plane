@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import math
+import numbers
 import os
 
 from .errors import SceneError
@@ -19,6 +20,17 @@ LIGHT_TYPES = ("point", "directional")
 LAYER_IDS = ("horizon", "objects", "form_shadow", "cast_shadow", "construction", "labels")
 
 _UNIT_TOL = 1e-9
+
+# --- M5: the ``mesh`` object type (contract §5.2.1, §5.0.1) ---------------------------------------
+OBJECT_TYPES += ("mesh",)
+#: Size guard of a mesh object after loading (contract §5.2.1).
+MESH_MAX_FACES = 50000
+MESH_MAX_VERTICES = 50000
+#: Defaults of the optional mesh keys (contract §5.2.1; the same values as ``meshprep``'s constants).
+MESH_WELD_TOLERANCE_DEFAULT = 1e-6
+MESH_SMOOTH_ANGLE_DEFAULT = 30.0
+#: The exact Y-up -> Z-up axis map ``A: (x, y, z) -> (x, -z, y)`` (integer entries, contract §5.2.1).
+AXIS_MAP = ((1, 0, 0), (0, 0, -1), (0, 1, 0))
 
 
 # ---------------------------------------------------------------------------
@@ -191,6 +203,8 @@ def validate_object(value, field: str) -> dict:
     elif typ == "prism":
         out["polygon"] = _validate_polygon(_require(o, "polygon", field), f"{field}.polygon")
         out["height"] = _number(_require(o, "height", field), f"{field}.height", positive=True)
+    elif typ == "mesh":
+        out.update(validate_mesh_object(o, field))
     out["transform"] = validate_transform(o.get("transform"), f"{field}.transform")
     return out
 
@@ -351,14 +365,20 @@ def validate_scene(scene) -> dict:
     }
 
 
+def read_json(path) -> dict:
+    """Read a scene (or camera) JSON file; ``JSONDecodeError`` -> ``SceneError("", "invalid JSON: ...")``
+    (contract §5.0.1: extracted from :func:`load_scene`, reused by ``castplane.io.load_expanded_scene``)."""
+    with open(path, "r", encoding="utf-8") as fh:
+        try:
+            return json.load(fh)
+        except json.JSONDecodeError as exc:
+            raise SceneError("", f"invalid JSON: {exc}") from exc
+
+
 def load_scene(path_or_dict) -> dict:
     """Load a scene from a JSON file path or a dict and validate it (contract §3)."""
     if isinstance(path_or_dict, (str, os.PathLike)):
-        with open(path_or_dict, "r", encoding="utf-8") as fh:
-            try:
-                data = json.load(fh)
-            except json.JSONDecodeError as exc:
-                raise SceneError("", f"invalid JSON: {exc}") from exc
+        data = read_json(path_or_dict)
     else:
         data = path_or_dict
     return validate_scene(data)
@@ -476,6 +496,113 @@ def validate_receivers_in_scene(receivers: list, objects: list, lights: list) ->
             for k, p in enumerate(r["bounds"]):
                 if p[2] < -1e-9 * ext:
                     raise SceneError(f"receivers[{i}].bounds[{k}]", "below the ground receiver")
+
+
+# M5: mesh objects (contract §5.2.1, §5.0.1)
+# ---------------------------------------------------------------------------
+
+def to_z_up(vertices) -> list:
+    """Apply the exact axis map ``A`` of :data:`AXIS_MAP`, ``(x, y, z) -> (x, -z, y)``, by component
+    swapping and sign change (never ``cos`` / ``sin``: contract §5.2.1, D31).  ``-z + 0.0`` keeps the
+    floats canonical (no ``-0.0``)."""
+    return [[float(v[0]), -float(v[2]) + 0.0, float(v[1])] for v in vertices]
+
+
+def _is_index(x) -> bool:
+    return isinstance(x, numbers.Integral) and not isinstance(x, bool)
+
+
+def validate_mesh_data(value, field: str, source_field: str | None = None) -> dict:
+    """``objects[i].data`` of a mesh object (contract §5.2.1): ``vertices`` (>= 3 finite ``[x, y, z]``),
+    ``faces`` (>= 1 int lists of >= 3 indices in ``[0, n_v)``), optional ``smooth_groups`` (non-negative
+    ints, one per face, default all 0) and the size guard.  ``source_field`` (``objects[i].path`` for
+    file sources) is the field of the size-guard error.  Returns ``{vertices, faces, smooth_groups}``
+    as plain Python floats / ints."""
+    d = _dict(value, field)
+    verts = _require(d, "vertices", field)
+    if not isinstance(verts, (list, tuple)) or len(verts) < 3:
+        raise SceneError(f"{field}.vertices", "must be a list of at least 3 [x, y, z] vertices")
+    if len(verts) > MESH_MAX_VERTICES:
+        raise SceneError(source_field or f"{field}.vertices",
+                         f"{len(verts)} vertices exceed the limit of {MESH_MAX_VERTICES}")
+    vertices = [_vector(v, f"{field}.vertices[{k}]", 3) for k, v in enumerate(verts)]
+    faces_in = _require(d, "faces", field)
+    if not isinstance(faces_in, (list, tuple)) or len(faces_in) < 1:
+        raise SceneError(f"{field}.faces", "must be a non-empty list of faces")
+    if len(faces_in) > MESH_MAX_FACES:
+        raise SceneError(source_field or f"{field}.faces",
+                         f"{len(faces_in)} faces exceed the limit of {MESH_MAX_FACES}")
+    n_v = len(vertices)
+    faces = []
+    for k, f in enumerate(faces_in):
+        if not isinstance(f, (list, tuple)) or len(f) < 3:
+            raise SceneError(f"{field}.faces[{k}]", "must be a list of at least 3 vertex indices")
+        for v in f:
+            if not _is_index(v) or not 0 <= v < n_v:
+                raise SceneError(f"{field}.faces[{k}]", f"vertex indices must be integers in [0, {n_v})")
+        faces.append([int(v) for v in f])
+    groups = d.get("smooth_groups")
+    if groups is None:
+        smooth_groups = [0] * len(faces)
+    else:
+        if not isinstance(groups, (list, tuple)) or len(groups) != len(faces):
+            raise SceneError(f"{field}.smooth_groups", "must be a list with one entry per face")
+        for k, g in enumerate(groups):
+            if not _is_index(g) or g < 0:
+                raise SceneError(f"{field}.smooth_groups[{k}]", "must be a non-negative integer")
+        smooth_groups = [int(g) for g in groups]
+    return {"vertices": vertices, "faces": faces, "smooth_groups": smooth_groups}
+
+
+def validate_mesh_object(o: dict, field: str) -> dict:
+    """The ``mesh`` branch of :func:`validate_object` (contract §5.2.1, §5.0.1).
+
+    ``data`` is required ("expand first" for a ``path``-only object, which is a loader-level object
+    like ``step``: ``castplane.io.expand_scene`` fills ``data``); both together mean "already
+    expanded".  ``up: "y"`` converts ``data`` with the exact :func:`to_z_up` and is rewritten to
+    ``"z"``; the usable-face guard (:func:`castplane.meshprep.has_usable_face`) runs
+    :func:`castplane.meshprep.weld_vertices` and :func:`castplane.meshprep.drop_degenerate_faces` on
+    ``scale · vertices`` (the validated ``data``
+    stays the raw, unwelded data).  Returns the mesh keys of the validated object."""
+    from . import meshprep  # numpy-only core module; imported here to keep scene.py light
+
+    path = o.get("path")
+    if path is not None and (not isinstance(path, str) or path == ""):
+        raise SceneError(f"{field}.path", "must be a non-empty string")
+    if "data" not in o:
+        if path is None:
+            raise SceneError(f"{field}.data", "required")
+        raise SceneError(f"{field}.path",
+                         "mesh file must be expanded first (castplane.io.expand_scene or 'castplane import')")
+    node = o.get("node")
+    if node is not None and not (isinstance(node, str) or (_is_index(node) and node >= 0)):
+        raise SceneError(f"{field}.node", "must be a string or a non-negative integer")
+    up = o.get("up", "z")
+    if up not in ("z", "y"):
+        raise SceneError(f"{field}.up", "must be 'z' or 'y'")
+    scale = _number(o.get("scale", 1.0), f"{field}.scale", positive=True)
+    weld = _number(o.get("weld_tolerance", MESH_WELD_TOLERANCE_DEFAULT), f"{field}.weld_tolerance")
+    if weld < 0:
+        raise SceneError(f"{field}.weld_tolerance", "must be >= 0")
+    smooth = _number(o.get("smooth_angle_deg", MESH_SMOOTH_ANGLE_DEFAULT), f"{field}.smooth_angle_deg")
+    if not 0.0 <= smooth <= 180.0:
+        raise SceneError(f"{field}.smooth_angle_deg", "must be in [0, 180]")
+    source_field = f"{field}.path" if path is not None else None
+    data = validate_mesh_data(o["data"], f"{field}.data", source_field)
+    if up == "y":
+        data["vertices"] = to_z_up(data["vertices"])
+    # usable-face guard (contract §5.2.1 [decision]): "validated => renders"
+    if not meshprep.has_usable_face(data["vertices"], data["faces"], scale, weld):
+        raise SceneError(source_field or f"{field}.data.faces", "no usable face")
+    return {
+        "path": path,
+        "node": node,
+        "data": data,
+        "up": "z",
+        "scale": scale,
+        "weld_tolerance": weld,
+        "smooth_angle_deg": smooth,
+    }
 
 
 # ---------------------------------------------------------------------------

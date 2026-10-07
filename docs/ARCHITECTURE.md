@@ -1824,6 +1824,142 @@ unordered world pairs with equal `silhouette` / `back` flags and `segment` endpo
 `max_error_mm ≤ 1e-9` for the same mapped points, segments per mapped (kind, point) within 1e-9 mm; (g) warning
 `(code, ids)` sets equal; (h) horizon / camera blocks exact.
 
+### Implementation notes
+- **[decision, implementation] (M5) `triangles` follow the orientation fix.** §5.2.3 lists the fan triangulation as step 4
+  and the orientation fix as step 5; the record's `triangles` are the fans of the kept faces **after** propagation and the
+  volume / nesting flips (the same triangle set; a flipped face `[f0] + f[1:][::-1]` contributes its fans reversed), so the
+  generalised winding number of `point_inside_mesh` sees a consistently oriented surface (with the raw orientation a light
+  at the centre of a unit box with one flipped face has `w = 2/3 < 0.75` and would be "outside"). A fallback mesh keeps
+  the fans of its kept faces as given. Rays (M4, the ray-cast reference) are orientation-free.
+- **[decision, implementation] (M5) Unmerged regions and open edges in `merge_coplanar`.** A region left unmerged (hole or
+  pinch) contributes its member faces **in ascending face index at its seed's position** of the seed-ordered output;
+  `merge_coplanar` returns `(new_faces, origin)` with `origin[k]` the seed of a merged face or the face itself (the source
+  of its smoothing group). An edge with a single face (only possible in a direct call, e.g. the bent-strip test of
+  §5.2.11) is a region-boundary edge.
+- **[decision, implementation] (M5) Weld details.** Cell keys are `floor(x/τ + 0.5)` of the float quotient; when some `x/τ`
+  is not finite (a `τ` far below every float spacing) the weld is the exact `τ = 0` rule. The fast path computes the cell
+  occupancy on per-axis compressed cell indices (distinct indices renumbered with gaps capped at 2, so `|Δ| ≤ 1` is kept)
+  combined into one int64, merges a vertex directly only when its cell has no occupied neighbour **and** every vertex of
+  the cell is within `τ` of the cell's lowest input index (the float quotient may put two vertices more than `τ` apart into
+  one cell), and runs the reference loop on all other vertices; `tests/test_meshprep.py` proves it result-identical. The
+  degenerate-face collapse keeps the face's first vertex (`[a, b, c, a] → [a, b, c]`).
+- **[decision, implementation] (M5) Fallback area test.** "`|area| ≤ tol·scale_A`" uses the stage-A `tol` and the mesh's own
+  `scale_A` of §5.2.3 step 1 (stored on the record as `mesh_scale_A`); the receiver-plane area of a bounded loop is
+  `½·n̂·Σ X_i × X_{i+1}` of its finite vertices (the shoelace area for the ground).
+- **[decision, implementation] (M5, pre-M4 worktree) Receivers.** M5 was built before M4 was merged: the fallback's
+  "`obj["clipped"][r] = None` for every receiver" is `obj["ground_mesh"] = None` here (M4 makes `ground_mesh` the alias of
+  `clipped[receivers[0].id]` and extends the rule to every receiver); the per-face `clip_polygon_bounds` of a bounded
+  receiver and the "fallback mesh on a bounded receiver" test of §5.2.11 need M4's `shadow.clip_polygon_bounds` and are
+  added at the M4 / M5 merge. The four `MESH_*` codes sit at the end of `WARNING_CODES` in the M5 branch; the merge keeps
+  the §5.0.5 order (after `RECEIVER_UNLIT`). `MESH_RAYS_CAPPED` is evaluated per shadow record, i.e. per (object, light,
+  receiver) as §5.2.4 states (§5.0.5's "(object, light)" is the single-receiver reading).
+- **[decision, implementation] (M5) API details.** `preprocess_mesh(data, scale, weld_tolerance, smooth_angle_deg,
+  object_id="")` takes the object id of its `MESH_*` warnings as an extra keyword (the positional signature is the
+  contract's). Every object record carries `fallback` / `prep_warnings` / `mesh["edge_smooth"]` (primitives: `False`, `[]`,
+  all False); mesh records add `triangles`, `smooth_groups` and `mesh_scale_A`, and their edge templates carry the
+  camera-free `smooth` key. Stage-A shadow records carry `ray_vertices` (a record without it, e.g. an inactive light's empty
+  record, draws every row). Validation rejects booleans and floats as face indices / smoothing groups. Until the three v5
+  mesh cases are added, `test_set_covers_the_required_sources` requires every kind except `mesh` (a tripwire that fails as
+  soon as a mesh case exists).
+- **[decision, implementation] (M5) Vertex field paths.** A vertex that is not a list of 3 numbers is reported at
+  `objects[i].data.vertices[k]` as the §5.2.1 row says; a non-finite or non-numeric component is reported one level
+  deeper, at `objects[i].data.vertices[k][c]`, the `_vector` convention every other vector of §2.0 already follows
+  (`transform.position[c]`, ...).
+- **[decision, implementation] (M5) Fallback `VERTEX_NOT_BELOW_LIGHT`.** In the per-face fallback of §5.2.5 the "some
+  silhouette vertex `w_S ≤ tol`" test of §2.3 reads "some vertex of a face that is **not parallel** to the light" (exactly
+  the vertices that can enter a per-face loop; faces with `parallel` are skipped). A vertex used only by light-parallel
+  faces never reaches a loop and does not raise the warning. `vertex_ids` / `keep` are unchanged (every kept-face vertex).
+- **[decision, implementation] (M5) Coplanar merge after a winding fix.** The merge of step 6 reads each face's edges by
+  position, so when step 5 flipped any face it runs on `build_adjacency` of the **oriented** faces (the undirected edge set
+  and its numbering are unchanged by flips; only `face_edge_at` / `edge_dirs` differ). A direct `preprocess_mesh` call
+  whose faces are all degenerate raises `ValueError("no usable face ...")` (unreachable on a validated scene).
+- **[decision, implementation] (M5) Shared helpers.** `preprocess_mesh(..., return_scale=False)`: with `return_scale=True`
+  the contract's 5-tuple gains a sixth item, the step-1 `scale_A`, which `primitives.prepared_mesh` stores as
+  `mesh_scale_A` instead of recomputing it. The §5.2.1 usable-face guard is `meshprep.has_usable_face(vertices, faces,
+  scale, weld_tolerance)` (steps 2–3 on `scale · vertices`), so `scene.py` keeps no numpy import. The §5.2.4 ray
+  selection reuses the edge-silhouette mask the shadow record already computed (receiver-clipped or not).
+- **[decision, implementation] (M5 part 2) Unreadable mesh files are `OSError`s.** §5.2.1 lists a missing / unreadable
+  file among the loader errors re-raised as `SceneError(objects[i].path)`, §5.0.2 (the later, unified rule shared with
+  M8) says an unreadable file is an `OSError` (CLI exit 1). §5.0.2 is followed: `expand_mesh_object` re-raises the
+  `OSError` of the same class with the message `objects[i].path: <reason>`, so the field is still named; parse errors,
+  unsupported features and empty selections are `SceneError(objects[i].path, "<loader field>: <message>")` (OBJ loader
+  fields are `line N`, glTF loader fields the glTF JSON path), a failed `node` selection `SceneError(objects[i].node)`.
+- **[decision, implementation] (M5 part 2) Two-light glTF imports before M6.** This branch predates M6, so
+  `validate_scene` still applies the v1 "exactly one light" row: `castplane import` of a file with ≥ 2 lights emits
+  every light as §5.2.8 says, but its validation check fails with `lights` (exit 2, nothing written) until M6 is merged;
+  `--light NAME` imports one light. The re-load tests branch on `validate_scene` accepting two lights (they assert
+  the `lights` failure before M6 and the two re-loaded lights after it), so they need no edit at the M6 merge.
+- **[decision, implementation] (M5 part 2) glTF importer details.** (1) A node selection is a subtree (§5.2.1), so a
+  mesh node whose ancestor is already emitted as a mesh object is not emitted again (only the topmost mesh node of a
+  branch becomes an object; its object then holds the descendants' meshes) — otherwise the geometry would be imported
+  twice. A mesh node whose primitives are all points / lines is skipped. (2) A string `node` that matches no node name
+  but a mesh name selects the first node (traversal order) instantiating that mesh, that node alone. (3) `--node`
+  emits one mesh object for that selection (the given value; all digits = index); `--id` renames the object only when
+  the import yields exactly one object (else a usage `SceneError("--id")`). (4) Ids: empty names → `node<k>` /
+  `light<k>` with `k` the **node** index; `sun` is the id of the default light; object ids are de-duplicated against
+  the receiver id `ground` (and, with `--into`, against the scene's object and receiver ids; `castplane import`
+  applies this to every format, OBJ / STL / PLY included, and an explicit `--id` that collides is a usage
+  `SceneError("--id")` instead of being renamed); the reserved ids of §5.0.1 are applied
+  to objects as well (`hidden` → `hidden_object`, `core` → `core_object` when the output has ≥ 2 lights). (5) The
+  uniform scale `s` of an `extras.castplane` node is the mean column norm of its world matrix, taken as exactly 1 when
+  `|s − 1| ≤ 1e-12`, so an unscaled node keeps its parameters verbatim (a rotation's column norms are 1 ± 1 ulp).
+  (6) `meta.import_notes` is always written (an empty list when there is no note); with `--into` an existing `meta`
+  object is copied and gets the `import_notes` key. (7) `IMPORT_NOTE_CODES` is a dict code → default message (the
+  shape of `errors.WARNING_CODES`); M8 adds its `STEP_*` codes to it. (8) Reading: an accessor without `bufferView` is
+  zeros (glTF §3.6.2.1); `extensionsRequired` naming Draco, meshopt or mesh quantization is an error, other required
+  extensions (materials, textures) are ignored; strips use the glTF rule `(i, i+2, i+1)` for odd `i` (the same cyclic
+  triangle as "swapped"). The API adds `gltf.import_gltf_parts` (the pieces before the defaults, used by `--into`) next
+  to `import_gltf_scene`.
+- **[decision, implementation] (M5 part 2) `castplane import` details.** The validation check runs on the assembled
+  scene with the imported meshes' `data` filled in and, with `--into`, the SCENE's own objects expanded relative to the
+  SCENE's directory; the written raw scene copies the SCENE's objects verbatim except that, when the output's
+  directory (the current directory for stdout) is not the SCENE's directory, a relative `path` of a SCENE object whose
+  type has an expander (`mesh`; M8: `step`) is rewritten as the POSIX path of the same file relative to the output's
+  directory, so that the written scene re-loads from where it is written (the check above resolves exactly these
+  files). A glTF that yields no object (only points / lines, or no mesh node) is `SceneError("meshes", "the file holds
+  no triangle")`, the message of the loader. `extras.castplane` parameters are validated as written, before the node
+  scale, with the field prefix `nodes[k].extras.castplane` (so a bad size reads `nodes[0].extras.castplane.size[1]`).
+  OBJ files are read as `utf-8-sig` (a leading byte-order mark is skipped). Within one `expand_scene` call a
+  trimesh-read file (STL / PLY) is read once like OBJ / glTF files (it takes no `node`, so its raw mesh is cached and
+  deep-copied per object). `castplane/__init__.py` imports `io` so that `castplane.io` is reachable after a plain
+  `import castplane` (§5.0.7); `io` is not in `castplane.__all__` (a star import would shadow the stdlib `io`). An OBJ selection (`node`) drops the unused
+  vertices (file order kept); a `.step` / `.stp` FILE is a usage `SceneError` until M8 registers its loader. Conformance:
+  the three mesh cases were generated on this pre-M4 branch with `--case`, so their CHANGELOG entry is numbered v4
+  here and carries a note that it becomes the M5 v5 entry at the merge (§5.0.8 rule 1).
+- **[decision, implementation] (M5 part 2) `tests/test_property.py`.** `test_vertices_above_the_light_only_warn`
+  asserted "some vertex below and some above the light ⇒ an unbounded outline" over the whole scene; hypothesis (which
+  mines constants from the imported modules, so the new `castplane/io` modules changed its draws) generated two
+  separate boxes, one wholly below and one wholly above the light, for which no outline is unbounded. The predicate is
+  now evaluated per object (one object straddling the light height), which is what the spec §5.7 row 4 statement means.
+- **[decision, implementation] (M4 / M5 merge) What the rebase onto v4 completed.** This supersedes the "pre-M4
+  worktree" note above. (1) `pipeline._clip_object` returns `None` for a fallback mesh, so `obj["clipped"][r] = None` for
+  every receiver `r` (and `ground_mesh = None`, its alias for `receivers[0]`), on both the unbounded-ground path and the
+  bounded-default path; `clip_mesh_to_plane` is never called on a fallback mesh. (2) On a bounded receiver
+  `_bounded_object_record` hands a fallback object to `_fallback_shadow_record(obj, ol, lt, rcv["pi"], tol, rid,
+  rcv=rcv)`: every non-parallel face loop is shadowed with the receiver frame (`shadow_loop(..., frame, F)`) and cut by
+  `clip_polygon_bounds`, then the `< 3` vertices / `|area| ≤ tol·scale_A` drop rule of §5.2.5 is applied to the clipped
+  loop; names carry the receiver suffix (`<obj>.v<k>.shadow.<light>.<r>`, `.foot.<r>`); receiver-plane crossings keep the
+  undirected-edge key of §5.2.5, and every bounds-clip row (crossing or anchor) is a crossing point of its own
+  `<obj>.s<k>.<light>.<r>`, exactly as `_loop_entries` names them for the manifold path; `VERTEX_NOT_BELOW_LIGHT` is not
+  emitted (unbounded ground only, §5.1.9) and the record carries M4's `ray_keep` (irrelevant: `ray_vertices` is all
+  False). `rcv=None` is the unchanged v2 ground path. (3) The manifold mesh path on a bounded receiver
+  (`_bounded_object_record` → `_caster_record`) gets the §5.2.4 `ray_vertices` from `_mesh_ray_vertices` on the loop
+  mesh actually used (receiver-clipped or not) and `MESH_RAYS_CAPPED` per (object, light, receiver); `_project_shadows`
+  ANDs both masks (`ok &= ray_keep`, then `ok &= ray_vertices`). (4) `shadow_geometry` merges `prep_warnings` before
+  the bounded-default branch, so the `MESH_*` warnings are emitted on every receiver configuration. (5) The four
+  `MESH_*` codes now follow `RECEIVER_UNLIT` (the §5.0.5 order); the CLI `_run` keeps both changes
+  (`load_expanded_scene` + notes, and the `hidden_lines` parameter). (6) Tests: `tests/test_mesh_pipeline.py` adds the
+  §5.2.11 "fallback mesh on a bounded receiver" test (the §5.1.11 wall scene and a bounded-floor variant with the crate
+  as an open-bottom box: all `clipped` entries `None`, every loop vertex on the plate inside its bounds, ray-cast IoU ≥
+  0.99 on each plate — measured 1.0 — and no rays / checks for the crate) and the manifold split-box crate on the same
+  two receiver configurations, byte-identical to the parametric crate after deleting the two mesh keys. With hidden
+  lines **on**, the mesh crate's runs may differ from the parametric crate's by one bisection step (measured
+  `s = 0.66245` vs `0.66255` on one edge of the bounded-floor variant): the occluder of a mesh is its triangle fan
+  (§5.2.7), the box's is the exact box, and a sample grazing a box edge can fall on either side of the `1 − eps` test;
+  this is inside the conformance runs rule (1e-3 in `s`) and is not asserted byte-for-byte. (7) Conformance: the three
+  mesh cases were regenerated on the merged branch (they now carry the M4 keys) and the CHANGELOG entry is the one M5
+  milestone entry **v5** (0 existing files changed, 3 added; 43 v4 cases with zero drift), §5.0.8 rule 1.
+
 ### 5.3 M6 — multiple lights (amendment to §2.0, §2.3, §2.5–2.10, §3, §3.1, §4)
 
 This section extends the contract to `lights` of any length `N ≥ 1`. Everything of §2–§4 stays in force; the rules

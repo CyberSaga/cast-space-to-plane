@@ -1,0 +1,32 @@
+{
+  "description": "M5 mesh import: a house read from meshes/house.obj (box body + gable roof, 7 faces incl. two pentagons) next to a cylinder, under a point lamp; render with 'castplane render examples/mesh_demo.json -o out' (the path is relative to this file)",
+  "version": "0.1",
+  "units": "m",
+  "up": "z",
+  "objects": [
+    {"id": "house", "type": "mesh", "path": "meshes/house.obj",
+     "transform": {"position": [0.0, 0.0, 0.0], "rotation_deg": [0, 0, -25]}},
+    {"id": "tank", "type": "cylinder", "radius": 0.25, "height": 0.9,
+     "transform": {"position": [1.4, 0.6, 0.0]}}
+  ],
+  "lights": [
+    {"id": "lamp", "type": "point", "position": [-1.6, -1.2, 3.2]}
+  ],
+  "receivers": [
+    {"id": "ground", "type": "plane", "normal": [0, 0, 1], "offset": 0.0}
+  ],
+  "camera": {
+    "position": [2.6, -5.4, 2.3],
+    "target": [0.3, 0.2, 0.55],
+    "roll_deg": 0,
+    "focal_length_mm": 35,
+    "frame_mm": [36, 24],
+    "shift_mm": [0.0, 0.0],
+    "near_m": 0.05
+  },
+  "output": {
+    "canvas_mm": [273, 182],
+    "layers": ["horizon", "objects", "form_shadow", "cast_shadow", "construction", "labels"],
+    "png_dpi": 150
+  }
+}

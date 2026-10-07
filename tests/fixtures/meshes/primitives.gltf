@@ -1,0 +1,286 @@
+{
+ "accessors": [
+  {
+   "bufferView": 0,
+   "componentType": 5126,
+   "count": 4,
+   "max": [
+    1.0,
+    0.0,
+    0.0
+   ],
+   "min": [
+    0.0,
+    0.0,
+    -1.0
+   ],
+   "type": "VEC3"
+  },
+  {
+   "bufferView": 0,
+   "byteOffset": 12,
+   "componentType": 5126,
+   "count": 4,
+   "type": "VEC3"
+  },
+  {
+   "bufferView": 1,
+   "componentType": 5125,
+   "count": 6,
+   "type": "SCALAR"
+  },
+  {
+   "bufferView": 2,
+   "componentType": 5121,
+   "count": 6,
+   "type": "SCALAR"
+  },
+  {
+   "bufferView": 3,
+   "componentType": 5126,
+   "count": 4,
+   "max": [
+    1.0,
+    0.0,
+    0.0
+   ],
+   "min": [
+    0.0,
+    0.0,
+    -1.0
+   ],
+   "type": "VEC3"
+  },
+  {
+   "bufferView": 4,
+   "componentType": 5126,
+   "count": 6,
+   "max": [
+    1.0,
+    0.0,
+    0.0
+   ],
+   "min": [
+    0.0,
+    0.0,
+    -1.0
+   ],
+   "type": "VEC3"
+  },
+  {
+   "bufferView": 5,
+   "componentType": 5126,
+   "count": 4,
+   "max": [
+    1.0,
+    0.0,
+    0.0
+   ],
+   "min": [
+    0.0,
+    0.0,
+    -1.0
+   ],
+   "type": "VEC3"
+  },
+  {
+   "bufferView": 6,
+   "componentType": 5126,
+   "count": 6,
+   "max": [
+    1.0,
+    0.0,
+    0.0
+   ],
+   "min": [
+    0.0,
+    0.0,
+    -1.0
+   ],
+   "type": "VEC3"
+  },
+  {
+   "bufferView": 7,
+   "componentType": 5123,
+   "count": 4,
+   "type": "SCALAR"
+  }
+ ],
+ "asset": {
+  "generator": "castplane tools/make_mesh_fixtures.py",
+  "version": "2.0"
+ },
+ "bufferViews": [
+  {
+   "buffer": 0,
+   "byteLength": 96,
+   "byteOffset": 8,
+   "byteStride": 24
+  },
+  {
+   "buffer": 0,
+   "byteLength": 24,
+   "byteOffset": 104
+  },
+  {
+   "buffer": 0,
+   "byteLength": 6,
+   "byteOffset": 128
+  },
+  {
+   "buffer": 0,
+   "byteLength": 48,
+   "byteOffset": 136
+  },
+  {
+   "buffer": 0,
+   "byteLength": 72,
+   "byteOffset": 184
+  },
+  {
+   "buffer": 0,
+   "byteLength": 48,
+   "byteOffset": 256
+  },
+  {
+   "buffer": 0,
+   "byteLength": 72,
+   "byteOffset": 304
+  },
+  {
+   "buffer": 0,
+   "byteLength": 8,
+   "byteOffset": 376
+  }
+ ],
+ "buffers": [
+  {
+   "byteLength": 384,
+   "uri": "data:application/octet-stream;base64,AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAACAPwAAAAAAAIA/AAAAAAAAAAAAAAAAAACAPwAAAAAAAAAAAAAAAAAAgL8AAAAAAACAPwAAAAAAAIA/AAAAAAAAgL8AAAAAAACAPwAAAAAAAAAAAQAAAAMAAAAAAAAAAwAAAAIAAAAAAQMAAwIAAAAAAAAAAAAAAAAAAAAAgD8AAAAAAAAAAAAAAAAAAAAAAACAvwAAgD8AAAAAAACAvwAAAAAAAAAAAAAAAAAAgD8AAAAAAAAAAAAAgD8AAAAAAACAvwAAAAAAAAAAAAAAAAAAgD8AAAAAAACAvwAAAAAAAAAAAACAvwAAAAAAAAAAAAAAAAAAAAAAAAAAAACAvwAAgD8AAAAAAAAAAAAAgD8AAAAAAACAvwAAAD8AAAAAAAAAvwAAAAAAAAAAAAAAAAAAgD8AAAAAAAAAAAAAgD8AAAAAAACAvwAAAAAAAAAAAACAvwAAAAAAAAAAAAAAAAAAAQABAAMA"
+  }
+ ],
+ "meshes": [
+  {
+   "name": "strided",
+   "primitives": [
+    {
+     "attributes": {
+      "NORMAL": 1,
+      "POSITION": 0
+     },
+     "indices": 2
+    }
+   ]
+  },
+  {
+   "name": "u8",
+   "primitives": [
+    {
+     "attributes": {
+      "POSITION": 4
+     },
+     "indices": 3,
+     "mode": 4
+    }
+   ]
+  },
+  {
+   "name": "soup",
+   "primitives": [
+    {
+     "attributes": {
+      "POSITION": 5
+     }
+    }
+   ]
+  },
+  {
+   "name": "strip",
+   "primitives": [
+    {
+     "attributes": {
+      "POSITION": 6
+     },
+     "mode": 5
+    }
+   ]
+  },
+  {
+   "name": "fan",
+   "primitives": [
+    {
+     "attributes": {
+      "POSITION": 7
+     },
+     "mode": 6
+    },
+    {
+     "attributes": {
+      "POSITION": 4
+     },
+     "indices": 8,
+     "mode": 1
+    }
+   ]
+  }
+ ],
+ "nodes": [
+  {
+   "mesh": 0,
+   "name": "Strided",
+   "translation": [
+    0.0,
+    0.0,
+    -0.0
+   ]
+  },
+  {
+   "mesh": 1,
+   "name": "U8",
+   "translation": [
+    0.0,
+    0.0,
+    -2.0
+   ]
+  },
+  {
+   "mesh": 2,
+   "name": "Soup",
+   "translation": [
+    0.0,
+    0.0,
+    -4.0
+   ]
+  },
+  {
+   "mesh": 3,
+   "name": "Strip",
+   "translation": [
+    0.0,
+    0.0,
+    -6.0
+   ]
+  },
+  {
+   "mesh": 4,
+   "name": "Fan",
+   "translation": [
+    0.0,
+    0.0,
+    -8.0
+   ]
+  }
+ ],
+ "scene": 0,
+ "scenes": [
+  {
+   "nodes": [
+    0,
+    1,
+    2,
+    3,
+    4
+   ]
+  }
+ ]
+}

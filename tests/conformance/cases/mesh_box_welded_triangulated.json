@@ -1,0 +1,251 @@
+{
+ "description": "M5 acceptance 1 (contract 5.2.12): analytic_unit_box_point_light_overhead with the box as an inline mesh of 24 split vertices (the eight corners, then the same eight twice) and 12 triangles on the duplicates; welding maps 8..23 -> 0..7, the coplanar merge restores the six quads, so the document equals the parametric box except for the mesh-only edge keys smooth / camera_silhouette",
+ "version": "0.1",
+ "units": "m",
+ "up": "z",
+ "objects": [
+  {
+   "id": "cube",
+   "type": "mesh",
+   "data": {
+    "vertices": [
+     [
+      -0.5,
+      -0.5,
+      0.0
+     ],
+     [
+      0.5,
+      -0.5,
+      0.0
+     ],
+     [
+      0.5,
+      0.5,
+      0.0
+     ],
+     [
+      -0.5,
+      0.5,
+      0.0
+     ],
+     [
+      -0.5,
+      -0.5,
+      1.0
+     ],
+     [
+      0.5,
+      -0.5,
+      1.0
+     ],
+     [
+      0.5,
+      0.5,
+      1.0
+     ],
+     [
+      -0.5,
+      0.5,
+      1.0
+     ],
+     [
+      -0.5,
+      -0.5,
+      0.0
+     ],
+     [
+      0.5,
+      -0.5,
+      0.0
+     ],
+     [
+      0.5,
+      0.5,
+      0.0
+     ],
+     [
+      -0.5,
+      0.5,
+      0.0
+     ],
+     [
+      -0.5,
+      -0.5,
+      1.0
+     ],
+     [
+      0.5,
+      -0.5,
+      1.0
+     ],
+     [
+      0.5,
+      0.5,
+      1.0
+     ],
+     [
+      -0.5,
+      0.5,
+      1.0
+     ],
+     [
+      -0.5,
+      -0.5,
+      0.0
+     ],
+     [
+      0.5,
+      -0.5,
+      0.0
+     ],
+     [
+      0.5,
+      0.5,
+      0.0
+     ],
+     [
+      -0.5,
+      0.5,
+      0.0
+     ],
+     [
+      -0.5,
+      -0.5,
+      1.0
+     ],
+     [
+      0.5,
+      -0.5,
+      1.0
+     ],
+     [
+      0.5,
+      0.5,
+      1.0
+     ],
+     [
+      -0.5,
+      0.5,
+      1.0
+     ]
+    ],
+    "faces": [
+     [
+      8,
+      11,
+      10
+     ],
+     [
+      8,
+      10,
+      9
+     ],
+     [
+      12,
+      13,
+      14
+     ],
+     [
+      12,
+      14,
+      15
+     ],
+     [
+      16,
+      17,
+      21
+     ],
+     [
+      16,
+      21,
+      20
+     ],
+     [
+      17,
+      18,
+      22
+     ],
+     [
+      17,
+      22,
+      21
+     ],
+     [
+      18,
+      19,
+      23
+     ],
+     [
+      18,
+      23,
+      22
+     ],
+     [
+      19,
+      16,
+      20
+     ],
+     [
+      19,
+      20,
+      23
+     ]
+    ]
+   }
+  }
+ ],
+ "lights": [
+  {
+   "id": "lamp",
+   "type": "point",
+   "position": [
+    0.0,
+    0.0,
+    3.0
+   ]
+  }
+ ],
+ "receivers": [
+  {
+   "id": "ground",
+   "type": "plane",
+   "normal": [
+    0,
+    0,
+    1
+   ],
+   "offset": 0.0
+  }
+ ],
+ "camera": {
+  "roll_deg": 0,
+  "focal_length_mm": 35,
+  "frame_mm": [
+   36,
+   24
+  ],
+  "shift_mm": [
+   0.0,
+   0.0
+  ],
+  "near_m": 0.05,
+  "position": [
+   4.0,
+   -8.0,
+   5.0
+  ],
+  "target": [
+   0.0,
+   0.0,
+   0.5
+  ]
+ },
+ "output": {
+  "canvas_mm": [
+   360,
+   240
+  ],
+  "png_dpi": 150
+ }
+}

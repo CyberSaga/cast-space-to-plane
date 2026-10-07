@@ -105,6 +105,8 @@ def local_extreme_points(obj: dict, n_circle: int = 64) -> np.ndarray:
         poly = np.asarray(obj["polygon"], dtype=np.float64)
         h = obj["height"]
         return np.vstack([np.c_[poly, np.zeros(len(poly))], np.c_[poly, np.full(len(poly), h)]])
+    if kind == "mesh":   # M5: the scaled vertices (Z-up scenes only; make_mesh_scene writes up "z")
+        return float(obj.get("scale", 1.0)) * np.asarray(obj["data"]["vertices"], dtype=np.float64).reshape(-1, 3)
     th = np.linspace(0.0, 2.0 * math.pi, n_circle, endpoint=False)
     r = obj["radius"]
     rim = np.c_[r * np.cos(th), r * np.sin(th), np.zeros(n_circle)]
@@ -137,7 +139,7 @@ def lowest_z(obj: dict) -> float:
     kind = obj["type"]
     R = rotation_matrix(obj["transform"]["rotation_deg"])
     pos = np.asarray(obj["transform"]["position"], dtype=np.float64)
-    if kind in ("box", "prism"):
+    if kind in ("box", "prism", "mesh"):
         return float(np.min(world_extreme_points(obj)[:, 2]))
     a = R @ np.array([0.0, 0.0, 1.0])
     r = float(obj["radius"])
@@ -156,7 +158,7 @@ def lowest_z(obj: dict) -> float:
 def highest_z(obj: dict) -> float:
     """Exact highest world ``z`` of the primitive (mirror of :func:`lowest_z`)."""
     kind = obj["type"]
-    if kind in ("box", "prism"):
+    if kind in ("box", "prism", "mesh"):
         return float(np.max(world_extreme_points(obj)[:, 2]))
     R = rotation_matrix(obj["transform"]["rotation_deg"])
     pos = np.asarray(obj["transform"]["position"], dtype=np.float64)
@@ -678,3 +680,108 @@ def sample_grid(scene: dict, light: dict, n: int = 256, margin: float = 1.0):
     the raycast/raster comparison.  Points not below a point light are ignored."""
     lo, hi = shadow_window(scene, light, None, margin)
     return grid(lo, hi, n)
+
+
+# --------------------------------------------------------------------------- M5: mesh scenes
+def _ear_clip(poly) -> list:
+    """Triangles ``(i, j, k)`` of a simple counter-clockwise polygon by ear clipping (lowest-index
+    ear first; deterministic).  The ray-cast reference fans every face, so concave caps are written
+    as triangles (contract §5.2.10: concave OBJ polygons are a documented limitation of the fan)."""
+    P = [tuple(map(float, p)) for p in poly]
+    idx = list(range(len(P)))
+
+    def cross(o, a, b):
+        return (a[0] - o[0]) * (b[1] - o[1]) - (a[1] - o[1]) * (b[0] - o[0])
+
+    tris = []
+    while len(idx) > 3:
+        n = len(idx)
+        for k in range(n):
+            i, j, m = idx[k - 1], idx[k], idx[(k + 1) % n]
+            if cross(P[i], P[j], P[m]) <= 0.0:
+                continue
+            if any(cross(P[i], P[j], P[q]) >= 0 and cross(P[j], P[m], P[q]) >= 0 and cross(P[m], P[i], P[q]) >= 0
+                   for q in idx if q not in (i, j, m)):
+                continue
+            tris.append((i, j, m))
+            del idx[k]
+            break
+        else:  # pragma: no cover - a simple polygon always has an ear
+            raise ValueError("no ear found")
+    tris.append(tuple(idx))
+    return tris
+
+
+def primitive_mesh_data(obj: dict) -> tuple[list, list]:
+    """Local ``(vertices, faces)`` of a box or prism (spec §4 local conventions), outward CCW faces:
+    quads for the sides, the caps of a prism ear-clipped into triangles, a box's caps as quads."""
+    if obj["type"] == "box":
+        sx, sy, sz = obj["size"]
+        ring = [(-sx / 2, -sy / 2), (sx / 2, -sy / 2), (sx / 2, sy / 2), (-sx / 2, sy / 2)]
+        h = sz
+    else:
+        ring = [tuple(p) for p in obj["polygon"]]
+        if polygon_area(ring) < 0:
+            ring = ring[::-1]
+        h = obj["height"]
+    n = len(ring)
+    V = [[x, y, 0.0] for x, y in ring] + [[x, y, float(h)] for x, y in ring]
+    if obj["type"] == "box":
+        caps = [[0, 3, 2, 1], [4, 5, 6, 7]]
+    else:
+        tris = _ear_clip(ring)
+        caps = [[a, c, b] for a, b, c in tris] + [[n + a, n + b, n + c] for a, b, c in tris]
+    sides = [[k, (k + 1) % n, n + (k + 1) % n, n + k] for k in range(n)]
+    return V, caps + sides
+
+
+def to_mesh_object(rng: np.random.Generator, obj: dict, open_bottom: bool = False) -> dict:
+    """The same solid as a ``mesh`` object with inline data: quads randomly split into triangles,
+    vertices randomly split per face (seams for the weld), face order, vertex order and face start
+    vertices shuffled.  ``open_bottom`` drops the bottom faces (a non-manifold fallback mesh)."""
+    V, F = primitive_mesh_data(obj)
+    if open_bottom:
+        F = [f for f in F if not all(V[v][2] == 0.0 for v in f)]
+    faces = []
+    for f in F:
+        if len(f) == 4 and rng.uniform() < 0.5:
+            r = int(rng.integers(2))
+            a, b, c, d = f[r:] + f[:r]
+            faces += [[a, b, c], [a, c, d]]
+        else:
+            faces.append(list(f))
+    verts = [list(v) for v in V]
+    out_faces = []
+    for f in faces:
+        g = []
+        for v in f:
+            if rng.uniform() < 0.4:           # a split (duplicated) vertex
+                verts.append(list(V[v]))
+                g.append(len(verts) - 1)
+            else:
+                g.append(v)
+        out_faces.append(g)
+    perm = rng.permutation(len(verts))
+    inv = np.argsort(perm)
+    verts = [verts[int(k)] for k in perm]
+    out_faces = [[int(inv[v]) for v in f] for f in out_faces]
+    out_faces = [out_faces[int(k)] for k in rng.permutation(len(out_faces))]
+    out_faces = [f[r:] + f[:r] for f, r in zip(out_faces, (int(rng.integers(len(f))) for f in out_faces))]
+    return {"id": obj["id"], "type": "mesh", "data": {"vertices": verts, "faces": out_faces},
+            "transform": obj["transform"]}
+
+
+def make_mesh_scene(seed: int, n_objects: int | None = None, light_type: str | None = None,
+                    allow_tilt: bool = True, open_bottom_rate: float = 0.25) -> dict:
+    """Seeded scene of 1–6 ``mesh`` objects (boxes and possibly concave prisms written as inline
+    meshes with seams, mixed triangles / quads and shuffled orders; some with an open bottom, i.e. a
+    non-manifold fallback mesh) under one random light (contract §5.2.11: ray-cast IoU on seeded
+    mesh scenes).  Uses its own RNG stream; :func:`make_scene` is untouched."""
+    rng = np.random.default_rng([int(seed), 5])
+    if n_objects is None:
+        n_objects = int(rng.integers(1, 7))
+    objects = [random_object(rng, i, ("box", "prism")[int(rng.integers(2))], allow_tilt) for i in range(n_objects)]
+    light = random_light(rng, objects, light_type)
+    camera = random_camera(rng, objects)
+    meshes = [to_mesh_object(rng, o, open_bottom=bool(rng.uniform() < open_bottom_rate)) for o in objects]
+    return assemble_scene(meshes, light, camera)

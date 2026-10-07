@@ -257,6 +257,7 @@ def test_set_covers_the_required_sources():
         forms.add("target" if "target" in scene["camera"] else "yaw_pitch")
         codes.update(w["code"] for w in load_expected(name)["warnings"])
     assert set(_DEGENERATE_ROW_CODES) <= codes, sorted(set(_DEGENERATE_ROW_CODES) - codes)
+    # every object kind incl. ``mesh`` (the three M5 cases, contract §5.0.8, §5.2.11)
     assert kinds == set(OBJECT_TYPES) and lights == set(LIGHT_TYPES) and forms == {"target", "yaw_pitch"}
 
 
@@ -692,6 +693,32 @@ def test_m4_cases_cover_the_required_sources():
         assert any(r["visibility"] == "partial" and r["runs"] for r in records), n
     for n in set(M4_CASES) - {"wall_and_ground_hidden", "hidden_lines_curved_unbounded", "hidden_lines_vp_in_canvas"}:
         assert load_expected(n)["hidden_lines"] is False, n
+
+
+# --------------------------------------------------------------------------- M5: mesh cases (contract §5.2.9, §5.2.11)
+def test_cases_are_post_expansion_scenes_with_inline_mesh_data():
+    """Conformance cases are post-expansion scenes (contract §5.0.2): a ``mesh`` object carries its
+    geometry inline as ``data`` and never a ``path``; loader-only types (``step``) never appear.  The
+    TypeScript port reads ``cases/`` without any loader."""
+    seen = 0
+    for name in case_names():
+        raw = json.loads((CASES / f"{name}.json").read_text(encoding="utf-8"))
+        for i, o in enumerate(raw["objects"]):
+            assert o.get("type") != "step", f"{name}: objects[{i}] is a loader-only step object"
+            if o.get("type") == "mesh":
+                seen += 1
+                assert "data" in o and "path" not in o and "node" not in o, f"{name}: objects[{i}] must use inline data"
+    assert seen >= 3
+
+
+def test_welded_mesh_box_expected_equals_the_parametric_box_but_for_the_mesh_keys():
+    """contract §5.2.12: the expected file of ``mesh_box_welded_triangulated`` equals
+    ``analytic_unit_box_point_light_overhead`` exactly except for the two mesh-only keys on its 12 edges."""
+    mesh = load_expected("mesh_box_welded_triangulated")
+    assert len(mesh["edges"]) == 12 and all(e.pop("smooth") is False for e in mesh["edges"])
+    for e in mesh["edges"]:
+        e.pop("camera_silhouette")
+    assert mesh == load_expected("analytic_unit_box_point_light_overhead")
 
 
 # --------------------------------------------------------------------------- M6: multi-light documents

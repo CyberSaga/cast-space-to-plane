@@ -235,6 +235,47 @@ HITTERS = {
 }
 
 
+# --------------------------------------------------------------------------- M5: mesh objects
+def mesh_triangles(obj: dict) -> np.ndarray:
+    """``(t, 3, 3)`` local triangles of a ``mesh`` object (contract §5.2.7): the fan triangulation
+    ``(f0, f_k, f_{k+1})`` of the **raw** ``data.faces`` (no weld, no merge, no orientation fix) on
+    ``scale · vertices``; an ``up: "y"`` object (raw, unvalidated scene) is mapped ``(x, y, z) ->
+    (x, -z, y)`` here (the validated form is already Z-up and says ``up: "z"``)."""
+    data = obj["data"]
+    V = np.asarray(data["vertices"], dtype=np.float64).reshape(-1, 3)
+    if obj.get("up", "z") == "y":
+        V = np.stack([V[:, 0], -V[:, 2], V[:, 1]], axis=1)
+    V = V * float(obj.get("scale", 1.0))
+    tris = [(f[0], f[k], f[k + 1]) for f in data["faces"] for k in range(1, len(f) - 1)]
+    return V[np.asarray(tris, dtype=np.int64).reshape(-1, 3)]
+
+
+def hit_mesh(obj: dict, o: np.ndarray, d: np.ndarray, tmax) -> np.ndarray:
+    """Möller–Trumbore against every fan triangle of the raw faces (barycentric bounds inclusive by
+    ``GEOM_EPS``, ``T_EPS < t < tmax``): "the segment meets any face", which is the union semantics of
+    the non-manifold fallback and the solid semantics of a closed mesh alike (contract §5.2.7).  A
+    face in the receiver plane (``t = 0``) is invisible here by the ``T_EPS`` rule."""
+    T = mesh_triangles(obj)
+    hit = np.zeros(o.shape[0], dtype=bool)
+    for A, B, C in T:
+        e1, e2 = B - A, C - A
+        p = np.cross(d, e2[None, :])
+        det = p @ e1
+        ok = det != 0.0
+        inv = np.zeros_like(det)
+        np.divide(1.0, det, out=inv, where=ok)
+        s = o - A[None, :]
+        u = np.einsum("ij,ij->i", s, p) * inv
+        q = np.cross(s, e1[None, :])
+        v = (d * q).sum(axis=1) * inv
+        t = (q @ e2) * inv
+        hit |= (ok & (u >= -GEOM_EPS) & (v >= -GEOM_EPS) & (u + v <= 1.0 + GEOM_EPS) & _in_range(t, tmax))
+    return hit
+
+
+HITTERS["mesh"] = hit_mesh
+
+
 # --------------------------------------------------------------------------- scene level
 def rays_to_light(light: dict, origins: np.ndarray) -> tuple[np.ndarray, np.ndarray | float]:
     """Ray directions towards the light and the parameter upper bound (``1`` for a point
