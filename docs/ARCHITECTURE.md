@@ -3436,6 +3436,62 @@ and the hidden-run SVG groups (§5.1.8). Nothing an M4–M6 case needs lies beyo
   in scene order of `receivers[1:]`. The document's `per_receiver` is a plain object in the port, whose key order
   would put integer-like ids first (§5.4.2, §5.4.4 (8)); `svg.ts` therefore iterates in the order of
   `doc.receivers` (keys not listed there follow), which is the Python order for every document `render` produces.
+- **[implementation] (M7 phase 2, part 2) Hidden lines in the port: what lands, and the guard it removes.**
+  `src/hidden.ts` carries every public name of §5.1.6 under the Python names (`HLR_*`, `hlr_sample_count`,
+  `hlr_tol_mm`, `occluder` with the box / prism / cylinder / cone / sphere / plate / ground kinds and the generic
+  closed mesh `mesh_occluder` from `triangles` or `mesh.faces`, `first_hit` (one shared origin or one per ray) and
+  its scalar form `first_hit_ray`, `image_bounds`, `occluded`, `scene_occluders`, `classify_curve` / `classify_batch`,
+  `drawn_segments_4d` / `drawn_segment_4d` / `clip_polygon_4d`, `runs_straight` / `runs_conic`,
+  `classify_document(doc, A, B, cull = true)`), exported as the module namespace `hidden`. `compose` calls
+  `classify_document(doc, B.A, B)` when the effective switch is on, so the part-1 guard
+  (`SceneError("output.hidden_lines")`, the note "`hidden_lines: true` is rejected until the hidden-line part" above)
+  is gone; `examples/wall_and_ground.json` left `TODO_EXAMPLES` and the three hidden-line cases left `TODO_CASES`.
+  `write_svg` gains the three hidden layer builders of `svg.py` (hidden sub-groups first, `dashed` / `omit`, cast-shadow
+  fill paths `stroke="none"` with the `.outline` runs, `HIDDEN_STROKE`, `OUTLINE_STYLE`); a document without
+  `hidden_lines: true` takes the unchanged writer path. The web UI gets the phase-2 "Hidden lines" checkbox of §5.4.10
+  (initialised from `output.hidden_lines`, off during a drag as §5.4.11 allows; *Download scene* writes its state as
+  `output.hidden_lines`).
+- **[decision, implementation] (M7 phase 2, part 2) numpy batch semantics as per-row loops.** Every vectorised
+  expression of `hidden.py` is a loop over rows in the port with the operand order of the numpy text (left-to-right
+  sums for `@` / `einsum`, `np.fmin` / `np.fmax` NaN-ignoring, `np.max` / `np.min` NaN-propagating, the `where`
+  selections of `_quadratic_roots`, `_first_box`, `_disc`, `_first_prism`), so each row's floats are the per-row floats of
+  the batch. Two batch shapes are not reproduced because no result depends on them: the batched
+  `clip_segments_halfspace` keeps clipping a row that is already dropped (its values are "meaningless" by its own
+  docstring) — the port stops at the first drop; `_first_mesh`'s Möller–Trumbore blocks are a memory device — the
+  port loops over triangles. The rectangle steps of `drawn_segments_4d` / `clip_polygon_4d` decide on the projected
+  3-vectors with the same `dot3(x̃, row)` and interpolation as `camera.ts::clip_segment_rect_h` /
+  `clip_polygon_rect_h`, i.e. on the port's own drawn segment and polygon (the M4 note "The 4-D clip decides on the
+  drawn 3-vectors"): `ts/test/hidden.test.ts` checks the vertex counts on every non-mesh case and on the canvas-corner
+  scene.
+- **[implementation] (M7 phase 2, part 2) Multi-light documents.** `classify_document` ports the M6 pairing of
+  `_curved_pairs` (terminator entries keyed by `(object, light)` when the document has `constructions`), but the
+  multi-light SVG builders (`svg_multilight.layer_form_shadow` / `layer_cast_shadow` with `hidden_style`) belong to the
+  multi-light part: until then a multi-light document is written by the single-light builders in both the plain and
+  the hidden path, as in part 1 (the four `multilight_*` cases stay on `TODO_CASES`).
+- **[implementation] (M7 phase 2, part 2) Cross-implementation evidence.** `tools/compare_svg.py` reports 0 mismatches
+  and 0 boundary differences on the three hidden-line cases and `examples/wall_and_ground.json`; the explicit scene list
+  of the part-1 note becomes `python tools/compare_svg.py $(ls tests/conformance/cases/*.json | grep -v
+  'mesh_\|multilight_') examples/{basic,construction_demo,curved_demo,directional,three_point,wall_and_ground}.json`
+  (49 scenes: 0 / 0 / 0). The tool now renders scenes that share a file stem (the case and the example
+  `wall_and_ground`) into separate output directories: `render.mjs` names its outputs by the stem, so before, the
+  example's SVG overwrote the case's and the case was reported as a mismatch. The default run lists the three
+  `mesh_*` cases as `TS render failed` and the four `multilight_*` cases as mismatches until their parts land. A scratch differential (not committed: scenes built from the Python test builders) rendered
+  with the switch on every non-mesh, non-multi-light case (dashed and `omit`), the canvas-corner scene, 20
+  `random_scenes.make_scene` scenes, the 40 `tests/test_hidden.py::zbuffer_random_scene` scenes (with plates) and
+  `benchmarks/scenes/benchmark_100.json`: 148 of 150 documents agree under the v6 comparator (runs rule included) and
+  their SVGs are byte-identical (the benchmark scene with 1979 partial and 7302 hidden records included). The two
+  differences are not hidden-line geometry: (1) the canvas-corner scene's drawn ground-shadow polygon has 4 vertices in
+  Python and 6 in the port (stage B: the fourth rectangle functional of the corner vertex is a rounding-level value
+  whose sign differs between numpy's `X @ P.T` and the port's left-to-right `project`; each implementation's
+  `polygon_edges` agree with its own polygon, the two extra degenerate edges are clip edges, `"visible"`); (2)
+  `zbuffer_random_scene(28)` has a terminator ellipse with `ry ≈ 0.053 mm`, `rx ≈ 14.2 mm` whose `rx` differs by
+  ≈ 1e-4 mm with the switch **off** as well — `ellipse_params` on the identical normalised matrix gives `rx` 14.2012087
+  (numpy) vs 14.2012251 (port): `p r − q²` cancels to ≈ 1e-3 of its terms. Neither scene is in the conformance set;
+  both are ulp-amplifying by construction (§5.4.14 (f) would give such a case a `case_overrides` entry).
+- **[implementation] (M7 phase 2, part 2) Cost.** On the CI container (node 22.22.0) `render` of
+  `benchmark_100.json` takes ≈ 0.18 s with the switch off and ≈ 0.65 s with it on (Python reference ≈ 0.36 s / 1.15 s
+  on the same machine); informational only, like the Python `--hidden-lines` row (§5.1.6.6), and not part of the TS
+  benchmark gate (§5.4.9).
 
 ### 5.5 M8 — STEP import (spec §9 row "STEP", spec §10 M8) — a loader, outside the core
 

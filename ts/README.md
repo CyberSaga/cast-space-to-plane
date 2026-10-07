@@ -4,9 +4,9 @@ The TypeScript port of the castplane core (contract `docs/ARCHITECTURE.md` §5.4
 pipeline (stage A camera independent, stage B projection, stage C the spec §6.2 geometry document), the deterministic
 JSON writer and the spec §6.1 SVG writer. Python (`castplane/`) is the reference implementation; the port is accepted
 against the conformance set `tests/conformance/` (phase 1: 34/34 cases at set v3; phase 2, in progress at set v6:
-40 of 50 cases, the hidden-line, mesh and multi-light cases are listed as `todo` in `test/conformance.test.ts` until
-their part lands, contract §5.4.0 / §5.4.14; until then `render` rejects `mesh` objects and `hidden_lines: true` with a
-`SceneError` instead of writing an incomplete document). Zero runtime dependencies; the core under
+43 of 50 cases incl. the three hidden-line cases (`src/hidden.ts`, part 2); the mesh and multi-light cases are listed
+as `todo` in `test/conformance.test.ts` until their part lands, contract §5.4.0 / §5.4.14; until then `render` rejects
+`mesh` objects with a `SceneError` instead of writing an incomplete document). Zero runtime dependencies; the core under
 `src/` compiles with `types: []` and `lib: ["ES2022"]`, so it runs unchanged in node and in the browser.
 
 ## Build and test
@@ -27,7 +27,9 @@ read from the repository, plus the comparator self-tests), `geometry_json` (writ
 `analytic` (the spec §7.2 hand values), `camera`, `degenerate` (spec §5.7 rows), `scene` (validation rows),
 `numerics` (`pymod`, `pyimod`, `py_round`, Jacobi condition numbers, the `%` and neutrality grep rules), `errors`
 (`WARNING_CODES` equals `castplane/errors.py`), `mesh_shadow`, `receivers` (bounded receivers, the bounds clip and
-the `wall_and_ground` hand values of contract §5.1.11).
+the `wall_and_ground` hand values of contract §5.1.11), `hidden` (sampled hidden-line removal: occluders, the
+sampling / bisection rule, the drawn 4-D geometry, the `wall_and_ground_hidden` hand values, run-record invariants on
+every case with the switch on, the hidden-run SVG groups).
 
 ## API
 
@@ -37,10 +39,11 @@ import { load_scene, shadow_geometry, project_scene, compose, write_svg, dumps, 
 const scene = load_scene(json);              // validated, defaults filled (throws SceneError {field, detail})
 const A     = shadow_geometry(scene);         // stage A: never touches scene.camera; reuse it for every camera
 const B     = project_scene(scene, A, camera); // stage B: optional camera override (a spec §4 camera block)
-const doc   = compose(scene, B);              // stage C: the spec §6.2 document (read-only data)
-const svg   = write_svg(doc, layers);         // layered SVG string
+const doc   = compose(scene, B, hidden_lines); // stage C: the spec §6.2 document (read-only data); hidden_lines
+                                              // (null = scene.output.hidden_lines) runs hidden.classify_document
+const svg   = write_svg(doc, layers, hidden_style); // layered SVG string; hidden_style "dashed" | "omit"
 const text  = dumps(doc);                     // deterministic JSON (Python json.dumps(sort_keys, indent=1) byte format)
-const out   = render(scene, camera);          // {geometry: doc, svg}
+const out   = render(scene, camera, hidden_lines, hidden_style); // {geometry: doc, svg}
 ```
 
 Function names are the Python names (snake_case); see contract §5.4.2 for the module map and `docs/USAGE.md` §4 for the user guide (API, benchmark, web UI).

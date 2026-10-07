@@ -119,20 +119,37 @@ def main(argv: list[str] | None = None) -> int:
     if node is None or not (ROOT / "ts" / "build" / "src" / "pipeline.js").exists():
         print("node and a built port (npm run -w ts build) are required", file=sys.stderr)
         return 2
+    # render.mjs names its outputs by the file stem: scenes sharing a stem (tests/conformance/cases/wall_and_ground.json
+    # and examples/wall_and_ground.json) go to separate output directories, one node run per directory
+    batches: list[list[pathlib.Path]] = []
+    for path in scenes:
+        for batch in batches:
+            if all(p.stem != path.stem for p in batch):
+                batch.append(path)
+                break
+        else:
+            batches.append([path])
     with tempfile.TemporaryDirectory() as tmp:
-        run = subprocess.run([node, str(RENDER), *map(str, scenes), tmp], capture_output=True, text=True, check=False)
-        if run.returncode not in (0, 1):
-            print(run.stderr, file=sys.stderr)
-            return 2
+        outdir: dict[int, pathlib.Path] = {}
+        stderr = []
+        for k, batch in enumerate(batches):
+            out = pathlib.Path(tmp) / str(k)
+            run = subprocess.run([node, str(RENDER), *map(str, batch), str(out)], capture_output=True, text=True, check=False)
+            if run.returncode not in (0, 1):
+                print(run.stderr, file=sys.stderr)
+                return 2
+            stderr.append(run.stderr)
+            for path in batch:
+                outdir[id(path)] = out
         boundary, mismatch, failed = [], [], []
         for path in scenes:
-            error = pathlib.Path(tmp) / f"{path.stem}.error"
+            error = outdir[id(path)] / f"{path.stem}.error"
             if error.exists():
                 failed.append(f"{path.stem}: {error.read_text(encoding='utf-8').strip()}")
                 continue
-            svg_file = pathlib.Path(tmp) / f"{path.stem}.svg"
+            svg_file = outdir[id(path)] / f"{path.stem}.svg"
             if not svg_file.exists():
-                print(run.stderr, file=sys.stderr)
+                print("".join(stderr), file=sys.stderr)
                 return 2
             scene = load_scene(path)
             py = castplane.render(scene)["svg"]

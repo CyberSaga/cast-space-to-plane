@@ -658,11 +658,13 @@ import { load_scene, load_scene_text, shadow_geometry, project_scene, compose, w
 const scene = load_scene(JSON.parse(text));     // 或 load_scene_text(text)；驗證並補預設值，錯誤拋 SceneError
 const A     = shadow_geometry(scene);           // A 段：不讀 scene.camera；換相機時重複使用
 const B     = project_scene(scene, A, camera);  // B 段：camera 可省略（用場景相機）
-const doc   = compose(scene, B);                // C 段：規格 §6.2 文件（唯讀資料，與 A 共用串列）
-const svg   = write_svg(doc, layers);           // 圖層字串；layers 省略時六層全畫
+const doc   = compose(scene, B, hidden_lines);  // C 段：規格 §6.2 文件（唯讀資料，與 A 共用串列）；hidden_lines 省略時用場景的 output.hidden_lines
+const svg   = write_svg(doc, layers, hidden_style); // 圖層字串；layers 省略時六層全畫；hidden_style 為 "dashed"（預設）或 "omit"
 const json  = dumps(doc);                       // 與 Python geometry_json.dumps 逐位元組相同的格式
-const out   = render(scene, camera);            // {geometry: doc, svg}
+const out   = render(scene, camera, hidden_lines, hidden_style); // {geometry: doc, svg}
 ```
+
+取樣式消隱（合約 §5.1.6）由 `src/hidden.ts` 移植，公開名稱與 `castplane.hidden` 相同（`import { hidden } from "castplane"`：`occluder`、`first_hit`、`occluded`、`image_bounds`、`classify_curve`、`drawn_segments_4d`、`clip_polygon_4d`、`runs_straight`、`runs_conic`、`classify_document` 等）。
 
 與 Python 的差異：
 
@@ -709,11 +711,12 @@ vite + three.js（版本釘選：three 0.186.1、vite 8.3.3）。`vite build` �
 - **SVG 疊圖**：
   - 每個動畫影格最多重算一次（最新的相機為準）：沿用快取的 A 段，執行 `project_scene` → `compose` → `write_svg`；
   - 圖層勾選框以 CSS 隱藏圖層；「3D view」勾選框隱藏 WebGL 畫面；
+  - 「Hidden lines」勾選框（第二階段）：初值取場景的 `output.hidden_lines`，以 `hidden_lines` 傳給 `compose`，SVG 用場景的 `output.hidden_style`；拖曳中的影格不做消隱（合約 §5.4.11 允許），放開後的靜止影格重算；
   - SVG 超過 250 000 字元的場景（例如 `benchmark_100.json`）在拖曳時改用 `<img src="blob:…">` 顯示同一份寫出器文字，放開滑鼠後恢復 DOM 疊圖。
 - **下載**：
   - 「Download SVG」：勾選的圖層，`<名稱>.svg`；
   - 「Download JSON」：§6.2 文件，`<名稱>.json`；
-  - 「Download scene (current camera)」：場景加上目前的相機區塊，`<名稱>.scene.json`。用 Python 命令列的 `render` 指令渲染這個檔案會重現同一張 SVG（已驗證逐位元組相同）；
+  - 「Download scene (current camera)」：場景加上目前的相機區塊與「Hidden lines」的狀態（寫成 `output.hidden_lines`），`<名稱>.scene.json`。用 Python 命令列的 `render` 指令渲染這個檔案會重現同一張 SVG（已驗證逐位元組相同）；
   - 「Copy camera block」：把目前的相機區塊複製到剪貼簿。
 - **面板**：
   - 狀態列顯示 A 段 ms（快取）、`core ms`（B + C + SVG）、`dom ms`（疊圖更新）、疊圖模式，以及點／邊／作圖線數量；
