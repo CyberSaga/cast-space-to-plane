@@ -40,21 +40,21 @@ castplane/                  pure library, depends only on numpy (stdlib otherwis
   io/obj.py io/gltf.py io/trimesh_adapter.py   (M5, §5.2.8) mesh file loaders (trimesh = optional extra `mesh`)
   io/part21.py io/step.py   (M8, §5.5.2–§5.5.7) ISO 10303-21 parser and STEP recognisers; tessellate_step needs the optional extra `step`
   io/cli.py                 (M5 + M8, §5.0.2) the one `castplane import` subcommand (mesh and STEP options)
-ts/                         (M7, §5.4) the TypeScript core (ts/src, zero dependencies), node:test suites, ts/bench/camera_only.ts
-web/                        (M7, §5.4.10) the vite + three.js web UI (static build)
-package.json, package-lock.json   (M7) root npm workspace for ts/ and web/
+ts/                         (M7, §5.4, on M7 branch) the TypeScript core (ts/src, zero dependencies), node:test suites, ts/bench/camera_only.ts
+web/                        (M7, §5.4.10, on M7 branch) the vite + three.js web UI (static build)
+package.json, package-lock.json   (M7, on M7 branch) root npm workspace for ts/ and web/
 tests/
   reference/raycast.py      independent ray-casting reference (shares NO code with castplane except reading scene dicts)
   reference/raster.py       nonzero-winding polygon rasterizer for IoU
   reference/random_scenes.py random scene generator (seeded)
   reference/zbuffer.py      (M4, §5.1.11) three-valued per-pixel depth-buffer reference for hidden lines (shares no code with castplane)
-  fixtures/meshes/*, fixtures/step/*   (M5, M8) loader fixtures; tests/golden/example_basic.svg (M6)
+  fixtures/meshes/*, fixtures/step/*   (M5, M8) loader fixtures; tests/golden/example_basic.svg (M6), tests/golden/v2_svg_sha256.json (M4)
   test_*.py                 unit / invariant / analytic / degenerate / property / raycast tests
   conformance/cases/*.json  inputs ; conformance/expected/*.json outputs (§6.2 format) ; test_conformance.py ; README.md ; CHANGELOG.md
   conformance/rules.json    (M7, §5.0.8) the comparator constants shared by the Python and TypeScript runners
   test_ts_port.py           (M7) Python-side checks of the files shared with the TypeScript port
 tools/regen_conformance.py  regenerates expected files; requires --reason, appends a versioned entry to CHANGELOG.md
-                            (+ `--rules-only`, `--strip-new-keys`, §5.0.8); tools/compare_svg.py (M7 dev tool); tools/make_step_fixtures.py (M8, needs OCP)
+                            (+ `--rules-only`, `--strip-new-keys`, §5.0.8); tools/make_mesh_fixtures.py (M5, writes tests/fixtures/meshes/*); tools/compare_svg.py (M7 dev tool, on M7 branch); tools/make_step_fixtures.py (M8, needs OCP)
 benchmarks/bench.py         §8 performance targets (benchmarks/README.md records the measured status)
 benchmarks/scenes/benchmark_100.json   (M7, §5.4.9) the §8 benchmark scene as a committed scene file (bench.py reads it by default); benchmarks/export_scene.py writes it
 examples/*.json             example scenes (the §4 scene is examples/basic.json); examples/README.md
