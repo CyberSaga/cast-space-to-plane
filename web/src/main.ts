@@ -81,6 +81,7 @@ const rollInput = $<HTMLInputElement>("roll");
 const rollOut = $<HTMLOutputElement>("roll-out");
 const layersBox = $<HTMLSpanElement>("layers");
 const view3d = $<HTMLInputElement>("view3d");
+const hiddenLines = $<HTMLInputElement>("hidden-lines");
 const statusLine = $<HTMLDivElement>("status");
 const errorPanel = $<HTMLDivElement>("error");
 const warningsBody = $<HTMLTableElement>("warnings").tBodies[0]!;
@@ -157,6 +158,7 @@ function load(name: string, make: () => Scene): boolean {
   state.layersChecked = new Set(scene.output.layers);
   for (const [id, box] of layerBoxes) box.checked = state.layersChecked.has(id);
   overlay.set_hidden_layers(state.layersChecked);
+  hiddenLines.checked = scene.output.hidden_lines === true;
   sync_sliders();
   layout();
   document.title = `${name} — castplane web`;
@@ -238,6 +240,8 @@ $<HTMLButtonElement>("reset").addEventListener("click", () => {
   sync_sliders();
   request_render();
 });
+// phase 2 of §5.4.10: the hidden-line switch, passed as `hidden_lines` to `compose` (initialised from the scene)
+hiddenLines.addEventListener("change", () => request_render());
 view3d.addEventListener("change", () => {
   canvas.classList.toggle("hidden", !view3d.checked);
   request_render();
@@ -255,13 +259,13 @@ function save(file: DownloadFile): void {
 }
 
 $<HTMLButtonElement>("dl-svg").addEventListener("click", () => {
-  if (state.doc !== null) save(svg_blob(state.doc, state.layersChecked, state.sceneName));
+  if (state.doc !== null) save(svg_blob(state.doc, state.layersChecked, state.sceneName, state.scene?.output.hidden_style ?? "dashed"));
 });
 $<HTMLButtonElement>("dl-json").addEventListener("click", () => {
   if (state.doc !== null) save(json_blob(state.doc, state.sceneName));
 });
 $<HTMLButtonElement>("dl-scene").addEventListener("click", () => {
-  if (state.scene !== null && state.orbit !== null) save(scene_blob(state.scene, camera_from_orbit(state.orbit, state.scene.camera), state.sceneName));
+  if (state.scene !== null && state.orbit !== null) save(scene_blob(state.scene, camera_from_orbit(state.orbit, state.scene.camera), state.sceneName, hiddenLines.checked));
 });
 $<HTMLButtonElement>("copy-camera").addEventListener("click", () => {
   if (state.scene === null || state.orbit === null) return;
@@ -353,9 +357,11 @@ function frame(): void {
   const t0 = performance.now();
   try {
     const B = project_scene(scene, state.A, cam, !state.dragging);
-    doc = compose(scene, B);
+    // hidden lines are skipped during a drag (§5.4.11: a documented switch whose off state is a contract document);
+    // the resting frame recomputes them
+    doc = compose(scene, B, hiddenLines.checked && !state.dragging);
     // all six layers with CSS visibility (DOM mode); the checked subset in <img> mode
-    svg = write_svg(doc, img_mode ? ordered_layers(state.layersChecked) : LAYER_IDS);
+    svg = write_svg(doc, img_mode ? ordered_layers(state.layersChecked) : LAYER_IDS, scene.output.hidden_style ?? "dashed");
   } catch (e) {
     show_error(describe_error(e));
     return;
@@ -430,7 +436,7 @@ function update_warnings(doc: GeometryDocument): void {
   reference_render: () => {
     if (state.scene === null || state.A === null) return null;
     const doc = compose(state.scene, project_scene(state.scene, state.A));
-    return { svg: write_svg(doc, state.scene.output.layers), json: dumps(doc) };
+    return { svg: write_svg(doc, state.scene.output.layers, state.scene.output.hidden_style ?? "dashed"), json: dumps(doc) };
   },
 };
 

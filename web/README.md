@@ -39,11 +39,15 @@ npm run -w web test        # orbit / download unit tests (node:test, web/test/)
   animation frame where something changed, the frame runs `project_scene` → `compose` → `write_svg` (all six
   layers) against the cached stage A. Pointer events only update the state and at most one core render runs per
   frame (the latest camera wins). The layer checkboxes hide groups with CSS (`hide-<layer>` classes). The
-  *3D view* checkbox hides the WebGL canvas.
+  *3D view* checkbox hides the WebGL canvas. The *Hidden lines* checkbox (contract §5.4.10, phase 2) is
+  initialised from `output.hidden_lines` and passed as `hidden_lines` to `compose`; the SVG is written with the
+  scene's `output.hidden_style`. During a drag the frames are composed with hidden lines off (§5.4.11 allows it:
+  the switch-off document is a contract document) and the resting frame recomputes them.
 - **Downloads** (`src/download.ts`):
-  - *Download SVG*: `write_svg` with the checked layers, `<name>.svg`;
+  - *Download SVG*: `write_svg` with the checked layers (and the scene's `hidden_style`), `<name>.svg`;
   - *Download JSON*: the spec §6.2 document, `<name>.json`;
-  - *Download scene (current camera)*: the scene with the current camera block, `<name>.scene.json`. Run
+  - *Download scene (current camera)*: the scene with the current camera block and the *Hidden lines* state as
+    `output.hidden_lines`, `<name>.scene.json`. Run
     `castplane render <name>.scene.json -o out` to reproduce the picture with the Python reference: the
     smoke check below found the SVG byte-identical;
   - *Copy camera block*: copies the current camera block to the clipboard.

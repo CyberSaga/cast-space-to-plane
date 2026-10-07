@@ -222,3 +222,21 @@ test("scene_blob of a yaw/pitch scene carries one camera form only and re-valida
   const again = load_scene_text(text);
   close3(again.camera.position, sc.camera.position, 1e-9, "position");
 });
+
+test("hidden lines in the downloads (phase 2 of §5.4.10): the scene's switch and style round-trip", () => {
+  const sc = example("wall_and_ground");
+  assert.equal(sc.output.hidden_lines, true);
+  const A = shadow_geometry(sc);
+  const cam = camera_from_orbit(orbit_from_camera(sc.camera, sc), sc.camera);
+  const on = compose(sc, project_scene(sc, A, cam), true);
+  const dashed = svg_blob(on, LAYER_ORDER, "wall_and_ground").text;
+  assert.ok(dashed.includes('<g id="objects.hidden" stroke="#111" stroke-width="0.15" stroke-dasharray="0.5 0.5" fill="none">'));
+  const omit = svg_blob(on, LAYER_ORDER, "wall_and_ground", "omit").text;
+  assert.ok(omit.includes('<g id="objects.hidden.crate"/>') && !dashed.includes('<g id="objects.hidden.crate"/>'));
+  // the checkbox state is written as output.hidden_lines, so the Python CLI reproduces the picture
+  assert.equal(load_scene_text(scene_blob(sc, cam, "wall_and_ground", false).text).output.hidden_lines, false);
+  assert.equal(load_scene_text(scene_blob(sc, cam, "wall_and_ground", true).text).output.hidden_lines, true);
+  assert.equal(load_scene_text(scene_blob(sc, cam, "wall_and_ground").text).output.hidden_lines, true);
+  const off = compose(sc, project_scene(sc, A, cam), false);
+  assert.ok(!svg_blob(off, LAYER_ORDER, "wall_and_ground").text.includes(".hidden"));
+});
