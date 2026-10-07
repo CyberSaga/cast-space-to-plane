@@ -524,6 +524,28 @@ B 段在多光源場景呼叫；純 numpy、確定性；只讀畫出的 `shadows
 | `active_lights(receiver, light_ids) -> list` | 受影面上有效的光源（`receivers[r].lit[k]`），即 `umbra[].lights` |
 | `umbra_entries(receivers, shadows, light_ids, canvas_mm, compute=True) -> list` | `umbra[]`：每個受影面一筆 `{receiver, lights, polygons}`；`compute=False` 時 `polygons` 為 `null` |
 
+### 2.22 STEP 匯入（`castplane.io.part21` / `castplane.io.step`，M8，合約 §5.5）
+
+`castplane.io.part21`（M8，純 stdlib；合約 §5.5.2）：ISO 10303-21 語法子集，不做語意檢查。
+
+| 名稱 | 說明 |
+| --- | --- |
+| `tokenize(text) -> [(kind, text), …]` | 以單一正規表示式切詞（`skip` 空白與 `/* … */` 註解丟棄；`ref`、`str`、`enum`、`real`、`name`、`punct`），字串裡的 `/*` 不會被當成註解 |
+| `parse(text) -> {"header", "entities"}` | `header` 為 `{NAME: args}`；`entities` 為 `{"#15": (NAME, args)}`，複合實體為 `("COMPLEX", [(NAME, args), …])`；`$` / `*` → `None`、`'it''s'` → `it's`、型別值 `LENGTH_MEASURE(1.E-07)` → `("LENGTH_MEASURE", 1e-07)`、列舉保留點號（`".T."`）；多個 `DATA` 區段串接 |
+| `Part21SyntaxError(offset, message)` | `ValueError`：重複的實體編號、截斷的檔案（位移為輸入結尾）、未知字元（如 `!USER_ENTITY`、二進位 `"…"`）、未結束的字串；訊息以 `at offset N` 結尾 |
+
+`castplane.io.step`（M8，stdlib + numpy；合約 §5.5.3–§5.5.7）：把 STEP 檔的 `MANIFOLD_SOLID_BREP` 依面型簽章辨識為 `cylinder` / `sphere` / `cone` / `box` 物件。
+
+| 名稱 | 說明 |
+| --- | --- |
+| `import_step(path, *, fallback="error", solid=None, obj_id=None, transform=None, field="step") -> report` | 報告 `{"path", "schema", "unit", "unit_divisor", "angle_factor", "tol", "solids", "objects", "notes"}`；單一實體（或以 `solid` 選一個）時物件 id 為 `obj_id`（預設：檔名主幹，`[^A-Za-z0-9_-]` 換成 `_`），多個時為 `<id>_<k>`；`transform` 與檔案中的放置組合（`R = R_user·R_step`、`position = R_user·p_step + p_user`） |
+| `expand_step_object(obj, field, base_dir) -> (objects, notes)` | `type: "step"` 物件的展開器：檢查 `id`、`path`、`solid`（整數 ≥ 0）、`fallback`（`"error"` / `"mesh"`）、`transform`（不可有 `scale`），相對路徑以 `base_dir`（`None` 時為目前工作目錄）為準 |
+| `recognise_solid(entities, solid_ref, unit_divisor, angle_factor, tol) -> dict \| None` | 合約 §5.5.5 的四條規則（不讀檔案中的任何方向正負號）；不是支援的基元時回傳 `None` |
+| `to_metres(x, unit_divisor)` | 唯一的單位換算 `float(x) / unit_divisor + 0.0`（除法，絕不乘 0.001：整數或二進位分數的 mm 值得到與公尺字面值完全相同的 double）；串列與陣列逐項換算 |
+| `euler_zyx_deg(R) -> [rx, ry, rz]` | `R = Rz·Ry·Rx` 的分解（度；先把九個元素 `+ 0.0`；萬向鎖時 `rz = 0`；角度在 `(−180, 180]`，`[[-1,-0.,0],[-0.,-1,0],[0,0,1]]` → `[0.0, 0.0, 180.0]`） |
+| `tessellate_step(path, *, deflection_mm=None) -> {"vertices", "faces", "cascade_unit"}`、`mesh_object_from_triangles(obj_id, tri, transform)` | 選用的 OCP（`pip install 'castplane[step]'`）網格化退路與轉成內嵌 `mesh` 物件的轉接；沒有 OCP 時拋 `ImportError`（CLI 結束碼 3） |
+| `StepError(field, message, entity=None)`、`STEP_WARNING_CODES`、`make_step_warning(code, ids=(), message=None)`、`DEFAULT_SCENE_TEMPLATE` | `SceneError` 子類別（`entity` 為 `"#15"` 或 `None`；訊息以實體編號、`syntax:` 或 `unsupported:` 開頭）；匯入備註代碼 `STEP_UNIT_ASSUMED_MM`、`STEP_ANGLE_UNIT_ASSUMED_RAD`、`STEP_SOLID_TESSELLATED`；`examples/basic.json` 的 `version` / `units` / `up` / `lights` / `receivers` / `camera` / `output` 區塊 |
+
 ## 3. 警告代碼（合約 §2.9）
 
 | 代碼 | 條件 | ids | 效果 |

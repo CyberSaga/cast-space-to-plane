@@ -3660,3 +3660,55 @@ LGPL-2.1；確定性只到 OCC 版本；頂點重建誤差 1.4e-9 mm；OCP 8 的
 列 M5 為 M8 前置：網格退路經 M5 的內嵌 `data` 網格物件；`type: step` 走解析辨識；`type: mesh` + `.step` 直接走網格退路；`EXPANDERS` /
 `EXTENSION_LOADERS` 登錄表；網格化實測數字 170/164、400/598）；8 驗收案例（§5.5.10 的圓柱位元相同、手算數字）；9 風險（exporter 精度、
 分割面、單位宣告缺失、OCC 版本漂移、PRODUCT 名稱的程序計數器）。
+
+### Implementation notes
+- **[decision, implementation] (M8 part 1) Re-measured on the committed fixtures (cadquery-ocp 8.0.1.1.0, OCC 8.0).**
+  Confirmed exactly as quoted above: cylinder fixture 118 entities / 5 684 bytes, its `CYLINDRICAL_SURFACE` axis is `#34`;
+  `two_solids` solids `#37` / `#154` and `#142 = ITEM_DEFINED_TRANSFORMATION('','',#11,#15)` (identity); box faces `#17` /
+  `#137` both `(0.866025403784, 0.5, 0.)`; box expansion `size = [1.00000000000002, 0.8000000000003888, 0.6]`,
+  `position = [2.0000000000000004, 4.0, 0.0]`, `rotation_deg = [0.0, 0.0, 30.000000000012566]`; cone semi-angle
+  `0.321750554397`, axis `(-0., -0., -1.)`; `cylinder_down` `ref_direction (-1., 0., -0.)` → `[0.0, 0.0, 180.0]`;
+  tessellation 170 / 164 (cylinder), 400 / 598 (frustum), 24 / 12 (box), 1447 / 2836 (sphere). Sizes 2–17 KB, set 56 KB.
+  **Corrected**: (a) §5.5.9's PRODUCT counters are `8.0 1` … `8.0 7` for the seven single-solid fixtures written before
+  `two_solids`, and `8.0 8`, `8.0 8.1`, `8.0 8.2` inside it (not `1 … 6`, `7`, `7.1`, `7.2`; the normalisation is a
+  regular expression over any counter, so the output is the same); (b) the "`2.775557561563E-17`" example is a
+  **direction** component (`cylinder_tilted`, 13 significant digits), not a coordinate; directions carry 12–13
+  significant digits, coordinates up to 14 (`743.46242505348`); (c) `cylinder_tilted` expands to `height
+  1.600000000000126`, `rotation_deg [30.000000000017515, 1.3772205761362216e-15, 20.000000000016044]` (within the 1e-9
+  of §5.5.10), `position [0.0, 5.0, -0.4]` exactly.
+- **[decision, implementation] (M8 part 1) §5.5.10 metre-tolerance case.** For a 2 m part `extent_mm = 2000`, so
+  `tol = 1e-6 · 2000 / 1000 = 2e-6 m` (= 2e-3 mm in the mm file), not "2e-9 m". A tilted cap plane is judged by the
+  unit-free direction predicate (`|n × a| ≤ tol_dir_step = 1e-7`), so a 2e-9 rad tilt is accepted and 2e-6 rad rejected in
+  both the metre and the millimetre file; the test additionally exercises `tol` itself with a second cylindrical face
+  whose radius differs by 1e-6 m (accepted) / 1e-5 m (rejected), in both units.
+- **[decision, implementation] (M8 part 1) Which unit entities count (§5.5.3).** The length / plane-angle units read are
+  those listed by a `GLOBAL_UNIT_ASSIGNED_CONTEXT` (every entity when no context lists any). Needed because a `DEGREE`
+  file necessarily also holds the radian `SI_UNIT` referenced by its `PLANE_ANGLE_MEASURE_WITH_UNIT`; scanning every
+  entity would see two plane-angle units with different factors. The conversion measure must reference a radian unit,
+  else `StepError("unsupported: plane angle unit …")`.
+- **[decision, implementation] (M8 part 1) Messages.** A rule-specific reason is appended to the §5.5.5 message after
+  `; ` (`#15: unsupported solid: faces {CONICAL_SURFACE: 1, PLANE: 2} (supported: cylinder, sphere, cone, box); cone:
+  2 planar faces (a frustum is not a cone)`), so the contract text stays a prefix. Degenerate placements read
+  `unsupported: degenerate placement #32 (ref_direction parallel to axis)` with `entity = "#32"`; a dangling or
+  mistyped reference is `#n: expected DIRECTION, found …`. An `ITEM_DEFINED_TRANSFORMATION` is the identity when the
+  locations agree within `tol` and both the normalised axes and the projected `ref_direction`s within `tol_dir_step`.
+  In a standalone `import_step(field=F)` a bad `solid` / `fallback` / `transform` is reported at `F` with a trailing
+  `.path` replaced by `.solid` / `.fallback` / `.transform` (`objects[i].solid` when expanding; `step.solid` for the
+  default `field="step"`). A `POLY_LOOP` or a nested `ORIENTED_EDGE` makes the solid unrecognised (so `fallback="mesh"`
+  still applies) instead of raising.
+- **[decision, implementation] (M8 part 1) Cone semi-angle check.** When the conical surface's placement lies in the
+  base plane (OCC always writes it so), `(b − o)·a_s = 0` and the §5.5.5 consistency test reduces to `r = radius_s`; the
+  semi-angle is then only range-checked (`0 < |semi| < π/2 − tol_dir_step`). This is sufficient for a valid B-rep (the
+  seam edge lies on the surface) and is why a degree value read as radians (`18.43…` rad) is rejected by the range check,
+  not by consistency.
+- **[decision, implementation] (M8 part 1) Mesh fallback in multi-solid files.** `fallback="mesh"` on an unrecognised
+  solid `k` of a file with several solids tessellates only the `k`-th `TopAbs_SOLID` of the shape (explorer order;
+  verified equal to the entity order on `two_solids`: 170 / 164 and 1447 / 2836, identical to the single fixtures), with
+  the deflection rule applied to that solid's bounding box; a single-solid file is tessellated whole, exactly as
+  `tessellate_step`. Recognised solids never import OCP.
+- **[decision, implementation] (M8 part 1) Gimbal-lock branch.** §5.5.5 says the M5 `gltf.euler_zyx` is "the same
+  decomposition"; it is, except at gimbal lock, where `gltf.euler_zyx` sets `rx = 0` (and `rz = atan2(−R01, R11)`) while
+  `euler_zyx_deg` sets `rz = 0` (and `rx = atan2(sy·R01, R11)`). Both reproduce `R`; `gltf.py` (M5's file) is unchanged.
+- **[decision, implementation] (M8 part 1) Vector arithmetic.** `step.py` does its 3-vector arithmetic in plain Python
+  floats in a fixed order (`_dot`, `_cross`, …; numpy only for `to_metres` of arrays, `euler_zyx_deg` input and the
+  user-transform composition), so recognition and the emitted numbers do not depend on a BLAS build.

@@ -5,6 +5,7 @@ recognisers, importer API.  Fixtures: ``tests/fixtures/step/`` (written by
 from __future__ import annotations
 
 import math
+import re
 import pathlib
 
 import pytest
@@ -101,3 +102,719 @@ def test_parse_cylinder_fixture_counts():
     assert len(doc["entities"]) == 118
     assert doc["entities"]["#15"] == ("MANIFOLD_SOLID_BREP", ["", "#16"])
     assert doc["header"]["FILE_SCHEMA"] == [["AUTOMOTIVE_DESIGN { 1 0 10303 214 1 1 1 1 }"]]
+
+
+# =========================================================================== STEP semantics (§5.5.3–§5.5.6)
+import copy  # noqa: E402
+import json  # noqa: E402
+import random  # noqa: E402
+import time  # noqa: E402
+
+import numpy as np  # noqa: E402
+
+import castplane  # noqa: E402
+from castplane.errors import SceneError  # noqa: E402
+from castplane.io import step as S  # noqa: E402
+from castplane.io.step import (DEFAULT_SCENE_TEMPLATE, STEP_WARNING_CODES, StepError, euler_zyx_deg,  # noqa: E402
+                               expand_step_object, import_step, make_step_warning, recognise_solid, to_metres)
+from castplane.output.geometry_json import dumps as geometry_dumps  # noqa: E402
+from castplane.transform import euler_zyx_matrix  # noqa: E402
+from tests.test_conformance import CASES, EXPECTED, compare_documents  # noqa: E402
+
+FIXTURES = ("cylinder", "cylinder_down", "cylinder_tilted", "sphere", "cone", "box", "frustum", "two_solids")
+PILLAR = {"id": "pillar", "type": "cylinder", "radius": 0.3, "height": 2.4,
+          "transform": {"position": [-1.5, 6.0, 0.0], "rotation_deg": [0.0, 0.0, 0.0]}}
+SPHERE = {"type": "sphere", "radius": 0.5, "transform": {"position": [1.0, 2.0, 0.0], "rotation_deg": [0.0, 0.0, 0.0]}}
+CONE = {"type": "cone", "radius": 0.4, "height": 1.2,
+        "transform": {"position": [-2.0, 5.0, 0.0], "rotation_deg": [0.0, 0.0, 0.0]}}
+
+
+def fixture_text(name: str) -> str:
+    return (FIX / f"{name}.step").read_text(encoding="utf-8")
+
+
+def write(tmp_path, text: str, name: str = "part.step") -> pathlib.Path:
+    path = tmp_path / name
+    path.write_text(text, encoding="utf-8")
+    return path
+
+
+def edit(text: str, old: str, new: str) -> str:
+    assert text.count(old) == 1, old
+    return text.replace(old, new)
+
+
+def add_entities(text: str, extra: str) -> str:
+    """Insert entity records before the end of the DATA section."""
+    i = text.rindex("ENDSEC;")
+    return text[:i] + extra.strip() + "\n" + text[i:]
+
+
+def expand(path, **kw) -> list:
+    obj = {"id": kw.pop("id", "part"), "type": "step", "path": str(path), **kw}
+    objects, notes = expand_step_object(obj, "objects[0]", None)
+    return objects
+
+
+def strip_id(o: dict) -> dict:
+    return {k: v for k, v in o.items() if k != "id"}
+
+
+# --------------------------------------------------------------------------- an inline Part-21 writer
+def f(x) -> str:
+    return repr(float(x))
+
+
+class Builder:
+    """Hand-written Part 21 B-reps (the inline-string cases of contract §5.5.10)."""
+
+    def __init__(self):
+        self.lines = []
+
+    def add(self, record: str) -> str:
+        ref = f"#{len(self.lines) + 1}"
+        self.lines.append(f"{ref} = {record};")
+        return ref
+
+    def point(self, p) -> str:
+        return self.add(f"CARTESIAN_POINT('',({','.join(f(c) for c in p)}))")
+
+    def direction(self, d) -> str:
+        return self.add(f"DIRECTION('',({','.join(f(c) for c in d)}))")
+
+    def axis(self, o, a=(0, 0, 1), r=(1, 0, 0)) -> str:
+        return self.add(f"AXIS2_PLACEMENT_3D('',{self.point(o)},{self.direction(a)},{self.direction(r)})")
+
+    def vertex(self, p) -> str:
+        return self.add(f"VERTEX_POINT('',{self.point(p)})")
+
+    def edge(self, v1, v2, geom) -> str:
+        return self.add(f"EDGE_CURVE('',{v1},{v2},{geom},.T.)")
+
+    def face(self, edges, surface, vertex=None) -> str:
+        if vertex is not None:
+            loop = self.add(f"VERTEX_LOOP('',{vertex})")
+        else:
+            oes = [self.add(f"ORIENTED_EDGE('',*,*,{e},.T.)") for e in edges]
+            loop = self.add(f"EDGE_LOOP('',({','.join(oes)}))")
+        bound = self.add(f"FACE_OUTER_BOUND('',{loop},.T.)")
+        return self.add(f"ADVANCED_FACE('',({bound}),{surface},.T.)")
+
+    def solid(self, faces) -> str:
+        shell = self.add(f"CLOSED_SHELL('',({','.join(faces)}))")
+        return self.add(f"MANIFOLD_SOLID_BREP('',{shell})")
+
+    def units(self, length="mm", angle="rad") -> None:
+        refs = []
+        if length == "mm":
+            refs.append(self.add("( LENGTH_UNIT() NAMED_UNIT(*) SI_UNIT(.MILLI.,.METRE.) )"))
+        elif length == "m":
+            refs.append(self.add("( LENGTH_UNIT() NAMED_UNIT(*) SI_UNIT($,.METRE.) )"))
+        elif length == "cm":
+            refs.append(self.add("( LENGTH_UNIT() NAMED_UNIT(*) SI_UNIT(.CENTI.,.METRE.) )"))
+        elif length == "inch":
+            mm = self.add("( LENGTH_UNIT() NAMED_UNIT(*) SI_UNIT(.MILLI.,.METRE.) )")
+            m = self.add(f"LENGTH_MEASURE_WITH_UNIT(LENGTH_MEASURE(25.4),{mm})")
+            dim = self.add("DIMENSIONAL_EXPONENTS(1.,0.,0.,0.,0.,0.,0.)")
+            refs.append(self.add(f"( CONVERSION_BASED_UNIT('INCH',{m}) LENGTH_UNIT() NAMED_UNIT({dim}) )"))
+        if angle == "rad":
+            refs.append(self.add("( NAMED_UNIT(*) PLANE_ANGLE_UNIT() SI_UNIT($,.RADIAN.) )"))
+        elif angle == "deg":
+            rad = self.add("( NAMED_UNIT(*) PLANE_ANGLE_UNIT() SI_UNIT($,.RADIAN.) )")
+            m = self.add(f"PLANE_ANGLE_MEASURE_WITH_UNIT(PLANE_ANGLE_MEASURE(0.0174532925199433),{rad})")
+            dim = self.add("DIMENSIONAL_EXPONENTS(0.,0.,0.,0.,0.,0.,0.)")
+            refs.append(self.add(f"( CONVERSION_BASED_UNIT('DEGREE',{m}) NAMED_UNIT({dim}) PLANE_ANGLE_UNIT() )"))
+        if refs:
+            self.add(f"( GEOMETRIC_REPRESENTATION_CONTEXT(3) GLOBAL_UNIT_ASSIGNED_CONTEXT(({','.join(refs)})) "
+                     "REPRESENTATION_CONTEXT('','') )")
+
+    def cylinder(self, r, h, o=(0.0, 0.0, 0.0), tilt=0.0, radius2=None) -> str:
+        """An upright cylinder (axis +z) of radius ``r`` and height ``h`` based at ``o``; ``tilt``
+        rotates the top cap plane's normal about x; ``radius2`` adds a second cylindrical face."""
+        top = (o[0], o[1], o[2] + h)
+        vb, vt = self.vertex((o[0] + r, o[1], o[2])), self.vertex((top[0] + r, top[1], top[2]))
+        cb = self.add(f"CIRCLE('',{self.axis(o)},{f(r)})")
+        ct = self.add(f"CIRCLE('',{self.axis(top)},{f(r)})")
+        eb, et = self.edge(vb, vb, cb), self.edge(vt, vt, ct)
+        seam = self.edge(vb, vt, self.add(f"LINE('',{self.point((o[0] + r, o[1], o[2]))},"
+                                          f"{self.add(f'VECTOR({chr(39)}{chr(39)},{self.direction((0, 0, 1))},1.)')})"))
+        side = self.face([eb, seam, et, seam], self.add(f"CYLINDRICAL_SURFACE('',{self.axis(o)},{f(r)})"))
+        bottom = self.face([eb], self.add(f"PLANE('',{self.axis(o)})"))
+        n_top = (0.0, -math.sin(tilt), math.cos(tilt))
+        topf = self.face([et], self.add(f"PLANE('',{self.axis(top, n_top)})"))
+        faces = [side, topf, bottom]
+        if radius2 is not None:
+            faces.append(self.face([], self.add(f"CYLINDRICAL_SURFACE('',{self.axis(o)},{f(radius2)})")))
+        return self.solid(faces)
+
+    def cone(self, r, h, semi, o=(0.0, 0.0, 0.0)) -> str:
+        apex = (o[0], o[1], o[2] + h)
+        vb, va = self.vertex((o[0] + r, o[1], o[2])), self.vertex(apex)
+        cb = self.add(f"CIRCLE('',{self.axis(o)},{f(r)})")
+        eb = self.edge(vb, vb, cb)
+        line = self.add(f"LINE('',{self.point((o[0] + r, o[1], o[2]))},"
+                        f"{self.add(f'VECTOR({chr(39)}{chr(39)},{self.direction((-r, 0, h))},1.)')})")
+        seam = self.edge(vb, va, line)
+        side = self.face([eb, seam], self.add(f"CONICAL_SURFACE('',{self.axis(o)},{f(r)},{semi!r})"))
+        base = self.face([eb], self.add(f"PLANE('',{self.axis(o, (0, 0, -1))})"))
+        return self.solid([side, base])
+
+    def text(self) -> str:
+        return p21("\n".join(self.lines))
+
+
+def cylinder_file(tmp_path, r, h, o=(0.0, 0.0, 0.0), length="mm", angle="rad", **kw):
+    b = Builder()
+    b.units(length, angle)
+    b.cylinder(r, h, o, **kw)
+    return write(tmp_path, b.text())
+
+
+# --------------------------------------------------------------------------- public surface, notes
+def test_step_public_surface_and_notes():
+    assert S.__all__ == ["StepError", "STEP_WARNING_CODES", "DEFAULT_SCENE_TEMPLATE", "make_step_warning",
+                         "to_metres", "import_step", "expand_step_object", "recognise_solid", "euler_zyx_deg",
+                         "tessellate_step", "mesh_object_from_triangles"]
+    assert set(STEP_WARNING_CODES) == {"STEP_UNIT_ASSUMED_MM", "STEP_ANGLE_UNIT_ASSUMED_RAD", "STEP_SOLID_TESSELLATED"}
+    assert make_step_warning("STEP_SOLID_TESSELLATED", ["#15"]) == {
+        "code": "STEP_SOLID_TESSELLATED", "ids": ["#15"], "message": STEP_WARNING_CODES["STEP_SOLID_TESSELLATED"]}
+    with pytest.raises(ValueError):
+        make_step_warning("MESH_NON_MANIFOLD")
+    assert issubclass(StepError, SceneError)
+    e = StepError("objects[2].path", "#15: x", "#15")
+    assert (e.field, e.message, e.entity) == ("objects[2].path", "#15: x", "#15")
+
+
+def test_default_scene_template_is_the_basic_example_blocks():
+    basic = json.loads((ROOT / "examples" / "basic.json").read_text(encoding="utf-8"))
+    assert DEFAULT_SCENE_TEMPLATE == {k: basic[k] for k in ("version", "units", "up", "lights", "receivers",
+                                                             "camera", "output")}
+
+
+# --------------------------------------------------------------------------- units (§5.5.3)
+def test_to_metres_is_a_division():
+    assert to_metres(9, 1000.0) == 0.009 and 9 * 0.001 != 0.009
+    assert to_metres(1001.0, 1000.0) == 1.001 and 1001 * 0.001 != 1.001
+    assert to_metres(0.5, 1000.0) == 0.0005
+    assert to_metres(-1500.0, 1000.0) == -1.5 and to_metres(2400.0, 1000.0) == 2.4
+    assert to_metres([300.0, -0.0, np.float64(2.0)], 1000.0) == [0.3, 0.0, 0.002]
+    assert math.copysign(1.0, to_metres(-0.0, 1000.0)) == 1.0
+    assert to_metres(np.array([1.0, 2.0]), 1.0) == [1.0, 2.0]
+    assert all(type(v) is float for v in to_metres(np.array([1.0, 2.0]), 1.0))
+
+
+def test_unit_arithmetic_mm_file(tmp_path):
+    rep = import_step(cylinder_file(tmp_path, 9.0, 1001.0, (0.5, 0.0, 0.0)))
+    (obj,) = rep["objects"]
+    assert rep["unit"] == "mm" and rep["unit_divisor"] == 1000.0 and rep["notes"] == []
+    assert obj["radius"] == 0.009 and obj["height"] == 1.001 and obj["transform"]["position"][0] == 0.0005
+    assert obj["transform"]["position"] == [0.0005, 0.0, 0.0]
+
+
+def test_unit_arithmetic_metre_file_unchanged(tmp_path):
+    rep = import_step(cylinder_file(tmp_path, 9.0, 1001.0, (0.5, 0.0, 0.0), length="m"))
+    (obj,) = rep["objects"]
+    assert rep["unit"] == "m" and rep["unit_divisor"] == 1.0
+    assert obj["radius"] == 9.0 and obj["height"] == 1001.0 and obj["transform"]["position"] == [0.5, 0.0, 0.0]
+
+
+def test_no_unit_context_assumes_mm_and_radians(tmp_path):
+    rep = import_step(cylinder_file(tmp_path, 300.0, 2400.0, length=None, angle=None))
+    assert [n["code"] for n in rep["notes"]] == ["STEP_ANGLE_UNIT_ASSUMED_RAD", "STEP_UNIT_ASSUMED_MM"]
+    assert all(n["ids"] == [] for n in rep["notes"])
+    assert rep["unit"] == "mm" and rep["angle_factor"] == 1.0
+    assert rep["objects"][0]["radius"] == 0.3
+
+
+@pytest.mark.parametrize("length", ["inch", "cm"])
+def test_unsupported_length_units(tmp_path, length):
+    with pytest.raises(StepError) as exc:
+        import_step(cylinder_file(tmp_path, 300.0, 2400.0, length=length))
+    assert exc.value.message.startswith("unsupported: length unit")
+    assert exc.value.field == "step"
+
+
+def test_two_length_units_with_different_scales(tmp_path):
+    b = Builder()
+    b.units("mm")
+    b.units("m", angle=None)
+    b.cylinder(1.0, 2.0)
+    with pytest.raises(StepError, match="different scales"):
+        import_step(write(tmp_path, b.text()))
+
+
+def test_degree_angle_unit_cone_equals_radian_cone(tmp_path):
+    rad, deg = Builder(), Builder()
+    rad.units("mm", "rad")
+    rad.cone(400.0, 1200.0, math.atan(1.0 / 3.0))
+    deg.units("mm", "deg")
+    deg.cone(400.0, 1200.0, 18.434948822922)
+    r_rad = import_step(write(tmp_path, rad.text(), "rad.step"), obj_id="c")
+    r_deg = import_step(write(tmp_path, deg.text(), "deg.step"), obj_id="c")
+    assert r_deg["angle_factor"] == 0.0174532925199433
+    assert r_deg["objects"] == r_rad["objects"]
+    assert strip_id(r_rad["objects"][0]) == {"type": "cone", "radius": 0.4, "height": 1.2,
+                                             "transform": {"position": [0.0, 0.0, 0.0], "rotation_deg": [0.0, 0.0, 0.0]}}
+    # the degree value read as radians is out of the (0, pi/2) range
+    bad = Builder()
+    bad.units("mm", "rad")
+    bad.cone(400.0, 1200.0, 18.434948822922)
+    with pytest.raises(StepError, match="semi-angle out of range"):
+        import_step(write(tmp_path, bad.text(), "bad.step"))
+
+
+# --------------------------------------------------------------------------- tolerances (§5.5.4)
+def test_tolerance_is_physical_across_units(tmp_path):
+    mm = import_step(cylinder_file(tmp_path, 500.0, 2000.0, length="mm"))
+    m = import_step(cylinder_file(tmp_path, 0.5, 2.0, length="m"))
+    assert mm["tol"] == pytest.approx(2e-3) and m["tol"] == pytest.approx(2e-6)       # 1e-6 · 2000 mm
+    assert strip_id(mm["objects"][0]) == strip_id(m["objects"][0])
+    small = import_step(cylinder_file(tmp_path, 0.001, 0.0005, length="m"))           # extent < 1 mm
+    assert small["tol"] == pytest.approx(1e-9)
+
+
+@pytest.mark.parametrize("length, scale", [("m", 1.0), ("mm", 1000.0)])
+def test_metre_file_tolerance_mirrors_the_mm_file(tmp_path, length, scale):
+    ok = import_step(cylinder_file(tmp_path, 0.5 * scale, 2.0 * scale, length=length, tilt=2e-9))
+    assert ok["objects"][0]["type"] == "cylinder" and ok["objects"][0]["height"] == pytest.approx(2.0)
+    with pytest.raises(StepError, match="unsupported solid"):
+        import_step(cylinder_file(tmp_path, 0.5 * scale, 2.0 * scale, length=length, tilt=2e-6))
+    # positional tolerance (tol = 2e-6 m on this 2 m part): a second cylindrical face 1e-6 m off is
+    # the same cylinder, 1e-5 m off is not
+    near = import_step(cylinder_file(tmp_path, 0.5 * scale, 2.0 * scale, length=length,
+                                     radius2=(0.5 + 1e-6) * scale))
+    assert near["objects"][0]["type"] == "cylinder" and near["objects"][0]["radius"] == 0.5
+    with pytest.raises(StepError, match="different radii"):
+        import_step(cylinder_file(tmp_path, 0.5 * scale, 2.0 * scale, length=length, radius2=(0.5 + 1e-5) * scale))
+
+
+# --------------------------------------------------------------------------- fixtures: exact expansions
+def test_fixture_set_is_small():
+    total = sum((FIX / f"{n}.step").stat().st_size for n in FIXTURES)
+    assert total < 100_000
+    assert (FIX / "README.md").exists()
+
+
+def test_cylinder_fixture_is_the_pillar():
+    objects = expand_step_object({"id": "pillar", "type": "step", "path": "cylinder.step"}, "objects[1]", FIX)[0]
+    assert objects == [PILLAR]
+    assert all(type(v) is float for v in objects[0]["transform"]["position"] + objects[0]["transform"]["rotation_deg"])
+    rep = import_step(FIX / "cylinder.step")
+    assert rep["objects"][0]["id"] == "cylinder"
+    assert rep["schema"] == "AUTOMOTIVE_DESIGN { 1 0 10303 214 1 1 1 1 }"
+    assert rep["solids"] == [{"entity": "#15", "kind": "cylinder", "faces": {"CYLINDRICAL_SURFACE": 1, "PLANE": 2},
+                              "object": rep["objects"][0]}]
+    assert rep["unit"] == "mm" and rep["unit_divisor"] == 1000.0 and rep["angle_factor"] == 1.0
+    assert rep["tol"] == 6e-3 and rep["notes"] == []
+
+
+def _basic_with(obj_id: str, replacement: dict) -> dict:
+    scene = json.loads((ROOT / "examples" / "basic.json").read_text(encoding="utf-8"))
+    scene["objects"] = [replacement if o["id"] == obj_id else o for o in scene["objects"]]
+    return scene
+
+
+def _geometry(scene) -> dict:
+    return castplane.render(castplane.load_scene(scene))["geometry"]
+
+
+def test_cylinder_fixture_renders_the_basic_example_byte_equal():
+    (pillar,) = expand_step_object({"id": "pillar", "type": "step", "path": "cylinder.step"}, "objects[1]", FIX)[0]
+    inline = json.loads((ROOT / "examples" / "basic.json").read_text(encoding="utf-8"))
+    doc = _geometry(_basic_with("pillar", pillar))
+    assert geometry_dumps(doc) == geometry_dumps(_geometry(inline))
+    expected = json.loads((EXPECTED / "example_basic.json").read_text(encoding="utf-8"))
+    assert compare_documents(expected, json.loads(geometry_dumps(doc)), "example_basic") == []
+    # the hand numbers of contract §5.5.10 (closed form, no castplane code)
+    pts = doc["points"]
+    hand = {"pillar.g0.base": (-1.7552526894158411, 5.8423736552920795, 0.0),
+            "pillar.g1.base": (-1.220747310584159, 6.10962634470792, 0.0),
+            "pillar.g0.top.shadow.lamp": (-5.584894920868585, 12.043916175929343, 0.0),
+            "pillar.g1.top.shadow.lamp": (-3.884195988222324, 12.894265642252474, 0.0)}
+    for name, world in hand.items():
+        assert np.allclose(pts[name]["world"], world, rtol=0, atol=1e-9), name
+    b, lamp, r = np.array([-1.5, 6.0, 0.0]), np.array([0.0, 3.0, 3.5]), 0.3
+    q = (b - lamp)[:2]
+    d = math.hypot(*q)
+    assert d == pytest.approx(3.3541019662496847, abs=1e-15)
+    theta, alpha = math.atan2(-3.0, 1.5), math.acos(r / d)
+    for k, t in enumerate((theta - alpha, theta + alpha)):
+        g = b + r * np.array([math.cos(t), math.sin(t), 0.0])
+        assert np.allclose(pts[f"pillar.g{k}.base"]["world"], g, atol=1e-12)
+        top = g + np.array([0.0, 0.0, 2.4])
+        shadow = lamp + (top - lamp) * 35.0 / 11.0
+        assert np.allclose(pts[f"pillar.g{k}.top.shadow.lamp"]["world"], shadow, atol=1e-9)
+
+
+def test_sphere_and_cone_fixtures_exact_and_render_byte_equal():
+    for name, want in (("sphere", SPHERE), ("cone", CONE)):
+        (obj,) = expand(FIX / f"{name}.step", id=name)
+        assert strip_id(obj) == want and obj["id"] == name
+        tmpl = copy.deepcopy(DEFAULT_SCENE_TEMPLATE)
+        inline = dict(tmpl, objects=[{"id": name, **want}])
+        imported = dict(tmpl, objects=[obj])
+        assert geometry_dumps(_geometry(imported)) == geometry_dumps(_geometry(inline))
+
+
+def test_sphere_axis_down_is_the_same_sphere(tmp_path):
+    text = edit(fixture_text("sphere"), "#25 = DIRECTION('',(0.,0.,1.));", "#25 = DIRECTION('',(0.,0.,-1.));")
+    assert strip_id(expand(write(tmp_path, text))[0]) == SPHERE
+
+
+def test_box_fixture_within_1e9_and_conformance():
+    (crate,) = expand(FIX / "box.step", id="crate")
+    assert crate["type"] == "box"
+    assert np.allclose(crate["size"], [1.0, 0.8, 0.6], rtol=0, atol=1e-9)
+    assert np.allclose(crate["transform"]["position"], [2.0, 4.0, 0.0], rtol=0, atol=1e-9)
+    assert np.allclose(crate["transform"]["rotation_deg"], [0.0, 0.0, 30.0], rtol=0, atol=1e-9)
+    # the OCC 8.0 numbers recorded in contract §5.5.5
+    assert crate["size"] == [1.00000000000002, 0.8000000000003888, 0.6]
+    assert crate["transform"]["position"] == [2.0000000000000004, 4.0, 0.0]
+    assert crate["transform"]["rotation_deg"] == [0.0, 0.0, 30.000000000012566]
+    doc = json.loads(geometry_dumps(_geometry(_basic_with("crate", crate))))
+    expected = json.loads((EXPECTED / "example_basic.json").read_text(encoding="utf-8"))
+    assert compare_documents(expected, doc, "example_basic") == []
+
+
+def test_box_with_opposite_axis_signs_is_the_same_box(tmp_path):
+    text = fixture_text("box")
+    assert "#35 = DIRECTION('',(0.866025403784,0.5,0.));" in text
+    edited = edit(text, "#155 = DIRECTION('',(0.866025403784,0.5,0.));",
+                  "#155 = DIRECTION('',(-0.866025403784,-0.5,-0.));")
+    assert expand(write(tmp_path, edited), id="crate") == expand(FIX / "box.step", id="crate")
+
+
+def test_cylinder_down_fixture_turns_the_frame():
+    (obj,) = expand(FIX / "cylinder_down.step", id="pillar")
+    assert obj == dict(PILLAR, transform={"position": [-1.5, 6.0, 0.0], "rotation_deg": [0.0, 0.0, 180.0]})
+
+
+def test_cylinder_axis_edit_canonicalises_bit_equal(tmp_path):
+    text = edit(fixture_text("cylinder"), "#34 = DIRECTION('',(0.,0.,1.));", "#34 = DIRECTION('',(0.,0.,-1.));")
+    assert expand(write(tmp_path, text), id="pillar") == [PILLAR]
+
+
+def test_cylinder_tilted_fixture():
+    (drum,) = expand(FIX / "cylinder_tilted.step", id="drum")
+    assert drum["radius"] == 0.5
+    assert drum["transform"]["position"] == [0.0, 5.0, -0.4]
+    assert drum["height"] == pytest.approx(1.6, abs=1e-9)
+    assert np.allclose(drum["transform"]["rotation_deg"], [30.0, 0.0, 20.0], rtol=0, atol=1e-9)
+    scene = json.loads((CASES / "buried_cylinder_tilted.json").read_text(encoding="utf-8"))
+    scene["objects"] = [drum if o["id"] == "drum" else o for o in scene["objects"]]
+    doc = json.loads(geometry_dumps(_geometry(scene)))
+    expected = json.loads((EXPECTED / "buried_cylinder_tilted.json").read_text(encoding="utf-8"))
+    assert compare_documents(expected, doc, "buried_cylinder_tilted") == []
+
+
+def test_frustum_fixture_is_unsupported():
+    with pytest.raises(StepError) as exc:
+        import_step(FIX / "frustum.step", field="objects[2].path")
+    e = exc.value
+    assert e.entity == "#15" and e.field == "objects[2].path"
+    assert e.message.startswith("#15: unsupported solid: faces {CONICAL_SURFACE: 1, PLANE: 2} "
+                                "(supported: cylinder, sphere, cone, box)")
+
+
+def test_two_solids_ids_and_selection():
+    objs = expand(FIX / "two_solids.step", id="part")
+    assert [o["id"] for o in objs] == ["part_0", "part_1"]
+    assert [o["type"] for o in objs] == ["cylinder", "sphere"]
+    assert strip_id(objs[0]) == strip_id(PILLAR) and strip_id(objs[1]) == SPHERE
+    rep = import_step(FIX / "two_solids.step", obj_id="part")
+    assert [s["entity"] for s in rep["solids"]] == ["#37", "#154"]
+    assert [s["kind"] for s in rep["solids"]] == ["cylinder", "sphere"]
+    (one,) = expand(FIX / "two_solids.step", id="part", solid=1)
+    assert one["id"] == "part" and strip_id(one) == SPHERE
+    with pytest.raises(SceneError) as exc:
+        expand(FIX / "two_solids.step", solid=2)
+    assert exc.value.field == "objects[0].solid" and exc.value.message == "file has 2 solid(s)"
+    for bad in (True, 1.0, -1, "1"):
+        with pytest.raises(SceneError) as exc:
+            expand(FIX / "two_solids.step", solid=bad)
+        assert exc.value.field == "objects[0].solid"
+
+
+def test_default_id_is_the_sanitised_file_stem(tmp_path):
+    path = write(tmp_path, fixture_text("cylinder"), "my pillar.v2.step")
+    assert import_step(path)["objects"][0]["id"] == "my_pillar_v2"
+
+
+# --------------------------------------------------------------------------- assemblies, errors
+def test_non_identity_assembly_transformation_is_rejected(tmp_path):
+    b = Builder()
+    b.units()
+    b.cylinder(300.0, 2400.0)
+    p1, p2 = b.axis((0, 0, 0)), b.axis((1, 0, 0))
+    ref = b.add(f"ITEM_DEFINED_TRANSFORMATION('','',{p1},{p2})")
+    with pytest.raises(StepError) as exc:
+        import_step(write(tmp_path, b.text()))
+    assert exc.value.message == f"unsupported: assembly transformation {ref} is not the identity (single placement only)"
+    assert exc.value.entity == ref
+    ok = Builder()
+    ok.units()
+    ok.cylinder(300.0, 2400.0)
+    ok.add(f"ITEM_DEFINED_TRANSFORMATION('','',{ok.axis((0, 0, 0))},{ok.axis((0, 0, 1e-4))})")
+    assert import_step(write(tmp_path, ok.text(), "ok.step"))["objects"][0]["type"] == "cylinder"
+
+
+def test_mapped_item_is_rejected(tmp_path):
+    b = Builder()
+    b.units()
+    b.cylinder(300.0, 2400.0)
+    b.add("MAPPED_ITEM('',#1,#2)")
+    with pytest.raises(StepError, match="unsupported: MAPPED_ITEM"):
+        import_step(write(tmp_path, b.text()))
+
+
+@pytest.mark.parametrize("mutate", [
+    lambda t: t[: len(t) // 2],                                                          # truncated
+    lambda t: edit(t, "#118 = PRODUCT_RELATED", "#118 = !USER_ENTITY(1);\n#119 = PRODUCT_RELATED"),
+    lambda t: edit(t, "#118 = PRODUCT_RELATED", "#5 = A();\n#119 = PRODUCT_RELATED"),     # duplicate #5
+    lambda t: edit(t, "'distance_accuracy_value'", "'distance_accuracy_value"),          # unterminated string
+])
+def test_syntax_errors_are_step_errors_with_an_offset(tmp_path, mutate):
+    with pytest.raises(StepError) as exc:
+        import_step(write(tmp_path, mutate(fixture_text("cylinder"))), field="objects[0].path")
+    assert exc.value.message.startswith("syntax:")
+    assert re.search(r"at offset \d+$", exc.value.message)
+    assert exc.value.field == "objects[0].path" and exc.value.entity is None
+
+
+def test_comment_and_string_handling_through_the_importer(tmp_path):
+    text = fixture_text("cylinder").replace("#16 = CLOSED_SHELL", "/* a comment */ #16 = CLOSED_SHELL")
+    text = text.replace("#7 = PRODUCT('castplane cylinder'", "#7 = PRODUCT('castplane /* cylinder */'")
+    assert expand(write(tmp_path, text), id="pillar") == [PILLAR]
+    doc = parse(text)
+    assert doc["entities"]["#7"][1][0] == "castplane /* cylinder */"
+
+
+def test_unreadable_path_is_an_oserror(tmp_path):
+    with pytest.raises(OSError) as exc:
+        expand(tmp_path / "missing.step")
+    assert "objects[0].path" in str(exc.value)
+
+
+# --------------------------------------------------------------------------- recogniser negatives
+def _unsupported(tmp_path, text, *needles):
+    with pytest.raises(StepError) as exc:
+        import_step(write(tmp_path, text))
+    assert "unsupported" in exc.value.message
+    for needle in needles:
+        assert needle in exc.value.message
+    return exc.value
+
+
+def test_keyway_third_plane_is_unsupported(tmp_path):
+    text = edit(fixture_text("cylinder"), "#16 = CLOSED_SHELL('',(#17,#105,#109));",
+                "#16 = CLOSED_SHELL('',(#17,#105,#109,#200));")
+    text = add_entities(text, """
+#200 = ADVANCED_FACE('',(),#201,.T.);
+#201 = PLANE('',#202);
+#202 = AXIS2_PLACEMENT_3D('',#203,#204,#205);
+#203 = CARTESIAN_POINT('',(-1.25E+03,6.E+03,0.));
+#204 = DIRECTION('',(1.,0.,0.));
+#205 = DIRECTION('',(0.,0.,1.));""")
+    e = _unsupported(tmp_path, text, "#15: unsupported solid: faces {CYLINDRICAL_SURFACE: 1, PLANE: 3}")
+    assert e.entity == "#15"
+
+
+def test_tilted_cap_plane_is_unsupported(tmp_path):
+    text = edit(fixture_text("cylinder"), "#46 = DIRECTION('',(0.,0.,1.));", "#46 = DIRECTION('',(0.001,0.,1.));")
+    _unsupported(tmp_path, text, "faces {CYLINDRICAL_SURFACE: 1, PLANE: 2}", "perpendicular")
+
+
+def test_two_cylindrical_faces_with_different_radii_are_unsupported(tmp_path):
+    text = edit(fixture_text("cylinder"), "#16 = CLOSED_SHELL('',(#17,#105,#109));",
+                "#16 = CLOSED_SHELL('',(#17,#105,#109,#200));")
+    text = add_entities(text, "#200 = ADVANCED_FACE('',(),#201,.T.);\n#201 = CYLINDRICAL_SURFACE('',#32,301.);")
+    _unsupported(tmp_path, text, "CYLINDRICAL_SURFACE: 2", "different radii")
+    same = edit(text, "#201 = CYLINDRICAL_SURFACE('',#32,301.);", "#201 = CYLINDRICAL_SURFACE('',#32,300.);")
+    assert expand(write(tmp_path, same, "same.step"), id="pillar") == [PILLAR]
+
+
+def test_sphere_split_into_two_faces_is_a_sphere(tmp_path):
+    text = edit(fixture_text("sphere"), "#16 = CLOSED_SHELL('',(#17));", "#16 = CLOSED_SHELL('',(#17,#40));")
+    text = add_entities(text, """
+#40 = ADVANCED_FACE('',(#41),#44,.T.);
+#41 = FACE_BOUND('',#42,.T.);
+#42 = VERTEX_LOOP('',#43);
+#43 = VERTEX_POINT('',#21);
+#44 = SPHERICAL_SURFACE('',#45,500.);
+#45 = AXIS2_PLACEMENT_3D('',#24,#46,$);
+#46 = DIRECTION('',(1.,0.,0.));""")
+    assert strip_id(expand(write(tmp_path, text))[0]) == SPHERE
+    other = edit(text, "#44 = SPHERICAL_SURFACE('',#45,500.);", "#44 = SPHERICAL_SURFACE('',#45,400.);")
+    _unsupported(tmp_path, other, "SPHERICAL_SURFACE: 2")
+
+
+def test_toroidal_surface_is_named(tmp_path):
+    text = edit(fixture_text("cylinder"), "#31 = CYLINDRICAL_SURFACE('',#32,300.);",
+                "#31 = TOROIDAL_SURFACE('',#32,300.,50.);")
+    _unsupported(tmp_path, text, "TOROIDAL_SURFACE: 1", "PLANE: 2")
+
+
+def test_no_manifold_solid_brep(tmp_path):
+    text = edit(fixture_text("cylinder"), "#15 = MANIFOLD_SOLID_BREP('',#16);", "#15 = FACETED_BREP('',#16);")
+    with pytest.raises(StepError) as exc:
+        import_step(write(tmp_path, text))
+    assert exc.value.message == "unsupported: no MANIFOLD_SOLID_BREP solid (found: FACETED_BREP ×1)"
+
+
+def test_box_with_a_cylindrical_face_is_unsupported(tmp_path):
+    text = edit(fixture_text("box"), "#152 = PLANE('',#153);", "#152 = CYLINDRICAL_SURFACE('',#153,100.);")
+    _unsupported(tmp_path, text, "faces {CYLINDRICAL_SURFACE: 1, PLANE: 5}")
+
+
+def test_recognise_solid_returns_none_for_unsupported():
+    ents = parse(fixture_text("frustum"))["entities"]
+    assert recognise_solid(ents, "#15", 1000.0, 1.0, 1.2e-3) is None
+    ents = parse(fixture_text("cone"))["entities"]
+    assert recognise_solid(ents, "#15", 1000.0, 1.0, 5e-3) == CONE
+
+
+def test_degenerate_placement(tmp_path):
+    text = edit(fixture_text("cylinder"), "#35 = DIRECTION('',(1.,0.,-0.));", "#35 = DIRECTION('',(0.,0.,2.));")
+    with pytest.raises(StepError) as exc:
+        import_step(write(tmp_path, text))
+    assert "degenerate placement #32" in exc.value.message and exc.value.entity == "#32"
+
+
+# --------------------------------------------------------------------------- euler_zyx_deg (§5.5.5)
+def test_euler_round_trips():
+    rng = random.Random(20261006)
+    for _ in range(200):
+        a = [rng.uniform(-180, 180), rng.uniform(-89, 89), rng.uniform(-180, 180)]
+        R = euler_zyx_matrix(a)
+        e = euler_zyx_deg(R)
+        assert all(-180.0 < v <= 180.0 for v in e)
+        assert np.allclose(euler_zyx_matrix(e), R, rtol=0, atol=1e-12)
+        assert all(type(v) is float for v in e)
+
+
+@pytest.mark.parametrize("ry", [90.0, -90.0])
+@pytest.mark.parametrize("rx, rz", [(0.0, 0.0), (30.0, 0.0), (0.0, 40.0), (25.0, -70.0), (170.0, 100.0)])
+def test_euler_gimbal_lock(rx, ry, rz):
+    R = euler_zyx_matrix([rx, ry, rz])
+    e = euler_zyx_deg(R)
+    assert e[2] == 0.0
+    assert np.allclose(euler_zyx_matrix(e), R, rtol=0, atol=1e-12)
+    assert all(-180.0 < v <= 180.0 for v in e)
+
+
+def test_euler_exact_180_with_signed_zeros():
+    for z in (-0.0, 0.0):
+        R = [[-1.0, z, 0.0], [z, -1.0, 0.0], [0.0, 0.0, 1.0]]
+        e = euler_zyx_deg(R)
+        assert e == [0.0, 0.0, 180.0] and all(math.copysign(1.0, v) == 1.0 for v in e)
+    assert euler_zyx_deg(np.eye(3)) == [0.0, 0.0, 0.0]
+    assert euler_zyx_deg(euler_zyx_matrix([0, 0, 30])) == [0.0, 0.0, 29.999999999999996]
+
+
+# --------------------------------------------------------------------------- expansion object (§5.5.1)
+def test_expand_step_object_validation_rows():
+    def err(obj):
+        with pytest.raises(SceneError) as exc:
+            expand_step_object(dict({"id": "p", "type": "step", "path": "cylinder.step"}, **obj), "objects[0]", FIX)
+        return exc.value.field
+
+    assert err({"fallback": "x"}) == "objects[0].fallback"
+    assert err({"transform": {"scale": 2}}) == "objects[0].transform.scale"
+    assert err({"transform": {"position": [0, 0]}}) == "objects[0].transform.position"
+    assert err({"path": ""}) == "objects[0].path"
+    assert err({"path": 3}) == "objects[0].path"
+    assert err({"id": "a.b"}) == "objects[0].id"
+    assert err({"id": ""}) == "objects[0].id"
+    with pytest.raises(SceneError) as exc:
+        expand_step_object({"id": "p", "type": "step"}, "objects[0]", FIX)
+    assert exc.value.field == "objects[0].path"
+
+
+def test_expand_step_object_relative_to_base_dir_and_cwd(monkeypatch):
+    obj = {"id": "pillar", "type": "step", "path": "cylinder.step", "unknown": 1}
+    assert expand_step_object(obj, "objects[0]", FIX) == ([PILLAR], [])
+    monkeypatch.chdir(FIX)
+    assert expand_step_object(obj, "objects[0]", None) == ([PILLAR], [])
+    with pytest.raises(StepError) as exc:
+        expand_step_object(dict(obj, path="frustum.step"), "objects[3]", None)
+    assert exc.value.field == "objects[3].path" and exc.value.entity == "#15"
+
+
+def test_user_transform_composes():
+    (obj,) = expand(FIX / "cylinder.step", id="pillar", transform={"rotation_deg": [0, 0, 90], "position": [1, 0, 0]})
+    assert obj["transform"]["position"] == pytest.approx([-5.0, -1.5, 0.0], abs=1e-12)
+    assert obj["transform"]["rotation_deg"] == pytest.approx([0.0, 0.0, 90.0], abs=1e-12)
+    inline = {"id": "pillar", "type": "cylinder", "radius": 0.3, "height": 2.4,
+              "transform": {"position": [-5.0, -1.5, 0.0], "rotation_deg": [0.0, 0.0, 90.0]}}
+    tmpl = copy.deepcopy(DEFAULT_SCENE_TEMPLATE)
+    tmpl["camera"] = {"position": [0.0, -12.0, 2.0], "target": [-5.0, -1.5, 1.0], "focal_length_mm": 35,
+                      "frame_mm": [36, 24]}
+    a = _geometry(dict(tmpl, objects=[obj]))["points"]
+    b = _geometry(dict(tmpl, objects=[inline]))["points"]
+    assert set(a) == set(b)
+    for name in a:
+        assert np.allclose(a[name]["world"], b[name]["world"], rtol=0, atol=1e-9), name
+
+
+def test_expansion_is_deterministic():
+    obj = {"id": "part", "type": "step", "path": "two_solids.step"}
+    one = json.dumps(expand_step_object(obj, "objects[0]", FIX), sort_keys=True)
+    two = json.dumps(expand_step_object(obj, "objects[0]", FIX), sort_keys=True)
+    assert one == two
+
+
+# --------------------------------------------------------------------------- tessellation fallback (§5.5.7)
+def test_mesh_fallback_without_ocp_is_an_import_error(monkeypatch):
+    import builtins
+
+    real_import = builtins.__import__
+
+    def no_ocp(name, *args, **kwargs):
+        if name == "OCP" or name.startswith("OCP."):
+            raise ImportError("No module named 'OCP'")
+        return real_import(name, *args, **kwargs)
+
+    monkeypatch.setattr(builtins, "__import__", no_ocp)
+    with pytest.raises(ImportError, match=r"castplane\[step\]"):
+        expand(FIX / "frustum.step", fallback="mesh")
+    # recognised solids never need OCP
+    assert expand(FIX / "cylinder.step", id="pillar", fallback="mesh") == [PILLAR]
+
+
+def test_mesh_object_from_triangles_shape():
+    tri = {"vertices": [[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]],
+           "faces": [[0, 2, 1], [0, 1, 3], [0, 3, 2], [1, 2, 3]], "cascade_unit": "MM"}
+    obj = S.mesh_object_from_triangles("t", tri, None)
+    assert obj == {"id": "t", "type": "mesh", "data": {"vertices": tri["vertices"], "faces": tri["faces"],
+                                                         "smooth_groups": [0, 0, 0, 0]}}
+    assert S.mesh_object_from_triangles("t", tri, {"position": [1.0, 0.0, 0.0]})["transform"] == {"position": [1.0, 0.0, 0.0]}
+    castplane.validate_scene(dict(copy.deepcopy(DEFAULT_SCENE_TEMPLATE), objects=[obj]))
+
+
+def test_mesh_fallback_with_ocp():
+    pytest.importorskip("OCP")
+    rep = import_step(FIX / "frustum.step", fallback="mesh", obj_id="f")
+    (obj,) = rep["objects"]
+    assert obj["type"] == "mesh" and rep["solids"][0]["kind"] == "mesh"
+    assert rep["notes"] == [make_step_warning("STEP_SOLID_TESSELLATED", ["#15"])]
+    scene = castplane.validate_scene(dict(copy.deepcopy(DEFAULT_SCENE_TEMPLATE), objects=[obj]))
+    castplane.render(scene)
+    tri = S.tessellate_step(FIX / "frustum.step")
+    n = len(tri["vertices"])
+    assert tri["cascade_unit"] == "MM" and len(tri["faces"]) >= 100
+    assert all(0 <= i < n for face in tri["faces"] for i in face)
+    assert len(S.tessellate_step(FIX / "cylinder.step")["vertices"]) >= 100
+
+
+# --------------------------------------------------------------------------- performance (spec §8)
+def test_step_import_is_not_slow():
+    for name in FIXTURES:
+        times = []
+        for _ in range(3):
+            t0 = time.perf_counter()
+            try:
+                import_step(FIX / f"{name}.step")
+            except StepError:
+                pass
+            times.append(time.perf_counter() - t0)
+        assert min(times) < 0.5, name
