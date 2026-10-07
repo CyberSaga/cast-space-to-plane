@@ -58,4 +58,5 @@ export * as curved from "./curved.js";
 export * as multilight from "./multilight.js";
 export * as hidden from "./hidden.js";
 export * as meshprep from "./meshprep.js";
+export * as umbra from "./umbra.js";
 export { TOL_DIR, ZERO_REL, cross3, join, meet, normalize_max, row_max_abs, scene_scale, to_homogeneous, tolerance } from "./homogeneous.js";

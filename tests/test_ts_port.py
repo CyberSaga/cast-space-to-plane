@@ -398,6 +398,54 @@ def test_ts_weld_map_equals_the_reference_loop(built_port, tmp_path):
 
 
 @needs_node
+def test_ts_umbra_pieces_equal_the_reference(built_port, tmp_path):
+    """``umbra.record_pieces`` / ``umbra.umbra_pieces`` of the port (contract §5.3.4, M7 phase 2 part 4) against the
+    reference kernel, bit for bit (pieces and sides): 40 random two- to four-light inputs with star loops,
+    self-intersecting loops and loops on a coarse lattice (coincident vertices and collinear edges across lights)."""
+    import numpy as np
+
+    from castplane.umbra import record_pieces, tolerances, umbra_pieces
+
+    canvas = [360.0, 240.0]
+    tol_mm, tol_area = tolerances(canvas)
+    cases = []
+    for seed in range(40):
+        rng = np.random.default_rng(seed)
+        per_light = []
+        for _ in range(2 + seed % 3):
+            records = []
+            for _ in range(1 + int(rng.integers(3))):
+                n = int(rng.integers(3, 15))
+                th = np.sort(rng.random(n)) * 2 * np.pi
+                r = 5 + 20 * rng.random(n)
+                c = rng.random(2) * 40 - 20
+                loops = [np.stack([c[0] + r * np.cos(th), c[1] + r * np.sin(th)], axis=1)]
+                if rng.random() < 0.5:
+                    loops.append(rng.random((int(rng.integers(3, 9)), 2)) * 40 - 20)
+                if rng.random() < 0.4:
+                    loops.append(np.round(rng.random((5, 2)) * 8) * 5 - 20)
+                records.append([lp.tolist() for lp in loops])
+            per_light.append(records)
+        recs = [rec for records in per_light for rec in records]
+        cases.append({"per_light": per_light, "umbra": umbra_pieces(per_light, canvas),
+                      "records": [[[p.tolist() for p in pieces], sides.tolist()]
+                                  for pieces, sides in (record_pieces(rec, tol_mm, tol_area) for rec in recs)]})
+    (tmp_path / "umbra.json").write_text(json.dumps(cases), encoding="utf-8")
+    script = ("import { readFileSync } from 'node:fs';"
+              f"const U = await import({json.dumps((built_port / 'src' / 'umbra.js').as_uri())});"
+              "const cases = JSON.parse(readFileSync(process.argv[1], 'utf-8'));"
+              "const [tm, ta] = U.tolerances([360, 240]);"
+              "console.log(JSON.stringify(cases.map((c) => JSON.stringify(U.umbra_pieces(c.per_light, [360, 240])) === "
+              "JSON.stringify(c.umbra) && JSON.stringify(c.per_light.flat().map((r) => U.record_pieces(r, tm, ta))) === "
+              "JSON.stringify(c.records))));")
+    proc = subprocess.run([NODE, "--input-type=module", "-e", script, str(tmp_path / "umbra.json")],
+                          capture_output=True, text=True, timeout=300)
+    assert proc.returncode == 0, proc.stderr[-2000:]
+    assert json.loads(proc.stdout) == [True] * len(cases)
+    assert sum(len(c["umbra"]) for c in cases) > 100
+
+
+@needs_node
 def test_ts_bench_reports_the_bench_py_record(built_port):
     """``ts/bench/camera_only.ts --json`` (§5.4.9): the field names of ``bench.py --json`` plus ``engine``, the
     document size of the committed benchmark scene, and ``--gate none`` exits 0."""
