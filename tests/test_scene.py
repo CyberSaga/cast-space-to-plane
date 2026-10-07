@@ -403,8 +403,9 @@ def test_m6_reserved_light_ids_only_in_multi_light_scenes():
     assert RESERVED_LIGHT_IDS_MULTI == ("umbra", "core")
     for rid in RESERVED_LIGHT_IDS_MULTI:
         expect_error(_two_lights(id=rid), "lights[1].id")
-        with pytest.raises(SceneError, match="reserved id"):
+        with pytest.raises(SceneError, match="reserved id") as info:
             validate_scene(_two_lights(id=rid))
+        assert info.value.message == "reserved id in a multi-light scene"   # §5.3.0's message
         scene = _two_lights()
         scene["lights"][0]["id"] = rid
         expect_error(scene, "lights[0].id")
@@ -417,8 +418,9 @@ def test_m6_core_object_id_only_in_multi_light_scenes():
     scene = _two_lights()
     scene["objects"][0]["id"] = "core"
     expect_error(scene, "objects[0].id")
-    with pytest.raises(SceneError, match="reserved id"):
+    with pytest.raises(SceneError, match="reserved id") as info:
         validate_scene(scene)
+    assert info.value.message == "reserved id"                       # §5.0.1's message (review fix)
     assert validate_scene(mutate(["objects", 0, "id"], "core"))["objects"][0]["id"] == "core"
     scene = _two_lights()
     scene["objects"][0]["id"] = "umbra"                              # only `core` is reserved for objects

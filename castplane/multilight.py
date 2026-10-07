@@ -90,19 +90,23 @@ def multi_light_name(name: str, light_id: str, object_ids=None) -> str:
 # edges (contract §5.3.3)
 # ---------------------------------------------------------------------------
 
-def silhouette_lights(edge_flags, light_ids, n_edges: int | None = None):
+def silhouette_lights(edge_flags, light_ids, n_edges: int):
     """``edges[].silhouette`` and ``edges[].silhouette_lights`` of one polyhedral object.
 
     ``edge_flags[k]`` is ``obj["lights"][light_ids[k]]["edge_silhouette"]`` (a bool array over the
     object's edges) or ``None`` when the object has no record for that light (no silhouette edge).
     Returns ``(silhouette, lists)``: the OR over lights (bool array, unchanged for ``N = 1``) and,
-    per edge, the ids of the lights for which it is a silhouette edge (scene order, ``[]`` allowed)."""
+    per edge, the ids of the lights for which it is a silhouette edge (scene order, ``[]`` allowed).
+    ``n_edges`` (= ``len(obj["edge_templates"])``) is required so that an object with no record for
+    any light still gets one all-``False`` flag per edge; a flag array of another length is a
+    caller error (``ValueError``)."""
     arrays = [None if f is None else np.asarray(f, dtype=bool).reshape(-1) for f in edge_flags]
-    if n_edges is None:
-        n_edges = next((a.shape[0] for a in arrays if a is not None), 0)
-    table = np.zeros((len(light_ids), int(n_edges)), dtype=bool)
+    n_edges = int(n_edges)
+    table = np.zeros((len(light_ids), n_edges), dtype=bool)
     for k, a in enumerate(arrays):
         if a is not None:
+            if a.shape[0] != n_edges:
+                raise ValueError(f"edge_flags[{k}] has {a.shape[0]} flags, expected {n_edges}")
             table[k] = a
     silhouette = table.any(axis=0)
     ids = list(light_ids)

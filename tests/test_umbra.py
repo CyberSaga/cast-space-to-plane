@@ -357,3 +357,40 @@ def test_record_pieces_on_a_2000_edge_loop():
     assert abs(total(pieces) - abs(area(loop))) <= 10 * TOL_AREA
     for piece in pieces[::97]:
         assert_convex_ccw(piece)
+
+
+# --- review fix: the chunk boundaries of the kernel never change the output -----------------
+
+def _chunk_inputs():
+    rng = np.random.default_rng(11)
+    per_light = []
+    for _ in range(3):
+        records = []
+        for _ in range(3):
+            loops = [_random_star(rng, rng.random(2) * 40 - 20, 9, 5, 25).tolist(),
+                     (rng.random((6, 2)) * 40 - 20).tolist()]             # one self-intersecting loop
+            records.append(loops)
+        per_light.append(records)
+    th = np.linspace(0.0, 2 * np.pi, 41)[:-1]
+    r = 30 + 20 * np.cos(7 * th)
+    loop = np.stack([r * np.cos(3 * th), r * np.sin(2 * th)], axis=1)     # 40 edges, many crossings
+    return per_light, loop
+
+
+def _chunk_outputs(per_light, loop):
+    pieces, sides = record_pieces([loop], TOL_MM, TOL_AREA)
+    return (json.dumps(umbra_pieces(per_light, CANVAS)), json.dumps(umbra_pieces(per_light[:2], CANVAS)),
+            json.dumps([p.tolist() for p in pieces]), sides.tolist())
+
+
+@pytest.mark.parametrize("entries,pairs", [(1, 1), (2, 3), (7, 5), (64, 17), (1000, 1000)])
+def test_chunk_sizes_are_invisible_in_the_output(monkeypatch, entries, pairs):
+    """``_CHUNK_ENTRIES`` / ``_CHUNK_PAIRS`` only bound the size of the temporaries of the slab and
+    crossing-pair loops; every chunking gives byte-identical pieces and sides."""
+    import castplane.umbra as U
+    per_light, loop = _chunk_inputs()
+    default = _chunk_outputs(per_light, loop)
+    assert len(json.loads(default[0])) > 0 and len(default[3]) > 0
+    monkeypatch.setattr(U, "_CHUNK_ENTRIES", entries)
+    monkeypatch.setattr(U, "_CHUNK_PAIRS", pairs)
+    assert _chunk_outputs(per_light, loop) == default

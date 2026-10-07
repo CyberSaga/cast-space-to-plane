@@ -88,9 +88,9 @@ def _ranges(starts: np.ndarray, counts: np.ndarray):
 # the kernel
 # ---------------------------------------------------------------------------
 
-def _edge_table(polygons, groups, lines, tol_mm):
-    """Steps 1–2: vertex events, snapping and the edge table (input order, horizontal edges
-    discarded).  Returns ``(kept, table)`` or ``(kept, None)`` when no edge remains."""
+def _flatten(polygons, groups, lines):
+    """List inputs → the flat form of :func:`_edge_table_flat` (polygons with fewer than three
+    vertices dropped): ``(V, sizes, poly_groups, line)`` or ``None`` when nothing remains."""
     polys, poly_groups, poly_lines = [], [], []
     for i, poly in enumerate(polygons):
         P = np.asarray(poly, dtype=float).reshape(-1, 2)
@@ -100,9 +100,17 @@ def _edge_table(polygons, groups, lines, tol_mm):
         poly_groups.append(int(groups[i]))
         poly_lines.append(np.asarray(lines[i], dtype=np.int64).reshape(-1))
     if not polys:
-        return np.zeros(0), None
+        return None
     sizes = np.array([P.shape[0] for P in polys], dtype=np.int64)
-    V = np.concatenate(polys, axis=0)
+    return (np.concatenate(polys, axis=0), sizes, np.array(poly_groups, dtype=np.int64),
+            np.concatenate(poly_lines))
+
+
+def _edge_table_flat(V, sizes, poly_groups, line, tol_mm):
+    """Steps 1–2: vertex events, snapping and the edge table (input order, horizontal edges
+    discarded).  ``V`` is the ``(Σ n_i, 2)`` concatenation of the polygons (every ``n_i >= 3``),
+    ``sizes`` the ``n_i``, ``poly_groups`` the group of each polygon, ``line`` the concatenated
+    line ids.  Returns ``(kept, table)`` or ``(kept, None)`` when no edge remains."""
     kept = _greedy_merge(np.sort(V[:, 1]), tol_mm)
     snapped = kept[np.searchsorted(kept, V[:, 1], side="right") - 1]
     first = np.cumsum(sizes) - sizes                       # index of each polygon's vertex 0
@@ -111,8 +119,7 @@ def _edge_table(polygons, groups, lines, tol_mm):
     nxt = first[poly_of] + (local + 1) % sizes[poly_of]
     u0, v0 = V[:, 0], snapped
     u1, v1 = V[nxt, 0], snapped[nxt]
-    line = np.concatenate(poly_lines)
-    group = np.repeat(np.array(poly_groups, dtype=np.int64), sizes)
+    group = np.repeat(poly_groups, sizes)
     keep = v0 != v1
     table = {
         "u0": u0[keep], "v0": v0[keep], "u1": u1[keep], "v1": v1[keep],
@@ -292,26 +299,25 @@ def _merge_runs(raw: dict, line: np.ndarray):
     return roots, last[roots]
 
 
-def scan_pieces(polygons, groups, lines, n_groups, tol_mm, tol_area):
-    """Nonzero scanline decomposition with one winding counter per group (contract §5.3.4).
+_EMPTY_SCAN = (np.zeros((0, 4, 2)), np.zeros(0, dtype=np.int64), _EMPTY_SIDES)
 
-    ``polygons[i]`` is an ``(n_i, 2)`` array of ``[u, v]`` vertices, ``groups[i]`` its group
-    (``0 .. n_groups − 1``), ``lines[i]`` an ``(n_i,)`` int array of the line ids of its edges
-    (edge ``e`` runs from vertex ``e`` to vertex ``(e + 1) mod n_i``); polygons with fewer than three
-    vertices are ignored.  An interval of a slab is inside iff every group's winding number is
-    nonzero.  Returns ``(pieces, sides)``: ``pieces`` a list of ``(m, 2)`` float arrays (convex, CCW
-    in the ``v``-up frame, ``m`` = 3 or 4, area ``> tol_area``, rotated to the canonical start),
-    ``sides`` an ``(len(pieces), 2)`` int array ``(line_left, line_right)``."""
-    kept, T = _edge_table(polygons, groups, lines, tol_mm)
+
+def _scan_flat(V, sizes, poly_groups, line, n_groups, tol_mm, tol_area):
+    """The kernel on the flat form (see :func:`_edge_table_flat`).  Returns ``(verts, nv, sides)``:
+    ``verts`` an ``(P, 4, 2)`` array whose row ``p`` holds piece ``p``'s ``nv[p]`` (3 or 4) vertices
+    from the canonical start on (the slots after ``nv[p]`` repeat the last vertex and are never
+    emitted), ``sides`` the ``(P, 2)`` line ids ``(line_left, line_right)``.  Every per-piece step
+    is vectorised."""
+    kept, T = _edge_table_flat(V, sizes, poly_groups, line, tol_mm)
     if T is None:
-        return [], _EMPTY_SIDES.copy()
+        return _EMPTY_SCAN
     cross = _crossing_events(T, kept, tol_mm)
     ev = np.sort(np.concatenate([kept, cross])) if cross.shape[0] else kept
     if ev.shape[0] < 2:
-        return [], _EMPTY_SIDES.copy()
+        return _EMPTY_SCAN
     raw = _raw_pieces(T, ev, int(n_groups), tol_mm)
     if raw is None:
-        return [], _EMPTY_SIDES.copy()
+        return _EMPTY_SCAN
     roots, lasts = _merge_runs(raw, T["line"])
     # step 7: output vertices (x_lo, a), (x_hi, a) iff wide, (x_hi', b), (x_lo', b) iff wide
     a = ev[raw["slab"][roots]]
@@ -334,29 +340,47 @@ def scan_pieces(polygons, groups, lines, n_groups, tol_mm, tol_area):
         area = area + (Uf[:, k] * Vf[:, k1] - Uf[:, k1] * Vf[:, k])
     area = 0.5 * area
     ok = (nv >= 3) & (area > tol_area)
+    if not ok.any():
+        return _EMPTY_SCAN
+    sides = np.stack([T["line"][raw["el"][roots]], T["line"][raw["er"][roots]]], axis=1)[ok].astype(np.int64)
+    U, Vv, has, nv = U[ok], Vv[ok], has[ok], nv[ok]
     # canonical start: v <= v_min + tol, then the smallest u (ties within tol: lowest index)
     vm = np.where(has, Vv, np.inf).min(axis=1)
     cand = has & (Vv <= vm[:, None] + tol_mm)
     um = np.where(cand, U, np.inf).min(axis=1)
     cand &= U <= um[:, None] + tol_mm
     start_slot = np.argmax(cand, axis=1)
-    sides_all = np.stack([T["line"][raw["el"][roots]], T["line"][raw["er"][roots]]], axis=1)
-    pieces, keep_idx = [], []
-    for p in np.flatnonzero(ok):
-        slots = np.flatnonzero(has[p])
-        r = int(np.searchsorted(slots, start_slot[p]))
-        slots = np.concatenate([slots[r:], slots[:r]])
-        pieces.append(np.stack([U[p, slots] + 0.0, Vv[p, slots] + 0.0], axis=1))
-        keep_idx.append(p)
-    if not pieces:
+    # rotation by index arithmetic: the emitted slots in slot order, read from the start slot's rank
+    rows = np.arange(U.shape[0])
+    rank = np.cumsum(has, axis=1) - 1                       # rank of each emitted slot
+    emitted = np.argsort(~has, axis=1, kind="stable")       # emitted slots first, in slot order
+    j = np.minimum(np.arange(4)[None, :], (nv - 1)[:, None])
+    src = (rank[rows, start_slot][:, None] + j) % nv[:, None]
+    slot = emitted[rows[:, None], src]
+    verts = np.stack([U[rows[:, None], slot] + 0.0, Vv[rows[:, None], slot] + 0.0], axis=2)
+    return verts, nv.astype(np.int64), sides
+
+
+def scan_pieces(polygons, groups, lines, n_groups, tol_mm, tol_area):
+    """Nonzero scanline decomposition with one winding counter per group (contract §5.3.4).
+
+    ``polygons[i]`` is an ``(n_i, 2)`` array of ``[u, v]`` vertices, ``groups[i]`` its group
+    (``0 .. n_groups − 1``), ``lines[i]`` an ``(n_i,)`` int array of the line ids of its edges
+    (edge ``e`` runs from vertex ``e`` to vertex ``(e + 1) mod n_i``); polygons with fewer than three
+    vertices are ignored.  An interval of a slab is inside iff every group's winding number is
+    nonzero.  Returns ``(pieces, sides)``: ``pieces`` a list of ``(m, 2)`` float arrays (convex, CCW
+    in the ``v``-up frame, ``m`` = 3 or 4, area ``> tol_area``, rotated to the canonical start),
+    ``sides`` an ``(len(pieces), 2)`` int array ``(line_left, line_right)``."""
+    flat = _flatten(polygons, groups, lines)
+    if flat is None:
         return [], _EMPTY_SIDES.copy()
-    return pieces, sides_all[np.array(keep_idx, dtype=np.int64)].astype(np.int64)
+    verts, nv, sides = _scan_flat(*flat, n_groups, tol_mm, tol_area)
+    return [verts[p, :n] for p, n in enumerate(nv.tolist())], sides.copy()
 
 
-def record_pieces(polygons, tol_mm, tol_area):
-    """:func:`scan_pieces` of one record's loops (``shadows[].polygons``) with a single group and
-    line ids = the running edge index over the record's loops (contract §5.3.4): the nonzero
-    decomposition of the record's drawn region (holes are reversed loops)."""
+def _record_scan(polygons, tol_mm, tol_area):
+    """:func:`record_pieces` in the padded form of :func:`_scan_flat`, plus the record's edge
+    count (every loop's ``n_i``, also of loops with fewer than three vertices)."""
     polys, lines = [], []
     offset = 0
     for poly in polygons:
@@ -364,15 +388,28 @@ def record_pieces(polygons, tol_mm, tol_area):
         polys.append(P)
         lines.append(np.arange(offset, offset + P.shape[0], dtype=np.int64))
         offset += P.shape[0]
-    return scan_pieces(polys, [0] * len(polys), lines, 1, tol_mm, tol_area)
+    flat = _flatten(polys, [0] * len(polys), lines)
+    if flat is None:
+        return _EMPTY_SCAN + (offset,)
+    return _scan_flat(*flat, 1, tol_mm, tol_area) + (offset,)
 
 
-def _piece_lines(piece: np.ndarray, side, base: int) -> np.ndarray:
-    """Line ids of a record piece's edges in the intersection scan: an upward edge carries the
-    piece's right line, a downward edge its left line, a horizontal edge ``−1``."""
-    v = piece[:, 1]
-    vn = np.roll(v, -1)
-    return np.where(vn > v, base + int(side[1]), np.where(vn < v, base + int(side[0]), -1)).astype(np.int64)
+def record_pieces(polygons, tol_mm, tol_area):
+    """:func:`scan_pieces` of one record's loops (``shadows[].polygons``) with a single group and
+    line ids = the running edge index over the record's loops (contract §5.3.4): the nonzero
+    decomposition of the record's drawn region (holes are reversed loops)."""
+    verts, nv, sides, _ = _record_scan(polygons, tol_mm, tol_area)
+    return [verts[p, :n] for p, n in enumerate(nv.tolist())], sides.copy()
+
+
+def _piece_lines(verts, nv, sides, base: int) -> np.ndarray:
+    """Line ids of the record pieces' edges in the intersection scan (padded ``(P, 4)`` table,
+    slots ``>= nv`` unused): an upward edge carries the piece's right line, a downward edge its
+    left line, a horizontal edge ``−1``."""
+    v = verts[:, :, 1]
+    nxt = (np.arange(4)[None, :] + 1) % nv[:, None]
+    vn = np.take_along_axis(v, nxt, axis=1)
+    return np.where(vn > v, base + sides[:, 1:2], np.where(vn < v, base + sides[:, 0:1], -1)).astype(np.int64)
 
 
 def umbra_pieces(per_light, canvas_mm) -> list:
@@ -385,18 +422,23 @@ def umbra_pieces(per_light, canvas_mm) -> list:
     if len(per_light) < 2:
         return []
     tol_mm, tol_area = tolerances(canvas_mm)
-    polys, groups, lines = [], [], []
+    Vs, sizes, groups, lines = [], [], [], []
     base = 0
     for k, records in enumerate(per_light):
         for rec in records:
-            pieces, sides = record_pieces(rec, tol_mm, tol_area)
-            for piece, side in zip(pieces, sides):
-                polys.append(piece)
-                groups.append(k)
-                lines.append(_piece_lines(piece, side, base))
-            base += sum(np.asarray(p, dtype=float).reshape(-1, 2).shape[0] for p in rec)
-    pieces, _ = scan_pieces(polys, groups, lines, len(per_light), tol_mm, tol_area)
-    return [[[float(x) + 0.0, float(y) + 0.0] for x, y in piece.tolist()] for piece in pieces]
+            verts, nv, sides, n_edges = _record_scan(rec, tol_mm, tol_area)
+            if nv.shape[0]:
+                used = np.arange(4)[None, :] < nv[:, None]          # row-major = piece order
+                Vs.append(verts[used])
+                lines.append(_piece_lines(verts, nv, sides, base)[used])
+                sizes.append(nv)
+                groups.append(np.full(nv.shape[0], k, dtype=np.int64))
+            base += n_edges
+    if not Vs:
+        return []
+    verts, nv, _ = _scan_flat(np.concatenate(Vs, axis=0), np.concatenate(sizes), np.concatenate(groups),
+                              np.concatenate(lines), len(per_light), tol_mm, tol_area)
+    return [row[:n] for row, n in zip(verts.tolist(), nv.tolist())]
 
 
 def umbra_from_document(doc: dict) -> list:

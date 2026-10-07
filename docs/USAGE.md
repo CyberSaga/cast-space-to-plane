@@ -329,7 +329,7 @@ C 段在 `hidden_lines` 開啟時呼叫；純 numpy、確定性（取樣位置�
 | `runs_straight(result, a3, b3, length_mm)`、`runs_conic(interval, runs, cum, th)` | 文件的 run 紀錄：直線 `{s, t, mm, visible}`、圓錐曲線 `{interval, theta, mm, visible}` |
 | `HLR_SPACING_MM`、`HLR_MIN_SAMPLES`、`HLR_MAX_SAMPLES`、`HLR_BISECTIONS`、`HLR_RAY_EPS` | 1.0、8、4096、6、1e-5（合約固定） |
 
-### 2.18 `castplane.umbra` — 本影的掃描線核心（合約 §5.3.4、§5.3.7，M6）
+### 2.20 `castplane.umbra` — 本影的掃描線核心（合約 §5.3.4、§5.3.7，M6）
 
 B 段在多光源場景呼叫；純 numpy、確定性；只讀畫出的 `shadows[].polygons`（畫布 mm）、`umbra[].lights` 與 `canvas_mm`，所以移植版可只憑 JSON 重算。
 
@@ -341,7 +341,7 @@ B 段在多光源場景呼叫；純 numpy、確定性；只讀畫出的 `shadows
 | `umbra_pieces(per_light, canvas_mm) -> list` | 一個受影面：`per_light[k]` 是第 k 個有效光源（場景順序）各紀錄的 `polygons`；少於兩個有效光源回傳 `[]`；各紀錄的碎片一次相交掃描，回傳 `[[u, v], ...]` 碎片串列（`+ 0.0`） |
 | `umbra_from_document(doc) -> list` | 由文件的 `shadows[]`、`umbra[].lights`、`canvas_mm` 重算每筆 `umbra[]`（沒有 `umbra` 鍵時回傳 `[]`）；與 `doc["umbra"]` 逐位元相同 |
 
-### 2.19 `castplane.multilight` — 多光源組裝（合約 §5.3.2、§5.3.3、§5.3.5，M6）
+### 2.21 `castplane.multilight` — 多光源組裝（合約 §5.3.2、§5.3.3、§5.3.5，M6）
 
 純函式的小工具，讓管線檔案只需掛鉤；每個光源都用 v1 / M4 的公式單獨計算，這裡只把各光源的結果組成多光源文件的部分。
 
@@ -351,7 +351,7 @@ B 段在多光源場景呼叫；純 numpy、確定性；只讀畫出的 `shadows
 | `is_light_dependent_stem(stem) -> bool` | `sil.<k>`、`g<k>.base`、`g<k>.top` 隨光源而異；`c`、`apex`、`og<k>.*`、`v<k>` 不會 |
 | `curved_stem_name(obj_id, stem, light_id, multi) -> str` | 曲面作圖點的基本名：多光源時依光源而異的 stem 加 `.<light>`（`ball.sil.0.lamp`）；影子 / 垂足名再加 `.shadow.<light>[.<r>]` / `.foot[.<r>]` |
 | `multi_light_name(name, light_id, object_ids=None) -> str` | 逐位元比對用的名稱對映：單光源文件的點名 → 多光源文件的點名（`ball.sil.0.shadow.lamp` → `ball.sil.0.lamp.shadow.lamp`） |
-| `silhouette_lights(edge_flags, light_ids, n_edges=None) -> (silhouette, lists)` | 一個多面體物件：`edges[].silhouette`（各光源的 OR）與 `edges[].silhouette_lights`（場景順序） |
+| `silhouette_lights(edge_flags, light_ids, n_edges) -> (silhouette, lists)` | 一個多面體物件：`edges[].silhouette`（各光源的 OR）與 `edges[].silhouette_lights`（場景順序） |
 | `plate_silhouette_lights(casts, light_ids) -> list` | 有界受影面的邊界邊：該板對哪些光源投影（`casts[k]`） |
 | `unlit_union(lit_by_light) -> (union, masks, core)` | 至少被一個光源背光的面（面索引順序）、各光源在其中的遮罩、被所有光源背光的核心面遮罩 |
 | `form_table(obj, light_ids) -> dict` | A 段物件的聯集面表 `form_idx` / `form_lens` / `form_faces`（只投影一次；N = 1 時就是 v1 的陣列）與 `masks` / `core` |

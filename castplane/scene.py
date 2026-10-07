@@ -501,4 +501,4 @@ def validate_lights_in_scene(lights: list, objects: list) -> None:
             raise SceneError(f"lights[{i}].id", "reserved id in a multi-light scene")
     for i, o in enumerate(objects):
         if o["id"] in RESERVED_OBJECT_IDS_MULTI:
-            raise SceneError(f"objects[{i}].id", "reserved id in a multi-light scene")
+            raise SceneError(f"objects[{i}].id", "reserved id")

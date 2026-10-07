@@ -101,7 +101,8 @@ def test_silhouette_lights_acceptance_cube():
     obj = cube()
     data = cube_light_data(obj)
     assert int(data["west"]["edge_silhouette"].sum()) == 6        # "west has exactly six silhouette edges"
-    sil, lists = ML.silhouette_lights([data[k]["edge_silhouette"] for k in LIGHT_IDS], LIGHT_IDS)
+    sil, lists = ML.silhouette_lights([data[k]["edge_silhouette"] for k in LIGHT_IDS], LIGHT_IDS,
+                                     len(obj["edge_templates"]))
     by_edge = {(t["from"].split(".")[1], t["to"].split(".")[1]): (bool(s), l)
                for t, s, l in zip(obj["edge_templates"], sil.tolist(), lists)}
     expected = {
@@ -118,11 +119,19 @@ def test_silhouette_lights_acceptance_cube():
 def test_silhouette_lights_single_light_is_the_v1_flag_and_missing_records():
     obj = cube()
     data = cube_light_data(obj, (WEST,))
-    sil, lists = ML.silhouette_lights([data["west"]["edge_silhouette"]], ["west"])
+    sil, lists = ML.silhouette_lights([data["west"]["edge_silhouette"]], ["west"], len(obj["edge_templates"]))
     assert sil.tolist() == data["west"]["edge_silhouette"].tolist()
     assert lists == [["west"] if s else [] for s in sil.tolist()]
     sil, lists = ML.silhouette_lights([None, None], LIGHT_IDS, n_edges=3)
     assert sil.tolist() == [False] * 3 and lists == [[], [], []]
+    # review fix: every record missing still gives one flag per edge, never a zero-length array
+    n = len(obj["edge_templates"])
+    sil, lists = ML.silhouette_lights([None, None], LIGHT_IDS, n)
+    assert sil.shape == (n,) and not sil.any() and lists == [[]] * n
+    with pytest.raises(TypeError):
+        ML.silhouette_lights([None, None], LIGHT_IDS)                 # n_edges is required
+    with pytest.raises(ValueError):
+        ML.silhouette_lights([data["west"]["edge_silhouette"]], ["west"], n + 1)
 
 
 def test_plate_silhouette_lights():
@@ -276,3 +285,18 @@ def test_umbra_entries_per_receiver():
     doc = {"canvas_mm": [360.0, 240.0], "shadows": copy.deepcopy(shadows), "umbra": out}
     from castplane.umbra import umbra_from_document
     assert umbra_from_document(json.loads(json.dumps(doc))) == out
+
+
+def test_stage_a_shadow_order_is_receiver_light_caster_with_two_casters():
+    """Review check (§5.3.2, §5.1.3.1): ``A["shadows"]`` is ordered receiver → light (scene order)
+    → caster, not object-major, also with two casters and two lights."""
+    scene = json.loads((ROOT / "examples" / "basic.json").read_text())
+    second = copy.deepcopy(scene["lights"][0])
+    second["id"] = "second"
+    second["position"][0] *= -1
+    scene["lights"].append(second)
+    casters = [o["id"] for o in scene["objects"]]
+    assert len(casters) >= 2
+    A = shadow_geometry(load_scene(scene))
+    keys = [(r["receiver"], r["light"], r["object"]) for r in A["shadows"]]
+    assert keys == [("ground", lid, oid) for lid in ("lamp", "second") for oid in casters]

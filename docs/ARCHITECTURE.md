@@ -2245,8 +2245,8 @@ dependency (shapely, pyclipper); `float32` or GPU paths.
 - **[decision, implementation] (M6 step 1) The v1 length-1 test.** `tests/test_scene.py::test_lights_exactly_one`
   asserted the v1 rule that §5.3.0 lifts; it is replaced by `test_lights_non_empty_list` (empty / non-list rejected, two
   lights accepted). The multi-light id rules live in `scene.validate_lights_in_scene(lights, objects)` (called from the
-  `lights` row of `validate_scene`); `core` as an object id uses the same message as the light ids, `"reserved id in a
-  multi-light scene"` (it starts with §5.0.1's `"reserved id"`).
+  `lights` row of `validate_scene`); the light ids `umbra` / `core` use §5.3.0's message `"reserved id in a multi-light
+  scene"`, the object id `core` uses §5.0.1's message `"reserved id"` (one string per row of §5.0.1 / §5.3.0).
 - **[decision, implementation] (M6 step 2) Literal readings of §5.3.4 that a port must share.** (1) `tol_area` is
   evaluated as `1e-9 * (D * D)`. (2) "Consecutive edges of the same polygon" (excluded from the crossing pairs) are
   edges whose indices **in the input polygon** differ by 1 modulo `n_i`, decided before the horizontal edges are
@@ -2273,6 +2273,17 @@ dependency (shapely, pyclipper); `float32` or GPU paths.
   §5.3.1). An object or plate without a record for some light counts as lit by it (no core), as `_project_polyhedra`
   treats a missing record (no unlit face, no silhouette edge). `multilight.multi_light_name` takes an optional
   `object_ids` so that `F.<light>.<r>` is never read as a curved stem whatever the ids are.
+- **[decision, implementation] (M6 review fixes) Vectorised piece output, required `n_edges`, USAGE numbering.**
+  Step 7 of §5.3.4 (rotation to the canonical start) and the per-piece line ids of `umbra_pieces` are computed on one
+  padded `(P, 4)` table per scan (index arithmetic `(rank(start) + j) mod nv`; the record pieces enter the intersection
+  scan as one concatenated vertex table), as §5.3.9 asks; the output is bit-identical to the per-piece loop it replaces
+  (pieces, sides and `umbra_pieces` JSON compared on random, self-intersecting and benchmark inputs), and
+  `tests/test_umbra.py::test_chunk_sizes_are_invisible_in_the_output` pins that `_CHUNK_ENTRIES` / `_CHUNK_PAIRS` never
+  change the output. Measured (informational, §5.3.9): the 100-record benchmark drawables against their mirror image
+  0.44 s → 0.30 s. `multilight.silhouette_lights(edge_flags, light_ids, n_edges)` takes `n_edges` as a required argument
+  (an object without a record for any light still gets one `False` per edge; a flag array of another length raises
+  `ValueError`, a caller error, not a scene degeneracy). The USAGE sections of `umbra` / `multilight` are numbered §2.20 /
+  §2.21 because M5 owns §2.18 / §2.19.
 
 ### 5.4 M7 — TypeScript port of the core and the three.js web UI (spec §9 row "TypeScript 移植", spec §10 M7)
 
