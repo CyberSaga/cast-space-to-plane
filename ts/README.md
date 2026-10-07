@@ -4,9 +4,11 @@ The TypeScript port of the castplane core (contract `docs/ARCHITECTURE.md` §5.4
 pipeline (stage A camera independent, stage B projection, stage C the spec §6.2 geometry document), the deterministic
 JSON writer and the spec §6.1 SVG writer. Python (`castplane/`) is the reference implementation; the port is accepted
 against the conformance set `tests/conformance/` (phase 1: 34/34 cases at set v3; phase 2, in progress at set v6:
-43 of 50 cases incl. the three hidden-line cases (`src/hidden.ts`, part 2); the mesh and multi-light cases are listed
-as `todo` in `test/conformance.test.ts` until their part lands, contract §5.4.0 / §5.4.14; until then `render` rejects
-`mesh` objects with a `SceneError` instead of writing an incomplete document). Zero runtime dependencies; the core under
+46 of 50 cases incl. the three hidden-line cases (`src/hidden.ts`, part 2) and the three mesh cases
+(`src/meshprep.ts`, part 3); the four multi-light cases are listed as `todo` in `test/conformance.test.ts` until
+their part lands, contract §5.4.0 / §5.4.14). The core reads expanded scenes only: a `mesh` object carries its
+geometry inline (`data`); `objects[i].path` alone is the "must be expanded first" `SceneError` (expand with
+`castplane.io.expand_scene` or `castplane import --inline`). Zero runtime dependencies; the core under
 `src/` compiles with `types: []` and `lib: ["ES2022"]`, so it runs unchanged in node and in the browser.
 
 ## Build and test
@@ -29,7 +31,11 @@ read from the repository, plus the comparator self-tests), `geometry_json` (writ
 (`WARNING_CODES` equals `castplane/errors.py`), `mesh_shadow`, `receivers` (bounded receivers, the bounds clip and
 the `wall_and_ground` hand values of contract §5.1.11), `hidden` (sampled hidden-line removal: occluders, the
 sampling / bisection rule, the drawn 4-D geometry, the `wall_and_ground_hidden` hand values, run-record invariants on
-every case with the switch on, the hidden-run SVG groups).
+every case with the switch on, the hidden-run SVG groups), `meshprep` (the `tests/test_meshprep.py` table: weld,
+degenerate faces, orientation and nesting parity, the non-manifold fallback mesh, the coplanar merge, edge
+classification, `point_inside_mesh`), `mesh_pipeline` (acceptance 1 and 2 of contract §5.2.12, smooth edges, the
+64-ray cap, meshes on bounded receivers). `test/fixtures/mesh_demo.expanded.json` is the Python expansion of
+`examples/mesh_demo.json` that the determinism tests read (kept current by `tests/test_ts_port.py`).
 
 ## API
 

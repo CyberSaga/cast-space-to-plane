@@ -3512,6 +3512,75 @@ and the hidden-run SVG groups (§5.1.8). Nothing an M4–M6 case needs lies beyo
   `svg_multilight` builders with `hidden_style` for a document with `constructions` (as `svg.py` does), with a test
   that a two-light document with the switch on writes `form_shadow.hidden` and then `form_shadow.<light>` /
   `form_shadow.core` per §5.0.6.
+- **[implementation] (M7 phase 2, part 3) Meshes in the port: what lands, and the guard it removes.** `src/meshprep.ts`
+  carries every public name of §5.2.3 under the Python names (`COPLANAR_TOL_RAD`, `WELD_TOLERANCE_DEFAULT`,
+  `SMOOTH_ANGLE_DEFAULT`, `MESH_MAX_RAYS`, `SMOOTH_BAND`, `INSIDE_WINDING`, `DEGENERATE_REL`, `VOLUME_REL`, `mesh_scale`,
+  `weld_map`, `weld_vertices`, `prepare_faces`, `drop_degenerate_faces`, `compact_vertices`, `triangulate`,
+  `build_adjacency`, `fix_orientation`, `signed_volume`, `winding_number`, `merge_coplanar`, `classify_edges`,
+  `fallback_mesh`, `inherit_edge_smooth`, `point_inside_mesh`, `preprocess_mesh`, `has_usable_face`), exported as the
+  module namespace `meshprep`; `mesh.ts` gains `triangulate_faces` and the optional `Mesh.edge_smooth`;
+  `primitives.ts` gains `prepared_mesh`, the mesh kind of `local_mesh` / `build_object` (`fallback`, `prep_warnings`,
+  `triangles`, `smooth_groups`, `mesh_scale_A`, `edge_smooth`, the templates' `smooth` key) and the mesh branch of
+  `point_inside_solid`; `pipeline.ts` ports `_fallback_shadow_record` (ground and bounded receivers, with the receiver
+  frame, the bounds clip, the `< 3` / `|area| <= tol·scale_A` drop rule and the undirected-edge crossing keys),
+  `_mesh_ray_vertices` (64-ray cap, `MESH_RAYS_CAPPED` per (object, light, receiver), on the loop mesh actually used),
+  the `prep_warnings` merge before the bounded-default branch, "a fallback mesh is never clipped", stage B's
+  `camera_silhouette` and compose's `_mesh_edge_keys`. The part-1 guard (`shadow_geometry` rejecting `mesh` with
+  `SceneError("objects[i].type")`) is gone, and the usable-face hook `scene.ts::set_mesh_usable_face_guard` of the
+  part-1 note was replaced by a direct call of `meshprep.has_usable_face` in `validate_mesh_object` (no import cycle:
+  `meshprep.ts` imports only `errors`, `mesh`, `transform` and a type of `shadow`), so the port-only name is gone. The
+  three `mesh_*` cases left `TODO_CASES` and pass; `TODO_EXAMPLES` of `ts/test/determinism.test.ts` is empty.
+- **[decision, implementation] (M7 phase 2, part 3) Literal readings of the mesh port.** (1) *Weld.* `weld_map` is the
+  reference loop of §5.2.3 step 2 (`fast` is accepted for the Python signature and ignored; the numpy fast path is
+  result-identical to the loop by `tests/test_meshprep.py`); `cell_quotients` and its non-finite → exact rule are
+  verbatim. Python's cell indices are unbounded `int`s; the port keys its cell dictionary by one exact number per cell
+  — the per-axis renumbering with gaps capped at 2 of the Python fast path (`_compressed_cell_keys`; a computed gap of
+  two distinct integral floats is `>= 2` exactly when the true gap is), combined as `(c0·R + c1)·R + c2` — and falls
+  back to decimal-string keys (through `BigInt` beyond 2^52) when `R³ >= 2^53`. This is an encoding of the same
+  dictionary: the visiting order, the 27 neighbours and the lowest-index rule are unchanged
+  (`tests/test_ts_port.py::test_ts_weld_map_equals_the_reference_loop` compares the port with Python's
+  `fast=False` loop on 13 point sets). The exact (`τ = 0`) path keys the float triple by its shortest decimal text, which
+  identifies `-0.0` and `0.0` as Python's tuple equality does. (2) *Reductions.* The 3-term `einsum("ij,ij->i")` dot
+  products (signed volume, winding number, point–triangle distance, `classify_edges`), `np.cross` and the Newell
+  vectors of the degenerate test are written left to right as §5.4.4 (2)–(3) prescribe, `cumsum` sums run in triangle
+  order, the fallback area's `np.sum(axis=0)` is a sequential per-component sum and `n @ s` a left-to-right dot;
+  `atan2` / `cos` are V8's (fdlibm-derived), `scale_A ** 2` / `** 3` are JavaScript `**`. All of these feed only
+  banded comparisons (`n_f·n_s >= cos(1e-3)`, the `1e-9` smooth band, `|w| > 0.75`, the `1e-12·scale_A²` / `³`
+  thresholds, `|area| <= tol·scale_A`), and `Math.cos(1e-3)`, `Math.cos(radians(30))`, `1.5 ** 3` equal the CPython
+  values bit for bit. (3) *Shapes.* Tuples are arrays (`preprocess_mesh` → `[mesh, triangles, fallback, smooth_groups,
+  warnings]`, `[…, scale_A]` with `return_scale = true`; `weld_vertices`, `drop_degenerate_faces`, `compact_vertices`,
+  `fix_orientation`, `merge_coplanar` likewise); `build_adjacency` returns the record with plain arrays (`counts` a
+  `number[]`); a crossing origin is the tagged `{kind: "ground", i, j}` of §5.4.2. Only mesh shadow records carry
+  `ray_vertices` in the port (Python stores an all-true mask on every polyhedral record; an absent mask means "every
+  row" in both, §5.2.4). `point_inside_mesh` reads the first three components of `x`, so the homogeneous `L` of a
+  point light can be passed as `point_inside_solid` does.
+- **[decision, implementation] (M7 phase 2, part 3) `examples/mesh_demo.json` in a loader-free port.** The example
+  names `meshes/house.obj`, which the core cannot read (§5.4.0, §5.2.9). The port's tests read its Python expansion,
+  committed as `ts/test/fixtures/mesh_demo.expanded.json` (`json.dumps(expand_scene(example), indent=1, sort_keys=True,
+  ensure_ascii=False)` and a newline) through `ts/test/helpers.ts::read_example`;
+  `tests/test_ts_port.py::test_expanded_example_fixtures_are_current` keeps the file equal to the current expansion and
+  requires a fixture for exactly the examples with a mesh `path`. `test_ts_render_equals_the_reference_on_the_examples`
+  renders the fixture with the port and compares it with `castplane.render(load_expanded_scene(example))` (its todo
+  list is now `{"two_lights.json"}`, the multi-light part's), and `tools/compare_svg.py` expands every scene with a
+  mesh `path` before the port renders it. The web UI bundles `examples/*.json` as before, so `mesh_demo` shows the
+  expand-first `SceneError` there; an expanded scene renders, its mesh drawn as a `BufferGeometry` of
+  `prepared_mesh`'s triangles in the local frame (both sides: a fallback mesh may be open), placed by
+  `transform_frame` like every primitive (§5.4.10 phase 2; `web/test/orbit.test.ts` checks both). No OBJ parser was
+  added to `web/` (§5.4.10 does not ask for one).
+- **[implementation] (M7 phase 2, part 3) Cross-implementation evidence and cost.** Set v6: 46 of 50 cases pass
+  `compare_documents` (the four `multilight_*` cases stay on `TODO_CASES`); `tools/compare_svg.py` on the 46 cases and
+  the seven single-light examples (`mesh_demo.json` through its expansion) reports 0 boundary differences, 0 mismatches
+  and 0 render failures (53 scenes). `tests/test_ts_port.py::test_ts_mesh_scenes_equal_the_reference` renders 47 mesh
+  scenes (12 seeded `make_mesh_scene` scenes, the §7.1 invariant scenes, the acceptance / fallback / buried boxes,
+  smooth prisms incl. the 64-ray cap, a smooth UV sphere, centre-fan caps, a hollow box with the light in its cavity, a
+  light inside the box, Möbius and Klein connectivity, meshes on bounded receivers, nine of them with hidden lines on)
+  with both implementations: SVG byte-identical and JSON comparator-equal on all 47. A wider scratch differential (not
+  committed: 104 scenes, 60 seeds) agrees on every scene. The three ulp-amplifying scenes of the part-2 note were
+  re-measured and are unchanged (the canvas-corner polygon 4 vs 6 vertices, `zbuffer_random_scene(28)`'s `rx`, the
+  light at the camera centre): none involves a mesh. On the CI container (node 22.22.0) the `bench.py --scene mesh10k`
+  scene (one mesh of 10 000 unwelded triangles) takes ≈ 0.2–0.3 s for `render` and ≈ 0.17–0.25 s for
+  `preprocess_mesh` (the weld ≈ 60 ms of it), against ≈ 0.22–0.25 s / 0.09–0.11 s for the Python reference; not gated
+  (§5.2.7).
 
 ### 5.5 M8 — STEP import (spec §9 row "STEP", spec §10 M8) — a loader, outside the core
 

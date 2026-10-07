@@ -23,8 +23,8 @@ npm run -w web test        # orbit / download unit tests (node:test, web/test/)
   that fails validation shows the `SceneError` field path and message in the error panel, and the previous
   scene stays loaded. The core reads expanded scenes only (contract §5.4.0): a `mesh` object must carry its
   geometry inline (`data`), so the bundled `mesh_demo` example, which names `meshes/house.obj`, shows the
-  "mesh file must be expanded first" error; write an expanded scene with `castplane import house.obj --inline`
-  (or `castplane.io.expand_scene`) and load that file instead.
+  "mesh file must be expanded first" error; load an expanded scene instead (`castplane.io.expand_scene` of the
+  example, or `castplane import FILE -o scene.json --inline` for a new scene).
 - **3D view** (`src/scene3d.ts`, `src/threeCamera.ts`): boxes, cylinders, cones, spheres, prisms and inline meshes
   (a `BufferGeometry` of the core's preprocessed triangles, `prepared_mesh`, both sides drawn) placed with
   the core's `transform_frame`, light helpers (a sphere for a point light, an arrow for a directional light), and the

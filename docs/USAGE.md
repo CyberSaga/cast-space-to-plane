@@ -666,6 +666,8 @@ const out   = render(scene, camera, hidden_lines, hidden_style); // {geometry: d
 
 取樣式消隱（合約 §5.1.6）由 `src/hidden.ts` 移植，公開名稱與 `castplane.hidden` 相同（`import { hidden } from "castplane"`：`occluder`、`first_hit`、`occluded`、`image_bounds`、`classify_curve`、`drawn_segments_4d`、`clip_polygon_4d`、`runs_straight`、`runs_conic`、`classify_document` 等）。
 
+網格前處理（合約 §5.2.3–§5.2.5）由 `src/meshprep.ts` 移植，公開名稱與 `castplane.meshprep` 相同（`import { meshprep } from "castplane"`：`weld_map`、`weld_vertices`、`drop_degenerate_faces`、`build_adjacency`、`fix_orientation`、`merge_coplanar`、`classify_edges`、`fallback_mesh`、`inherit_edge_smooth`、`point_inside_mesh`、`preprocess_mesh` 等），另有 `mesh.triangulate_faces` 與 `primitives.prepared_mesh`。`mesh` 物件必須帶內嵌的 `data`：核心不讀檔，只有 `path` 的物件會拋 `SceneError("objects[i].path", "mesh file must be expanded first …")`；先用 `castplane import FILE -o scene.json --inline` 或 `castplane.io.expand_scene` 展開。
+
 與 Python 的差異：
 
 | 項目 | TypeScript |
@@ -700,7 +702,7 @@ vite + three.js（版本釘選：three 0.186.1、vite 8.3.3）。`vite build` �
   - 不是 JSON 的檔案顯示「not a JSON file」；
   - 場景無效時，錯誤面板顯示 `SceneError` 的欄位路徑與訊息，原本的場景保留。
 - **3D 顯示**：
-  - 方塊、圓柱、圓錐、球、稜柱以核心的 `transform_frame` 擺放；
+  - 方塊、圓柱、圓錐、球、稜柱與內嵌網格（核心前處理後的三角形 `prepared_mesh`，雙面繪製）以核心的 `transform_frame` 擺放；範例 `mesh_demo` 只有 `path`，網頁上顯示「必須先展開」的錯誤，請載入展開後的場景；
   - 點光源畫成小球，平行光畫成箭頭；地面加格線；
   - three.js 相機直接由核心的 `camera_matrix` 建出，所以 WebGL 畫面與 SVG 疊圖是同一台 castplane 相機的兩種渲染；
   - three.js 不產生任何陰影，畫面上的影子全部來自移植的核心。
