@@ -250,6 +250,74 @@ def test_expanded_example_fixtures_are_current():
                                                                  ensure_ascii=False) + "\n", name
 
 
+def _mesh_scenes() -> dict:
+    """Mesh scenes for the cross-implementation check of the port's mesh part (contract §5.2.9, §5.4.14): the
+    acceptance boxes, the fallback and buried variants, smooth prisms (the ray cap included), a smooth UV sphere, a
+    hollow box with the light in its cavity, a light inside the box, Moebius / Klein connectivity, meshes on bounded
+    receivers, the §7.1 invariant scenes and seeded ``make_mesh_scene`` scenes; several with hidden lines on."""
+    import copy
+
+    from castplane.mesh import sphere_mesh
+    from tests import test_mesh_pipeline as mp
+    from tests import test_meshprep as tm
+    from tests.reference.random_scenes import make_mesh_scene
+
+    def box(V, F, **kw):
+        return mp.mesh_box_scene(V, F, **kw)
+
+    scenes = {f"rand{s}": make_mesh_scene(s) for s in range(12)}
+    scenes.update({f"inv{k}": copy.deepcopy(dict(sc)) for k, sc in enumerate(mp.mesh_invariant_scenes())})
+    scenes["split"] = box(mp.SPLIT_V, mp.SPLIT_F)
+    scenes["open_bottom"] = box(mp.CUBE_V, mp.OPEN_BOTTOM_F)
+    scenes["open_bottom_buried"] = box(mp.CUBE_V, mp.OPEN_BOTTOM_F, transform={"position": [0, 0, -0.5]})
+    scenes["split_buried"] = box(mp.SPLIT_V, mp.SPLIT_F, transform={"position": [0, 0, -0.5]})
+    scenes["prism16"] = box(*mp.prism_data(16))
+    scenes["prism100_capped"] = box(*mp.prism_data(100), smooth_angle_deg=0.0)
+    sm = sphere_mesh(0.5)
+    scenes["sphere"] = box(sm["vertices"].tolist(), sm["faces"])
+    scenes["fan_prism"] = box(*tm.fan_prism(r=0.5, h=1.0))
+    hv, hf = tm.hollow_box()
+    scenes["hollow_cavity_light"] = box(hv, hf)
+    scenes["hollow_cavity_light"]["lights"][0]["position"] = [0, 0, 1.0]
+    scenes["light_inside"] = box(mp.SPLIT_V, mp.SPLIT_F)
+    scenes["light_inside"]["lights"][0]["position"] = [0, 0, 0.5]
+    mv, mf = tm.mobius()
+    scenes["mobius"] = box([[0.4 * x, 0.4 * y, 0.4 * z + 0.6] for x, y, z in mv], mf)
+    kv, kf = tm.klein()
+    scenes["klein"] = box([[0.2 * x, 0.2 * y, 0.2 * z + 0.5] for x, y, z in kv], kf)
+    for floor in (False, True):
+        scenes[f"wall_fallback{int(floor)}"] = mp.wall_mesh_scene(mp.OPEN_BOTTOM_F, floor=floor)
+        scenes[f"wall_split{int(floor)}"] = mp.wall_mesh_scene(mp.SPLIT_F, mp.SPLIT_V, floor=floor)
+    for name in ("split", "open_bottom", "prism16", "sphere", "wall_fallback1", "wall_split1", "inv0", "rand1", "rand5"):
+        sc = copy.deepcopy(scenes[name])
+        sc.setdefault("output", {})["hidden_lines"] = True
+        scenes[f"{name}_hidden"] = sc
+    return scenes
+
+
+@needs_node
+def test_ts_mesh_scenes_equal_the_reference(built_port, tmp_path):
+    """The port's mesh part against the Python reference beyond the three conformance cases: every scene of
+    :func:`_mesh_scenes` gives the same SVG text byte for byte and a JSON document that passes the comparator."""
+    from castplane.output import geometry_json
+
+    scenes = _mesh_scenes()
+    (tmp_path / "in").mkdir()
+    paths = []
+    for name, sc in scenes.items():
+        path = tmp_path / "in" / f"{name}.json"
+        path.write_text(json.dumps(sc), encoding="utf-8")
+        paths.append(path)
+    proc = subprocess.run([NODE, str(TS / "scripts" / "render.mjs"), *map(str, paths), str(tmp_path / "out")],
+                          capture_output=True, text=True, timeout=600)
+    assert proc.returncode == 0, proc.stderr[-2000:]
+    for name, sc in scenes.items():
+        ref = castplane.render(castplane.load_scene(sc))
+        assert (tmp_path / "out" / f"{name}.svg").read_text(encoding="utf-8") == ref["svg"], name
+        port_doc = json.loads((tmp_path / "out" / f"{name}.json").read_text(encoding="utf-8"))
+        assert tc.compare_documents(json.loads(geometry_json.dumps(ref["geometry"])), port_doc) == [], name
+
+
 @needs_node
 def test_ts_bench_reports_the_bench_py_record(built_port):
     """``ts/bench/camera_only.ts --json`` (§5.4.9): the field names of ``bench.py --json`` plus ``engine``, the
