@@ -72,8 +72,9 @@ def wedge():
 
 # --------------------------------------------------------------------------- OBJ / STL / PLY
 def write_obj_box(up: str) -> str:
+    axes = 'Y-up, load with up: "y"' if up == "y" else "Z-up"
     lines = ["# castplane M5 fixture: the split-vertex unit box of contract §5.2.12 "
-             f"({'Y-up, load with up: \"y\"' if up == 'y' else 'Z-up'})", "o cube", "s off"]
+             f"({axes})", "o cube", "s off"]
     for v in SPLIT_V:
         p = to_gltf_axes(v) if up == "y" else v
         lines.append("v " + " ".join(fmt(c) for c in p))
