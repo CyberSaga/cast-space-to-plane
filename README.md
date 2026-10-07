@@ -40,6 +40,7 @@ castplane stages examples/basic.json -o stages.json # A 段 / B 段中間結果�
 castplane render examples/wall_and_ground.json -o out --hidden-lines   # M4：地面 + 有界牆面（轉折影），隱藏線畫成虛線
 castplane render examples/mesh_demo.json -o out     # 場景裡的 mesh 物件以 path 引用 OBJ 檔（M5）
 castplane import tests/fixtures/meshes/box_split.obj -o box.json   # 網格檔 → 場景檔（OBJ、glTF / GLB、STL、PLY）
+castplane render examples/two_lights.json -o out    # M6：兩盞點光源，每個光源一個子群組，本影疊在最上面
 ```
 
 `render` 預設只寫 SVG 與 JSON；PNG 要明確以 `--formats` 要求，沒有 cairosvg / resvg 時以結束碼 3 回報，而且**什麼檔案都不寫**（同一次要求的 SVG / JSON 也不寫，避免半成品；先不加 `png` 再跑一次即可）。結束碼：0 成功、1 檔案錯誤、2 輸入無效（訊息含欄位路徑，例如 `error: objects[1].radius: must be > 0`）、3 缺少選用相依套件。完整選項見 [`docs/USAGE.md`](docs/USAGE.md)。
@@ -70,6 +71,9 @@ result = castplane.render(scene)        # {"geometry": doc, "svg": "<svg …>"}
 
 # M4：取樣式消隱（預設關閉；None = 用場景的 output.hidden_lines / hidden_style）
 result = castplane.render(scene, hidden_lines=True, hidden_style="dashed")   # 或 "omit"
+
+# M6：兩個以上光源時文件多了 constructions / umbra / form_shadow_core；拖曳相機時可略過本影
+B = castplane.project_scene(scene, A, camera=camera, umbra=False)   # umbra[].polygons = None（不計算）
 ```
 
 ## 作圖線是什麼
@@ -109,6 +113,8 @@ result = castplane.render(scene, hidden_lines=True, hidden_style="dashed")   # �
 
 `output.layers` 或 `--layers` 選擇子集，順序固定。v1 不消隱，所有邊都畫。
 
+**M6 多光源（合約 §5.3.6）。** `lights` 有兩個以上光源時，`form_shadow`、`cast_shadow`、`construction` 三層改成**每個光源一個子群組**（`form_shadow.<light>`、`cast_shadow.<light>`、`construction.<light>`，依光源 id 的碼位順序）：各光源的影子填色降為 `fill-opacity = 0.3 / N_act`、背光面 `0.18 / N_act`（`N_act` 是在某個受影面上有效的光源數；兩盞時 `0.15` / `0.09`），只被部分光源遮住的區域（半影）因此較淡；**本影**（被所有有效光源都遮住的區域）以一個 `<path>` 畫在 `cast_shadow.umbra`（`fill-opacity="0.3"`、不描邊，每塊凸片一個 `M … Z` 子路徑），被所有光源背光的面畫一次在 `form_shadow.core`（原本的 0.18 色調）。半影不另外存成多邊形：就是各光源子群組露出本影之外的部分。只有一個光源時 SVG 與單光源版本逐位元相同。
+
 **M4 隱藏線（合約 §5.1.8）。** `output.hidden_lines`（或 `--hidden-lines`、`render(..., hidden_lines=True)`）開啟時，每條邊、母線、明暗交界線、圓錐曲線與影子輪廓邊依取樣結果切成可見段與隱藏段：可見段留在原本的群組，隱藏段放進各層**第一個**子群組 `objects.hidden` / `form_shadow.hidden` / `cast_shadow.hidden`，畫成 0.15 mm 虛線（`hidden_style: "dashed"`，預設）或留空（`"omit"`，真正的消隱）；影子的填色不受影響，輪廓改畫在 `cast_shadow.<light>.<object>.outline`。關閉時 SVG 與 v2 位元相同。有界受影面的邊畫在 `objects.<受影面 id>`，板子的影子跟物件的影子一樣在 `cast_shadow.<light>`。
 
 ### JSON 幾何（規格 §6.2）
@@ -127,7 +133,7 @@ result = castplane.render(scene, hidden_lines=True, hidden_style="dashed")   # �
 | `<受影面>.b<k>` | M4：有界受影面的 bounds 頂點 k（板子當施影體時同樣有 `.shadow.<光源>[.<受影面>]` / `.foot[.<受影面>]`） |
 | `….shadow.<光源>.<受影面>`、`….foot.<受影面>`、`<物件>.s<k>.<光源>.<受影面>`、`F.<光源>.<受影面>` | M4：`receivers[0]` 以外的受影面在名稱末尾加 `.<受影面 id>`（`receivers[0]` 保留上面的短名稱） |
 
-其他區塊：`edges[]`（`from`、`to`、`silhouette`、`back`、`segment` 畫面線段）、`shadows[]`（`outline` / `loops` 點名或 `{"direction": …}` 方向頂點、`polygons` 裁切後的可畫多邊形、`conics` 圓錐曲線、`unbounded`）、`form_shadow[]`、`outlines[]`（曲面物件的相機輪廓）、`construction`（`light_point`、`shadow_vp`、`rays`、`segments`、`checks`）、`horizon`（`v_mm`、`line`、`vanishing_points`）、`warnings[]`（`{code, ids, message}`）。M4 另有頂層 `hidden_lines`（實際生效的開關）、`receivers[]`（`plane`、`bounds`、各光源的 `lit` / `casts`）、`construction.per_receiver`、每個 `shadows[]` 的 `receiver` 與 `polygon_edges`，以及每個可消隱圖形的 `visibility`（`visible` / `hidden` / `partial`）與 `runs`（直線 `{s, t, mm, visible}`、圓錐曲線 `{interval, theta, mm, visible}` 與 `hidden_polylines`）；開關關閉時這些鍵都是「全部可見」的值。浮點數以最短往返表示寫出、鍵排序，相同輸入產生位元相同的檔案。完整鍵表在 [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) §3.1。
+其他區塊：`edges[]`（`from`、`to`、`silhouette`、`back`、`segment` 畫面線段）、`shadows[]`（`outline` / `loops` 點名或 `{"direction": …}` 方向頂點、`polygons` 裁切後的可畫多邊形、`conics` 圓錐曲線、`unbounded`）、`form_shadow[]`、`outlines[]`（曲面物件的相機輪廓）、`construction`（`light_point`、`shadow_vp`、`rays`、`segments`、`checks`）、`horizon`（`v_mm`、`line`、`vanishing_points`）、`warnings[]`（`{code, ids, message}`）。M4 另有頂層 `hidden_lines`（實際生效的開關）、`receivers[]`（`plane`、`bounds`、各光源的 `lit` / `casts`）、`construction.per_receiver`、每個 `shadows[]` 的 `receiver` 與 `polygon_edges`，以及每個可消隱圖形的 `visibility`（`visible` / `hidden` / `partial`）與 `runs`（直線 `{s, t, mm, visible}`、圓錐曲線 `{interval, theta, mm, visible}` 與 `hidden_polylines`）；開關關閉時這些鍵都是「全部可見」的值。M6：兩個以上光源的文件另有 `constructions`（`{<光源>: 作圖區塊}`，每個光源一塊，含 `per_receiver`；`construction` 是第一個光源那一塊的別名）、`umbra[]`（每個受影面一筆 `{receiver, lights, polygons}`：`lights` 是在該面上有效的光源、`polygons` 是本影的凸片，畫面 mm；有效光源少於兩盞時為 `[]`，`project_scene(..., umbra=False)` 時為 `null`）、`form_shadow_core[]`（被所有光源背光的面）、`form_shadow[].light` 與 `edges[].silhouette_lights`（該邊是哪些光源的光輪廓邊；`silhouette` 是各光源的 OR）；曲面物件隨光源而異的作圖點名稱帶光源 id（`ball.sil.0.lamp`、`pillar.g0.base.sun`）。單光源文件沒有這些鍵。`castplane.umbra.umbra_from_document(doc)` 只憑文件就能逐位元重算 `umbra`。浮點數以最短往返表示寫出、鍵排序，相同輸入產生位元相同的檔案。完整鍵表在 [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) §3.1。
 
 ### PNG
 
@@ -145,7 +151,7 @@ result = castplane.render(scene, hidden_lines=True, hidden_style="dashed")   # �
 | | `type` | `box`（`size` 三個正數）、`cylinder` / `cone`（`radius`、`height` 正數）、`sphere`（`radius`）、`prism`（`polygon` 至少 3 個 `[x, y]`、不共線、不自交；順時針輸入會自動反向；`height`） |
 | | `transform` | 選填；`position` 預設 `[0, 0, 0]`，`rotation_deg` 預設 `[0, 0, 0]`（Z-Y-X 順序的歐拉角，`R = Rz·Ry·Rx`）；`scale` 不允許（用 size 參數） |
 | | `type: "mesh"`（M5） | `path`（網格檔，相對於場景檔目錄；CLI 與 `castplane.io.load_expanded_scene` 先展開）或內嵌 `data`（`vertices`、`faces`、選用 `smooth_groups`），選用 `node`、`up`（`"z"` / `"y"`）、`scale`、`weld_tolerance`（預設 1e-6 m）、`smooth_angle_deg`（預設 30）；面數、頂點數各 ≤ 50 000。完整規則見 [`docs/USAGE.md`](docs/USAGE.md)「場景 JSON 的 `mesh` 物件」 |
-| `lights[]` | | v1 恰好一個；`id` 唯一、非空、不含 `.` |
+| `lights[]` | | **M6 起**：非空串列（v1 恰好一個）；`id` 唯一、非空、不含 `.`、不得與受影面 id 相同；兩個以上光源時光源 id 不得是 `umbra` / `core`、物件 id 不得是 `core`（SVG 子群組名稱；單光源場景仍可用）。光源順序就是文件裡各光源紀錄與 `umbra[].lights` 的順序 |
 | | `type` | `point`（`position`）或 `directional`（`direction` 指向光源，長度必須為 1，容差 1e-9） |
 | `receivers[]` | | v1 恰好一個；`type: "plane"`、`normal` 必須是 `[0, 0, 1]`、`offset` 必須是 0（預設 0）。**M4 起**：非空串列；`id` 唯一、不含 `.`、不得與物件／光源 id 相同、不得是 `hidden`；`normal` 任意單位向量（法線指向的一側是受光面，不會自動翻轉）、`offset` 任意 |
 | | `bounds` | M4：選填，≥ 3 個世界座標點組成的**嚴格凸**簡單多邊形，必須在平面上（順時針輸入自動反向）；省略表示無界，只允許 `receivers[0]` 且必須是地面 z = 0；有地面時 bounds 不得低於地面。凹的受影面請拆成幾個凸板 |
@@ -180,14 +186,15 @@ result = castplane.render(scene, hidden_lines=True, hidden_style="dashed")   # �
 
 | 層 | 內容 | 執行 |
 | --- | --- | --- |
-| 單元與不變量（§7.1） | 作圖法 = 直接計算（1e-6 mm）、影子與相機無關（1e-9 m）、點光趨近平行光（max(1e-4 m, 2·δ)，δ 為 D20 推導的位似差距，並須在 10⁷ m 時縮十倍）、剛體等變（1e-6 mm）、齊次尺度不變（1e-9）、無 NaN / Inf | `python3 -m pytest -q`（全套約 1080 個測試，2–3 分鐘；`test_raycast.py` 與 `test_property.py` 最慢） |
+| 單元與不變量（§7.1） | 作圖法 = 直接計算（1e-6 mm）、影子與相機無關（1e-9 m）、點光趨近平行光（max(1e-4 m, 2·δ)，δ 為 D20 推導的位似差距，並須在 10⁷ m 時縮十倍）、剛體等變（1e-6 mm）、齊次尺度不變（1e-9）、無 NaN / Inf | `python3 -m pytest -q`（全套約 1610 個測試，2–3 分鐘；`test_raycast.py` 與 `test_property.py` 最慢） |
 | 解析案例（§7.2） | 單位方塊 h/(h−1)、太陽 45° / 30° 影長、球影橢圓閉式解、平視與俯仰相機 | `python3 -m pytest tests/test_analytic.py tests/test_curved.py -q` |
 | 退化情況（§5.7） | 每列至少一個測試，檢查警告代碼與輸出有限 | `python3 -m pytest tests/test_degenerate.py -q` |
 | 光線投射對照組（§7.3） | 亂數場景（1–10 個基元，含凹稜柱與光源垂足在凹口內的案例），地面取樣網格逐點射線測試，影子多邊形柵格化後 IoU ≥ 0.99（另逐物件比對）；與幾何法零程式碼共用 | `python3 -m pytest tests/test_raycast.py -q`（較慢） |
 | 屬性測試（§7.4） | hypothesis 生成隨機場景與相機，驗證全部不變量，並針對退化情況生成專門分佈 | `python3 -m pytest tests/test_property.py -q`（較慢） |
-| 一致性測試集（§7.5） | 46 個案例（v2 的 34 個 + M4 的 9 個 + M5 的 3 個內嵌網格案例）的輸入與 §6.2 輸出，畫面座標容差 1e-6 mm、警告代碼集合相同；TypeScript 移植的合約。比對常數的單一來源是 `tests/conformance/rules.json`（Python 與 TypeScript 執行器共用，含逐案例的 `case_overrides`） | `python3 -m pytest tests/test_conformance.py -q`；重新產生：`python3 tools/regen_conformance.py --reason "…"`；比對規則變更：`python3 tools/regen_conformance.py --rules-only --reason "…"` |
+| 一致性測試集（§7.5） | 50 個案例（v2 的 34 個 + M4 的 9 個 + M5 的 3 個內嵌網格案例 + M6 的 4 個多光源案例）的輸入與 §6.2 輸出，畫面座標容差 1e-6 mm、警告代碼集合相同；TypeScript 移植的合約。比對常數的單一來源是 `tests/conformance/rules.json`（Python 與 TypeScript 執行器共用，含逐案例的 `case_overrides`） | `python3 -m pytest tests/test_conformance.py -q`；重新產生：`python3 tools/regen_conformance.py --reason "…"`；比對規則變更：`python3 tools/regen_conformance.py --rules-only --reason "…"` |
 | 消隱參考（M4） | `tests/reference/zbuffer.py` 逐像素光線投射深度緩衝（0.1 mm/px，三值判定加輪廓防護），與 castplane 零程式碼共用；29 個場景的每段 run 每 0.5 mm 取樣與其比對（≥ 99%，方塊／稜柱邊 100%），run 邊界與逐點光線投射在 ±0.15 mm 內一致 | `python3 -m pytest tests/test_hidden.py tests/test_receivers.py -q` |
 | 網格（M5） | 前處理表（焊接、退化面、方向、共面合併、邊分類）、匯入方塊 = 參數化方塊（逐位元）、非流形逐面退路、載入器（OBJ、glTF `.gltf` + `.bin` / data URI、GLB、跨距存取器、鏡像節點、精確 Y-up → Z-up、STL / PLY）、`castplane import` | `python3 -m pytest tests/test_meshprep.py tests/test_mesh_pipeline.py tests/test_loaders.py -q`；夾具：`python3 tools/make_mesh_fixtures.py` |
+| 多光源（M6） | 手算驗收案例（兩盞對稱點光源下的單位方塊：本影 3 片、地面面積 7/6）、每個光源的紀錄與其單光源文件逐位元相同、本影掃描線核心（`record_pieces` 表、隨機輸入對柵格 AND）、三盞光的本影對柵格 AND（IoU ≥ 0.995）與光源順序不變、對光線投射「被所有光源遮住」的遮罩 IoU ≥ 0.99、`umbra_from_document` 逐位元重算 | `python3 -m pytest tests/test_umbra.py tests/test_multilight.py -q` |
 | 效能基準（§8） | 100 個基元、約 1 萬條邊：完整渲染 < 1 s、只換相機 < 100 ms；預設讀取提交的場景檔 `benchmarks/scenes/benchmark_100.json`（`benchmarks/export_scene.py` 產生，TypeScript 基準讀同一個檔） | `python3 benchmarks/bench.py`（不在預設測試內；目前量測狀態見 `benchmarks/README.md`） |
 
 ## 里程碑（規格 §10）
@@ -200,7 +207,7 @@ result = castplane.render(scene, hidden_lines=True, hidden_style="dashed")   # �
 | M3 核心穩定（閘門） | 光線投射對照組、屬性測試、一致性測試集 v1、效能基準 | **通過（D17 豁免）**：光線投射對照（IoU ≥ 0.99）、屬性測試、一致性測試集（目前 v5）與效能基準皆已交付並通過；§8 的「完整渲染 < 1 s」已達標（約 0.35–0.45 s），「只換相機 < 100 ms」**尚未達標**（約 110–130 ms，關閉循環 GC 約 90 ms；量測結果見 `benchmarks/README.md`）。規格 §8 將數字定為目標值，閘門審查依合約 §4 / D17 豁免這一項：CI 以 `python3 benchmarks/bench.py --gate full` 為閘門（`.github/workflows/ci.yml`），只換相機列為已知未達標、留待 M7 互動介面時收斂 |
 | M4 多受影面與隱藏線 | 有界受影面、逐面裁切、轉折影、取樣式隱藏線、visibility 欄位 | 完成（已合併到主分支，一致性測試集 v4）：任意平面的有界凸受影面、bounds 裁切與錨點規則、轉折影、`RECEIVER_UNLIT`、逐受影面作圖線、取樣式消隱（`hidden_lines` 預設關閉，`--hidden-lines`）、9 個一致性案例；34 個既有案例在合併時做了一次鍵新增重產（一致性 v4，合約 §5.0.8） |
 | M5 網格匯入 | OBJ、glTF/GLB 載入、前處理管線 | 完成（已合併到主分支，一致性測試集 v5）：`mesh` 物件（`path` / 內嵌 `data`）、`castplane.meshprep` 前處理（焊接 → 退化面 → 流形與方向 → 共面合併 → 平滑／特徵邊）、非流形逐面退路、`castplane.io` 載入器（OBJ、glTF / GLB、STL / PLY 經選用的 trimesh）與 `castplane import`；3 個網格一致性案例；`benchmarks/bench.py --scene mesh10k` |
-| M6 多光源 | 多光源影子分組、疊影規則、SVG 子圖層 | 未排程／預留（`lights` 為陣列、影子帶 light id、`cast_shadow.<light>` 子圖層） |
+| M6 多光源 | 多光源影子分組、疊影規則、SVG 子圖層 | 完成（M6 工作樹，合併時成為一致性測試集 v6）：任意數量的光源、每個光源單獨以 v1 / M4 公式計算（與單光源文件逐位元相同）、本影（`castplane.umbra` 純 numpy 掃描線核心，只讀畫出的影子多邊形）、半影由各光源子群組的較淡填色呈現、`form_shadow_core`、`constructions`、曲面作圖點帶光源 id、SVG 每光源子群組與 `cast_shadow.umbra` / `form_shadow.core`、`castplane info` 列出每個光源；4 個多光源一致性案例；`benchmarks/bench.py --lights 2\|3`、`--no-umbra`；單光源文件與 SVG 完全不變 |
 | M7 TypeScript 移植與網頁 UI | 核心移植、three.js 場景顯示、相機拖曳 | 進行中：第 1 步完成（`tests/conformance/rules.json` 與一致性測試集 v3、`regen_conformance.py --rules-only`、提交的基準場景檔 `benchmarks/scenes/benchmark_100.json`、`tests/test_ts_port.py`）；移植本身見合約 §5.4 與 `docs/PLAN-v2.md` |
 | M8 STEP 評估 | 可行性報告、原型解析器 | 未排程／預留 |
 

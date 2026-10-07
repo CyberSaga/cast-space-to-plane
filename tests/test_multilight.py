@@ -1052,3 +1052,23 @@ def test_plate_per_light_entries_and_core():
     ids = g_ids(render(scene)["svg"])
     assert "form_shadow.core.wall" in ids
     assert "form_shadow.lamp.wall" not in ids and "form_shadow.lamp2.wall" not in ids
+
+
+def test_two_lights_example_matches_its_readme():
+    """examples/README.md describes examples/two_lights.json (M6 part 3): two point lights whose L' and F' lie
+    on the canvas, an umbra on the ground, the crate's three faces unlit by both lights in the core, no warning."""
+    r = castplane.render(load("two_lights.json"))
+    doc, svg = r["geometry"], r["svg"]
+    assert doc["warnings"] == [] and sorted(doc["constructions"]) == ["left", "right"]
+    w, h = doc["canvas_mm"]
+    for c in doc["constructions"].values():
+        for key in ("light_point", "shadow_vp"):
+            u, v = c[key]
+            assert abs(u) < w / 2 and abs(v) < h / 2, key
+    (entry,) = doc["umbra"]
+    assert entry["lights"] == ["left", "right"] and len(entry["polygons"]) == 118
+    assert [(c["object"], len(c["faces"])) for c in doc["form_shadow_core"]] == [("crate", 3)]
+    assert "ball.sil.0.left" in doc["points"] and "pillar.g0.base.right" in doc["points"]
+    assert 'fill-opacity="0.15"' in g_tag(svg, "cast_shadow.left")
+    assert 'fill-opacity="0.09"' in g_tag(svg, "form_shadow.left")
+    assert g_body(svg, "cast_shadow.umbra").count("<path") == 1

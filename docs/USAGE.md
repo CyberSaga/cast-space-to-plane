@@ -51,7 +51,27 @@ castplane info examples/directional.json
 castplane stages examples/basic.json | python3 -c "import json,sys; d=json.load(sys.stdin); print(d['B']['camera']['P'])"
 castplane render examples/wall_and_ground.json -o out --hidden-lines              # M4：地面 + 牆面，隱藏線畫成虛線
 castplane render examples/wall_and_ground.json -o out --hidden-lines --hidden-style omit
+castplane render examples/two_lights.json -o out                                   # M6：兩盞點光源（本影、半影、每光源子群組）
+castplane info examples/two_lights.json                                            # M6：lights: 2，每個光源一行
 ```
+
+### 多光源場景（M6，合約 §5.3）
+
+`lights` 可以有任意多個光源，命令列不需要新選項。單光源場景的 JSON 與 SVG 與 M5 之前逐位元相同；兩個以上光源時：
+
+| 輸出 | 多光源時的變化 |
+| --- | --- |
+| `shadows[]` | 依受影面 → 光源（場景順序）→ 施影者排序；每個光源的紀錄與只放那一盞光的單光源文件逐位元相同（曲面作圖點名稱依下一列對映） |
+| `points` | 曲面物件隨光源而異的基本名在最後加 `.<光源>`：`<物件>.sil.<k>.<光源>`、`<物件>.g<k>.base.<光源>` / `.top.<光源>`；影子與垂足照舊接在後面（`ball.sil.0.lamp.shadow.lamp`、`ball.sil.0.lamp.foot`）。`<物件>.c`、`.apex`、`.v<k>` 各光源共用 |
+| `constructions` | `{<光源>: 作圖區塊}`（每個光源一份 M4 作圖區塊，含 `per_receiver`）；`construction` 是第一個光源那一塊的別名 |
+| `umbra[]` | 每個受影面一筆 `{receiver, lights, polygons}`：`lights` = 在該面上有效的光源（`receivers[r].lit`，場景順序）；`polygons` = 本影（被這些光源**全部**遮住的畫出區域之交集）的凸片，畫面 mm，逆時針；有效光源少於兩盞時 `[]`；`render(..., umbra=False)` / `project_scene(..., umbra=False)` 時 `null`（不計算，其餘不變） |
+| `form_shadow[]` | 每個 (光源, 物件) 一筆，多了 `light` 鍵，光源為主序；曲面物件每盞光一條明暗交界線 |
+| `form_shadow_core[]` | 被所有光源都背光的面（多面體與有界受影面），物件順序 |
+| `edges[]` | `silhouette` 是各光源的 OR；`silhouette_lights` 列出該邊是哪些光源的光輪廓邊 |
+| SVG | `form_shadow.<光源>`（`fill-opacity` = `0.18 / N_act`，不含 core 面）與 `form_shadow.core`；`cast_shadow.<光源>`（`0.3 / N_act`）與最上面的 `cast_shadow.umbra`（`0.3`，每筆 `umbra[]` 一個 `<path>`）；`construction.<光源>`（各自的 L′、F′ 與三組作圖線）。`N_act` = `umbra[].lights` 聯集的光源數（至少 1）；只有一盞有效光源時該光源群組維持 `0.3`，本影群組為空 |
+| `castplane info` | `lights: N` 後每個光源一行：`<id> (<type>): position\|direction (x, y, z); active: <受影面>=yes\|no, …` |
+
+半影不另外輸出多邊形：它就是各光源子群組露出本影之外的部分（需要時以 `W_k − 本影` 自行求得）。`castplane.umbra.umbra_from_document(doc)` 只用文件的 `shadows[].polygons`、`umbra[].lights` 與 `canvas_mm` 就能逐位元重算 `umbra`，是移植版的參考。兩個以上光源時光源 id 不得是 `umbra` / `core`、物件 id 不得是 `core`（SVG 子群組名稱）。
 
 ### `castplane import`（M5 網格匯入，合約 §5.0.2、§5.2.8）
 
@@ -152,7 +172,7 @@ castplane import tests/fixtures/meshes/features.obj --node walls --scale 0.5 -o 
 | `validate_hidden_output(o, field="output") -> dict` | M4：`output.hidden_lines`（布林，預設 false）與 `output.hidden_style`（`dashed` 預設 / `omit`） |
 | `validate_receivers_in_scene(receivers, objects, lights)` | M4：受影面的場景層規則：id 唯一、不得與物件／光源 id 重複、保留字 `hidden`、無 bounds 只限 `receivers[0]` 的地面、有地面時 bounds 不得在地面以下 |
 | `RESERVED_IDS`、`HIDDEN_STYLES` | M4：保留 id（`hidden`）與 `hidden_style` 的允許值 |
-| `validate_lights_in_scene(lights, objects)` | M6：多光源場景（`len(lights) ≥ 2`）的保留 id：光源 id 不得是 `umbra`、`core`，物件 id 不得是 `core`（訊息 `reserved id in a multi-light scene`；單光源場景仍可用，合約 §5.3.0、§5.0.1） |
+| `validate_lights_in_scene(lights, objects)` | M6：多光源場景（`len(lights) ≥ 2`）的保留 id：光源 id 不得是 `umbra`、`core`（訊息 `reserved id in a multi-light scene`），物件 id 不得是 `core`（訊息 `reserved id`）；單光源場景仍可用（合約 §5.3.0、§5.0.1） |
 | `RESERVED_LIGHT_IDS_MULTI`、`RESERVED_OBJECT_IDS_MULTI` | M6：`("umbra", "core")` 與 `("core",)` |
 
 ### 2.3 `castplane.errors` — 錯誤與警告
@@ -170,7 +190,7 @@ castplane import tests/fixtures/meshes/features.obj --node walls --scale 0.5 -o 
 | 函式 | 說明 |
 | --- | --- |
 | `shadow_geometry(scene) -> dict` | A 段（見 2.1）。回傳 `{objects, vertices, bbox, scene_scale, tol, receiver, receivers, lights, shadows, warnings}`；M4：`receivers` 每個受影面一筆（平面、座標系、bounds 邊泛函、各光源紀錄、`lit` / `casts`），`shadows` 依受影面 → 光源 → 施影者排序 |
-| `project_scene(scene, A, camera=None) -> dict` | B 段（見 2.1）。回傳 `{A, camera, scene_scale, tol, objects, lights, receiver_lights, receivers, plates, horizon, shadows, construction, warnings}`；M4：`B["A"]` 就是 A 段本身，`receiver_lights` 是非預設受影面的 F′_r，`plates` 是有界面的 bounds 點、邊與背光面；M6（N ≥ 2）：另有 `light_ids`、`constructions`（每個光源一個作圖區塊，`construction` 是第一個光源的同一物件）與 `umbra`（每個受影面一筆），多面體紀錄帶 `silhouette_lights`、`form_by_light`、`form_core`，平面板帶 `form_by_light` / `form_core` |
+| `project_scene(scene, A, camera=None, umbra=True) -> dict` | B 段（見 2.1）。回傳 `{A, camera, scene_scale, tol, objects, lights, receiver_lights, receivers, plates, horizon, shadows, construction, warnings}`；M4：`B["A"]` 就是 A 段本身，`receiver_lights` 是非預設受影面的 F′_r，`plates` 是有界面的 bounds 點、邊與背光面；M6（N ≥ 2）：另有 `light_ids`、`constructions`（每個光源一個作圖區塊，`construction` 是第一個光源的同一物件）與 `umbra`（每個受影面一筆），多面體紀錄帶 `silhouette_lights`、`form_by_light`、`form_core`，平面板帶 `form_by_light` / `form_core` |
 | `compose(scene, B, hidden_lines=None) -> dict` | C 段（見 2.1）；M4：`hidden_lines=None` 取場景 `output.hidden_lines`，文件頂層 `hidden_lines` 記錄實際值；另有 `receivers`、`construction.per_receiver` 等 M4 鍵（合約 §5.0.3）；M6：兩個以上光源時加上 `constructions`、`umbra`、`form_shadow_core`、`form_shadow[].light`、`edges[].silhouette_lights`（只在多光源文件出現，合約 §5.3.5） |
 | `render(scene, camera=None, hidden_lines=None, hidden_style=None, umbra=True) -> dict` | 見 2.1；M4：兩個關鍵字覆寫場景的 `output` 值（場景本身不改）；M6：`umbra` 傳給 `project_scene` |
 
