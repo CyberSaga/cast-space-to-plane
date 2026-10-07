@@ -850,9 +850,16 @@ class _OcpFile:
             p = o["BRep_Tool"].Pnt_s(o["TopoDS"].Vertex(explorer.Current()))
             have.append((p.X(), p.Y(), p.Z()))
             explorer.Next()
-        for v in vertices:                     # a cheap guard against a record mismatch
+        cell = 2.0 * tol                       # a cheap guard against a record mismatch (grid lookup)
+        grid = {}
+        for q in have:
+            grid.setdefault(tuple(math.floor(c / cell) for c in q), []).append(q)
+        for v in vertices:
             w = _scale(scale, v)
-            if not any(_norm(_sub(w, q)) <= tol for q in have):
+            i, j, k = (math.floor(c / cell) for c in w)
+            if not any(_norm(_sub(w, q)) <= tol
+                       for di in (-1, 0, 1) for dj in (-1, 0, 1) for dk in (-1, 0, 1)
+                       for q in grid.get((i + di, j + dj, k + dk), ())):
                 raise _err(f"{ref}: unsupported: the OCP solid does not match the file's vertex {list(v)}", ref)
         return shape
 

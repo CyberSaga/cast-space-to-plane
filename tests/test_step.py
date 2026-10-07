@@ -1617,3 +1617,20 @@ def test_conical_surface_radius_may_be_zero_but_not_negative(tmp_path):
     negative = b.text().replace(",0.,", ",-1.,")
     with pytest.raises(StepError, match=r"CONICAL_SURFACE radius must be ≥ 0"):
         import_step(write(tmp_path, negative, "neg.step"))
+
+
+def test_mesh_fallback_guard_fires_when_ocp_loses_the_unit_context(tmp_path, monkeypatch):
+    """Two metre solids that hang in no shape representation: OCC transfers each one without its
+    unit (so in metres read as millimetres); the vertex guard turns that into a StepError."""
+    pytest.importorskip("OCP")
+    b = Builder()
+    b.units("m")
+    b.cylinder(0.3, 2.4, (-1.5, 6.0, 0.0))
+    b.cylinder(0.5, 1.0, (2.0, 1.0, 0.0))
+
+    def reject(faces, ud, tol):
+        raise S._Reject("forced")
+
+    monkeypatch.setattr(S, "_recognise_cylinder", reject)
+    with pytest.raises(StepError, match=r"^step: #\d+: unsupported: the OCP solid does not match"):
+        import_step(write(tmp_path, b.text()), fallback="mesh")

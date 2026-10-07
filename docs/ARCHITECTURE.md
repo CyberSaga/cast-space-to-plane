@@ -3797,7 +3797,9 @@ LGPL-2.1；確定性只到 OCC 版本；頂點重建誤差 1.4e-9 mm；OCP 8 的
   ("OCP numbers the records … differently"); every `VERTEX_POINT` reachable from `ref` (× cascade divisor /
   `unit_divisor`) must lie within `max(tol · scale, 1e-9)` of a vertex of the transferred solid ("the OCP solid
   does not match the file's vertex …"; one-way, because OCC rebuilds a `VERTEX_LOOP` sphere with two pole
-  vertices). A single-solid file is still tessellated whole (`TransferRoots` / `OneShape`), byte-identical to
+  vertices; the guard also fires for a hand-written multi-solid file whose `MANIFOLD_SOLID_BREP`s hang in no
+  shape representation, where OCC transfers the solid without its unit context — such a file already failed
+  before, `TransferRoots` finding nothing). A single-solid file is still tessellated whole (`TransferRoots` / `OneShape`), byte-identical to
   `tessellate_step`. The file is read by OCP **once per `import_step` call** (lazily, at the first
   unrecognised solid), not once per solid: 120 frustums 24.5 s → 1.9 s. The per-solid deflection rule is
   unchanged and the meshes are byte-identical to the previous ones on every file whose explorer order equals
