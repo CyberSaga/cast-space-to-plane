@@ -538,8 +538,14 @@ def drawn_segments_4d(cam: dict, A4, B4):
     if A4.shape[0] == 0:
         return A4.copy(), B4.copy(), np.zeros(0, dtype=bool)
     A, B, keep = clip_segments_near(cam, A4, B4)
+    # the projected 3-vectors are carried and interpolated exactly as clip_segments_rect_h does on the
+    # stage-B call (same floats, hence the same in/out decisions and the same interpolation parameters);
+    # the 4-D endpoints follow with the same (fa, fb) and the keep mask is the 2-D one
+    xa, xb = project(cam, A), project(cam, B)
     for row in rect_functionals(cam["rect"]):
-        A, B, k = clip_segments_halfspace(A, B, project(cam, A) @ row, project(cam, B) @ row)
+        fa, fb = xa @ row, xb @ row
+        xa, xb, k = clip_segments_halfspace(xa, xb, fa, fb)
+        A, B, _k4 = clip_segments_halfspace(A, B, fa, fb)
         keep = keep & k
     return A, B, keep
 
@@ -551,18 +557,21 @@ def drawn_segment_4d(cam: dict, A4, B4):
     return (A[0], B[0]) if bool(keep[0]) else None
 
 
-def _clip_step(pts: np.ndarray, ids: list, vals: np.ndarray):
-    """One Sutherland–Hodgman step of :func:`camera.clip_polygon_halfspace` (same formulas, same zero-row
-    filter) carrying the outgoing-edge provenance: a kept vertex keeps its id, a crossing-out vertex starts
-    a clip edge (``None``), a crossing-in vertex continues the original edge."""
+def _clip_step(pts: np.ndarray, ids: list, vals: np.ndarray, extra: np.ndarray | None = None):
+    """One Sutherland–Hodgman step of :func:`homogeneous.clip_polygon_halfspace` (same formulas, same
+    zero-row filter) on ``pts`` carrying the outgoing-edge provenance: a kept vertex keeps its id, a
+    crossing-out vertex starts a clip edge (``None``), a crossing-in vertex continues the original edge.
+    ``extra`` (same row count, e.g. the 4-D points of the projected 3-vectors ``pts``) is interpolated with
+    the same ``(fa, fb)`` and filtered with the mask of ``pts``.  Returns ``(pts, ids)`` or
+    ``(pts, ids, extra)``."""
     n = pts.shape[0]
-    if n == 0:
-        return pts, []
-    if np.all(vals >= 0.0):
-        return pts.copy(), list(ids)
+    if n == 0 or np.all(vals >= 0.0):
+        res = (pts.copy(), list(ids))
+        return res if extra is None else res + (extra.copy(),)
     if np.all(vals < 0.0):
-        return np.zeros((0, pts.shape[1])), []
-    out, oid = [], []
+        res = (np.zeros((0, pts.shape[1])), [])
+        return res if extra is None else res + (np.zeros((0, extra.shape[1])),)
+    out, oid, ext = [], [], []
     for i in range(n):
         j = (i + 1) % n
         a, b = pts[i], pts[j]
@@ -571,12 +580,19 @@ def _clip_step(pts: np.ndarray, ids: list, vals: np.ndarray):
         if a_in:
             out.append(a)
             oid.append(ids[i])
+            if extra is not None:
+                ext.append(extra[i])
         if a_in != b_in:
             out.append((fa * b - fb * a) / (fa - fb))
             oid.append(None if a_in else ids[i])
+            if extra is not None:
+                ext.append((fa * extra[j] - fb * extra[i]) / (fa - fb))
     out = np.array(out, dtype=np.float64).reshape(-1, pts.shape[1])
     keep = row_max_abs(out) > ZERO_REL * float(np.max(np.abs(pts)))
-    return out[keep], [x for x, k in zip(oid, keep.tolist()) if k]
+    res = (out[keep], [x for x, k in zip(oid, keep.tolist()) if k])
+    if extra is None:
+        return res
+    return res + (np.array(ext, dtype=np.float64).reshape(-1, extra.shape[1])[keep],)
 
 
 def clip_polygon_4d(cam: dict, V4):
@@ -592,8 +608,12 @@ def clip_polygon_4d(cam: dict, V4):
     pts, ids = _clip_step(pts, ids, nu(cam, pts))
     if pts.shape[0] < 3:
         return np.zeros((0, 4)), []
+    # the rectangle steps run on the projected 3-vectors exactly as project_polygons does (every in/out
+    # decision and the zero-row filter are bit-identical to the drawn polygon's, so the vertex counts
+    # always agree); the 4-D points are interpolated with the same (fa, fb)
+    X = project(cam, pts)
     for row in rect_functionals(cam["rect"]):
-        pts, ids = _clip_step(pts, ids, project(cam, pts) @ row)
+        X, ids, pts = _clip_step(X, ids, X @ row, pts)
         if pts.shape[0] < 3:
             return np.zeros((0, 4)), []
     return pts, ids
@@ -729,14 +749,13 @@ class _Subjects:
             sink(res)
 
 
-def _line_subject(subjects: _Subjects, cam: dict, A4, B4, seg, sink) -> bool:
+def _line_subject(subjects: _Subjects, cam: dict, A4, B4, seg, sink) -> None:
     """Register a straight drawable (4-D drawn endpoints ``A4``, ``B4``; drawn segment ``seg`` in mm)."""
     xa, xb = project(cam, A4), project(cam, B4)
     du = float(seg[1][0]) - float(seg[0][0])
     dv = float(seg[1][1]) - float(seg[0][1])
     length = math.sqrt(du * du + dv * dv)
     subjects.add_line(A4, B4, float(xa[2]), float(xb[2]), length, sink)
-    return True
 
 
 def _world4(points: dict, name: str):
@@ -820,7 +839,7 @@ def _conic_subject(subjects: _Subjects, entry: dict, a: dict) -> None:
         subjects.add_conic(a["TE"], rho, cum, th, res.sink(k))
 
 
-def _set(target: dict, key: str):
+def _set(target: dict):
     def put(res):
         target["visibility"], target["runs"] = res
     return put
@@ -883,7 +902,7 @@ def classify_document(doc: dict, A: dict, B: dict, cull: bool = True) -> dict:
         Ad, Bd, keep = drawn_segments_4d(cam, A4, B4)
         for e, a4, b4, k in zip(drawn, Ad, Bd, keep.tolist()):
             if k:
-                _line_subject(subjects, cam, a4, b4, e["segment"], _set(e, "runs"))
+                _line_subject(subjects, cam, a4, b4, e["segment"], _set(e))
 
     # curved drawables: outline generators / cap conics, terminator, cast-shadow conics
     gens = []
@@ -905,7 +924,7 @@ def classify_document(doc: dict, A: dict, B: dict, cull: bool = True) -> dict:
         Ad, Bd, keep = drawn_segments_4d(cam, np.array([g[1] for g in gens]), np.array([g[2] for g in gens]))
         for (d_entry, _a, _b, seg), a4, b4, k in zip(gens, Ad, Bd, keep.tolist()):
             if k:
-                _line_subject(subjects, cam, a4, b4, seg, _set(d_entry, "runs"))
+                _line_subject(subjects, cam, a4, b4, seg, _set(d_entry))
 
     # shadows[].polygon_edges: one run record per drawn polygon edge, parallel to polygons
     a_shadows = A.get("shadows", [])
@@ -921,14 +940,14 @@ def classify_document(doc: dict, A: dict, B: dict, cull: bool = True) -> dict:
             if j >= len(loops):
                 continue
             pts4, ids = clip_polygon_4d(cam, loops[j]["vertices"])
-            if pts4.shape[0] != len(poly):          # zero-vector filter rounding band: all visible
-                continue
+            if pts4.shape[0] != len(poly):          # unreachable: the rectangle steps run on the drawn
+                continue                            # polygon's own 3-vectors (defensive: never raise)
             n = len(poly)
             for e in range(n):
                 f = (e + 1) % n
                 if ids[e] is None or (pts4[e, 3] == 0.0 and pts4[f, 3] == 0.0):
                     continue
-                _line_subject(subjects, cam, pts4[e], pts4[f], [poly[e], poly[f]], _set(recs[e], "runs"))
+                _line_subject(subjects, cam, pts4[e], pts4[f], [poly[e], poly[f]], _set(recs[e]))
         sh["polygon_edges"] = per_poly
 
     subjects.classify(occs, C, cam, bounds)

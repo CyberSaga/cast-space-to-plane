@@ -55,6 +55,18 @@ def vp_in_canvas_scene() -> dict:
     return scene
 
 
+def canvas_corner_scene() -> dict:
+    """``wall_and_ground_hidden`` seen from inside the crate along the y axis (review fix): the crate's ground
+    shadow has a vertex on the extended-canvas corner (its edge ``x = 0.75, z = 0`` runs along the image
+    diagonal, ``0.75 / 0.5`` = the canvas aspect ``273 / 182``), so the fourth rectangle functional is a
+    rounding-level value whose sign decides the vertex count; every shadow edge is hidden (camera in a solid)."""
+    scene = wall_and_ground_scene()
+    scene["camera"]["position"] = [0, 4.5, 0.5]
+    scene["camera"]["target"] = [0, 6, 0.5]
+    scene["output"]["hidden_lines"] = True
+    return scene
+
+
 # --------------------------------------------------------------------------- constants and the N table
 @pytest.mark.parametrize("length, n", [(0.1, 8), (7.3, 8), (8.0, 8), (1023.9, 1024), (4095.9, 4096), (5000.0, 4096),
                                        (10.0, 10)])
@@ -265,6 +277,45 @@ def test_clip_polygon_4d_matches_the_drawn_polygons_and_marks_clip_edges():
     assert int(np.sum(pts[:, 3] == 0.0)) == 2 and ids.count(None) == 1
 
 
+@pytest.mark.parametrize("name", sorted(p.stem for p in CASES.glob("*.json")) + ["canvas_corner"])
+def test_clip_polygon_4d_vertex_count_equals_the_drawn_polygon(name):
+    """The rectangle steps of the 4-D clip are decided on the drawn polygon's own 3-vectors (§5.1.6.4 "the same
+    floats as the 2-D clip"): the vertex counts agree on every polygon, so the count-mismatch fallback of
+    ``classify_document`` never fires (review fix: a vertex on the canvas corner gave 6 vs 4)."""
+    scene = castplane.load_scene(canvas_corner_scene() if name == "canvas_corner" else load_case(name))
+    A = castplane.shadow_geometry(scene)
+    B = castplane.project_scene(scene, A)
+    doc = castplane.compose(scene, B)
+    for sh, a_sh in zip(doc["shadows"], A["shadows"]):
+        for j, (poly, loop) in enumerate(zip(sh["polygons"], a_sh["loops"])):
+            pts, _ids = hidden.clip_polygon_4d(B["camera"], loop["vertices"])
+            assert len(pts) == len(poly), (name, sh["object"], sh["receiver"], j)
+
+
+def test_canvas_corner_shadow_edges_are_hidden():
+    """Review fix (finding 1): the crate's ground-shadow polygon has 4 drawn vertices; its three outline edges
+    (every midpoint occluded: the camera is inside the crate) are 'hidden', not the silent all-'visible'
+    fallback; the clip edge is 'visible' with no runs."""
+    scene = castplane.load_scene(canvas_corner_scene())
+    A = castplane.shadow_geometry(scene)
+    B = castplane.project_scene(scene, A)
+    doc = castplane.compose(scene, B, hidden_lines=True)
+    sh = next(s for s in doc["shadows"] if s["object"] == "crate" and s["receiver"] == "ground")
+    a_sh = A["shadows"][doc["shadows"].index(sh)]
+    pts, ids = hidden.clip_polygon_4d(B["camera"], a_sh["loops"][0]["vertices"])
+    poly, recs = sh["polygons"][0], sh["polygon_edges"][0]
+    assert len(pts) == len(poly) == 4
+    X = pts[:, :3] / pts[:, 3:4]
+    mid = 0.5 * (X + np.roll(X, -1, axis=0))
+    assert hidden.occluded(hidden.scene_occluders(A), B["camera"]["C"], mid).all()
+    for i, r in zip(ids, recs):
+        if i is None:
+            assert r == {"visibility": "visible", "runs": []}
+        else:
+            assert r == {"visibility": "hidden", "runs": []}
+    assert ids.count(None) == 1
+
+
 # --------------------------------------------------------------------------- wall_and_ground_hidden (§5.1.11)
 def _edge(doc, a, b):
     found = [e for e in doc["edges"] if {e["from"], e["to"]} == {a, b}]
@@ -330,6 +381,7 @@ DETERMINISM_SCENES = {
     "fold_curved_cylinder": fold_curved_cylinder_scene,
     "hidden_lines_curved_unbounded": curved_unbounded_scene,
     "hidden_lines_vp_in_canvas": vp_in_canvas_scene,
+    "canvas_corner": canvas_corner_scene,
 }
 
 
@@ -342,7 +394,7 @@ def test_render_twice_with_hidden_lines_is_byte_identical(name):
 
 
 @pytest.mark.parametrize("name", ["wall_and_ground_hidden", "fold_curved_cylinder", "hidden_lines_curved_unbounded",
-                                  "example_construction_demo", "random_seed0_3objects"])
+                                  "example_construction_demo", "random_seed0_3objects", "canvas_corner"])
 def test_culled_equals_unculled(name):
     make = DETERMINISM_SCENES.get(name) or (lambda: load_case(name))
     scene = castplane.load_scene(make())
@@ -469,6 +521,22 @@ def test_named_m4_hidden_scenes_render_finite(name):
         # the w = 0 endpoint: the shadow edge running to the vanishing point is a subject (not all visible)
         recs = doc["shadows"][0]["polygon_edges"][0]
         assert any(r["visibility"] != "visible" for r in recs)
+        # the edge with exactly one direction endpoint is classified (review fix): partial, hidden first run,
+        # last run ending at the direction (t = 1); the edge with two direction endpoints is not a subject
+        scene = castplane.load_scene(DETERMINISM_SCENES[name]())
+        A = castplane.shadow_geometry(scene)
+        B = castplane.project_scene(scene, A)
+        p4, ids = hidden.clip_polygon_4d(B["camera"], A["shadows"][0]["loops"][0]["vertices"])
+        n = len(p4)
+        assert n == len(recs)
+        w0 = [(p4[k, 3] == 0.0, p4[(k + 1) % n, 3] == 0.0) for k in range(n)]
+        one = [k for k in range(n) if ids[k] is not None and w0[k][0] != w0[k][1]]
+        both = [k for k in range(n) if ids[k] is not None and all(w0[k])]
+        assert len(one) == 1 and len(both) == 1
+        r = recs[one[0]]
+        assert r["visibility"] == "partial" and r["runs"][0]["visible"] is False
+        assert r["runs"][-1]["t"][1] == 1.0 and r["runs"][-1]["s"][1] == 1.0
+        assert recs[both[0]] == {"visibility": "visible", "runs": []}
 
 
 # --------------------------------------------------------------------------- SVG (contract §5.1.8, §5.0.6)
@@ -778,8 +846,7 @@ def collect_document(scene: dict, doc: dict) -> _Collector:
             if len(poly) < 3:
                 continue
             p4, ids = hidden.clip_polygon_4d(cam, loop["vertices"])
-            if len(p4) != len(poly):
-                continue
+            assert len(p4) == len(poly), (sh["object"], sh["receiver"], len(p4), len(poly))
             n = len(poly)
             for k in range(n):
                 if ids[k] is None or (p4[k, 3] == 0.0 and p4[(k + 1) % n, 3] == 0.0):
@@ -866,7 +933,8 @@ def m4_hidden_scenes() -> dict:
     return out
 
 
-ZBUFFER_SCENES = dict(m4_hidden_scenes(), **{f"random_{s}": zbuffer_random_scene(s) for s in range(20)})
+ZBUFFER_SCENES = dict(m4_hidden_scenes(), **{f"random_{s}": zbuffer_random_scene(s) for s in range(20)},
+                      canvas_corner=canvas_corner_scene())
 
 
 def _zbuffer_result(name: str) -> dict:

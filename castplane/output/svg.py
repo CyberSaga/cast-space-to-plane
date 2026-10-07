@@ -595,8 +595,8 @@ _LAYER_BUILDERS = {
 }
 
 
-#: ``hidden_style`` values of :func:`write_svg` (contract §5.1.8).
-HIDDEN_STYLES = ("dashed", "omit")
+#: ``hidden_style`` values of :func:`write_svg` (contract §5.1.8); one definition, in the scene loader.
+from ..scene import HIDDEN_STYLES  # noqa: E402
 
 
 def write_svg(doc: dict, layers=None, hidden_style: str = "dashed") -> str:

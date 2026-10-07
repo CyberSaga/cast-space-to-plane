@@ -1370,12 +1370,21 @@ worktree and the merge rule are in `docs/PLAN-v2.md`.
   the pixel centre (up to 0.07 mm from the sample) passes beside the occluder and sees the background (`Z > depth·1.02`,
   "visible") while the sample's own ray grazes the occluder (`first_hit < 1 − ε_t`, correctly hidden). Light terminators
   near the camera silhouette produce whole runs of such samples (the terminator generator of a cylinder lit from nearly
-  the camera's side; a sphere's light-silhouette circle just behind its rim): up to 2.4 % disagreement on seeded random
-  scenes with every disagreeing sample confirmed hidden by the point-wise ray cast. `zbuffer.hidden_states` therefore
+  the camera's side; a sphere's light-silhouette circle just behind its rim). The same happens on a **face seen
+  edge-on**: in the contract's own case `hidden_lines_vp_in_canvas` the camera (`z = 3`) lies exactly in the plane of
+  the tower's top face, so the pixel-centre rays beside the hidden top edges see `Z = inf` through the zero-width face.
+  Measured with `guard=False` over the 28 depth-buffer scenes of `tests/test_hidden.py` (77,529 decided samples, 273
+  disagreements): the bare rule fails the ≥ 99 % gate on `hidden_lines_vp_in_canvas` (543 / 618 = 87.9 %),
+  `hidden_lines_curved_unbounded` (973 / 984 = 98.9 %), `random_1` (98.7 %) and `random_3` (97.9 %), and it fails the
+  **100 % rule on box / prism `edges[]`** ("no silhouette ambiguity there") on `hidden_lines_vp_in_canvas` (467 / 535;
+  all 68 box-edge disagreements of the set are there). Every one of the 273 disagreeing samples is confirmed
+  castplane-correct by the point-wise ray cast (`zbuffer.occluded_points`). `zbuffer.hidden_states` therefore
   leaves a sample **undecided** also when some pixel of the 3 × 3 neighbourhood of its pixel lies on the other side of
   the sample's depth than the centre pixel (centre "hidden" and a neighbour `Z ≥ depth`, or centre "visible" and a
   neighbour `Z ≤ depth`): a depth edge then passes within 1.5 px of the sample — the "silhouette pixels" the contract
-  names as a limit of the reference. The band rule itself is unchanged (`guard=False` gives it). With the guard every
+  names as a limit of the reference. The band rule itself is unchanged (`guard=False` gives it). The 100 % box / prism
+  rule of §5.1.11 is therefore stated, and tested, on the **guarded** decided set (9,631 of the 14,424 box / prism
+  samples stay decided). With the guard every
   M4 scene and the 20 random scenes of `tests/test_hidden.py` agree at 100 % of the decided samples (≥ 99 % required),
   both states are decided in quantity, and a document with every state flipped fails
   (`test_depth_buffer_comparison_is_not_vacuous`). Test-side choices the contract leaves open: the world point of a
@@ -1384,6 +1393,30 @@ worktree and the merge rule are in `docs/PLAN-v2.md`.
   length along the exact curve); which `polygon_edges` are subjects comes from `hidden.clip_polygon_4d`'s provenance;
   the random scenes are `random_scenes.make_scene(5000 + seed, 1 + seed % 6)` with `seed % 3` plates (a wall behind the
   objects as seen from the camera, then a low panel in front of them).
+- **[decision, implementation] (M4 review) The 4-D clip decides on the drawn 3-vectors.** `hidden.clip_polygon_4d` and
+  `hidden.drawn_segments_4d` read §5.1.6.4's "evaluated on `P·X` (the same floats as the 2-D clip)" literally: after
+  the near clip (4-D, as in stage B) they compute `x̃ = P·X` once and run the four rectangle steps on the carried
+  3-vectors with the stage-B formulas (`(fa·x̃b − fb·x̃a)/(fa − fb)`, the zero-row filter on the 3-vectors with the 2-D
+  scale), interpolating the 4-D points with the same `(fa, fb)`. The first implementation re-projected the
+  interpolated 4-D point before each functional; from the second functional on its values differed from the drawn
+  polygon's in the last bits, and a vertex on a clip line (a shadow edge through the extended-canvas corner:
+  `wall_and_ground_hidden` seen from `(0, 4.5, 0.5)` towards `(0, 6, 0.5)`, the fourth functional −2.6e-14 drawn vs
+  +6.5e-14 re-projected) gave 6 vertices against 4 drawn, so `classify_document`'s count check wrote four occluded
+  edges `visible`. Every in/out decision is now bit-identical to the drawn polygon's; the count check stays as a
+  defensive guard (no raise) that can only fire if `project` gave different bits for the same row in the stage-B
+  batch, which no test scene does (`test_clip_polygon_4d_vertex_count_equals_the_drawn_polygon` on all cases). The
+  TypeScript port must carry the 3-vectors the same way.
+- **[decision, implementation] (M4 review) Conic polylines are recomputed, not handed over.** §5.1.6.5 (c) says the
+  §2.6 polyline is "sampled once in `_arc_drawables`" and reused; `_arc_drawables` samples only the arcs it draws as
+  polylines (a healthy ellipse arc is an SVG `A`), so `hidden._conic_subject` recomputes the polyline of every visible
+  interval with the same call (`sample_arc(H, ρ, lo, hi, sample_count(lo, hi))` and the same division), which gives
+  the identical floats; the parametrisation and the `hidden_polylines` are cut from that table.
+- **[decision, implementation] (M4 review) `cli.py` lines outside the PLAN's M4 block.** Besides the argument block and
+  the `info` receivers, M4 changed `_run` (a `hidden_lines` parameter passed to `compose`; the `def` line and the
+  `return` line, next to the `scene = load_scene(scene_path)` line M5 turns into `load_expanded_scene`), the module
+  docstring usage block, one import line (`HIDDEN_STYLES`) and `cmd_stages` (`_stage_b_without_a`, B written without
+  its `A` reference). The merge of M4 after M5 resolves the `_run` hunk by keeping both changes
+  (`load_expanded_scene` and the `hidden_lines` parameter).
 
 ### 5.2 M5 — mesh import (spec §9 rows 網格匯入 / 匯入格式, spec §10 M5, spec §11.3)
 
