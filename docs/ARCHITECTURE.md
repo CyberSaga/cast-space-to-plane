@@ -2241,6 +2241,39 @@ the SVG would draw nothing new); reserving `shadow` / `foot` as light ids (v1 al
 against the known light ids); a group `opacity` on the per-light sub-groups (fades outlines); any polygon-boolean
 dependency (shapely, pyclipper); `float32` or GPU paths.
 
+### Implementation notes
+- **[decision, implementation] (M6 step 1) The v1 length-1 test.** `tests/test_scene.py::test_lights_exactly_one`
+  asserted the v1 rule that §5.3.0 lifts; it is replaced by `test_lights_non_empty_list` (empty / non-list rejected, two
+  lights accepted). The multi-light id rules live in `scene.validate_lights_in_scene(lights, objects)` (called from the
+  `lights` row of `validate_scene`); `core` as an object id uses the same message as the light ids, `"reserved id in a
+  multi-light scene"` (it starts with §5.0.1's `"reserved id"`).
+- **[decision, implementation] (M6 step 2) Literal readings of §5.3.4 that a port must share.** (1) `tol_area` is
+  evaluated as `1e-9 * (D * D)`. (2) "Consecutive edges of the same polygon" (excluded from the crossing pairs) are
+  edges whose indices **in the input polygon** differ by 1 modulo `n_i`, decided before the horizontal edges are
+  discarded (two edges separated by a discarded horizontal edge are not consecutive). (3) The line ids of
+  `record_pieces` and the `base_{k,r}` of `umbra_pieces` count **every** input polygon's `n_i` edges, also of polygons
+  with fewer than three vertices (only uniqueness matters for the run merge; the count is fixed so that the line ids are
+  reproducible). (4) Step 6 with two raw pieces of one slab carrying the same `(line_left, line_right)` key (not expected:
+  a line bounds at most one piece per slab) pairs them in order: the `m`-th of slab `s + 1` extends the merged piece of
+  the `m`-th of slab `s`. (5) Crossing-pair enumeration lists every `v`-overlapping pair once from the edge with the
+  smaller `(v_min, index)`; the `(i, j)` written into the formula is `(min, max)` of the two table indices; the order in
+  which pairs are visited does not affect the result (the events are sorted). (6) `umbra_from_document` always computes
+  the polygons, also for an entry written with `umbra=False` (`null`); on a computed document it equals `doc["umbra"]`.
+- **[decision, implementation] (M6 step 2) The cost bound of §5.3.4 is not a worst-case bound.** A slab
+  decomposition emits one (slab, active edge) entry per active edge per slab, so its cost is `Θ(Σ_slabs active edges)`,
+  which is `O((E + X)·E)` in the worst case, not `O((E + X)·log E)`: a 2 000-edge **random** self-intersecting loop
+  (4.6·10⁵ merged crossing events) produces 64 221 pieces in ≈ 100 s, while a 2 000-edge simple loop (the M5 mesh case of §5.3.9)
+  takes ≈ 0.14 s and the acceptance and benchmark-like inputs are far below that. The kernel is implemented as written
+  (vectorised, the slab loop chunked to ≤ 2¹⁸ entries, candidate pairs to ≤ 2¹⁹), and the bound is read as the cost for
+  inputs whose slabs hold few active edges (shadow drawables), which is what the benchmark rows measure.
+- **[decision, implementation] (M6 step 3) Plates in the core.** `multilight.plate_form_lights`: the per-light flag of a
+  plate is the single-light rule of §5.1.8 (both signs strictly beyond their tolerances, so a light parallel to the plate
+  gives no per-light entry, exactly the single-light document of that light); the plate is a **core** face iff the camera
+  side is decided (`|n·(C − b0)| > tol`) and no light is strictly on the camera's side ("parallel counts as unlit",
+  §5.3.1). An object or plate without a record for some light counts as lit by it (no core), as `_project_polyhedra`
+  treats a missing record (no unlit face, no silhouette edge). `multilight.multi_light_name` takes an optional
+  `object_ids` so that `F.<light>.<r>` is never read as a curved stem whatever the ids are.
+
 ### 5.4 M7 — TypeScript port of the core and the three.js web UI (spec §9 row "TypeScript 移植", spec §10 M7)
 
 Everything in §1–§4 (and §5.0–§5.3, §5.5 where they describe geometry) stays normative for the Python reference

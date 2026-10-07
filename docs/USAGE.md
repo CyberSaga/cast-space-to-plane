@@ -341,6 +341,29 @@ B 段在多光源場景呼叫；純 numpy、確定性；只讀畫出的 `shadows
 | `umbra_pieces(per_light, canvas_mm) -> list` | 一個受影面：`per_light[k]` 是第 k 個有效光源（場景順序）各紀錄的 `polygons`；少於兩個有效光源回傳 `[]`；各紀錄的碎片一次相交掃描，回傳 `[[u, v], ...]` 碎片串列（`+ 0.0`） |
 | `umbra_from_document(doc) -> list` | 由文件的 `shadows[]`、`umbra[].lights`、`canvas_mm` 重算每筆 `umbra[]`（沒有 `umbra` 鍵時回傳 `[]`）；與 `doc["umbra"]` 逐位元相同 |
 
+### 2.19 `castplane.multilight` — 多光源組裝（合約 §5.3.2、§5.3.3、§5.3.5，M6）
+
+純函式的小工具，讓管線檔案只需掛鉤；每個光源都用 v1 / M4 的公式單獨計算，這裡只把各光源的結果組成多光源文件的部分。
+
+| 函式 | 說明 |
+| --- | --- |
+| `is_multi(lights) -> bool` | `len(lights) ≥ 2`（也接受整份場景） |
+| `is_light_dependent_stem(stem) -> bool` | `sil.<k>`、`g<k>.base`、`g<k>.top` 隨光源而異；`c`、`apex`、`og<k>.*`、`v<k>` 不會 |
+| `curved_stem_name(obj_id, stem, light_id, multi) -> str` | 曲面作圖點的基本名：多光源時依光源而異的 stem 加 `.<light>`（`ball.sil.0.lamp`）；影子 / 垂足名再加 `.shadow.<light>[.<r>]` / `.foot[.<r>]` |
+| `multi_light_name(name, light_id, object_ids=None) -> str` | 逐位元比對用的名稱對映：單光源文件的點名 → 多光源文件的點名（`ball.sil.0.shadow.lamp` → `ball.sil.0.lamp.shadow.lamp`） |
+| `silhouette_lights(edge_flags, light_ids, n_edges=None) -> (silhouette, lists)` | 一個多面體物件：`edges[].silhouette`（各光源的 OR）與 `edges[].silhouette_lights`（場景順序） |
+| `plate_silhouette_lights(casts, light_ids) -> list` | 有界受影面的邊界邊：該板對哪些光源投影（`casts[k]`） |
+| `unlit_union(lit_by_light) -> (union, masks, core)` | 至少被一個光源背光的面（面索引順序）、各光源在其中的遮罩、被所有光源背光的核心面遮罩 |
+| `form_table(obj, light_ids) -> dict` | A 段物件的聯集面表 `form_idx` / `form_lens` / `form_faces`（只投影一次；N = 1 時就是 v1 的陣列）與 `masks` / `core` |
+| `split_form(faces, polygons, masks, core, light_ids) -> (by_light, core)` | 各光源的 `(faces, polygons)` 與核心，共用同一批可畫多邊形 |
+| `plate_form_lights(light_sides, tol_ws, cam_side, tol) -> (flags, core)` | 平面板當單面多面體：各光源的單光源規則，與「沒有任何光源在相機那一側」的核心 |
+| `assemble_form_shadow(items, light_ids) -> (form_shadow, form_shadow_core)` | `form_shadow[]`（帶 `light`，光源優先、再物件順序）與 `form_shadow_core[]` |
+| `construction_block(light, receiver_lights, shadows, default_id) -> dict` | 一個光源的 M4 作圖區塊（含 `per_receiver`）；N = 1 時等於 `construction` |
+| `construction_blocks(lights, receiver_lights, shadows, default_id) -> dict` | `B["constructions"]`：`{<light>: block}`，場景順序；`construction` 是第一個光源的別名 |
+| `construction_doc(block) -> dict` | 作圖區塊的文件形式（小鍵經 `canonical`，串列沿用） |
+| `active_lights(receiver, light_ids) -> list` | 受影面上有效的光源（`receivers[r].lit[k]`），即 `umbra[].lights` |
+| `umbra_entries(receivers, shadows, light_ids, canvas_mm, compute=True) -> list` | `umbra[]`：每個受影面一筆 `{receiver, lights, polygons}`；`compute=False` 時 `polygons` 為 `null` |
+
 ## 3. 警告代碼（合約 §2.9）
 
 | 代碼 | 條件 | ids | 效果 |
