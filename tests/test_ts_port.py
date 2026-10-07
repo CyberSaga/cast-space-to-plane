@@ -197,6 +197,29 @@ def test_ts_suite_passes(built_port):
 
 
 @needs_node
+def test_ts_conformance_runner_is_green_on_the_whole_set(built_port):
+    """The final TypeScript conformance runner (contract §5.4.8, §5.4.0 phase 2: "both runners green on v6"): run
+    alone, it reports one passing test per case of the set (``conformance: <name>``), nothing failed, skipped or
+    ``todo``; and its source carries no todo list any more (the phase-2 parts shrank it, part 5 removed it)."""
+    source = (TS / "test" / "conformance.test.ts").read_text(encoding="utf-8")
+    determinism = (TS / "test" / "determinism.test.ts").read_text(encoding="utf-8")
+    for text in (source, determinism):
+        assert not re.search(r"\btodo\s*:", text) and "TODO_CASES" not in text and "TODO_EXAMPLES" not in text
+    proc = subprocess.run([NODE, "--test", "--test-reporter=tap", str(built_port / "test" / "conformance.test.js")],
+                          cwd=TS, capture_output=True, text=True, timeout=900)
+    tail = "\n".join(proc.stdout.splitlines()[-30:])
+    assert proc.returncode == 0, tail + proc.stderr[-2000:]
+    passed = set(re.findall(r"^ok \d+ - conformance: (\S+)$", proc.stdout, re.M))
+    failed = re.findall(r"^not ok \d+ - (.*)$", proc.stdout, re.M)
+    assert failed == [], failed
+    assert passed == set(tc.case_names()), sorted(set(tc.case_names()) ^ passed)
+    assert len(passed) >= 50
+    for key in ("fail", "skipped", "todo", "cancelled"):
+        m = re.search(rf"^# {key} (\d+)$", proc.stdout, re.M)
+        assert m and m.group(1) == "0", (key, tail)
+
+
+@needs_node
 def test_ts_and_web_sources_have_no_unused_locals(built_port):
     """No dead imports or locals in the port, its tests or the web UI: ``tsc --noEmit --noUnusedLocals`` on the
     normative configs (the flag is passed here because the §5.4.1 ``ts/tsconfig.json`` block is literal)."""
@@ -219,11 +242,9 @@ def test_ts_render_equals_the_reference_on_the_examples(built_port, tmp_path):
     from castplane.output import geometry_json
 
     examples = sorted((ROOT / "examples").glob("*.json"))
-    # M7 phase 2 (contract §5.4.0): the examples whose geometry belonged to a phase-2 part that had not landed yet
-    # (hidden lines, meshes, N >= 2); each part shrank this list, the multi-light part left it empty
-    todo: set = set()
-    assert todo <= {p.name for p in examples}
-    examples = [p for p in examples if p.name not in todo]
+    # every example, the M4-M6 ones included (M7 phase 2 complete, contract §5.4.0 / §5.4.14): hidden lines on a
+    # bounded wall, a mesh (from its expansion), two lights with the umbra
+    assert {"wall_and_ground.json", "mesh_demo.json", "two_lights.json"} <= {p.name for p in examples}
     assert len(examples) == 8
     inputs = [EXPANDED.get(p.name, p) for p in examples]
     proc = subprocess.run([NODE, str(TS / "scripts" / "render.mjs"), *map(str, inputs), str(tmp_path)],
@@ -773,6 +794,10 @@ def test_ci_runs_the_port_and_the_web_ui_with_the_recorded_gate():
     web_runs = [s["run"] for s in jobs["web"]["steps"]]
     assert "npm ci" in ts_runs and "npm ci" in web_runs
     assert any(r.startswith("npm run -w ts test") for r in ts_runs)
+    # the final runner (M7 phase 2): the conformance runner alone, failing on a failed, skipped or todo case
+    runner = [r for r in ts_runs if "conformance.test.js" in r]
+    assert len(runner) == 1 and "--test-reporter=tap" in runner[0]
+    assert all(f"grep -qx '# {key} 0'" in runner[0] for key in ("fail", "skipped", "todo"))
     bench = [s for s in jobs["ts"]["steps"] if "camera_only.js" in s["run"]]
     assert len(bench) == 1 and bench[0]["if"] == "matrix.node == '22'"
     gate = re.search(r"--gate (\w+)", bench[0]["run"]).group(1)

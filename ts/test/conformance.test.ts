@@ -211,24 +211,19 @@ test("cases/ and expected/ correspond one to one, are non-empty, and every case 
 });
 
 /**
- * Phase 2 of contract §5.4.0 landed in parts; until the last part, the cases whose geometry was not yet ported ran as
- * node:test `todo`. Part 1 (receivers generalisation) ported every case without hidden lines, mesh objects or a second
- * light; part 2 (src/hidden.ts) the hidden-line cases; part 3 (src/meshprep.ts) the three mesh cases; part 4
- * (src/umbra.ts, src/multilight.ts) the four multi-light cases. The list is now EMPTY: every case of the set passes.
+ * The final runner (contract §5.4.0 phase 2, §5.4.8): every case of the set, one node:test test per case, none skipped
+ * or `todo`. Phase 2 landed in five parts with an explicit todo list that each part shrank; part 5 removed it.
  */
-export const TODO_CASES: ReadonlySet<string> = new Set<string>([]);
-
-test("TODO_CASES is empty: every case of the set passes from TypeScript (phase 2 complete)", () => {
-  assert.deepEqual([...TODO_CASES], []);
-});
-
-test("TODO_CASES names existing cases only", () => {
+test("the runner covers the whole set at v6 or later (phase 2: hidden lines, receivers, meshes, several lights)", () => {
   const names = new Set(case_names());
-  for (const name of TODO_CASES) assert.ok(names.has(name), name);
+  assert.ok(names.size >= 50, `only ${names.size} cases`);
+  for (const name of ["wall_and_ground_hidden", "mesh_box_welded_triangulated", "multilight_two_point_symmetric_box"]) {
+    assert.ok(names.has(name), name);
+  }
 });
 
 for (const name of case_names()) {
-  test(`conformance: ${name}`, { todo: TODO_CASES.has(name) ? "phase 2 part not yet landed" : false }, () => {
+  test(`conformance: ${name}`, () => {
     const mismatches = compare_documents(load_expected(name), render_case(name), name);
     if (mismatches.length > 0) {
       const shown = mismatches.slice(0, RULES.max_reported);

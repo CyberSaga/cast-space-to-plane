@@ -46,7 +46,10 @@ jobs:
   # M7 (contract §5.4.12): the TypeScript port on node 20 and 22 — conformance runner, writer parity,
   # determinism and unit suites — and, on node 22, the spec §8 benchmark.  Gate literal set at M7 step 7
   # by the §5.4.9 margin rule (camera-only minimum 55 / 60 / 63 ms < 70 ms, benchmarks/README.md); it is
-  # changed only with a new recorded measurement, never loosened to absorb a regression.
+  # changed only with a new recorded measurement, never loosened to absorb a regression (re-measured at the
+  # close of phase 2, benchmarks/README.md: kept).  Phase 2 (step 11): the port carries the M4-M6 format and the
+  # conformance runner is final -- one test per case of set v6, no todo list; the extra step below fails the job
+  # if a case is ever failed, skipped or marked todo.
   ts:
     runs-on: ubuntu-latest
     strategy:
@@ -62,6 +65,11 @@ jobs:
       - run: npm ci
       - run: npm run -w ts build                # tsc -p tsconfig.json && tsc -p tsconfig.test.json
       - run: npm run -w ts test                 # node --test build/test/*.test.js (conformance, parity, determinism, unit)
+      - name: Conformance runner on the whole set (one test per case; none failed, skipped or todo; §5.4.8)
+        shell: bash
+        run: |
+          node --test --test-reporter=tap ts/build/test/conformance.test.js | tee conformance.tap
+          grep -qx '# fail 0' conformance.tap && grep -qx '# skipped 0' conformance.tap && grep -qx '# todo 0' conformance.tap
       - name: Spec §8 benchmark on the TypeScript side (both targets gated, §5.4.9)
         if: matrix.node == '22'
         run: node ts/build/bench/camera_only.js --gate both --reps 20

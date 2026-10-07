@@ -16,11 +16,8 @@ import type { Scene } from "../src/scene.js";
 import { camera_override, deep_freeze, read_example, read_json, repo_path } from "./helpers.js";
 
 const EXAMPLES = repo_path("examples");
+/** Every example, the M4–M6 ones included (phase 2 of contract §5.4.0 complete: no example is skipped or `todo`). */
 const examples = readdirSync(EXAMPLES).filter((f) => f.endsWith(".json")).sort();
-/** Examples whose geometry belongs to a phase-2 part that has not landed yet (contract §5.4.0): run as node:test
- * `todo`; each part shrinks this list and the final part leaves it empty. */
-const TODO_EXAMPLES: ReadonlySet<string> = new Set<string>([]);
-const todo = (file: string): { todo: string | false } => ({ todo: TODO_EXAMPLES.has(file) ? "phase 2 part not yet landed" : false });
 
 const CAMERA_CODES = new Set([
   "CAMERA_LOOKING_ALONG_UP", "LIGHT_BEHIND_CAMERA", "LIGHT_POINT_AT_INFINITY", "SHADOW_VP_AT_INFINITY", "POINT_BEHIND_CAMERA",
@@ -107,7 +104,7 @@ test("camera_free covers every multi-light camera-free key of §5.0.3 (part 4 re
 });
 
 for (const file of examples) {
-  test(`deterministic render: ${file}`, todo(file), () => {
+  test(`deterministic render: ${file}`, () => {
     const a = render(load_scene(read_example(file)));
     const b = render(load_scene(read_example(file)));
     assert.equal(dumps(a.geometry), dumps(b.geometry));
@@ -115,7 +112,7 @@ for (const file of examples) {
     assert.equal(write_svg(a.geometry), write_svg(b.geometry));
   });
 
-  test(`camera-free blocks are identical for two cameras: ${file}`, todo(file), () => {
+  test(`camera-free blocks are identical for two cameras: ${file}`, () => {
     const scene = load_scene(read_example(file));
     const other = camera_override(scene.camera, [6, -28, 12], [0, 0, 0.5], 3);
     const d1 = render(scene).geometry as any;
@@ -127,7 +124,7 @@ for (const file of examples) {
     assert.notEqual(dumps(d1.camera), dumps(d2.camera));
   });
 
-  test(`stage A never reads scene.camera and A is never mutated: ${file}`, todo(file), () => {
+  test(`stage A never reads scene.camera and A is never mutated: ${file}`, () => {
     const scene = load_scene(read_example(file));
     const trap = new Proxy({}, { get() { throw new Error("stage A read scene.camera"); } });
     const A_free = shadow_geometry({ ...scene, camera: trap } as unknown as Scene);
@@ -140,6 +137,11 @@ for (const file of examples) {
     assert.equal(dumps(compose(scene, project_scene(scene, A_free))), d1);
   });
 }
+
+test("the M4–M6 examples are among the examples (phase 2: hidden lines, bounded receivers, a mesh, two lights)", () => {
+  for (const f of ["wall_and_ground.json", "mesh_demo.json", "two_lights.json"]) assert.ok(examples.includes(f), f);
+  assert.equal(load_scene(read_example("wall_and_ground.json")).output.hidden_lines, true);
+});
 
 test("the yaw/pitch example is among the examples (regression test of the explicit-override rule)", () => {
   assert.ok(examples.includes("directional.json"));
@@ -159,7 +161,6 @@ test("construction_block (contract §5.4.14 (c)) builds the construction block o
 
 test("stage B shares the camera-free point lists of stage A by reference (contract §5.4.7, M7 review)", () => {
   for (const f of examples) {
-    if (TODO_EXAMPLES.has(f)) continue;
     const scene = load_scene(read_example(f));
     const A = shadow_geometry(scene);
     const B = project_scene(scene, A);
