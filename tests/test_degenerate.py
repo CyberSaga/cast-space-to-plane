@@ -541,7 +541,10 @@ def test_image_space_reference_detects_a_clockwise_arc_at_infinity(monkeypatch):
         out["vertices"] = V[order]
         out["sources"] = [src[k] for k in order]
         # the pipeline draws the components (``loops``, one per cycle of the arc pairing): mutate them too
-        out["loops"] = [{"vertices": out["vertices"], "sources": out["sources"], "unbounded": out["unbounded"]}]
+        # (``arcs`` kept from the real result, so that the base-level correction of the pipeline does not undo
+        # the mutation: the mutant must be caught by the image-space reference itself)
+        out["loops"] = [{"vertices": out["vertices"], "sources": out["sources"], "unbounded": out["unbounded"],
+                         "arcs": out["loops"][0]["arcs"]}]
         return out
 
     name, scene = unbounded_scenes()[0]

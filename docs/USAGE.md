@@ -327,7 +327,9 @@ castplane import tests/fixtures/step/two_solids.step --solid 1 -o sphere.json
 | `shadow_w(pi, L, P)` | M·P 的 w 分量（≤ tol 表示頂點不低於光源） |
 | `clip_loop_to_plane(points4, pi, tol=0.0, sources=None)` | 封閉齊次迴圈對 πᵀX ≥ 0 的 Sutherland–Hodgman 裁切（地面裁切的退路） |
 | `clip_mesh_to_plane(mesh, pi, tol=0.0) -> (mesh, origins)` | 封閉網格被平面切成實體：平面正側的部分加上切面；`origins` 對應新頂點到原頂點或交點 |
-| `shadow_loop(points4, M, pi, tol=0.0, tol_clip=None, frame=None, F=None) -> dict` | 一個光輪廓迴圈的影子多邊形：`{vertices (齊次，含方向頂點), sources, unbounded}`；M4：非地面受影面傳入 `frame` 與光源垂足 `F`（無窮遠弧在受影面座標系中繞 n 逆時針；地面 `frame=None` 保留 v2 算式） |
+| `shadow_loop(points4, M, pi, tol=0.0, tol_clip=None, frame=None, F=None, turns=0) -> dict` | 一個光輪廓迴圈的影子多邊形：`{vertices (齊次，含方向頂點), sources, unbounded}`；M4：非地面受影面傳入 `frame` 與光源垂足 `F`（無窮遠弧在受影面座標系中繞 n 逆時針；地面 `frame=None` 保留 v2 算式）；`loops` 每個分量另帶 `arcs`（`(θ_out, 帶號掃角)`）；`turns` 把 `2π·turns` 加到第一段弧（基準層級修正，§5.1 實作註記「Base level of the arcs at infinity」） |
+| `light_plane_level(mesh, lit, L, pi, tol, frame=None) -> (theta_ref, count) or None` | 基準層級：過光源、平行受影面的平面上一條參考射線（避開所有邊交點的最大角隙中點）穿過的受光面數；點光源且有受光面跨越該平面時才有值 |
+| `arc_level(arcs, theta) -> int` | `shadow_loop` 分量的 `arcs` 在無窮遠方向 `theta` 的環繞數（逆時針弧加、順時針弧減，掃角超過 2π 計多次） |
 | `ARC_STEP_DEG` | 無窮遠弧每段最大角度 60° |
 | `receiver_frame(n) -> (e1, e2)` | M4：受影面座標系，`e1 = normalize(z × n)`、`e2 = n × e1`（n 平行 z 時 `e1 = x`）；地面即 (x, y)（合約 §5.1.2） |
 | `bounds_functionals(bounds, n) -> ndarray` | M4：有界面 bounds 的邊泛函 `ψ_k = (m_k, −m_k·b_k)`，`m_k` 為單位向內法線（合約 §5.1.2） |

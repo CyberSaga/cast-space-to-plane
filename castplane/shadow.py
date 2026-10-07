@@ -24,6 +24,8 @@ __all__ = [
     "clip_loop_to_plane",
     "clip_mesh_to_plane",
     "shadow_loop",
+    "light_plane_level",
+    "arc_level",
     "ARC_STEP_DEG",
     "receiver_frame",
     "bounds_functionals",
@@ -333,7 +335,8 @@ def _light_foot_from_matrix(M: np.ndarray, pi: np.ndarray) -> np.ndarray | None:
     return F / F[3]
 
 
-def shadow_loop(points4, M, pi, tol: float = 0.0, tol_clip: float | None = None, frame=None, F=None) -> dict:
+def shadow_loop(points4, M, pi, tol: float = 0.0, tol_clip: float | None = None, frame=None, F=None,
+                turns: int = 0) -> dict:
     """Shadow polygon of one silhouette loop (spec §5.2 / §5.7 row 4, contract §2.5).
 
     ``points4`` is the ``(n, 4)`` loop in order (lit face on the left as seen from the
@@ -369,6 +372,13 @@ def shadow_loop(points4, M, pi, tol: float = 0.0, tol_clip: float | None = None,
     ``(e1, e2)`` coordinates and the last-resort direction is ``(e1, 0)``.  ``F`` is the light foot on
     the receiver (used by the "edge through the light" fallback; recovered from ``M`` when ``None`` and
     the receiver is the ground).  ``frame is None`` runs the literal v2 code (byte identity on the ground).
+
+    ``turns`` (review fix, §5.1 implementation note "Base level of the arcs at infinity") adds ``2 pi turns``
+    to the signed sweep of the **first** arc emitted (the arc of the start vertex's chain); the caller
+    computes it with :func:`light_plane_level` / :func:`arc_level` so that the record's winding number at
+    infinity equals the number of lit faces the light-plane ray crosses.  ``turns = 0`` is the code above,
+    byte for byte.  Every component also carries ``"arcs"``: the ``(theta_out, signed sweep)`` of its arcs
+    in emission order (angles as :func:`_arc_angle`).
     """
     M = np.asarray(M, dtype=np.float64).reshape(4, 4)
     pi = np.asarray(pi, dtype=np.float64).reshape(4)
@@ -378,7 +388,7 @@ def shadow_loop(points4, M, pi, tol: float = 0.0, tol_clip: float | None = None,
     n = P.shape[0]
     empty = {"vertices": np.zeros((0, 4), dtype=np.float64), "unbounded": False,
              "sources": [], "below_ground": below}
-    empty["loops"] = [{"vertices": empty["vertices"], "unbounded": False, "sources": []}]
+    empty["loops"] = [{"vertices": empty["vertices"], "unbounded": False, "sources": [], "arcs": []}]
     if n == 0:
         return empty
     S = P @ M.T                                      # S_i = M P_i, spec §5.2
@@ -427,7 +437,7 @@ def shadow_loop(points4, M, pi, tol: float = 0.0, tol_clip: float | None = None,
         # several excursions to infinity: the arcs are fixed by the angular order of the crossings, not by
         # the loop order (contract §2.5 as amended by the §5.1 implementation note "arc pairing", D70);
         # one output loop per cycle of chains
-        components = _arc_components(verts, sources, kinds, outs, e12)
+        components = _arc_components(verts, sources, kinds, outs, e12, turns)
         first = components[0]
         return {"vertices": first["vertices"], "unbounded": True, "sources": first["sources"],
                 "below_ground": below, "loops": components}
@@ -438,6 +448,7 @@ def shadow_loop(points4, M, pi, tol: float = 0.0, tol_clip: float | None = None,
     out_sources: list = []
     m = len(verts)
     unbounded = False
+    arcs: list = []
     for k in range(m):
         out_verts.append(verts[k])
         out_sources.append(sources[k])
@@ -450,11 +461,14 @@ def shadow_loop(points4, M, pi, tol: float = 0.0, tol_clip: float | None = None,
             delta = (th1 - th0) % (2.0 * math.pi)
             if not math.isfinite(delta) or delta <= 1e-12:
                 delta = 2.0 * math.pi
+            if turns and not arcs:
+                delta = delta + 2.0 * math.pi * turns     # base-level correction (first arc only)
             _sweep_arc(th0, delta, e12, out_verts, out_sources)
+            arcs.append((th0, delta))
     vertices = np.array(out_verts, dtype=np.float64).reshape(-1, 4)
     return {"vertices": vertices, "unbounded": unbounded, "sources": out_sources,
             "below_ground": below,
-            "loops": [{"vertices": vertices, "unbounded": unbounded, "sources": out_sources}]}
+            "loops": [{"vertices": vertices, "unbounded": unbounded, "sources": out_sources, "arcs": arcs}]}
 
 
 def _arc_angle(d: np.ndarray, e12) -> float:
@@ -468,8 +482,10 @@ def _arc_angle(d: np.ndarray, e12) -> float:
 
 def _sweep_arc(th0: float, delta: float, e12, out_verts: list, out_sources: list) -> None:
     """Append the intermediate direction vertices of the arc at infinity from angle ``th0`` swept
-    counter-clockwise by ``delta`` (``ceil(delta / 60°)`` equal steps, contract §2.5; sources ``("arc", k)``)."""
-    steps = max(1, int(math.ceil(delta / math.radians(ARC_STEP_DEG) - 1e-12)))
+    counter-clockwise by ``delta`` (``ceil(delta / 60°)`` equal steps, contract §2.5; sources ``("arc", k)``).
+    A negative ``delta`` (only after a base-level correction, :func:`shadow_loop` ``turns < 0``) sweeps
+    clockwise by ``|delta|`` with ``ceil(|delta| / 60°)`` steps; a positive one is the unchanged v1 code."""
+    steps = max(1, int(math.ceil(abs(delta) / math.radians(ARC_STEP_DEG) - 1e-12)))
     for s in range(1, steps):
         th = th0 + delta * s / steps
         if e12 is None:
@@ -481,7 +497,7 @@ def _sweep_arc(th0: float, delta: float, e12, out_verts: list, out_sources: list
         out_sources.append(("arc", s - 1))
 
 
-def _arc_components(verts: list, sources: list, kinds: list, outs: list, e12) -> list:
+def _arc_components(verts: list, sources: list, kinds: list, outs: list, e12, turns: int = 0) -> list:
     """Arcs at infinity of a loop with ``p >= 2`` excursions to infinity (contract §2.5 as amended by the
     §5.1 implementation note "arc pairing"; D70).
 
@@ -496,8 +512,15 @@ def _arc_components(verts: list, sources: list, kinds: list, outs: list, e12) ->
     along the equator); the loop-order pairing of the v1 text is the special case where the two orders
     agree.  The finite chains ``in -> ... -> out`` are then re-linked through the matched arcs; every cycle
     of chains is one output loop (``{"vertices", "sources", "unbounded": True}``), emitted in the order of
-    its first chain, the cycle of the start vertex first and in the loop's own vertex order (so a loop whose
-    angular pairing is the loop-order pairing comes out exactly as before).
+    its first chain, the cycle of the start vertex first and in the loop's own vertex order.  Each arc's sweep
+    is the literal v1 expression ``(theta_in - theta_out) mod 2 pi`` on the raw ``atan2`` angles (``2 pi``
+    when ``<= 1e-12``) plus the whole turns by which the matched (unwrapped, sorted) difference departs
+    from it, so a loop whose angular pairing is the loop-order pairing comes out bit for bit as the v1 code
+    (review fix, §5.1 implementation note "Base level of the arcs at infinity").  ``turns`` adds
+    ``2 pi turns`` to the first arc emitted (see :func:`shadow_loop`).  The parenthesis matching only fixes
+    the arcs **relative** to each other; their absolute level (the winding number at infinity) is pinned by
+    the caller through ``turns`` (a loop whose region covers the whole equator, e.g. a spiral prism with the
+    lamp inside, needs ``turns != 0``).
     """
     m = len(verts)
     p = len(outs)
@@ -525,9 +548,15 @@ def _arc_components(verts: list, sources: list, kinds: list, outs: list, e12) ->
             stack.append((j, a + wrap))
         else:
             j_out, a_out = stack.pop()
-            delta = a + wrap - a_out
-            if not math.isfinite(delta) or delta <= 0.0:
+            # the literal v1 sweep on the raw angles (bit identity with the loop-order code) ...
+            delta = (th_in[j] - th_out[j_out]) % two_pi
+            if not math.isfinite(delta) or delta <= 1e-12:
                 delta = two_pi            # coincident crossings: the full circle (contract §2.5)
+            # ... corrected by the whole turns of the matched difference (0 unless the two disagree by ~2 pi)
+            unwrapped = a + wrap - a_out
+            k = round((unwrapped - delta) / two_pi) if math.isfinite(unwrapped) else 0
+            if k:
+                delta = delta + two_pi * k
             match[j_out] = (j, delta)
     assert not stack and len(match) == p
     components = []
@@ -537,6 +566,7 @@ def _arc_components(verts: list, sources: list, kinds: list, outs: list, e12) ->
             continue
         out_verts: list[np.ndarray] = []
         out_sources: list = []
+        arcs: list = []
         j = j0
         while True:
             seen.add(j)
@@ -544,7 +574,10 @@ def _arc_components(verts: list, sources: list, kinds: list, outs: list, e12) ->
                 out_verts.append(verts[k])
                 out_sources.append(sources[k])
             nxt, delta = match[j]
+            if turns and j == 0:
+                delta = delta + two_pi * turns     # base-level correction (the first arc emitted)
             _sweep_arc(th_out[j], delta, e12, out_verts, out_sources)
+            arcs.append((th_out[j], delta))
             if nxt == j0:
                 break
             j = nxt
@@ -553,8 +586,87 @@ def _arc_components(verts: list, sources: list, kinds: list, outs: list, e12) ->
                 out_verts.append(verts[k])
                 out_sources.append(sources[k])
         components.append({"vertices": np.array(out_verts, dtype=np.float64).reshape(-1, 4),
-                           "unbounded": True, "sources": out_sources})
+                           "unbounded": True, "sources": out_sources, "arcs": arcs})
     return components
+
+
+def light_plane_level(mesh: dict, lit, L, pi, tol: float, frame=None):
+    """Absolute level at infinity of a closed mesh's lit patch (review fix, §5.1 implementation note "Base
+    level of the arcs at infinity").
+
+    The arcs of :func:`shadow_loop` fix the level of the directions at infinity only up to a constant per
+    loop; the true level of a direction ``u`` of the light plane (through ``L``, parallel to ``pi``) is the
+    number of lit faces the ray ``L + t u`` (``t > 0``) crosses.  This returns ``(theta_ref, count)`` for one
+    reference direction, or ``None`` when no lit face crosses the light plane (no arc exists) or the light
+    is directional.  ``theta_ref`` is measured like :func:`_arc_angle` (ground ``(x, y)`` when ``frame`` is
+    None, else ``(e1, e2)``): the midpoint of the largest angular gap between the crossings of the light
+    plane with the edges adjacent to a lit face (a vertex counts as below the light iff
+    ``shadow_w > tol``, the classification of :func:`shadow_loop`; the crossing is the ``t* = w_a / (w_a -
+    w_b)`` point), so the ray meets no edge.  A lit face is crossed iff the ray points at its plane
+    (``n_f . u < 0``) and an odd number of its edge crossings lie on the left of the ray (the slice of a
+    planar face by the light plane is a set of segments on one line).  Vectorised over the edge table;
+    ``mesh`` needs ``vertices``, ``edges``, ``edge_faces`` and ``face_normals`` (contract §2.4)."""
+    L = np.asarray(L, dtype=np.float64).reshape(4)
+    pi = np.asarray(pi, dtype=np.float64).reshape(4)
+    if L[3] == 0.0:
+        return None
+    lit = np.asarray(lit, dtype=bool).reshape(-1)
+    V = np.asarray(mesh["vertices"], dtype=np.float64).reshape(-1, 3)
+    E = np.asarray(mesh["edges"], dtype=np.int64).reshape(-1, 2)
+    EF = np.asarray(mesh["edge_faces"], dtype=np.int64).reshape(-1, 2)
+    N = np.asarray(mesh["face_normals"], dtype=np.float64).reshape(-1, 3)
+    if E.shape[0] == 0 or lit.shape[0] == 0:
+        return None
+    if frame is None:
+        e1, e2 = np.array([1.0, 0.0, 0.0]), np.array([0.0, 1.0, 0.0])
+    else:
+        e1, e2 = (np.asarray(e, dtype=np.float64).reshape(3) for e in frame)
+    w = np.asarray(shadow_w(pi, L, to_homogeneous(V)), dtype=np.float64).reshape(-1)
+    below = w > tol
+    valid = EF >= 0
+    lit_adj = np.any(valid & lit[np.where(valid, EF, 0)], axis=1)
+    cross = (below[E[:, 0]] != below[E[:, 1]]) & lit_adj
+    if not bool(np.any(cross)):
+        return None
+    Ec, EFc = E[cross], EF[cross]
+    wa, wb = w[Ec[:, 0]], w[Ec[:, 1]]
+    t = wa / (wa - wb)
+    C = (1.0 - t)[:, None] * V[Ec[:, 0]] + t[:, None] * V[Ec[:, 1]] - L[:3][None, :] / L[3]
+    x, y = C @ e1, C @ e2
+    two_pi = 2.0 * math.pi
+    az = np.sort(np.arctan2(y, x) % two_pi)
+    gaps = np.diff(np.append(az, az[0] + two_pi))
+    i = int(np.argmax(gaps))
+    theta = float(az[i] + 0.5 * gaps[i])
+    if theta >= two_pi:
+        theta -= two_pi
+    c, s = math.cos(theta), math.sin(theta)
+    left = (c * y - s * x) > 0.0
+    parity = np.zeros(lit.shape[0], dtype=np.int64)
+    for col in range(2):
+        ok = EFc[:, col] >= 0
+        np.add.at(parity, EFc[ok, col], left[ok].astype(np.int64))
+    u = c * e1 + s * e2
+    hit = lit & ((N @ u) < 0.0) & ((parity % 2) == 1)
+    return theta, int(np.count_nonzero(hit))
+
+
+def arc_level(arcs, theta: float) -> int:
+    """Winding number at infinity, in the direction ``theta`` (not an arc end), of the arcs ``[(theta_out,
+    signed sweep), ...]`` of :func:`shadow_loop` components: each counter-clockwise arc adds the number of
+    times it passes over ``theta``, each clockwise one (a negative sweep) subtracts it."""
+    two_pi = 2.0 * math.pi
+    level = 0
+    for th0, sweep in arcs:
+        r = (theta - th0) % two_pi
+        if sweep > 0.0:
+            if sweep > r:
+                level += int(math.ceil((sweep - r) / two_pi))
+        elif sweep < 0.0:
+            r = two_pi - r
+            if -sweep > r:
+                level -= int(math.ceil((-sweep - r) / two_pi))
+    return level
 
 
 # ---------------------------------------------------------------------------
