@@ -213,13 +213,10 @@ test("cases/ and expected/ correspond one to one, are non-empty, and every case 
 /**
  * Phase 2 of contract §5.4.0 lands in parts; until the last part, the cases whose geometry is not yet ported are run
  * as node:test `todo` (reported, not failing). Each part shrinks this list; the final part leaves it EMPTY.
- * Part 1 (receivers generalisation) ports every case without hidden lines, mesh objects or a second light.
+ * Part 1 (receivers generalisation) ports every case without hidden lines, mesh objects or a second light; part 2
+ * (src/hidden.ts) the hidden-line cases.
  */
 export const TODO_CASES: ReadonlySet<string> = new Set([
-  // hidden lines (src/hidden.ts, §5.1.6)
-  "hidden_lines_curved_unbounded",
-  "hidden_lines_vp_in_canvas",
-  "wall_and_ground_hidden",
   // mesh objects (src/meshprep.ts, §5.2)
   "mesh_box_welded_triangulated",
   "mesh_open_bottom_box_fallback",

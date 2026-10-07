@@ -29,7 +29,7 @@ export type { Camera, Light, Output, Receiver, Scene, SceneObject, Transform } f
 export { compose, construction_block, project_scene, render, shadow_geometry } from "./pipeline.js";
 export type { StageA, StageB } from "./pipeline.js";
 export { canonical, dumps, py_repr, INT_KEYS } from "./output/geometry_json.js";
-export { LAYER_ORDER, STYLE, fmt, write_svg } from "./output/svg.js";
+export { HIDDEN_STROKE, HIDDEN_STYLES, LAYER_ORDER, OUTLINE_STYLE, STYLE, fmt, write_svg } from "./output/svg.js";
 export { cmp_code_points, py_round, pyimod, pymod } from "./pyfloat.js";
 export { apply_rotation, apply_transform, euler_zyx_matrix, rotation_x, rotation_y, rotation_z, transform_frame } from "./transform.js";
 export {
@@ -55,4 +55,5 @@ export {
 export * as conics from "./conics.js";
 export * as curved from "./curved.js";
 export * as multilight from "./multilight.js";
+export * as hidden from "./hidden.js";
 export { TOL_DIR, ZERO_REL, cross3, join, meet, normalize_max, row_max_abs, scene_scale, to_homogeneous, tolerance } from "./homogeneous.js";

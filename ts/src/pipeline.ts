@@ -25,6 +25,7 @@ import { SceneError, make_warning, merge_warnings } from "./errors.js";
 import type { Warning } from "./errors.js";
 import { TOL_DIR, row_max_abs, scene_scale, tolerance } from "./homogeneous.js";
 import { face_lit_flags, light_vector, lit_value, silhouette_loops } from "./light.js";
+import { classify_document } from "./hidden.js";
 import { NotManifoldError } from "./mesh.js";
 import type { Mesh } from "./mesh.js";
 import { is_multi } from "./multilight.js";
@@ -1274,15 +1275,10 @@ function receiver_light_points(points: Record<string, PointEntry>, lt: LightStag
  * Stage C: the spec §6.2 geometry document (contract §3.1, full key listing §5.0.3), canonical floats.
  * `hidden_lines` (§5.1.6.5 / §5.0.7): `null` / `undefined` = `scene.output.hidden_lines`; the effective switch is the
  * document's top-level `hidden_lines`. With it off every `visibility` is `"visible"` and every `runs` /
- * `hidden_polylines` / `polygon_edges` is `[]`. The sampled hidden-line classification (src/hidden.ts) is a later part
- * of phase 2; until it lands an effective switch `true` is rejected with a typed `SceneError("output.hidden_lines")`
- * rather than written as a `hidden_lines: true` document carrying the switch-off geometry (§5.4 implementation notes).
+ * `hidden_polylines` / `polygon_edges` is `[]`. When it is on, `hidden.classify_document(doc, B.A, B)` (src/hidden.ts,
+ * §5.1.6.5) fills `visibility` / `runs` / `polygon_edges` / `hidden_polylines` with fresh lists.
  */
 export function compose(scene: Scene, B: StageB, hidden_lines?: boolean | null): GeometryDocument {
-  if (hidden_lines === undefined || hidden_lines === null ? scene.output.hidden_lines === true : Boolean(hidden_lines)) {
-    throw new SceneError("output.hidden_lines",
-      "hidden-line removal is not ported yet (M7 phase 2, hidden-line part of contract §5.4.14); render with the switch off");
-  }
   const cam = B.camera;
   const points: Record<string, PointEntry> = {};
   const edges: Record<string, unknown>[] = [];
@@ -1409,7 +1405,7 @@ export function compose(scene: Scene, B: StageB, hidden_lines?: boolean | null):
     };
   }
   const { per_receiver: _per, ...rest } = head;
-  return {
+  const doc = {
     ...rest,
     construction: {
       ...head.construction,
@@ -1424,6 +1420,9 @@ export function compose(scene: Scene, B: StageB, hidden_lines?: boolean | null):
     form_shadow,
     outlines,
   } as unknown as GeometryDocument;
+  // M4 (contract §5.1.6.5): the sampled hidden-line removal of stage C
+  if (effective) classify_document(doc, B.A, B);
+  return doc;
 }
 
 /** Run stages A, B, C and write the SVG with the scene's layer subset (contract §3, §5.0.7): `hidden_lines` /

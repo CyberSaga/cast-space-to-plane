@@ -285,17 +285,22 @@ for (const [name, [mutate, expected]] of Object.entries(M4_VARIANTS)) {
   });
 }
 
-test("interim guards (M7 phase 2 part 1 review): unported mesh / hidden-line input is a typed SceneError, not a plain Error or a wrong document", async () => {
+test("interim guard (M7 phase 2 part 1 review): unported mesh input is a typed SceneError; hidden lines render (part 2)", async () => {
   const { SceneError } = await import("../src/errors.js");
   const { compose, project_scene, shadow_geometry } = await import("../src/pipeline.js");
   const mesh = { id: "m", type: "mesh", data: { vertices: [[0, 0, 0], [1, 0, 0], [0, 1, 0]], faces: [[0, 1, 2]] } };
   const s1 = scene_with([BOX, mesh], { id: "sun", type: "directional", direction: [0.6, 0, -0.8] }, SIDE_CAMERA);
   assert.throws(() => render(s1), (e: unknown) => e instanceof SceneError && e.field === "objects[1].type");
+  // part 2 (src/hidden.ts) removed the hidden-line guard: the argument and the scene's output.hidden_lines both work,
+  // and the explicit switch-off override still gives the switch-off document
   const s2 = scene_with([BOX], { id: "sun", type: "directional", direction: [0.6, 0, -0.8] }, SIDE_CAMERA);
-  assert.throws(() => render(s2, null, true), (e: unknown) => e instanceof SceneError && e.field === "output.hidden_lines");
+  assert.equal(render(s2, null, true).geometry.hidden_lines, true);
   const s3 = load_scene({ ...JSON.parse(JSON.stringify(s2)), output: { canvas_mm: [360, 240], hidden_lines: true } });
-  assert.throws(() => render(s3), (e: unknown) => e instanceof SceneError && e.field === "output.hidden_lines");
-  // the explicit switch-off override still renders a hidden_lines scene; stage A/B are unaffected
+  const on = render(s3).geometry as any;
+  assert.equal(on.hidden_lines, true);
+  assert.ok(on.edges.some((e: any) => e.visibility !== "visible"));
   assert.equal(render(s3, null, false).geometry.hidden_lines, false);
-  assert.equal(compose(s3, project_scene(s3, shadow_geometry(s3)), false).hidden_lines, false);
+  const off = compose(s3, project_scene(s3, shadow_geometry(s3)), false) as any;
+  assert.equal(off.hidden_lines, false);
+  assert.ok(off.edges.every((e: any) => e.visibility === "visible" && e.runs.length === 0));
 });

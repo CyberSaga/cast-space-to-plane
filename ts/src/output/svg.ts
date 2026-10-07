@@ -430,9 +430,9 @@ export const HIDDEN_STYLES = ["dashed", "omit"] as const;
 
 /**
  * Write the §6.1 SVG of a geometry document; `layers` selects a subset of the six ids (an unknown id throws, the
- * Python `ValueError`). `hidden_style` (contract §5.1.8 / §5.0.6): an unknown value throws; the hidden-run groups of a
- * document with `hidden_lines == true` come with the hidden-line part of phase 2 (a document with `hidden_lines` false
- * is written exactly as by the v2 writer).
+ * Python `ValueError`). `hidden_style` (contract §5.1.8 / §5.0.6): an unknown value throws; `"dashed"` draws the hidden
+ * runs of a document with `hidden_lines == true` dashed in the `*.hidden` sub-groups, `"omit"` writes those groups
+ * empty. A document with `hidden_lines` false (or absent) is written exactly as by the v2 writer.
  */
 export function write_svg(doc: AnyDoc, layers?: readonly string[] | null, hidden_style: string | null = "dashed"): string {
   const style = hidden_style ?? "dashed";
@@ -454,10 +454,211 @@ export function write_svg(doc: AnyDoc, layers?: readonly string[] | null, hidden
     '<?xml version="1.0" encoding="UTF-8"?>',
     `<svg xmlns="http://www.w3.org/2000/svg" width="${fmt(W)}mm" height="${fmt(H)}mm" viewBox="0 0 ${fmt(W)} ${fmt(H)}">`,
   ];
+  const hidden = Boolean((doc as any).hidden_lines);
   for (const name of selected) {
     const [builder, attrs] = LAYER_BUILDERS[name] as [(doc: AnyDoc, cv: Canvas) => string[], string];
+    const hidden_builder = HIDDEN_LAYER_BUILDERS[name];
+    if (hidden && hidden_builder !== undefined) { // M4 (contract §5.1.8): hidden-run sub-groups
+      parts.push(group(name, attrs, hidden_builder(doc, cv, style)));
+      continue;
+    }
     parts.push(group(name, attrs, builder(doc, cv)));
   }
   parts.push("</svg>");
   return parts.join("\n") + "\n";
 }
+
+// ---------------------------------------------------------------------------
+// M4: hidden-line runs (contract §5.1.8, §5.0.6)
+// ---------------------------------------------------------------------------
+
+/** Stroke colour of each layer's `*.hidden` group (the layer's own stroke colour, contract §5.1.8). */
+export const HIDDEN_STROKE: Readonly<Record<string, string>> = Object.freeze({ objects: "#111", form_shadow: "#335", cast_shadow: "#000" });
+
+function hidden_group_style(layer: string): string {
+  return `stroke="${HIDDEN_STROKE[layer] as string}" stroke-width="0.15" stroke-dasharray="0.5 0.5" fill="none"`;
+}
+
+/** Stroke of the cast-shadow outline runs (the fill paths are then written `stroke="none"`). */
+export const OUTLINE_STYLE = 'stroke="#000" stroke-width="0.25"';
+
+type Seg = [UV, UV];
+
+/** Visible and hidden pieces of a drawn straight segment by its `visibility` / `runs` (`segment[0] + s (segment[1] −
+ * segment[0])` at the run boundaries, contract §5.1.8). */
+function split_runs(seg: readonly UV[], item: any): [Seg[], Seg[]] {
+  const vis = item.visibility ?? "visible";
+  const s0 = seg[0] as UV, s1 = seg[1] as UV;
+  if (vis === "visible") return [[[s0, s1]], []];
+  if (vis === "hidden") return [[], [[s0, s1]]];
+  const ua = s0[0] as number, va = s0[1] as number, ub = s1[0] as number, vb = s1[1] as number;
+  const du = ub - ua, dv = vb - va;
+  const shown: Seg[] = [], hidden: Seg[] = [];
+  for (const r of item.runs ?? []) {
+    const [r0, r1] = r.s as [number, number];
+    const a: UV = [r0 === 0.0 ? ua : ua + r0 * du, r0 === 0.0 ? va : va + r0 * dv];
+    const b: UV = [r1 === 1.0 ? ub : ua + r1 * du, r1 === 1.0 ? vb : va + r1 * dv];
+    (r.visible ? shown : hidden).push([a, b]);
+  }
+  return [shown, hidden];
+}
+
+/** `<layer>.hidden` with one sub-group per `[id, segments, polylines]` (empty under `"omit"`). */
+function hidden_group(layer: string, groups: readonly [string, Seg[], UV[][]][], hidden_style: string, cv: Canvas): string {
+  const sub = groups.map(([gid, segs, plines]) => {
+    const body: string[] = [];
+    if (hidden_style !== "omit") {
+      for (const [a, b] of segs) body.push(cv.line(a, b));
+      for (const pl of plines) if (pl.length >= 2) body.push(cv.polyline(pl));
+    }
+    return group(`${layer}.hidden.${gid}`, "", body);
+  });
+  return group(`${layer}.hidden`, hidden_group_style(layer), sub);
+}
+
+function conic_hidden(entry: any): UV[][] {
+  return ((entry.hidden_polylines ?? []) as UV[][]).filter((pl) => pl.length >= 2);
+}
+
+interface ObjectSlot { front: Seg[]; back: Seg[]; extra_front: string[]; extra_back: string[]; hidden: Seg[]; hidden_pl: UV[][] }
+
+/** The objects layer of a document with hidden lines on: `objects.hidden` (sub-groups per object, sorted like the
+ * object groups) first, then the v2 object groups with the visible runs only. */
+function layer_objects_hidden(doc: AnyDoc, cv: Canvas, hidden_style: string): string[] {
+  const per_object = new Map<string, ObjectSlot>();
+  const slot = (oid: string): ObjectSlot => {
+    let s = per_object.get(oid);
+    if (s === undefined) per_object.set(oid, (s = { front: [], back: [], extra_front: [], extra_back: [], hidden: [], hidden_pl: [] }));
+    return s;
+  };
+  for (const e of (doc as any).edges ?? []) {
+    if (e.segment === null || e.segment === undefined) continue;
+    const s = slot(e.object);
+    const [shown, hid] = split_runs(e.segment, e);
+    (e.back ? s.back : s.front).push(...shown);
+    s.hidden.push(...hid);
+  }
+  for (const entry of (doc as any).outlines ?? []) {
+    const s = slot(entry.object);
+    for (const g of entry.generators ?? []) {
+      if (g.segment === null || g.segment === undefined) continue;
+      const [shown, hid] = split_runs(g.segment, g);
+      (g.back ? s.back : s.front).push(...shown);
+      s.hidden.push(...hid);
+    }
+    for (const c of entry.conics ?? []) {
+      (c.back ? s.extra_back : s.extra_front).push(...drawables(c, cv));
+      s.hidden_pl.push(...conic_hidden(c));
+    }
+  }
+  const ids = [...per_object.keys()].sort(cmp_code_points);
+  const groups: [string, Seg[], UV[][]][] = [];
+  for (const oid of ids) {
+    const s = per_object.get(oid) as ObjectSlot;
+    if (s.hidden.length > 0 || s.hidden_pl.length > 0) groups.push([oid, s.hidden, s.hidden_pl]);
+  }
+  const body = [hidden_group("objects", groups, hidden_style, cv)];
+  for (const oid of ids) {
+    const s = per_object.get(oid) as ObjectSlot;
+    const front = [...s.front.map(([a, b]) => cv.line(a, b)), ...s.extra_front];
+    const back = [...s.back.map(([a, b]) => cv.line(a, b)), ...s.extra_back];
+    const sub: string[] = [];
+    if (front.length > 0) sub.push(group(`objects.${oid}.front`, STYLE["objects"] as string, front));
+    if (back.length > 0) sub.push(group(`objects.${oid}.back`, STYLE["objects_back"] as string, back));
+    if (sub.length > 0 || s.hidden.length > 0 || s.hidden_pl.length > 0) body.push(group(`objects.${oid}`, "", sub));
+  }
+  return body;
+}
+
+/** The form-shadow layer with hidden lines on: `form_shadow.hidden` first (sub-groups in document order), then the v2
+ * entries whose terminator keeps the visible runs only (fills unchanged). */
+function layer_form_shadow_hidden(doc: AnyDoc, cv: Canvas, hidden_style: string): string[] {
+  const hidden_groups: [string, Seg[], UV[][]][] = [];
+  const body: string[] = [];
+  for (const entry of (doc as any).form_shadow ?? []) {
+    const oid = entry.object ?? "";
+    const polys = ((entry.polygons ?? []) as UV[][]).filter((poly) => poly.length >= 3);
+    const sub: string[] = polys.map((poly) => cv.polygon(poly));
+    const term: string[] = [], hid: Seg[] = [], hid_pl: UV[][] = [];
+    for (const t of entry.terminator ?? []) {
+      if ("segment" in t) {
+        for (const seg of t.polylines ?? []) {
+          if (seg.length !== 2) continue;
+          const [shown, h] = split_runs(seg, t);
+          term.push(...shown.map((p) => cv.polyline(p)));
+          hid.push(...h);
+        }
+        continue;
+      }
+      term.push(...drawables(t, cv));
+      hid_pl.push(...conic_hidden(t));
+    }
+    if (term.length > 0) sub.push(group(`form_shadow.${oid}.terminator`, STYLE["terminator"] as string, term));
+    if (hid.length > 0 || hid_pl.length > 0) hidden_groups.push([oid, hid, hid_pl]);
+    if (sub.length > 0) body.push(group(`form_shadow.${oid}`, "", sub));
+  }
+  return [hidden_group("form_shadow", hidden_groups, hidden_style, cv), ...body];
+}
+
+/** The cast-shadow layer with hidden lines on: `cast_shadow.hidden` (sub-groups per light) first; per record the fill
+ * path with `stroke="none"`, the visible conic drawables in `.conics` and the visible outline runs of the drawn polygon
+ * edges in `cast_shadow.<light>.<object>[.<r>].outline`. */
+function layer_cast_shadow_hidden(doc: AnyDoc, cv: Canvas, hidden_style: string): string[] {
+  const receivers = (doc as any).receivers;
+  const first_receiver: string | null = Array.isArray(receivers) && receivers.length > 0 ? receivers[0].id : null;
+  const per_light = new Map<string, string[]>();
+  const hidden_by_light = new Map<string, [Seg[], UV[][]]>();
+  for (const sh of (doc as any).shadows ?? []) {
+    const lid = sh.light ?? "";
+    const items: string[] = [];
+    const loops = ((sh.polygons ?? []) as UV[][]).filter((poly) => poly.length >= 3);
+    if (loops.length > 0) {
+      const path = cv.path(loops);
+      items.push(path.slice(0, -2) + ' stroke="none"/>');
+    }
+    const conics: string[] = [], hid_pl: UV[][] = [];
+    for (const entry of sh.conics ?? []) {
+      conics.push(...drawables(entry, cv));
+      hid_pl.push(...conic_hidden(entry));
+    }
+    if (conics.length > 0) {
+      items.push(group(shadow_subgroup_id(sh, first_receiver, "conics"), STYLE["cast_shadow_conics"] as string, conics));
+    }
+    const shown: Seg[] = [], hid: Seg[] = [];
+    const records = (sh.polygon_edges ?? []) as any[][];
+    ((sh.polygons ?? []) as UV[][]).forEach((poly, j) => {
+      if (poly.length < 3) return;
+      const recs = j < records.length ? (records[j] as any[]) : [];
+      const n = poly.length;
+      for (let e = 0; e < n; e++) {
+        const seg = [poly[e] as UV, poly[(e + 1) % n] as UV];
+        const rec = e < recs.length ? recs[e] : { visibility: "visible", runs: [] };
+        const [a, b] = split_runs(seg, rec);
+        shown.push(...a);
+        hid.push(...b);
+      }
+    });
+    if (shown.length > 0) {
+      items.push(group(shadow_subgroup_id(sh, first_receiver, "outline"), OUTLINE_STYLE, shown.map(([a, b]) => cv.line(a, b))));
+    }
+    if (hid.length > 0 || hid_pl.length > 0) {
+      let h = hidden_by_light.get(lid);
+      if (h === undefined) hidden_by_light.set(lid, (h = [[], []]));
+      h[0].push(...hid);
+      h[1].push(...hid_pl);
+    }
+    let list = per_light.get(lid);
+    if (list === undefined) per_light.set(lid, (list = []));
+    list.push(...items);
+  }
+  const lids = [...hidden_by_light.keys()].sort(cmp_code_points);
+  const body = [hidden_group("cast_shadow", lids.map((lid) => [lid, ...(hidden_by_light.get(lid) as [Seg[], UV[][]])]), hidden_style, cv)];
+  for (const light of [...per_light.keys()].sort(cmp_code_points)) body.push(group(`cast_shadow.${light}`, "", per_light.get(light) as string[]));
+  return body;
+}
+
+const HIDDEN_LAYER_BUILDERS: Record<string, (doc: AnyDoc, cv: Canvas, hidden_style: string) => string[]> = {
+  objects: layer_objects_hidden,
+  form_shadow: layer_form_shadow_hidden,
+  cast_shadow: layer_cast_shadow_hidden,
+};

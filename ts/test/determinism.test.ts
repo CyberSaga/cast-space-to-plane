@@ -19,7 +19,7 @@ const EXAMPLES = repo_path("examples");
 const examples = readdirSync(EXAMPLES).filter((f) => f.endsWith(".json")).sort();
 /** Examples whose geometry belongs to a phase-2 part that has not landed yet (contract §5.4.0): run as node:test
  * `todo`; each part shrinks this list and the final part leaves it empty. */
-const TODO_EXAMPLES: ReadonlySet<string> = new Set(["mesh_demo.json", "wall_and_ground.json"]); // the latter: hidden_lines on
+const TODO_EXAMPLES: ReadonlySet<string> = new Set(["mesh_demo.json"]);
 const todo = (file: string): { todo: string | false } => ({ todo: TODO_EXAMPLES.has(file) ? "phase 2 part not yet landed" : false });
 
 const CAMERA_CODES = new Set([
