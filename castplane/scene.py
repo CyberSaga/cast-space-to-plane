@@ -195,7 +195,8 @@ def validate_object(value, field: str) -> dict:
     out = {"id": _id(_require(o, "id", field), f"{field}.id", no_dot=True)}
     typ = _require(o, "type", field)
     if typ in LOADER_TYPES:
-        raise SceneError(f"{field}.type", f"loader object type '{typ}' must be expanded first (castplane.io.expand_scene or 'castplane import')")
+        raise SceneError(f"{field}.type", f"loader object type '{typ}' must be expanded first "
+                                          "(castplane.io.expand_scene or 'castplane import')")
     if typ not in OBJECT_TYPES:
         raise SceneError(f"{field}.type", f"must be one of {', '.join(OBJECT_TYPES)}")
     out["type"] = typ

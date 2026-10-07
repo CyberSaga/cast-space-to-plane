@@ -16,6 +16,7 @@ import numpy as np
 import pytest
 
 import castplane
+from castplane import cli
 from castplane import io as cpio
 from castplane.errors import SceneError
 from castplane.io import part21
@@ -950,7 +951,7 @@ def test_axis_aligned_occ_box_is_exact(tmp_path):
                    "transform": {"position": [0.0, 0.0, 0.0], "rotation_deg": [0.0, 0.0, 0.0]}}
 
 
-# --------------------------------------------------------------------------- registry and expansion (§5.0.2, §5.5.0, §5.5.1)
+# --------------------------------------------------------------------------- registry, expansion (§5.0.2, §5.5.1)
 BASIC = ROOT / "examples" / "basic.json"
 STEP_PILLAR = {"id": "pillar", "type": "step", "path": "cylinder.step"}
 
@@ -1183,3 +1184,195 @@ def test_mesh_object_with_a_step_path_without_ocp_is_an_import_error(monkeypatch
     # the analytic path never imports OCP
     assert cpio.load_expanded_scene(_basic_with("pillar", STEP_PILLAR), base_dir=FIX)[0] == \
         castplane.load_scene(str(BASIC))
+
+
+# --------------------------------------------------------------------------- CLI (§5.5.8, §5.0.2)
+def run(capsys, *argv) -> tuple:
+    """``castplane <argv>`` in-process -> ``(exit code, stdout, stderr)``."""
+    code = cli.main([str(a) for a in argv])
+    out = capsys.readouterr()
+    return code, out.out, out.err
+
+
+def _step_scene_file(tmp_path, name="basic.json", pillar_path="parts/pillar.step") -> pathlib.Path:
+    """``examples/basic.json`` with its pillar as a ``step`` object referencing a copy of the fixture."""
+    (tmp_path / "parts").mkdir(exist_ok=True)
+    (tmp_path / "parts" / "pillar.step").write_bytes((FIX / "cylinder.step").read_bytes())
+    path = tmp_path / name
+    path.write_text(json.dumps(_basic_with("pillar", {"id": "pillar", "type": "step", "path": pillar_path}),
+                               indent=1), encoding="utf-8")
+    return path
+
+
+def test_cli_import_writes_a_valid_scene(tmp_path, capsys):
+    out = tmp_path / "s.json"
+    code, stdout, stderr = run(capsys, "import", FIX / "cylinder.step", "-o", out)
+    assert code == 0 and stdout == f"{out}\n"
+    assert "note: IMPORT_NO_CAMERA_DEFAULT []: " in stderr and "note: IMPORT_NO_LIGHT_DEFAULT []: " in stderr
+    text = out.read_text(encoding="utf-8")
+    scene = json.loads(text)
+    assert text == json.dumps(scene, indent=1, sort_keys=True, ensure_ascii=False) + "\n"
+    assert scene["objects"] == [dict(PILLAR, id="cylinder")]
+    assert [n["code"] for n in scene["meta"]["import_notes"]] == ["IMPORT_NO_CAMERA_DEFAULT", "IMPORT_NO_LIGHT_DEFAULT"]
+    assert scene["receivers"] == [{"id": "ground", "type": "plane", "normal": [0.0, 0.0, 1.0], "offset": 0.0}]
+    code, stdout, _ = run(capsys, "validate", out)
+    assert code == 0 and stdout.startswith("ok: 1 object(s), 1 light(s), 1 receiver(s)")
+    # determinism: a second run writes identical bytes; stdout mode writes the same text
+    out2 = tmp_path / "s2.json"
+    assert run(capsys, "import", FIX / "cylinder.step", "-o", out2, "-q") == (0, "", "")
+    assert out2.read_bytes() == out.read_bytes()
+    code, stdout, _ = run(capsys, "import", FIX / "cylinder.step")
+    assert code == 0 and stdout == text
+    # the default id is the sanitised file stem
+    odd = tmp_path / "my pillar.v2.step"
+    odd.write_bytes((FIX / "cylinder.step").read_bytes())
+    code, stdout, _ = run(capsys, "import", odd, "-q")
+    assert code == 0 and [o["id"] for o in json.loads(stdout)["objects"]] == ["my_pillar_v2"]
+
+
+def test_cli_import_into_basic_appends_and_keeps_the_raw_blocks(tmp_path, capsys):
+    out = tmp_path / "s.json"
+    code, stdout, _ = run(capsys, "import", FIX / "cylinder.step", "--into", BASIC, "--id", "post", "-o", out)
+    assert code == 0 and stdout == f"{out}\n"
+    basic, scene = _basic(), json.loads(out.read_text(encoding="utf-8"))
+    for key in ("version", "units", "up", "lights", "receivers", "camera", "output"):
+        assert json.dumps(scene[key], sort_keys=True) == json.dumps(basic[key], sort_keys=True), key
+    assert scene["objects"] == basic["objects"] + [dict(PILLAR, id="post")]
+    crate = next(o for o in scene["objects"] if o["id"] == "crate")
+    assert crate == next(o for o in basic["objects"] if o["id"] == "crate")
+    assert all(type(v) is int for v in crate["transform"]["rotation_deg"])     # the raw [0, 0, 30]
+    assert scene["meta"] == {"import_notes": []}
+    assert run(capsys, "validate", out)[0] == 0
+    # unknown keys of SCENE are copied verbatim
+    into = tmp_path / "with_description.json"
+    into.write_text(json.dumps(dict(basic, description="a hand-made scene", extra={"k": [1, 2]})), encoding="utf-8")
+    code, stdout, _ = run(capsys, "import", FIX / "sphere.step", "--into", into, "-q")
+    got = json.loads(stdout)
+    assert code == 0 and got["description"] == "a hand-made scene" and got["extra"] == {"k": [1, 2]}
+    assert got["objects"][-1] == dict(SPHERE, id="sphere")
+    # an --id already used by SCENE is an error
+    code, _, stderr = run(capsys, "import", FIX / "cylinder.step", "--into", BASIC, "--id", "pillar")
+    assert code == 2 and stderr.startswith("error: --id: ")
+
+
+def test_cli_import_into_a_scene_holding_a_step_object(tmp_path, capsys):
+    into = _step_scene_file(tmp_path)
+    (tmp_path / "out").mkdir()
+    out = tmp_path / "out" / "s.json"
+    code, _, _ = run(capsys, "import", FIX / "sphere.step", "--into", into, "-o", out, "-q")
+    assert code == 0
+    scene = json.loads(out.read_text(encoding="utf-8"))
+    # SCENE's own step object stays raw, its relative path rewritten for the output's directory
+    assert scene["objects"][1] == {"id": "pillar", "type": "step", "path": "../parts/pillar.step"}
+    assert scene["objects"][-1] == dict(SPHERE, id="sphere")
+    expanded, _ = cpio.load_expanded_scene(str(out))
+    assert [o["type"] for o in expanded["objects"]] == ["box", "cylinder", "sphere"]
+    # the ids a step object of SCENE expands to are taken: a file stem part_0 is de-duplicated
+    two = tmp_path / "two.json"
+    (tmp_path / "parts" / "two_solids.step").write_bytes((FIX / "two_solids.step").read_bytes())
+    two.write_text(json.dumps(dict(copy.deepcopy(DEFAULT_SCENE_TEMPLATE),
+                                   objects=[{"id": "part", "type": "step", "path": "parts/two_solids.step"}])),
+                   encoding="utf-8")
+    stem = tmp_path / "part_0.step"
+    stem.write_bytes((FIX / "cone.step").read_bytes())
+    code, stdout, _ = run(capsys, "import", stem, "--into", two, "-q")
+    assert code == 0 and [o["id"] for o in json.loads(stdout)["objects"]] == ["part", "part_0_2"]
+    code, _, stderr = run(capsys, "import", stem, "--into", two, "--id", "part_1")
+    assert code == 2 and stderr.startswith("error: --id: ")
+
+
+def test_cli_import_solid_selection_and_quiet(capsys):
+    code, stdout, stderr = run(capsys, "import", FIX / "two_solids.step", "--solid", "1", "-q")
+    assert code == 0 and stderr == ""
+    assert json.loads(stdout)["objects"] == [dict(SPHERE, id="two_solids")]
+    code, stdout, _ = run(capsys, "import", FIX / "two_solids.step", "--id", "part", "-q")
+    assert [o["id"] for o in json.loads(stdout)["objects"]] == ["part_0", "part_1"]
+    code, _, stderr = run(capsys, "import", FIX / "two_solids.step", "--solid", "2")
+    assert code == 2 and stderr == "error: step.solid: file has 2 solid(s)\n"
+    code, _, stderr = run(capsys, "import", FIX / "two_solids.step", "--solid", "-1")
+    assert code == 2 and stderr.startswith("error: step.solid: ")
+    with pytest.raises(SystemExit) as exc:                  # not an integer: an argparse usage error
+        cli.main(["import", str(FIX / "two_solids.step"), "--solid", "1.0"])
+    assert exc.value.code == 2
+
+
+def test_cli_import_errors_and_exit_codes(tmp_path, capsys):
+    code, stdout, stderr = run(capsys, "import", FIX / "frustum.step")
+    assert code == 2 and stdout == ""
+    assert stderr.startswith("error: step: #15: unsupported solid: faces {CONICAL_SURFACE: 1, PLANE: 2}")
+    assert run(capsys, "import", tmp_path / "missing.step")[0] == 1
+    (tmp_path / "bad.step").write_text("ISO-10303-21;\nHEADER;\n", encoding="utf-8")
+    code, _, stderr = run(capsys, "import", tmp_path / "bad.step")
+    assert code == 2 and stderr.startswith("error: step: syntax: ")
+    # an option of the other family is a usage error (exit 2)
+    for argv in ((FIX / "cylinder.step", "--weld", "1e-6"), (FIX / "cylinder.step", "--inline"),
+                 (FIX / "cylinder.step", "--up", "y"), (FIX / "cylinder.step", "--node", "0")):
+        code, _, stderr = run(capsys, "import", *argv)
+        assert code == 2 and "is a mesh option" in stderr, argv
+    obj_file = ROOT / "tests" / "fixtures" / "meshes" / "box_split.obj"
+    for argv in ((obj_file, "--solid", "0"), (obj_file, "--fallback", "mesh"), (obj_file, "--fallback", "error")):
+        code, _, stderr = run(capsys, "import", *argv)
+        assert code == 2 and "is a STEP option" in stderr, argv
+    with pytest.raises(SystemExit) as exc:
+        cli.main(["import", str(FIX / "frustum.step"), "--fallback", "tessellate"])
+    assert exc.value.code == 2
+
+
+def test_cli_import_fallback_mesh_with_ocp(tmp_path, capsys):
+    pytest.importorskip("OCP")
+    out = tmp_path / "f.json"
+    code, _, stderr = run(capsys, "import", FIX / "frustum.step", "--fallback", "mesh", "-o", out)
+    assert code == 0 and "note: STEP_SOLID_TESSELLATED ['#15']: " in stderr
+    scene = json.loads(out.read_text(encoding="utf-8"))
+    (obj,) = scene["objects"]
+    assert obj["id"] == "frustum" and obj["type"] == "mesh" and "path" not in obj
+    assert obj["data"] == S.mesh_object_from_triangles("frustum", S.tessellate_step(FIX / "frustum.step"), None)["data"]
+    assert "STEP_SOLID_TESSELLATED" in [n["code"] for n in scene["meta"]["import_notes"]]
+    assert run(capsys, "validate", out)[0] == 0
+
+
+def test_cli_import_fallback_mesh_without_ocp_exits_3(capsys, monkeypatch):
+    _without_ocp(monkeypatch)
+    code, stdout, stderr = run(capsys, "import", FIX / "frustum.step", "--fallback", "mesh")
+    assert code == 3 and stdout == "" and "castplane[step]" in stderr
+    assert run(capsys, "import", FIX / "cylinder.step", "--fallback", "mesh", "-q")[0] == 0
+
+
+def test_cli_render_validate_info_stages_expand_step_objects(tmp_path, capsys, monkeypatch):
+    scene = _step_scene_file(tmp_path)
+    monkeypatch.chdir(ROOT / "docs")                        # paths resolve against the scene file, not the cwd
+    assert run(capsys, "render", scene, "-o", tmp_path / "out", "-q") == (0, "", "")
+    assert run(capsys, "render", BASIC, "-o", tmp_path / "ref", "-q") == (0, "", "")
+    for name in ("basic.json", "basic.svg"):
+        assert (tmp_path / "out" / name).read_bytes() == (tmp_path / "ref" / name).read_bytes(), name
+    code, stdout, _ = run(capsys, "validate", scene)
+    assert code == 0 and stdout.startswith("ok: 2 object(s), 1 light(s), 1 receiver(s)")
+    code, stdout, _ = run(capsys, "info", scene)
+    assert code == 0 and "objects: 2 (crate:box, pillar:cylinder)" in stdout and "step" not in stdout.split("\n")[1]
+    assert run(capsys, "stages", scene, "-o", tmp_path / "stages.json", "-q") == (0, "", "")
+    assert run(capsys, "stages", BASIC, "-o", tmp_path / "stages_ref.json", "-q") == (0, "", "")
+    assert (tmp_path / "stages.json").read_bytes() == (tmp_path / "stages_ref.json").read_bytes()
+    # validate counts the objects after expansion, and prints the importer notes
+    two = tmp_path / "two.json"
+    two.write_text(json.dumps(dict(copy.deepcopy(DEFAULT_SCENE_TEMPLATE),
+                                   objects=[{"id": "part", "type": "step", "path": str(FIX / "two_solids.step")}])),
+                   encoding="utf-8")
+    code, stdout, _ = run(capsys, "validate", two)
+    assert code == 0 and stdout.startswith("ok: 2 object(s)")
+    b = Builder()
+    b.cylinder(300.0, 2400.0, (-1500.0, 6000.0, 0.0))
+    write(tmp_path / "parts", b.text(), "pillar.step")       # the same pillar without a unit context
+    code, _, stderr = run(capsys, "render", scene, "-o", tmp_path / "out2")
+    assert code == 0 and "note: STEP_UNIT_ASSUMED_MM []: " in stderr
+    assert "note: STEP_ANGLE_UNIT_ASSUMED_RAD []: " in stderr
+    assert "STEP_" not in (tmp_path / "out2" / "basic.json").read_text(encoding="utf-8")
+    assert run(capsys, "validate", scene, "-q") == (0, "", "")
+    # a step error inside a scene names the object's path field
+    bad = tmp_path / "bad.json"
+    frustum = {"id": "pillar", "type": "step", "path": str(FIX / "frustum.step")}
+    bad.write_text(json.dumps(_basic_with("pillar", frustum)), encoding="utf-8")
+    code, _, stderr = run(capsys, "validate", bad)
+    assert code == 2 and stderr.startswith("error: objects[1].path: #15: unsupported solid")
+    bad.write_text(json.dumps(_basic_with("pillar", {"id": "pillar", "type": "step", "path": "missing.step"})),
+                   encoding="utf-8")
+    assert run(capsys, "render", bad, "-o", tmp_path / "out3")[0] == 1
