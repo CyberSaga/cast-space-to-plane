@@ -1376,3 +1376,16 @@ def test_cli_render_validate_info_stages_expand_step_objects(tmp_path, capsys, m
     bad.write_text(json.dumps(_basic_with("pillar", {"id": "pillar", "type": "step", "path": "missing.step"})),
                    encoding="utf-8")
     assert run(capsys, "render", bad, "-o", tmp_path / "out3")[0] == 1
+
+
+# --------------------------------------------------------------------------- documents (§5.5.12, §5.5 intro)
+def test_step_report_has_the_required_structure():
+    text = (ROOT / "docs" / "STEP.md").read_text(encoding="utf-8")
+    headings = [line for line in text.splitlines() if line.startswith("## ")]
+    assert [h.split()[1] for h in headings] == [f"{k}." for k in range(1, 10)], headings
+    for needle in ("路線 (a)", "路線 (b)", "建議", "範圍外", "M5", "驗收", "風險", "same_sense", "170", "598",
+                   "−1.7552526894158411", "−5.584894920868585"):
+        assert needle in text, needle
+    row = next(line for line in (ROOT / "README.md").read_text(encoding="utf-8").splitlines()
+               if line.startswith("| M8 "))
+    assert "原型完成（Part-21 解析器、四種基元、`castplane import`）；網格退路經 M5 內嵌網格型別" in row

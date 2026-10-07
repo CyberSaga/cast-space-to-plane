@@ -3729,3 +3729,37 @@ LGPL-2.1；確定性只到 OCC 版本；頂點重建誤差 1.4e-9 mm；OCP 8 的
 - **[decision, implementation] (M8 part 1) Vector arithmetic.** `step.py` does its 3-vector arithmetic in plain Python
   floats in a fixed order (`_dot`, `_cross`, …; numpy only for `to_metres` of arrays, `euler_zyx_deg` input and the
   user-transform composition), so recognition and the emitted numbers do not depend on a BLAS build.
+- **[decision, implementation] (M8 part 2) Registry and the `.step` mesh path (§5.0.2, §5.5.0, §5.5.7).**
+  `EXPANDERS["step"]`, `EXTENSION_LOADERS` and `IMPORT_NOTE_CODES.update(step.STEP_WARNING_CODES)` are appended
+  hunks of `castplane/io/__init__.py`; `EXTENSION_LOADERS` is consulted by M5's `load_mesh_file` (its per-call
+  parse cache) **before** the trimesh fallback, so `expand_mesh_object` needs no change and
+  `load_mesh_file("part.step")` returns the same raw form `{vertices (m), faces, smooth_groups: [0]*n}` as
+  `mesh_object_from_triangles(...)["data"]`. A `mesh` object with a `.step` path gets **no** importer note
+  (`STEP_SOLID_TESSELLATED` belongs to the `type: "step"` fallback, whose ids are entity ids); a `StepError` of
+  `tessellate_step` reaches the scene through M5's re-raise as `SceneError(objects[i].path, "step: unsupported: …")`;
+  `node` on a `.step` mesh is M5's `objects[i].node` error. `scene.LOADER_TYPES` sits directly above
+  `validate_object` (its test is the first statement after the `type` lookup, before the `OBJECT_TYPES` test).
+- **[decision, implementation] (M8 part 2) `castplane import` of a STEP file (§5.5.8).** The written objects are
+  the expanded primitives (an unrecognised solid with `--fallback mesh`: the inline `mesh`), never a `step`
+  reference; the importer notes go into `meta.import_notes` like every import (§5.0.2; §5.5.8 does not repeat it).
+  A missing FILE is checked (exit 1) before the extension dispatch. The mixed-family usage error is a
+  `SceneError` at the option (`error: --weld: --weld is a mesh option; FILE is a STEP file …`, exit 2), the same
+  mechanism M5 uses for `--up` on glTF; `--solid` is `type=int` (a non-integer is an argparse usage error, exit 2;
+  a negative or too large K is `SceneError("step.solid", …)`). **Added**: with `--into SCENE`, the ids that
+  SCENE's own `step` objects expand to (`part_0`, …) are reserved like SCENE's raw ids, so an imported object is
+  de-duplicated against them (`part_0_2`) instead of failing validation at `objects[j].id`; an explicit `--id`
+  equal to one of them is the usual `SceneError("--id")`.
+- **[decision, implementation] (M8 part 2) "every face contributes ≥ 1 triangle" (§5.5.10).** Tested without a
+  per-face API: the node blocks are unwelded, so each face's triangulation is its own connected component; the
+  frustum's triangles form exactly 3 components and OCP's face explorer finds 3 faces. `tessellate_step` keeps the
+  contract's return keys.
+- **[decision, implementation] (M8 part 2) Extras order and the test environments.** `step` is placed after `png`
+  in `pyproject.toml`; the existing `dev` line stays last (PLAN rule: no moving of existing lines), so the extras
+  read `mesh`, `png`, `step`, `dev`. The container's system Python has cadquery-ocp 8.0.1.1.0, so the OCP tests
+  run in the full suite; the absent path was run with a `ModuleNotFoundError` stub for `OCP` first on
+  `PYTHONPATH` (`tests/test_step.py`, `test_cli.py`, `test_loaders.py`: 186 passed, the 6 OCP tests skipped; CLI
+  `--fallback mesh` exit 3). The scratch OCP venv has no pytest, so it was not used.
+- **[decision, implementation] (M8 part 2) Measurements.** Fixture `import_step` 0.45–4.1 ms (min of 5; table in
+  `benchmarks/README.md`); a 200-cylinder OCC assembly (1 244 553 bytes, 24 220 entities) 0.34–0.40 s (min of 3,
+  three runs), not the prototype's 0.63 s; Part 21 parsing is ≈ 85 % of the time. `part21.py` is 202 lines and
+  `step.py` 838 (the §5.5.12 "≈ 700 lines" estimate is exceeded by the error paths and the fallback).
