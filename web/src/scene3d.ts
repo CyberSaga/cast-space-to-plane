@@ -9,11 +9,11 @@ import * as THREE from "three";
 import { transform_frame } from "castplane";
 import type { ObjectRecord, Scene, SceneObject, StageA, Vec3 } from "castplane";
 
+import { light_colour, receiver_plates, shading_intensity } from "./helpers3d.js";
 import { mesh_positions } from "./mesh3d.js";
 
 /** Per-object colours (cycled). */
 const PALETTE = [0xc9d6e8, 0xe8d3c3, 0xd2e3c8, 0xe6d9ef, 0xf0e2b6, 0xc8e4e4, 0xebc9cf, 0xd9d9d9];
-const LIGHT_COLOUR = 0xffcc33;
 
 /** The geometry of a primitive in its local frame (castplane local frames: base on `z = 0`, axis `+z`); a mesh object
  * with its stage-A record `rec` is the exception: world coordinates (`mesh_positions(...).world`, identity matrix). */
@@ -88,7 +88,8 @@ export function dispose_scene3d(root: THREE.Object3D): void {
   });
 }
 
-/** The three.js group of a scene: one mesh per object, light helpers + shading lights, receivers. */
+/** The three.js group of a scene: one mesh per object, light helpers + shading lights per light, receivers (the
+ * unbounded ground as a large plane with a grid, each bounded receiver as a plate over its `bounds`). */
 export function build_scene3d(scene: Scene, A?: StageA): THREE.Group {
   const group = new THREE.Group();
   group.name = "castplane-scene";
@@ -111,56 +112,80 @@ export function build_scene3d(scene: Scene, A?: StageA): THREE.Group {
     group.add(mesh);
   });
 
-  for (const light of scene.lights) {
+  // lights as helpers only (§5.4.10), one colour per light (phase 2: several lights); the shading lights share
+  // one total intensity so a scene with several lights is not drawn brighter
+  const intensity = shading_intensity(scene.lights.length);
+  scene.lights.forEach((light, i) => {
+    const colour = light_colour(i);
     if (light.type === "point") {
       const p = light.position as Vec3;
       const marker = new THREE.Mesh(
         new THREE.SphereGeometry(Math.max(0.04, 0.012 * extent), 16, 8),
-        new THREE.MeshBasicMaterial({ color: LIGHT_COLOUR }),
+        new THREE.MeshBasicMaterial({ color: colour }),
       );
       marker.name = `light:${light.id}`;
       marker.position.set(p[0], p[1], p[2]);
       group.add(marker);
-      const pl = new THREE.PointLight(0xffffff, 2.2, 0, 0);
+      const pl = new THREE.PointLight(0xffffff, intensity, 0, 0);
       pl.position.set(p[0], p[1], p[2]);
       pl.castShadow = false;
       group.add(pl);
     } else {
       const d = new THREE.Vector3(...(light.direction as Vec3)).normalize();
       const origin = new THREE.Vector3(centre[0], centre[1], Math.max(centre[2], 0));
-      const arrow = new THREE.ArrowHelper(d, origin, 0.4 * extent, LIGHT_COLOUR);
+      const arrow = new THREE.ArrowHelper(d, origin, 0.4 * extent, colour);
       arrow.name = `light:${light.id}`;
       group.add(arrow);
-      const dl = new THREE.DirectionalLight(0xffffff, 2.2);
+      const dl = new THREE.DirectionalLight(0xffffff, intensity);
       dl.position.copy(origin.clone().addScaledVector(d, extent));
       dl.target.position.copy(origin);
       dl.castShadow = false;
       group.add(dl, dl.target);
     }
-  }
+  });
   group.add(new THREE.AmbientLight(0xffffff, 0.9));
 
-  for (const rec of scene.receivers) {
+  const receiver_material = () => new THREE.MeshLambertMaterial({ color: 0xf4f4f0, side: THREE.DoubleSide,
+    polygonOffset: true, polygonOffsetFactor: 1, polygonOffsetUnits: 1 });
+  scene.receivers.forEach((rec, i) => {
+    const plate = receiver_plates([rec])[0]!;
+    if (plate.kind === "plate") {
+      // a bounded receiver (phase 2): a plate over its convex `bounds` (world coordinates) and its outline
+      const geometry = new THREE.BufferGeometry();
+      geometry.setAttribute("position", new THREE.BufferAttribute(plate.positions, 3));
+      geometry.computeVertexNormals();
+      const material = receiver_material();
+      material.color.setHex(i === 0 ? 0xf4f4f0 : 0xeceae2);
+      const mesh = new THREE.Mesh(geometry, material);
+      mesh.name = `receiver:${rec.id}`;
+      mesh.receiveShadow = false;
+      group.add(mesh);
+      const edge = new THREE.Line(
+        new THREE.BufferGeometry().setAttribute("position", new THREE.BufferAttribute(plate.outline, 3)),
+        new THREE.LineBasicMaterial({ color: 0x9a9a90 }),
+      );
+      edge.name = `outline:${rec.id}`;
+      group.add(edge);
+      return;
+    }
+    // the unbounded ground: a plane of 4x the scene extent with a grid
     const size = 4 * extent;
-    const plane = new THREE.Mesh(
-      new THREE.PlaneGeometry(size, size),
-      new THREE.MeshLambertMaterial({ color: 0xf4f4f0, side: THREE.DoubleSide, polygonOffset: true, polygonOffsetFactor: 1, polygonOffsetUnits: 1 }),
-    );
-    plane.name = `receiver:${rec.id}`;
+    const ground = new THREE.Mesh(new THREE.PlaneGeometry(size, size), receiver_material());
+    ground.name = `receiver:${rec.id}`;
     const n = new THREE.Vector3(...rec.normal);
-    plane.quaternion.setFromUnitVectors(new THREE.Vector3(0, 0, 1), n);
-    // the receiver point nearest to the scene centre's ground point (n·X = offset)
+    ground.quaternion.setFromUnitVectors(new THREE.Vector3(0, 0, 1), n);
+    // the receiver point nearest to the scene centre's ground point (the plane n·X + offset = 0)
     const c0 = new THREE.Vector3(centre[0], centre[1], 0);
-    plane.position.copy(c0).addScaledVector(n, rec.offset - n.dot(c0));
-    plane.receiveShadow = false;
-    group.add(plane);
+    ground.position.copy(c0).addScaledVector(n, -(n.dot(c0) + rec.offset));
+    ground.receiveShadow = false;
+    group.add(ground);
     const divisions = Math.min(200, Math.max(8, Math.round(size)));
     const grid = new THREE.GridHelper(size, divisions, 0xbbbbbb, 0xdddddd);
     grid.name = `grid:${rec.id}`;
     // GridHelper lies in XZ: +π/2 about X puts it in the plane's local XY, then the plane's orientation
-    grid.quaternion.copy(plane.quaternion).multiply(new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(1, 0, 0), Math.PI / 2));
-    grid.position.copy(plane.position);
+    grid.quaternion.copy(ground.quaternion).multiply(new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(1, 0, 0), Math.PI / 2));
+    grid.position.copy(ground.position);
     group.add(grid);
-  }
+  });
   return group;
 }

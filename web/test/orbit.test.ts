@@ -20,6 +20,7 @@ import {
 import type { OrbitState } from "../src/orbit.js";
 import { camera_block_text, json_blob, ordered_layers, scene_blob, svg_blob } from "../src/download.js";
 import { mesh_positions } from "../src/mesh3d.js";
+import { LIGHT_COLOURS, SHADING_TOTAL, light_colour, plate_outline, plate_positions, receiver_plates, shading_intensity } from "../src/helpers3d.js";
 
 // web/build/test/orbit.test.js -> repository root
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..", "..");
@@ -235,10 +236,16 @@ test("hidden lines in the downloads (phase 2 of §5.4.10): the scene's switch an
   assert.ok(dashed.includes('<g id="objects.hidden" stroke="#111" stroke-width="0.15" stroke-dasharray="0.5 0.5" fill="none">'));
   const omit = svg_blob(on, LAYER_ORDER, "wall_and_ground", "omit").text;
   assert.ok(omit.includes('<g id="objects.hidden.crate"/>') && !dashed.includes('<g id="objects.hidden.crate"/>'));
-  // the checkbox state is written as output.hidden_lines, so the Python CLI reproduces the picture
+  // the checkbox state and the style select are written as output.hidden_lines / hidden_style, so the Python CLI
+  // reproduces the picture
   assert.equal(load_scene_text(scene_blob(sc, cam, "wall_and_ground", false).text).output.hidden_lines, false);
   assert.equal(load_scene_text(scene_blob(sc, cam, "wall_and_ground", true).text).output.hidden_lines, true);
   assert.equal(load_scene_text(scene_blob(sc, cam, "wall_and_ground").text).output.hidden_lines, true);
+  assert.equal(load_scene_text(scene_blob(sc, cam, "wall_and_ground", true, "omit").text).output.hidden_style, "omit");
+  assert.equal(load_scene_text(scene_blob(sc, cam, "wall_and_ground", true).text).output.hidden_style, "dashed");
+  // without the switches the download is the scene with the camera block replaced, nothing else
+  const plain = JSON.parse(scene_blob(sc, cam, "wall_and_ground").text);
+  assert.deepEqual(plain.output, JSON.parse(JSON.stringify(sc.output)));
   const off = compose(sc, project_scene(sc, A, cam), false);
   assert.ok(!svg_blob(off, LAYER_ORDER, "wall_and_ground").text.includes(".hidden"));
 });
@@ -279,4 +286,62 @@ test("mesh scenes: the 3D view reuses stage A's triangles (world frame) instead 
   }
   // a record of another object is not used
   assert.equal(mesh_positions(obj, { ...rec, id: "other" }).world, false);
+});
+
+test("receivers in the 3D view (phase 2 of §5.4.10): the unbounded ground and a plate over each bounded receiver", () => {
+  const sc = example("wall_and_ground");
+  const plates = receiver_plates(sc.receivers);
+  assert.deepEqual(plates.map((p) => [p.id, p.kind]), [["ground", "ground"], ["wall", "plate"]]);
+  assert.equal(plates[0]!.positions.length, 0);
+  const wall = plates[1]!;
+  const bounds = sc.receivers[1]!.bounds!;
+  assert.equal(wall.positions.length, (bounds.length - 2) * 9); // a fan: n − 2 triangles
+  assert.equal(wall.outline.length, (bounds.length + 1) * 3); // closed: the first point again
+  assert.deepEqual([...wall.outline.slice(-3)], [...wall.outline.slice(0, 3)]);
+  // every plate vertex lies on the receiver plane (n·x + offset = 0) and the fan covers the 6 m × 2.5 m wall
+  const n = sc.receivers[1]!.normal, d = sc.receivers[1]!.offset;
+  let area = 0;
+  for (let k = 0; k < wall.positions.length; k += 9) {
+    const P = [0, 3, 6].map((j) => [0, 1, 2].map((a) => wall.positions[k + j + a]!));
+    for (const p of P) close(n[0]! * p[0]! + n[1]! * p[1]! + n[2]! * p[2]! + d, 0, 1e-6, "on the plane");
+    const u = [0, 1, 2].map((a) => P[1]![a]! - P[0]![a]!), v = [0, 1, 2].map((a) => P[2]![a]! - P[0]![a]!);
+    const c = [u[1]! * v[2]! - u[2]! * v[1]!, u[2]! * v[0]! - u[0]! * v[2]!, u[0]! * v[1]! - u[1]! * v[0]!];
+    area += Math.hypot(c[0]!, c[1]!, c[2]!) / 2;
+  }
+  close(area, 15, 1e-6, "wall area");
+  // a triangle and a pentagon: n − 2 triangles each; a degenerate input gives none
+  assert.equal(plate_positions([[0, 0, 0], [1, 0, 0], [0, 1, 0]]).length, 9);
+  assert.equal(plate_positions([[0, 0, 0], [1, 0, 0], [1, 1, 0], [0.5, 1.5, 0], [0, 1, 0]]).length, 27);
+  assert.equal(plate_positions([[0, 0, 0], [1, 0, 0]]).length, 0);
+  assert.equal(plate_outline([]).length, 0);
+  // every bounded receiver of the conformance set is a plate, the unbounded ground never is
+  for (const name of ["bounded_default_receiver", "receiver_directional_wall", "receiver_unlit_wall", "wall_and_ground"]) {
+    const cs = conformance_case(name);
+    assert.ok(cs.receivers.some((r) => r.bounds !== null), name);
+    for (const [i, p] of receiver_plates(cs.receivers).entries()) {
+      assert.equal(p.kind, cs.receivers[i]!.bounds === null ? "ground" : "plate", `${name} ${p.id}`);
+    }
+  }
+});
+
+test("several lights in the 3D view (phase 2 of §5.4.10): one helper colour per light, one total shading intensity", () => {
+  const sc = example("two_lights");
+  assert.deepEqual(sc.lights.map((l) => l.id), ["left", "right"]);
+  const colours = sc.lights.map((_, i) => light_colour(i));
+  assert.equal(new Set(colours).size, 2);
+  assert.equal(colours[0], LIGHT_COLOURS[0]); // the single-light colour of phase 1
+  assert.equal(light_colour(LIGHT_COLOURS.length), LIGHT_COLOURS[0]); // cycled
+  close(shading_intensity(1), SHADING_TOTAL, 0, "one light");
+  close(2 * shading_intensity(2), SHADING_TOTAL, 1e-15, "two lights");
+  close(3 * shading_intensity(3), SHADING_TOTAL, 1e-15, "three lights");
+  // the per-frame camera-only path with stage A cached (§5.4.10): umbra on at rest, off (null polygons) during a drag
+  const A = shadow_geometry(sc);
+  const cam = camera_from_orbit(rotate_orbit(orbit_from_camera(sc.camera, sc), 25, -8, 500), sc.camera);
+  const rest = compose(sc, project_scene(sc, A, cam, true));
+  const drag = compose(sc, project_scene(sc, A, cam, false));
+  assert.deepEqual(Object.keys(rest.constructions ?? {}), ["left", "right"]);
+  assert.ok(rest.umbra!.length === 1 && rest.umbra![0]!.polygons!.length > 0);
+  assert.equal(drag.umbra![0]!.polygons, null);
+  // everything but the umbra polygons is the same document
+  assert.deepEqual({ ...drag, umbra: null }, { ...rest, umbra: null });
 });

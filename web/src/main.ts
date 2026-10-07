@@ -82,6 +82,7 @@ const rollOut = $<HTMLOutputElement>("roll-out");
 const layersBox = $<HTMLSpanElement>("layers");
 const view3d = $<HTMLInputElement>("view3d");
 const hiddenLines = $<HTMLInputElement>("hidden-lines");
+const hiddenStyle = $<HTMLSelectElement>("hidden-style");
 const statusLine = $<HTMLDivElement>("status");
 const errorPanel = $<HTMLDivElement>("error");
 const warningsBody = $<HTMLTableElement>("warnings").tBodies[0]!;
@@ -159,6 +160,8 @@ function load(name: string, make: () => Scene): boolean {
   for (const [id, box] of layerBoxes) box.checked = state.layersChecked.has(id);
   overlay.set_hidden_layers(state.layersChecked);
   hiddenLines.checked = scene.output.hidden_lines === true;
+  hiddenStyle.value = scene.output.hidden_style ?? "dashed";
+  hiddenStyle.disabled = !hiddenLines.checked;
   sync_sliders();
   layout();
   document.title = `${name} — castplane web`;
@@ -240,8 +243,18 @@ $<HTMLButtonElement>("reset").addEventListener("click", () => {
   sync_sliders();
   request_render();
 });
-// phase 2 of §5.4.10: the hidden-line switch, passed as `hidden_lines` to `compose` (initialised from the scene)
-hiddenLines.addEventListener("change", () => request_render());
+// phase 2 of §5.4.10: the hidden-line switch, passed as `hidden_lines` to `compose`, and the hidden style, passed as
+// `hidden_style` to `write_svg` ("dashed" | "omit", §5.1.8); both initialised from the scene's `output`
+hiddenLines.addEventListener("change", () => {
+  hiddenStyle.disabled = !hiddenLines.checked;
+  request_render();
+});
+hiddenStyle.addEventListener("change", () => request_render());
+
+/** The selected hidden style (`write_svg`'s third argument). */
+function hidden_style(): "dashed" | "omit" {
+  return hiddenStyle.value === "omit" ? "omit" : "dashed";
+}
 view3d.addEventListener("change", () => {
   canvas.classList.toggle("hidden", !view3d.checked);
   request_render();
@@ -259,13 +272,13 @@ function save(file: DownloadFile): void {
 }
 
 $<HTMLButtonElement>("dl-svg").addEventListener("click", () => {
-  if (state.doc !== null) save(svg_blob(state.doc, state.layersChecked, state.sceneName, state.scene?.output.hidden_style ?? "dashed"));
+  if (state.doc !== null) save(svg_blob(state.doc, state.layersChecked, state.sceneName, hidden_style()));
 });
 $<HTMLButtonElement>("dl-json").addEventListener("click", () => {
   if (state.doc !== null) save(json_blob(state.doc, state.sceneName));
 });
 $<HTMLButtonElement>("dl-scene").addEventListener("click", () => {
-  if (state.scene !== null && state.orbit !== null) save(scene_blob(state.scene, camera_from_orbit(state.orbit, state.scene.camera), state.sceneName, hiddenLines.checked));
+  if (state.scene !== null && state.orbit !== null) save(scene_blob(state.scene, camera_from_orbit(state.orbit, state.scene.camera), state.sceneName, hiddenLines.checked, hidden_style()));
 });
 $<HTMLButtonElement>("copy-camera").addEventListener("click", () => {
   if (state.scene === null || state.orbit === null) return;
@@ -361,7 +374,7 @@ function frame(): void {
     // the resting frame recomputes them
     doc = compose(scene, B, hiddenLines.checked && !state.dragging);
     // all six layers with CSS visibility (DOM mode); the checked subset in <img> mode
-    svg = write_svg(doc, img_mode ? ordered_layers(state.layersChecked) : LAYER_IDS, scene.output.hidden_style ?? "dashed");
+    svg = write_svg(doc, img_mode ? ordered_layers(state.layersChecked) : LAYER_IDS, hidden_style());
   } catch (e) {
     show_error(describe_error(e));
     return;
@@ -386,9 +399,22 @@ function frame(): void {
   statusLine.textContent =
     `${state.sceneName}: stage A ${state.timings.stage_a_ms.toFixed(1)} ms (cached)\n` +
     `core ms ${state.timings.core_ms.toFixed(1)} · dom ms ${state.timings.dom_ms.toFixed(1)} · overlay ${overlay.mode}\n` +
-    `points ${Object.keys(doc.points).length} · edges ${doc.edges.length} · rays ${doc.construction.rays.length}\n` +
+    `points ${Object.keys(doc.points).length} · edges ${doc.edges.length} · rays ${ray_count(doc)}` +
+    (doc.umbra !== undefined ? ` · umbra pieces ${umbra_count(doc)}` : "") + "\n" +
+    `lights ${scene.lights.map((l) => l.id).join(", ")} · receivers ${scene.receivers.map((r) => r.id).join(", ")}\n` +
     `camera (${cam.position.map((x) => x.toFixed(2)).join(", ")}) → (${cam.target.map((x) => x.toFixed(2)).join(", ")}), ` +
     `f ${cam.focal_length_mm.toFixed(1)} mm, roll ${cam.roll_deg.toFixed(1)}°`;
+}
+
+/** Construction rays of every light (`constructions` with N ≥ 2 lights, else `construction`). */
+function ray_count(doc: GeometryDocument): number {
+  const blocks = doc.constructions !== undefined ? Object.values(doc.constructions) : [doc.construction];
+  return blocks.reduce((n, b) => n + b.rays.length, 0);
+}
+
+/** Umbra pieces of the frame (`null` polygons — a drag frame, `umbra = false` — count as none). */
+function umbra_count(doc: GeometryDocument): number {
+  return (doc.umbra ?? []).reduce((n, u) => n + (u.polygons?.length ?? 0), 0);
 }
 
 let lastWarnings = "";
@@ -418,25 +444,51 @@ function update_warnings(doc: GeometryDocument): void {
 }
 
 // ---------------------------------------------------------------------------- start
-/** Read-only hooks for the smoke test and for measuring `core ms` / `dom ms` (web/README.md). */
+/** Hooks for the smoke test and for measuring `core ms` / `dom ms` (web/README.md); `load_example`, `load_text` and
+ * `set_hidden` act as the UI controls would, the rest is read-only. */
 (window as unknown as { castplane_web: unknown }).castplane_web = {
   examples: EXAMPLES.map((e) => e.name),
   load_example: (name: string) => {
     const ex = EXAMPLES.find((e) => e.name === name);
     if (ex === undefined) throw new Error(`unknown example ${name}`);
     examplesSelect.value = name;
-    load(name, () => load_scene(ex.data));
+    return load(name, () => load_scene(ex.data)); // false: the error panel shows why, the previous scene stays
   },
   load_text,
   get frames() { return state.frames.slice(); },
   get timings() { return { ...state.timings }; },
   get camera() { return state.orbit && state.scene ? camera_from_orbit(state.orbit, state.scene.camera) : null; },
   get svg_length() { return state.svg.length; },
+  /** The UI's hidden-line state: the checkbox and the style select. */
+  get hidden() { return { lines: hiddenLines.checked, style: hidden_style() }; },
+  /** Set the hidden-line checkbox and style as a user would (fires their change handlers). */
+  set_hidden: (lines: boolean, style?: "dashed" | "omit") => {
+    hiddenLines.checked = lines;
+    hiddenLines.dispatchEvent(new Event("change"));
+    if (style !== undefined) {
+      hiddenStyle.value = style;
+      hiddenStyle.dispatchEvent(new Event("change"));
+    }
+  },
+  /** The names of the 3D view's objects (`<object id>`, `light:<id>`, `receiver:<id>`, `outline:<id>`, `grid:<id>`). */
+  get scene3d_names() { return group3 === null ? [] : group3.children.map((c) => c.name).filter((n) => n !== ""); },
+  get doc_summary() {
+    const d = state.doc;
+    if (d === null) return null;
+    return {
+      hidden_lines: d.hidden_lines,
+      hidden_edge_runs: d.edges.reduce((n, e) => n + e.runs.filter((r) => !r.visible).length, 0),
+      receivers: d.receivers.map((r) => r.id),
+      constructions: d.constructions === undefined ? [] : Object.keys(d.constructions),
+      umbra_pieces: umbra_count(d),
+    };
+  },
   /** The scene camera's SVG / JSON through the bundled core (`project_scene(scene, A)` with no override). */
   reference_render: () => {
     if (state.scene === null || state.A === null) return null;
     const doc = compose(state.scene, project_scene(state.scene, state.A));
-    return { svg: write_svg(doc, state.scene.output.layers, state.scene.output.hidden_style ?? "dashed"), json: dumps(doc) };
+    return { name: state.sceneName, svg: write_svg(doc, state.scene.output.layers, state.scene.output.hidden_style ?? "dashed"),
+      json: dumps(doc) };
   },
 };
 

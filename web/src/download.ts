@@ -27,7 +27,8 @@ export function ordered_layers(checked: Iterable<string>): string[] {
 }
 
 /** `write_svg(doc, layers, hidden_style)` with the checked layers in §2.10 order → `<sceneName>.svg` (`hidden_style`: the
- * scene's `output.hidden_style`, used only by a document with hidden lines on, §5.1.8). */
+ * UI's "Hidden style" select, initialised from the scene's `output.hidden_style`; used only by a document with hidden
+ * lines on, §5.1.8). */
 export function svg_blob(doc: GeometryDocument, layers: Iterable<string>, sceneName: string, hidden_style = "dashed"): DownloadFile {
   return { filename: `${sceneName}.svg`, type: SVG_MIME, text: write_svg(doc, ordered_layers(layers), hidden_style) };
 }
@@ -40,12 +41,15 @@ export function json_blob(doc: GeometryDocument, sceneName: string): DownloadFil
 /**
  * `dumps({...scene, camera: cam}) + "\n"` → `<sceneName>.scene.json`: the loaded scene with the explicit target-form
  * block of `camera_from_orbit`, so the result never carries both camera forms and the Python CLI reproduces the
- * picture (`castplane render x.scene.json -o out`). `hidden_lines` (the UI checkbox, phase 2 of §5.4.10), when given,
- * is written as `output.hidden_lines` for the same reason.
+ * picture (`castplane render x.scene.json -o out`). `hidden_lines` (the UI checkbox) and `hidden_style` (the UI select,
+ * phase 2 of §5.4.10), when given, are written as `output.hidden_lines` / `output.hidden_style` for the same reason.
  */
-export function scene_blob(scene: Scene, cam: TargetCamera, sceneName: string, hidden_lines?: boolean): DownloadFile {
-  const out = hidden_lines === undefined ? { ...scene, camera: cam } : { ...scene, camera: cam, output: { ...scene.output, hidden_lines } };
-  return { filename: `${sceneName}.scene.json`, type: JSON_MIME, text: dumps(out) + "\n" };
+export function scene_blob(scene: Scene, cam: TargetCamera, sceneName: string, hidden_lines?: boolean,
+  hidden_style?: "dashed" | "omit"): DownloadFile {
+  const output = { ...scene.output };
+  if (hidden_lines !== undefined) output.hidden_lines = hidden_lines;
+  if (hidden_style !== undefined) output.hidden_style = hidden_style;
+  return { filename: `${sceneName}.scene.json`, type: JSON_MIME, text: dumps({ ...scene, camera: cam, output }) + "\n" };
 }
 
 /** The text of "Copy camera block": the current block as deterministic JSON. */
