@@ -1634,3 +1634,81 @@ def test_mesh_fallback_guard_fires_when_ocp_loses_the_unit_context(tmp_path, mon
     monkeypatch.setattr(S, "_recognise_cylinder", reject)
     with pytest.raises(StepError, match=r"^step: #\d+: unsupported: the OCP solid does not match"):
         import_step(write(tmp_path, b.text()), fallback="mesh")
+
+
+# --------------------------------------------------------------------------- second review: OCC crash guard
+_SPHERE_UNRECOGNISED = """
+from castplane.io import step as S
+real = S._recognise
+def sphere_unrecognised(entities, ref, *args):
+    return (None, {"SPHERICAL_SURFACE": 1}, None) if ref == "#154" else real(entities, ref, *args)
+S._recognise = sphere_unrecognised
+"""
+
+
+def _mesh_in_subprocess(path, setup: str = "", solid=None) -> tuple:
+    """``import_step(path, fallback="mesh", solid=solid)`` in a child interpreter: an OCC segmentation
+    fault must fail the test (return code -11 / 139), not kill the test run."""
+    import os
+    import subprocess
+    import sys
+    code = (setup + "\nimport sys\n"
+            "from castplane.io.step import import_step, StepError\n"
+            "try:\n"
+            f"    rep = import_step(sys.argv[1], fallback='mesh', solid={solid!r})\n"
+            "    print('OK', [s['kind'] for s in rep['solids']])\n"
+            "except StepError as exc:\n"
+            "    print('StepError', exc.entity, str(exc))\n")
+    env = dict(os.environ, PYTHONPATH=str(ROOT) + os.pathsep + os.environ.get("PYTHONPATH", ""))
+    proc = subprocess.run([sys.executable, "-c", code, str(path)], cwd=ROOT, env=env, capture_output=True,
+                          text=True, timeout=300)
+    return proc.returncode, proc.stdout.strip()
+
+
+@pytest.mark.parametrize("mutate, out", [
+    (lambda t: edit(t, "#73 = CARTESIAN_POINT('',(0.,-0.));\n", ""),
+     "StepError #72 step: #72: unsupported: reference #73 (does not exist)"),
+    (lambda t: edit(t, "#91 = ( GEOMETRIC_REPRESENTATION_CONTEXT(2)", "#0 = ( GEOMETRIC_REPRESENTATION_CONTEXT(2)"),
+     "StepError #86 step: #86: unsupported: reference #91 (does not exist)"),
+    (lambda t: re.sub(r"#91\b", "#0", t),
+     "StepError #86 step: #86: unsupported: reference #0 (OCP numbers entities from #1)"),
+], ids=["dangling-reference-in-the-solid", "context-renumbered-to-#0", "references-to-#0"])
+def test_mesh_fallback_never_hands_occ_an_unresolved_reference(tmp_path, mutate, out):
+    """Second review: OCC's transfer dereferenced the missing entity and the interpreter died with a
+    segmentation fault (rc 139); the reference check before OCP makes it a StepError at the record."""
+    pytest.importorskip("OCP")
+    path = write(tmp_path, mutate(fixture_text("frustum")))
+    assert _mesh_in_subprocess(path) == (0, out)
+
+
+def test_mesh_fallback_unreferenced_entity_zero_and_padded_ids_still_mesh(tmp_path):
+    """``#0`` is "no entity" to OCC, so only a *reference* to it is refused; ``#091`` and ``#91`` are
+    the same id to OCC, so a zero-padded definition still resolves."""
+    pytest.importorskip("OCP")
+    text = fixture_text("frustum")
+    plain = import_step(FIX / "frustum.step", fallback="mesh", obj_id="f")["objects"]
+    unused = write(tmp_path, add_entities(text, "#0 = CARTESIAN_POINT('',(1.,2.,3.));"), "unused.step")
+    assert import_step(unused, fallback="mesh", obj_id="f")["objects"] == plain
+    padded = write(tmp_path, edit(text, "#91 = (", "#091 = ("), "padded.step")
+    assert import_step(padded, fallback="mesh", obj_id="f")["objects"] == plain
+
+
+def test_mesh_fallback_reference_check_covers_only_the_transferred_solid(tmp_path, monkeypatch):
+    """Multi-solid files: ``TransferOne`` reads the records reachable from the solid, so only those
+    must resolve; a dangling reference elsewhere does not stop the solid from being meshed."""
+    pytest.importorskip("OCP")
+    text = fixture_text("two_solids")
+    inside = write(tmp_path, edit(text, "#165 = DIRECTION", "#100165 = DIRECTION"), "inside.step")
+    refused = "StepError #162 step: #162: unsupported: reference #165 (does not exist)"
+    assert _mesh_in_subprocess(inside, _SPHERE_UNRECOGNISED) == (0, refused)
+    assert _mesh_in_subprocess(inside, _SPHERE_UNRECOGNISED, solid=1) == (0, refused)
+    real = S._recognise
+
+    def sphere_unrecognised(entities, ref, *args):
+        return (None, {"SPHERICAL_SURFACE": 1}, None) if ref == "#154" else real(entities, ref, *args)
+
+    monkeypatch.setattr(S, "_recognise", sphere_unrecognised)
+    plain = import_step(FIX / "two_solids.step", fallback="mesh", obj_id="p")["objects"]
+    assert [o["type"] for o in plain] == ["cylinder", "mesh"]
+    elsewhere = write(tmp_path, edit(text, "#59 = ", "#100059 = "), "elsewhere.step")    # a cylinder pcurve
+    assert import_step(elsewhere, fallback="mesh", obj_id="p")["objects"] == plain

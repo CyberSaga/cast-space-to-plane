@@ -712,7 +712,7 @@ def import_step(path, *, fallback="error", solid=None, obj_id=None, transform=No
         selected = list(enumerate(solid_ids)) if solid is None else [(solid, solid_ids[solid])]
         single = len(selected) == 1
         solids, objects = [], []
-        ocp_file, records = None, None
+        ocp_file, records, known = None, None, None
         for k, ref in selected:
             oid = obj_id if single else f"{obj_id}_{k}"
             rec, counts, reason = _recognise(entities, ref, ud, angle_factor, tol)
@@ -721,6 +721,9 @@ def import_step(path, *, fallback="error", solid=None, obj_id=None, transform=No
                     faces = ", ".join(f"{n}: {c}" for n, c in counts.items())
                     msg = f"{ref}: unsupported solid: faces {{{faces}}} (supported: {_SUPPORTED})"
                     raise _err(msg + (f"; {reason}" if reason else ""), ref)
+                if known is None:                # OCC must only see resolvable references (second review)
+                    known = _ocp_entity_ids(entities)
+                _check_references(entities, known, None if len(solid_ids) == 1 else ref)
                 if ocp_file is None:             # read by OCP once per import (review fix)
                     ocp_file = _OcpFile(path_s)
                 if len(solid_ids) == 1:
@@ -897,6 +900,53 @@ class _OcpFile:
                     faces.append([f[0], f[2], f[1]] if reversed_ else f)
             explorer.Next()
         return {"vertices": vertices, "faces": faces, "cascade_unit": self.cascade_unit}
+
+
+def _ocp_entity_ids(entities: dict) -> set:
+    """The numeric entity ids OCC can resolve (``#091`` and ``#91`` are the same id to OCC; ``#0``
+    is none: OCC reads id 0 as "no entity", so a reference to it is unresolved)."""
+    return {n for n in (int(r[1:]) for r in entities) if n != 0}
+
+
+_REF_RE = re.compile(r"#\d+")
+
+
+def _check_references(entities: dict, known: set, root: str | None = None) -> None:
+    """Every reference of the records OCC is about to transfer resolves (the whole file for
+    ``TransferRoots``, the records reachable from ``root`` for ``TransferOne``), else a
+    ``StepError`` at the referring record (second review: a dangling reference inside the solid
+    made the OCC transfer crash the interpreter with a segmentation fault)."""
+
+    def refs(x):
+        if isinstance(x, str):
+            if _REF_RE.fullmatch(x):
+                yield x
+        elif isinstance(x, (list, tuple)):
+            for y in x:
+                yield from refs(y)
+
+    def check(r):
+        out = []
+        for _, args in _parts(entities[r]):
+            for t in refs(args):
+                n = int(t[1:])
+                if n not in known:
+                    why = "OCP numbers entities from #1" if n == 0 else "does not exist"
+                    raise _err(f"{r}: unsupported: reference {t} ({why})", r)
+                if t in entities:
+                    out.append(t)
+        return out
+
+    if root is None:
+        for r in sorted(entities, key=lambda r: int(r[1:])):
+            check(r)
+        return
+    seen, stack = set(), [root]
+    while stack:
+        r = stack.pop()
+        if r not in seen:
+            seen.add(r)
+            stack.extend(check(r))
 
 
 def _solid_vertices(entities: dict, solid_ref: str) -> list:

@@ -6,3 +6,4 @@
 - m8-step#3: `import_step(fallback="mesh")` reads the STEP file with OCP once per import instead of once per unrecognised solid (120 solids: 24.5 s → 1.9 s).
 - m8-step#4: A non-positive cylindrical / spherical / circle radius (negative conical radius) is a `StepError` naming the entity instead of an emitted object rejected later at `objects[i].radius`.
 - m8-step#5: A non-finite coordinate in any `CARTESIAN_POINT` is a `StepError` naming the point instead of making the tolerance infinite and blaming the geometry.
+- m8-step second review: `import_step(fallback="mesh")` checks that every reference OCC is about to transfer resolves (no missing entity, no reference to `#0`) and raises a `StepError` at the referring record instead of letting OCC kill the interpreter with a segmentation fault; wrong-typed references remain a documented known limit (docs/STEP.md §9).

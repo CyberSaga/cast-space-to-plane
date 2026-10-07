@@ -3823,3 +3823,22 @@ LGPL-2.1；確定性只到 OCC 版本；頂點重建誤差 1.4e-9 mm；OCP 8 的
   `objects[i].radius` the user's `step` object does not have. A non-finite coordinate in **any**
   `CARTESIAN_POINT` (also 2-D pcurve points, which §5.5.4's extent still scans) is `StepError("#n: non-finite
   coordinate inf")` naming the point, instead of `tol = inf` blaming the geometry ("zero height").
+- **[decision, implementation] (second review of m8-step) The mesh fallback hands OCC only resolvable
+  references (§5.5.7).** cadquery-ocp 8.0.1.1.0 dereferences an unresolved reference during the transfer
+  without a check, and the interpreter dies with a segmentation fault (rc 139; not catchable): a missing
+  entity inside the solid, or an entity renumbered to `#0` (OCC reads id 0 as "no entity"). Before the
+  first OCP call of an unrecognised solid, `import_step` therefore checks the records OCC is about to
+  transfer: the whole file for a single-solid file (`TransferRoots`), the records reachable from the
+  `MANIFOLD_SOLID_BREP` for a multi-solid file (`TransferOne`). Each `#n` argument value must name a
+  defined entity by **numeric** id (`#091` defines `#91`, as in OCC) other than 0, else
+  `StepError("#m: unsupported: reference #n (does not exist)")` (`… (OCP numbers entities from #1)` for
+  `#0`) at the referring record `#m`. An unreferenced `#0` record and a dangling reference outside the
+  transferred records are accepted (OCC ignores them). The recognisers and `fallback="error"` are
+  unchanged. Known limit, not guarded: OCC also crashes on a reference to an entity of the **wrong
+  type** or a number / `$` / enumeration where a reference is required (e.g. `LINE('',#74,#74)` with
+  `#74` a `VECTOR`); catching that needs the ISO 10303-42 schema or running OCP in a child process, both
+  out of proportion for the prototype fallback; recorded in docs/STEP.md §9. The radius checks of
+  m8-step#4 stay ahead of the fallback decision (a reviewer asked whether a zero-radius degenerate
+  `CIRCLE` should be meshed instead): `CIRCLE.radius` is a `positive_length_measure` in ISO 10303-42, no
+  file in the repository has one, and OCC meshes a frustum whose 3-D top `CIRCLE` has radius 0 into 5
+  triangles without complaint, so the error is the safer answer.
