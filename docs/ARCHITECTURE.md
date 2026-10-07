@@ -3535,7 +3535,9 @@ and the hidden-run SVG groups (§5.1.8). Nothing an M4–M6 case needs lies beyo
   (first name in code-point order otherwise), as a versioned reference amendment (0 of 34 expected files and no SVG of
   the set, examples or benchmark change, measured). Until then no conformance case may rely on the object-id position of
   an object with two equally high labelled points.
-- **[implementation, deferred] (M7 review) `covering_segments` is ill-conditioned when `S' ≈ Q'`.** For a vertex a few
+- **[implementation, deferred] (M7 review) `covering_segments` is ill-conditioned when `S' ≈ Q'`.** *Re-checked on set
+  v7 (note "Final review fixes ported" at the end of this section): still deferred, the rule moves 9 of 60 expected
+  files.* For a vertex a few
   micrometres above the receiver the direction `C − B` (`S' − Q'`, ≈ 1e-5 mm long) amplifies the ulp noise of the
   projected points by `|A − B| / |C − B|` (up to 8e7) into the far endpoint. Measured differences between the
   implementations (second review pass, `tests.test_conformance.compare_documents` on non-set scenes): up to 5.8e-6 mm on
@@ -3973,8 +3975,9 @@ and the hidden-run SVG groups (§5.1.8). Nothing an M4–M6 case needs lies beyo
   scene, `int_ids_two_walls` (a crate and a ball on the ground, lights `"9"` / `"10"`, the bounded receivers `wall_b`
   before `wall_a`), which exercises the `per_receiver` marker order and the sorting of integer-like light ids; on the
   CI container it falls back to the region rule (76 vs 102 ground pieces), as do the six scenes named above.
-- **[implementation, deferred] (M7 phase 2, part 4 review fixes) `write_svg` parity holds for documents from `render`,
-  not for every reloaded document.** Python's `_layer_construction` and `svg_multilight.layer_construction` write
+- **[implementation, resolved] (M7 phase 2, part 4 review fixes) `write_svg` parity holds for documents from `render`,
+  not for every reloaded document.** *Resolved by the final-review merge (m4-hidden#0, see the note "Final review
+  fixes ported" at the end of this section); the text below is the original finding.* Python's `_layer_construction` and `svg_multilight.layer_construction` write
   the `F′<r>` markers and rays in the dict order of `per_receiver`; the port writes them in `doc.receivers` order (the
   part-1 note above). For a document produced by `render` both orders are scene order, so the §5.4.6 parity holds;
   for the same document reloaded from its JSON (`sort_keys`) with a scene receiver order that is not code-point
@@ -4036,7 +4039,8 @@ and the hidden-run SVG groups (§5.1.8). Nothing an M4–M6 case needs lies beyo
     `two_lights` (umbra on; ≈ 5 ms), with no target, in `benchmarks/README.md`.
   - **Open items.** The deferred Python-side note above (`per_receiver` marker order on a reloaded document) and
     the deferred `covering_segments` ill-conditioning of part 3 remain open proposals for the owners of those
-    Python files. Phase 2 adds no other deviation.
+    Python files. Phase 2 adds no other deviation. *(Status after the final-review merge: the first is resolved,
+    the second stays deferred; note "Final review fixes ported" below.)*
 - **[implementation] (M7 phase 2, part 5, review fixes)**
   - The TypeScript benchmark passed `scene.output.hidden_style` to its three `write_svg` calls, which `bench.py`
     does not; it now mirrors `bench.py` literally (`tests/test_ts_port.py::
@@ -4063,6 +4067,54 @@ and the hidden-run SVG groups (§5.1.8). Nothing an M4–M6 case needs lies beyo
   without that warning, and a cross-implementation test compares conic entries by index only when both lists have the
   same length and neither render warns `POINT_BEHIND_CAMERA` for the object. Test:
   `tests/test_contract_wording.py::test_camera_free_conic_fields_need_an_object_in_front_of_the_near_plane`.
+- **[decision, implementation] (M7, final review fixes ported; conformance v7) Final review fixes ported.**
+  `claude/epic-gauss-rgttme` (the five review-fix branches, conformance set v7, 60 cases) is merged into `wt/m7` and every
+  Python behaviour change of the merge is mirrored in `ts/src`:
+  - `castplane/shadow.py` → `ts/src/shadow.ts`: `shadow_loop` with `p >= 2` excursions uses the angular arc pairing
+    (`arc_components`: crossings sorted by `(angle mod 2π, incoming before outgoing, chain index)`, start at the first
+    crossing of minimal running level, parenthesis matching, one component per cycle in the order of its first chain;
+    the sweep is the literal v1 `(θ_in − θ_out) mod 2π` on the raw `atan2` angles (`2π` when `<= 1e-12`) plus
+    `2π·round(…)` (half to even, `py_round`) whole turns of the matched unwrapped difference); every result carries
+    `loops` and every component `arcs`; `sweep_arc` takes negative sweeps (`ceil(|Δ| / 60°)` steps); `light_plane_level`,
+    `arc_level` and the `turns` parameter. The p ≤ 1 path is the v1 code with `arcs` recorded. Same operation order as
+    the Python code, so the components agree bit for bit wherever the inputs do (`ts/test/arc_pairing.test.ts` also
+    checks bit identity against the v1 loop-order code on three loop-order patterns, the `u_closed_arm_wall` one among
+    them). `light_plane_level` evaluates its dot products sequentially where numpy uses `@`; only its integer `count`
+    and the reference angle (the midpoint of the largest gap, never an arc end) enter the output, so an ulp there
+    cannot change a document except on a degenerate tie.
+  - `castplane/pipeline.py` → `ts/src/pipeline.ts`: `base_turns` (ground records and `caster_record` through
+    `level_mesh`), every component drawn (polyhedral, per-face fallback and bounded records), `contact_tol` (`max(tol,
+    weld_tolerance)` for `mesh` objects) in the above test, `clip_mesh_to_plane` and `tol_clip`.
+  - `castplane/meshprep.py` → `ts/src/meshprep.ts`: `scale_A` from `used_vertices`.
+  - `castplane/umbra.py` → `ts/src/umbra.ts`: step-5 zero-width bridging (a run is a maximal sequence of inside or
+    `<= tol_mm`-wide intervals holding an inside one, trimmed to its first and last inside interval).
+  - `castplane/output/svg.py` / `svg_multilight.py` → `ts/src/output/svg.ts`: shadow / foot names parsed from the
+    right against the document's light and receiver ids (`name_ids`, `is_shadow_or_foot_name`; Python `str.isdigit`
+    of the generated index parts as `\p{Nd}+`); `per_receiver` keys not named by `receivers[]` follow in code-point
+    order (Python `sorted(…, key=(order, id))`; the port already used `receivers[]` order for the others and already
+    passed `receivers` to the per-light sub-document).
+  - Test side: the camera-free `conics[]` entries are compared by index only for objects that warn
+    `POINT_BEHIND_CAMERA` in neither render (`ts/test/determinism.test.ts`).
+  - Not ported (no TS counterpart): the loader / STEP / glTF / trimesh changes (the port has no loader; the cases are
+    post-expansion scenes), `scene.read_json`'s wider `except` (the port parses with `JSON.parse` and already maps every
+    parse error to `SceneError("", "invalid JSON: …")`), and `conics.py`'s `np.errstate` (it only silences a numpy
+    warning).
+  - **Deferred items of the M7 notes.** (1) *`per_receiver` marker order on a reloaded document*: **resolved** — the
+    Python writer now orders by `receivers[]` (m4-hidden#0), the port's leftover-key order matches, and
+    `ts/test/svg.test.ts` pins `write_svg(JSON round trip) == write_svg(doc)` for `wall` before `panel` (one and two
+    lights, hidden lines off and on); no expected byte changes. (2) *`covering_segments` ill-conditioning*: **still
+    deferred**. The well-conditioned rule of the M7-review note (direction of `A − B`, oriented like `C − B`, when
+    `|C − B| < 1e-3 · |A − B|`) was applied to `castplane/construction.py` on the merged tree and
+    `tools/regen_conformance.py --dry-run` reported 9 of 60 cases changed (`analytic_sphere_oblique_directional`,
+    `concave_prism_light_foot_in_notch`, `mesh_noisy_l_ground_contact` and the six `random_seed*` cases), so it was not
+    applied in either implementation (the task's condition: no conformance expected byte may change); it still needs
+    its own versioned regeneration. `test_ts_mesh_seed60_is_the_deferred_covering_segments_case` stays as it is. The
+    two other `[implementation, deferred]` proposals of the M7 review (circle axis direction, object-id label anchor)
+    are maintainer proposals with a versioned reference amendment of their own and were not part of this pass.
+  - Evidence: both runners pass all 60 cases of v7 (the TS runner matches every case file by name, no todo list);
+    `tools/compare_svg.py` reports 0 boundary differences and 0 mismatches on the 60 cases and the 8 examples; the
+    rendered JSON documents of both implementations have the same structure on all 60 cases (every number within
+    1.7e-8 relative/absolute).
 
 ### 5.5 M8 — STEP import (spec §9 row "STEP", spec §10 M8) — a loader, outside the core
 
