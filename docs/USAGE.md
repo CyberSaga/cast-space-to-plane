@@ -627,7 +627,7 @@ vite + three.js（版本釘選：three 0.186.1、vite 8.3.3）。`vite build` �
   - three.js 相機直接由核心的 `camera_matrix` 建出，所以 WebGL 畫面與 SVG 疊圖是同一台 castplane 相機的兩種渲染；
   - three.js 不產生任何陰影，畫面上的影子全部來自移植的核心。
 - **相機**：
-  - 左鍵拖曳環繞（俯仰限制 ±89.5°），右鍵或 Shift + 拖曳平移，滾輪縮放；
+  - 左鍵拖曳環繞（俯仰限制 ±89.5°；與 OrbitControls 相同，往下拖相機升高），右鍵或 Shift + 拖曳平移，滾輪縮放；
   - 焦距滑桿為對數刻度 8–400 mm，滾轉滑桿 ±180°；
   - 「Reset camera」回到場景相機。
 - **SVG 疊圖**：

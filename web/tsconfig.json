@@ -2,7 +2,7 @@
   "compilerOptions": {
     "strict": true,
     "target": "ES2022",
-    "lib": ["ES2022", "DOM", "DOM.Iterable"],
+    "lib": ["ES2022", "DOM"],
     "module": "ESNext",
     "moduleResolution": "bundler",
     "noEmit": true,
@@ -10,7 +10,6 @@
     "verbatimModuleSyntax": true,
     "noImplicitOverride": true,
     "noFallthroughCasesInSwitch": true,
-    "skipLibCheck": true,
     "types": ["vite/client"]
   },
   "include": ["src", "vite.config.ts"]

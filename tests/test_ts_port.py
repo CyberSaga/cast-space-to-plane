@@ -260,6 +260,23 @@ def test_npm_workspace_and_exact_pins():
     assert {k: pins[k] for k in WEB_PINS} == WEB_PINS
     assert pins["@types/node"] == _pins(ts_pkg)["@types/node"] and _pins(ts_pkg)["typescript"] == "6.0.2"
     assert web_pkg["dependencies"] == {"three": "0.186.1", "castplane": castplane.__version__}
+
+
+@needs_ts
+def test_web_tsconfig_is_the_normative_block():
+    """``web/tsconfig.json`` (contract §5.4.1): strict, module ESNext, moduleResolution bundler, lib exactly
+    ``["ES2022", "DOM"]``, noEmit.  The only additions are the ``ts/tsconfig.json`` strictness flags, ``target``,
+    ``types: ["vite/client"]`` (for ``import.meta.glob``) and ``vite.config.ts`` in ``include`` (step-8 note)."""
+    config = json.loads((WEB / "tsconfig.json").read_text(encoding="utf-8"))
+    opts = config["compilerOptions"]
+    assert opts["strict"] is True and opts["noEmit"] is True
+    assert opts["module"] == "ESNext" and opts["moduleResolution"] == "bundler"
+    assert opts["lib"] == ["ES2022", "DOM"]
+    extra = set(opts) - {"strict", "module", "moduleResolution", "lib", "noEmit"}
+    assert extra <= {"target", "isolatedModules", "verbatimModuleSyntax", "noImplicitOverride",
+                     "noFallthroughCasesInSwitch", "types"}, sorted(extra)
+    assert opts.get("types") == ["vite/client"] and opts.get("target") == "ES2022"
+    assert config["include"] == ["src", "vite.config.ts"]
     lock = json.loads((ROOT / "package-lock.json").read_text(encoding="utf-8"))
     for dep, version in WEB_PINS.items():
         if dep != "castplane":
@@ -282,23 +299,107 @@ def test_web_unit_tests_pass(built_port):
     assert re.search(r"^# fail 0$", proc.stdout, re.M)
 
 
+def _ci_jobs(text: str) -> dict[str, dict]:
+    """The jobs of ``ci.yml`` read as text (no YAML parser: PyYAML is not a dev dependency, and an
+    ``importorskip`` would silently skip this guard in the Python CI job).  The workflow's layout is fixed:
+    jobs at 2 spaces under ``jobs:``, steps as ``      - `` items, step keys at 8 spaces; a ``run: |`` block's
+    lines are joined with newlines and a trailing ``# comment`` of a one-line ``run:`` is dropped.  Returns
+    ``{job: {"matrix_node": str | None, "steps": [{"if": str, "run": str}, ...]}}``."""
+    lines = text.splitlines()
+    start = lines.index("jobs:") + 1
+    jobs: dict[str, dict] = {}
+    job = step = None
+    block = None  # the step dict whose ``run: |`` block is being read
+    for line in lines[start:]:
+        if block is not None:
+            if line.startswith("          ") or not line.strip():
+                block["run"] += line.strip() + "\n"
+                continue
+            block["run"] = block["run"].strip()
+            block = None
+        if re.fullmatch(r"\S.*", line):
+            break  # a top-level key after ``jobs:``
+        m = re.fullmatch(r"  ([A-Za-z_][\w-]*):\s*", line)
+        if m:
+            job = jobs.setdefault(m.group(1), {"matrix_node": None, "steps": []})
+            step = None
+            continue
+        if job is None:
+            continue
+        m = re.fullmatch(r"\s+node: (\[.*\])\s*", line)
+        if m and step is None:
+            job["matrix_node"] = m.group(1)
+            continue
+        m = re.fullmatch(r"      - (.*)", line)
+        if m:
+            step = {"if": "", "run": ""}
+            job["steps"].append(step)
+            line = "        " + m.group(1)
+        if step is None:
+            continue
+        m = re.fullmatch(r"        (if|run): (.*)", line)
+        if m:
+            value = m.group(2)
+            if m.group(1) == "run" and value.strip() == "|":
+                block = step
+                continue
+            if m.group(1) == "run":
+                value = re.sub(r"\s+#.*$", "", value)
+            step[m.group(1)] = value.strip()
+    if block is not None:
+        block["run"] = block["run"].strip()
+    return jobs
+
+
+def test_ci_text_parser_reads_the_layout_of_the_workflow():
+    """The text reader of ``ci.yml`` on a hand-written workflow of the same layout."""
+    text = (
+        "name: CI\n"
+        "jobs:\n"
+        "  a:\n"
+        "    strategy:\n"
+        "      matrix:\n"
+        '        node: ["20", "22"]\n'
+        "    steps:\n"
+        "      - uses: actions/checkout@v4\n"
+        "      - run: npm ci\n"
+        "      - run: npm run -w ts test    # comment\n"
+        "      - name: bench\n"
+        "        if: matrix.node == '22'\n"
+        "        run: node x.js --gate full --reps 20\n"
+        "  b:\n"
+        "    steps:\n"
+        "      - name: install\n"
+        "        run: |\n"
+        "          pip install a\n"
+        "          pip install b\n"
+        "      - run: done\n"
+    )
+    jobs = _ci_jobs(text)
+    assert set(jobs) == {"a", "b"}
+    assert jobs["a"]["matrix_node"] == '["20", "22"]'
+    assert [s["run"] for s in jobs["a"]["steps"]] == ["", "npm ci", "npm run -w ts test", "node x.js --gate full --reps 20"]
+    assert jobs["a"]["steps"][3]["if"] == "matrix.node == '22'"
+    assert jobs["b"]["matrix_node"] is None
+    assert [s["run"] for s in jobs["b"]["steps"]] == ["pip install a\npip install b", "done"]
+
+
 def test_ci_runs_the_port_and_the_web_ui_with_the_recorded_gate():
     """``.github/workflows/ci.yml`` (contract §5.4.12): jobs ``ts`` (node 20 / 22) and ``web``; the benchmark gate
-    literal is the one recorded in ``benchmarks/README.md`` at M7 step 7 (§5.4.9 margin rule)."""
-    yaml = pytest.importorskip("yaml")
-    ci = yaml.safe_load((ROOT / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8"))
-    jobs = ci["jobs"]
+    literal is the one recorded in ``benchmarks/README.md`` at M7 step 7 (§5.4.9 margin rule).  Read as text, so
+    the check runs in the Python CI job (no PyYAML there)."""
+    jobs = _ci_jobs((ROOT / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8"))
     assert {"test", "ts", "web"} <= set(jobs)
-    assert jobs["ts"]["strategy"]["matrix"]["node"] == ["20", "22"]
-    ts_runs = [s.get("run", "") for s in jobs["ts"]["steps"]]
-    web_runs = [s.get("run", "") for s in jobs["web"]["steps"]]
+    assert jobs["ts"]["matrix_node"] == '["20", "22"]'
+    ts_runs = [s["run"] for s in jobs["ts"]["steps"]]
+    web_runs = [s["run"] for s in jobs["web"]["steps"]]
     assert "npm ci" in ts_runs and "npm ci" in web_runs
     assert any(r.startswith("npm run -w ts test") for r in ts_runs)
-    bench = [s for s in jobs["ts"]["steps"] if "camera_only.js" in s.get("run", "")]
+    bench = [s for s in jobs["ts"]["steps"] if "camera_only.js" in s["run"]]
     assert len(bench) == 1 and bench[0]["if"] == "matrix.node == '22'"
     gate = re.search(r"--gate (\w+)", bench[0]["run"]).group(1)
     assert "--reps 20" in bench[0]["run"]
     readme = (ROOT / "benchmarks" / "README.md").read_text(encoding="utf-8")
     assert f"node ts/build/bench/camera_only.js --gate {gate} --reps 20" in readme
     assert any("npm run -w web test" in r and "npm run -w web build" in r for r in web_runs)
-    assert any("tests/test_ts_port.py" in s.get("run", "") for s in jobs["test"]["steps"])
+    assert any("tests/test_ts_port.py" in s["run"] for s in jobs["test"]["steps"])

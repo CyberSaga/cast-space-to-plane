@@ -100,10 +100,14 @@ export function camera_from_orbit(state: OrbitState, base: LensBase): TargetCame
   };
 }
 
-/** Left drag: `yaw_deg −= dx·(180 / H_px)`, `pitch_deg += dy·(180 / H_px)` clamped to ±{@link PITCH_LIMIT_DEG}. */
+/**
+ * Left drag: `yaw_deg −= dx·(180 / H_px)`, `pitch_deg −= dy·(180 / H_px)` clamped to ±{@link PITCH_LIMIT_DEG}
+ * (`dy` is the DOM delta, positive downwards: dragging down lifts the camera like OrbitControls; the §5.4.10
+ * `+=` sign is recorded as a deviation in docs/ARCHITECTURE.md §5.4).
+ */
 export function rotate_orbit(state: OrbitState, dx: number, dy: number, H_px: number): OrbitState {
   const k = 180 / H_px;
-  return { ...state, yaw_deg: state.yaw_deg - dx * k, pitch_deg: clamp(state.pitch_deg + dy * k, -PITCH_LIMIT_DEG, PITCH_LIMIT_DEG) };
+  return { ...state, yaw_deg: state.yaw_deg - dx * k, pitch_deg: clamp(state.pitch_deg - dy * k, -PITCH_LIMIT_DEG, PITCH_LIMIT_DEG) };
 }
 
 /**

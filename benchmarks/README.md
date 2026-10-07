@@ -324,7 +324,9 @@ below the 100 ms target), so the `ts` job of `.github/workflows/ci.yml` gates
 target is closed on the TypeScript side (the Python job keeps `--gate full`, D17). The measurement was
 taken on the container this repository's CI runs in, not on a GitHub-hosted runner; if the hosted
 runner turns out slower, the literal is changed only with a new recorded measurement here (§5.4.12),
-never loosened to absorb a regression. The JSON writer is not on the camera-only path; `Float64Array`
+never loosened to absorb a regression. Before the gate is relied on, the first hosted `ts` job's
+three runs are appended to the table above as a new row; only if its camera-only minimum is ≥ 70 ms does
+`ci.yml` switch to `--gate full`, with that row as the recorded measurement. The JSON writer is not on the camera-only path; `Float64Array`
 scratch buffers (§5.4.2) are not used (no measured need).
 
 ### Web UI frame cost (M7 step 8): `core ms` / `dom ms`

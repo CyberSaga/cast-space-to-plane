@@ -3316,8 +3316,21 @@ and the hidden-run SVG groups (§5.1.8). Nothing an M4–M6 case needs lies beyo
   - *Ground extent*: `build_scene3d(scene, A?)` takes the optional stage A for the scene extent of the ground
     plane (`A.bbox`, `A.scene_scale`).
   - *Pure input mapping*: the drag functions are `rotate_orbit`, `pan_orbit`, `zoom_orbit`, `set_roll`,
-    `set_focal` and `focal_from_slider` / `slider_from_focal`. They apply the §5.4.10 formulas literally,
-    including `pitch_deg += dy·(180 / H_px)`, so dragging down raises the view axis.
+    `set_focal` and `focal_from_slider` / `slider_from_focal`. They apply the §5.4.10 formulas, with one sign
+    change (next item).
+  - **[decision, implementation] (M7 review) Pitch drag sign: `pitch_deg −= dy·(180 / H_px)`, not `+=`.** With
+    the DOM `dy` (positive downwards) the literal `+=` makes a downward drag lower the camera and raise the view
+    axis, the opposite of OrbitControls, which the same sentence names as the model. It is also the opposite of the
+    contract's own yaw mapping and pan, which both "grab the world": the pan moves the target's image by exactly
+    (dx, dy) px, and a rightward drag moves the camera to its left. On the hand camera `(4, −8, 5) → (0, 0, 0.5)`,
+    a 100 px downward drag on a 500 px canvas took the camera below the ground (z ≈ −1.1 m). The clamp to
+    `[−89.5, 89.5]` and the target-form block are unchanged; `web/test/orbit.test.ts` checks both drag senses.
+  - *web/tsconfig.json*: the §5.4.1 keys (strict, module ESNext, moduleResolution bundler, lib exactly
+    `["ES2022", "DOM"]`, noEmit) plus `target: "ES2022"` and the strictness flags of `ts/tsconfig.json`
+    (`isolatedModules`, `verbatimModuleSyntax`, `noImplicitOverride`, `noFallthroughCasesInSwitch`). It also adds
+    `types: ["vite/client"]`, which `import.meta.glob` (the examples menu) needs, and includes `vite.config.ts`
+    so that the build's `tsc -p` checks it. It sets no `DOM.Iterable` and no `skipLibCheck`, because tsc 6.0.2
+    passes without them (`tests/test_ts_port.py` pins the block).
   - *Overlay*: `<img>` mode during a drag when the last resting SVG is longer than 250 000 characters
     (`IMG_MODE_THRESHOLD`, recorded in `web/README.md`). In that mode the writer is called with the checked
     layers, otherwise with all six.

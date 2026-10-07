@@ -28,7 +28,7 @@ npm run -w web test        # orbit / download unit tests (node:test, web/test/)
   `fov`), so the WebGL image and the SVG overlay are two renderings of one castplane camera. Three.js casts no
   shadows (`renderer.shadowMap.enabled = false`). Every shadow you see comes from the core.
 - **Camera** (`src/orbit.ts`):
-  - left drag orbits (yaw / pitch, with pitch clamped to ±89.5°);
+  - left drag orbits (yaw / pitch, with pitch clamped to ±89.5°; "grab the world" like OrbitControls, so dragging down lifts the camera);
   - right drag or Shift + drag pans;
   - the wheel zooms (distance 0.05 … 1e4 m);
   - sliders set the focal length (logarithmic, 8–400 mm) and the roll (±180°);
@@ -57,7 +57,7 @@ At rest the overlay is always the DOM (`innerHTML` of the writer's inner markup)
 last resting SVG is longer than **250 000 characters** (`IMG_MODE_THRESHOLD`) is shown instead through
 `<img src="blob:…">`. That image is the writer's unchanged SVG text for the checked layers. The blob URL is
 revoked on the next frame, and the DOM overlay comes back on pointer-up (contract §5.4.11). The five examples
-(8–11 k characters) always use the DOM mode. `benchmark_100.json` (1.96 M characters, ≈ 30 k elements) uses
+(8–13 k characters) always use the DOM mode. `benchmark_100.json` (1.96 M characters, ≈ 30 k elements) uses
 the `<img>` mode during a drag.
 
 ## Measured `core ms` / `dom ms` (acceptance §5.4.13 (b))
@@ -72,7 +72,7 @@ resolution.
 update: `innerHTML` in DOM mode, or the blob and `img.src` in `<img>` mode. It does not include the browser's
 later style, layout and paint, or the image decode.
 
-| scene | SVG chars | drag mode | core ms run 1 | run 2 | run 3 | dom ms run 1 | run 2 | run 3 |
+| scene | SVG chars (resting frame after the drag) | drag mode | core ms run 1 | run 2 | run 3 | dom ms run 1 | run 2 | run 3 |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- |
 | basic | 8 156 | DOM | 0.9 (1.2) | 0.9 (1.3) | 0.9 (1.3) | 0.5 (0.8) | 0.5 (0.8) | 0.5 (0.8) |
 | construction_demo | 9 840 | DOM | 0.5 (0.7) | 0.6 (0.8) | 0.6 (1.0) | 0.7 (0.9) | 0.6 (0.9) | 0.6 (0.9) |
@@ -80,6 +80,12 @@ later style, layout and paint, or the image decode.
 | directional | 11 118 | DOM | 1.3 (1.6) | 1.0 (1.5) | 1.3 (1.6) | 0.7 (0.8) | 0.8 (1.1) | 0.7 (1.1) |
 | three_point | 9 847 | DOM | 0.5 (0.8) | 0.6 (0.7) | 0.6 (0.7) | 0.5 (0.8) | 0.5 (0.9) | 0.5 (0.7) |
 | benchmark_100 | 1 961 491 | `<img>` | 57.0 (85.5) | 63.0 (85.6) | 59.2 (108.2) | 12.3 (15.5) | 11.5 (13.8) | 10.9 (14.8) |
+
+The "SVG chars" column is the length of the resting frame after the 30-step drag (`smoke.mjs` records
+`rest.at(-1).svg_bytes`), which is the length `IMG_MODE_THRESHOLD` is compared with. At the scene camera the
+writer's text (`node ts/scripts/render.mjs`, byte-identical to the Python writer) is 8 039 (basic), 9 860
+(construction_demo), 10 803 (curved_demo), 12 717 (directional), 9 792 (three_point) and 1 960 727
+(benchmark_100) characters.
 
 For `benchmark_100.json` the resting frames (DOM mode, after load and after pointer-up) took 151 / 100, 98 / 105
 and 111 / 129 ms of `innerHTML` in the three runs, plus the browser's layout of ≈ 30 k elements. This is why

@@ -104,13 +104,13 @@ test("yaw/pitch form: target where the view axis meets the ground, distance 5 wh
 
 const base_state = (): OrbitState => orbit_from_camera(conformance_case("analytic_unit_box_point_light_overhead").camera);
 
-test("drag: yaw −= dx·180/H, pitch += dy·180/H, pitch clamped to ±89.5°", () => {
+test("drag: yaw −= dx·180/H, pitch −= dy·180/H (DOM dy, down positive), pitch clamped to ±89.5°", () => {
   const s = base_state();
   const r = rotate_orbit(s, 10, -20, 600);
   close(r.yaw_deg, s.yaw_deg - 3, 1e-12, "yaw");
-  close(r.pitch_deg, s.pitch_deg - 6, 1e-12, "pitch");
-  assert.equal(rotate_orbit(s, 0, 1e6, 600).pitch_deg, PITCH_LIMIT_DEG);
-  assert.equal(rotate_orbit(s, 0, -1e6, 600).pitch_deg, -PITCH_LIMIT_DEG);
+  close(r.pitch_deg, s.pitch_deg + 6, 1e-12, "pitch");
+  assert.equal(rotate_orbit(s, 0, 1e6, 600).pitch_deg, -PITCH_LIMIT_DEG);
+  assert.equal(rotate_orbit(s, 0, -1e6, 600).pitch_deg, PITCH_LIMIT_DEG);
   assert.equal(PITCH_LIMIT_DEG, 89.5);
   // at the clamp the camera never looks along the up axis
   for (const dy of [1e6, -1e6]) {
@@ -118,6 +118,23 @@ test("drag: yaw −= dx·180/H, pitch += dy·180/H, pitch clamped to ±89.5°", 
     assert.deepEqual(camera_matrix(cam, [360, 240]).warnings, []);
   }
   assert.deepEqual(base_state(), s); // inputs are not mutated
+});
+
+test("drag sense: grab-the-world on both axes like OrbitControls and the pan (down lifts the camera, right moves it left)", () => {
+  const s = base_state();
+  const base = conformance_case("analytic_unit_box_point_light_overhead").camera;
+  const p0 = camera_from_orbit(s, base).position as number[];
+  // the review example: dy = +100 px on a 500 px canvas from (4, −8, 5) must not drop the camera below the ground
+  const down = camera_from_orbit(rotate_orbit(s, 0, 100, 500), base).position as number[];
+  close(rotate_orbit(s, 0, 100, 500).pitch_deg, s.pitch_deg - 36, 1e-12, "pitch");
+  assert.ok(down[2] > p0[2], `camera z ${down[2]} after a downward drag, was ${p0[2]}`);
+  const up = camera_from_orbit(rotate_orbit(s, 0, -20, 500), base).position as number[];
+  assert.ok(up[2] < p0[2] && up[2] > 0, `camera z ${up[2]} after an upward drag`);
+  // dragging right moves the camera to its left (−right′ component), as OrbitControls and the pan do
+  const right = camera_matrix(base, [360, 240]).R[0] as number[];
+  const moved = camera_from_orbit(rotate_orbit(s, 20, 0, 500), base).position as number[];
+  const along = (moved[0] - p0[0]) * right[0] + (moved[1] - p0[1]) * right[1] + (moved[2] - p0[2]) * right[2];
+  assert.ok(along < 0, `right-component ${along}`);
 });
 
 test("pan: target moves along right' / up' by k = distance·(frame_h / f) / H_px per pixel", () => {
