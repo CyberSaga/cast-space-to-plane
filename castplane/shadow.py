@@ -356,7 +356,12 @@ def shadow_loop(points4, M, pi, tol: float = 0.0, tol_clip: float | None = None,
     w = 0 exactly), "unbounded": bool, "sources": per-vertex provenance (int index of the
     input vertex, ("ground", i, j) for a ground-clip crossing, ("dir", i, j) for the
     direction of edge i -> j, ("arc", k) for the k-th inserted sweep vertex),
-    "below_ground": bool (some input vertex was below the receiver)}``.
+    "below_ground": bool (some input vertex was below the receiver),
+    "loops": [{"vertices", "unbounded", "sources"}, ...]}``: the polygon's components.  A loop with at
+    most one excursion to infinity has exactly one component (the top-level arrays themselves, possibly
+    empty); a loop that crosses the plane through the light ``2p >= 4`` times (a concave caster with the
+    light between its arms) has one component per cycle of the angular arc pairing (see
+    :func:`_arc_components`; the top-level arrays are the first one) -- callers must draw every component.
     A loop with all vertices at ``w <= tol`` yields an empty polygon.
 
     M4 (contract §5.1.2): ``frame = (e1, e2)`` (:func:`receiver_frame`) is given for every receiver
@@ -373,6 +378,7 @@ def shadow_loop(points4, M, pi, tol: float = 0.0, tol_clip: float | None = None,
     n = P.shape[0]
     empty = {"vertices": np.zeros((0, 4), dtype=np.float64), "unbounded": False,
              "sources": [], "below_ground": below}
+    empty["loops"] = [{"vertices": empty["vertices"], "unbounded": False, "sources": []}]
     if n == 0:
         return empty
     S = P @ M.T                                      # S_i = M P_i, spec §5.2
@@ -415,7 +421,19 @@ def shadow_loop(points4, M, pi, tol: float = 0.0, tol_clip: float | None = None,
                 kinds.append("in")
             # both not finite: edge dropped
 
-    # insert the arcs at infinity between each outgoing and the following incoming direction
+    e12 = None if frame is None else (e1, e2)
+    outs = [k for k in range(len(verts)) if kinds[k] == "out"]
+    if len(outs) >= 2:
+        # several excursions to infinity: the arcs are fixed by the angular order of the crossings, not by
+        # the loop order (contract §2.5 as amended by the §5.1 implementation note "arc pairing", D70);
+        # one output loop per cycle of chains
+        components = _arc_components(verts, sources, kinds, outs, e12)
+        first = components[0]
+        return {"vertices": first["vertices"], "unbounded": True, "sources": first["sources"],
+                "below_ground": below, "loops": components}
+
+    # insert the arc at infinity between the outgoing and the following incoming direction
+    # (at most one pair here: the literal v1/v2 code path, byte identity)
     out_verts: list[np.ndarray] = []
     out_sources: list = []
     m = len(verts)
@@ -427,29 +445,116 @@ def shadow_loop(points4, M, pi, tol: float = 0.0, tol_clip: float | None = None,
             unbounded = True
             nxt = (k + 1) % m
             assert kinds[nxt] == "in", "an outgoing direction must be followed by an incoming one"
-            d_out = verts[k]
-            d_in = verts[nxt]
-            if frame is None:   # the ground: literal v2 expressions (contract §5.1.2 [decision])
-                th0 = math.atan2(d_out[1], d_out[0])
-                th1 = math.atan2(d_in[1], d_in[0])
-            else:               # counter-clockwise about n in the receiver frame (e1, e2)
-                th0 = math.atan2(float(d_out[:3] @ e2), float(d_out[:3] @ e1))
-                th1 = math.atan2(float(d_in[:3] @ e2), float(d_in[:3] @ e1))
+            th0 = _arc_angle(verts[k], e12)
+            th1 = _arc_angle(verts[nxt], e12)
             delta = (th1 - th0) % (2.0 * math.pi)
             if not math.isfinite(delta) or delta <= 1e-12:
                 delta = 2.0 * math.pi
-            steps = max(1, int(math.ceil(delta / math.radians(ARC_STEP_DEG) - 1e-12)))
-            for s in range(1, steps):
-                th = th0 + delta * s / steps
-                if frame is None:
-                    out_verts.append(np.array([math.cos(th), math.sin(th), 0.0, 0.0]))
-                else:
-                    v = math.cos(th) * e1 + math.sin(th) * e2
-                    out_verts.append(np.array([v[0], v[1], v[2], 0.0]))
-                out_sources.append(("arc", s - 1))
+            _sweep_arc(th0, delta, e12, out_verts, out_sources)
     vertices = np.array(out_verts, dtype=np.float64).reshape(-1, 4)
     return {"vertices": vertices, "unbounded": unbounded, "sources": out_sources,
-            "below_ground": below}
+            "below_ground": below,
+            "loops": [{"vertices": vertices, "unbounded": unbounded, "sources": out_sources}]}
+
+
+def _arc_angle(d: np.ndarray, e12) -> float:
+    """Angle of the direction ``d`` (``w = 0``) counter-clockwise about ``n``: in ground ``(x, y)`` when
+    ``e12`` is None (the literal v2 expression, contract §5.1.2 [decision]), else in the receiver frame."""
+    if e12 is None:
+        return math.atan2(d[1], d[0])
+    e1, e2 = e12
+    return math.atan2(float(d[:3] @ e2), float(d[:3] @ e1))
+
+
+def _sweep_arc(th0: float, delta: float, e12, out_verts: list, out_sources: list) -> None:
+    """Append the intermediate direction vertices of the arc at infinity from angle ``th0`` swept
+    counter-clockwise by ``delta`` (``ceil(delta / 60°)`` equal steps, contract §2.5; sources ``("arc", k)``)."""
+    steps = max(1, int(math.ceil(delta / math.radians(ARC_STEP_DEG) - 1e-12)))
+    for s in range(1, steps):
+        th = th0 + delta * s / steps
+        if e12 is None:
+            out_verts.append(np.array([math.cos(th), math.sin(th), 0.0, 0.0]))
+        else:
+            e1, e2 = e12
+            v = math.cos(th) * e1 + math.sin(th) * e2
+            out_verts.append(np.array([v[0], v[1], v[2], 0.0]))
+        out_sources.append(("arc", s - 1))
+
+
+def _arc_components(verts: list, sources: list, kinds: list, outs: list, e12) -> list:
+    """Arcs at infinity of a loop with ``p >= 2`` excursions to infinity (contract §2.5 as amended by the
+    §5.1 implementation note "arc pairing"; D70).
+
+    The loop is a closed curve on the sphere of directions from the light with the shadow on its left; the
+    plane through the light parallel to the receiver is the equator.  Walking the equator counter-clockwise
+    about ``n``, the number of solid hits rises by one at every outgoing crossing and falls by one at every
+    incoming one, so the directions at infinity that are in shadow -- and hence the arcs -- are fixed by the
+    **angular** order of the loop's own crossings, independently of any origin: sort the ``2p`` crossings by
+    angle (an incoming one first at equal angles), start where the running level is minimal, and match
+    outgoing (``(``) with incoming (``)``) crossings like parentheses.  For a loop that is simple on the
+    sphere this pairs every outgoing direction with the angularly next incoming one (Jordan alternation
+    along the equator); the loop-order pairing of the v1 text is the special case where the two orders
+    agree.  The finite chains ``in -> ... -> out`` are then re-linked through the matched arcs; every cycle
+    of chains is one output loop (``{"vertices", "sources", "unbounded": True}``), emitted in the order of
+    its first chain, the cycle of the start vertex first and in the loop's own vertex order (so a loop whose
+    angular pairing is the loop-order pairing comes out exactly as before).
+    """
+    m = len(verts)
+    p = len(outs)
+    # chain j runs from its incoming vertex ins[j] to outs[j]; chain 0 holds the start vertex (index 0) and
+    # wraps: its head is verts[0 .. outs[0]] and its tail verts[outs[p-1] + 1 .. m-1] (beginning with its "in")
+    ins = [outs[p - 1] + 1] + [outs[j - 1] + 1 for j in range(1, p)]
+    for j in range(p):
+        assert ins[j] < m and kinds[ins[j]] == "in", "an outgoing direction must be followed by an incoming one"
+    th_out = [_arc_angle(verts[k], e12) for k in outs]
+    th_in = [_arc_angle(verts[k], e12) for k in ins]
+    two_pi = 2.0 * math.pi
+    crossings = sorted([(th_in[j] % two_pi, 0, j) for j in range(p)]
+                       + [(th_out[j] % two_pi, 1, j) for j in range(p)])
+    level, levels = 0, []
+    for _a, is_out, _j in crossings:
+        levels.append(level)
+        level += 1 if is_out else -1
+    start = int(min(range(2 * p), key=lambda i: (levels[i], i)))
+    rotated = [(a, is_out, j, 0.0) for a, is_out, j in crossings[start:]] \
+        + [(a, is_out, j, two_pi) for a, is_out, j in crossings[:start]]
+    stack: list[tuple[int, float]] = []
+    match: dict[int, tuple[int, float]] = {}
+    for a, is_out, j, wrap in rotated:
+        if is_out:
+            stack.append((j, a + wrap))
+        else:
+            j_out, a_out = stack.pop()
+            delta = a + wrap - a_out
+            if not math.isfinite(delta) or delta <= 0.0:
+                delta = two_pi            # coincident crossings: the full circle (contract §2.5)
+            match[j_out] = (j, delta)
+    assert not stack and len(match) == p
+    components = []
+    seen: set[int] = set()
+    for j0 in range(p):
+        if j0 in seen:
+            continue
+        out_verts: list[np.ndarray] = []
+        out_sources: list = []
+        j = j0
+        while True:
+            seen.add(j)
+            for k in range(0 if j == 0 else ins[j], outs[j] + 1):
+                out_verts.append(verts[k])
+                out_sources.append(sources[k])
+            nxt, delta = match[j]
+            _sweep_arc(th_out[j], delta, e12, out_verts, out_sources)
+            if nxt == j0:
+                break
+            j = nxt
+        if j0 == 0:
+            for k in range(ins[0], m):
+                out_verts.append(verts[k])
+                out_sources.append(sources[k])
+        components.append({"vertices": np.array(out_verts, dtype=np.float64).reshape(-1, 4),
+                           "unbounded": True, "sources": out_sources})
+    return components
 
 
 # ---------------------------------------------------------------------------

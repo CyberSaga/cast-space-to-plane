@@ -307,11 +307,12 @@ def _shadow_record(obj: dict, ol: dict, lt: dict, pi: np.ndarray, tol: float, re
     loops, ground = [], {}
     unbounded = False
     for loop in sil_loops:
-        sh = shadow_loop(V4c[loop], lt["M"], pi, lt["tol_w"], tol_clip=tol)
-        entries = _loop_entries(sh, loop, origins, oid, lid, ground)
-        unbounded = unbounded or bool(sh["unbounded"])
-        loops.append({"vertices": sh["vertices"], "sources": sh["sources"], "entries": entries,
-                      "unbounded": bool(sh["unbounded"])})
+        # every component of the loop's shadow (several when the loop crosses the light plane 4+ times)
+        for sh in shadow_loop(V4c[loop], lt["M"], pi, lt["tol_w"], tol_clip=tol)["loops"]:
+            entries = _loop_entries(sh, loop, origins, oid, lid, ground)
+            unbounded = unbounded or bool(sh["unbounded"])
+            loops.append({"vertices": sh["vertices"], "sources": sh["sources"], "entries": entries,
+                          "unbounded": bool(sh["unbounded"])})
     ground_points = list(ground.values())
     # M5 §5.2.4: rays / checks only for the first MESH_MAX_RAYS feature silhouette vertices of a mesh
     # (silhouette-loop order); every other record draws the rays of all its silhouette vertices
@@ -426,41 +427,43 @@ def _fallback_shadow_record(obj: dict, ol: dict, lt: dict, pi: np.ndarray, tol: 
             continue
         cyc = [int(v) for v in face] if lit_flags[fi] else [int(face[0])] + [int(v) for v in face[1:]][::-1]
         if rcv is None:
-            sh = shadow_loop(V4[cyc], lt["M"], pi, lt["tol_w"], tol_clip=tol)
+            face_sh = shadow_loop(V4[cyc], lt["M"], pi, lt["tol_w"], tol_clip=tol)
         else:
-            sh = shadow_loop(V4[cyc], lt["M"], pi, lt["tol_w"], tol_clip=tol, frame=rcv["frame"], F=lt["F"])
-        if bounded:
-            V, src = clip_polygon_bounds(sh["vertices"], sh["sources"], rcv["psi"], rcv["bounds"], tol)
-            sh = {"vertices": V, "sources": src, "unbounded": False}
-        verts = sh["vertices"]
-        if verts.shape[0] < 3:
-            continue
-        if not sh["unbounded"]:
-            X = verts[:, :3] / verts[:, 3:4]
-            area = 0.5 * float(n @ np.sum(np.cross(X, np.roll(X, -1, axis=0)), axis=0))
-            if abs(area) <= area_tol:
+            face_sh = shadow_loop(V4[cyc], lt["M"], pi, lt["tol_w"], tol_clip=tol, frame=rcv["frame"], F=lt["F"])
+        # every component of the face's shadow (several when a concave face crosses the light plane 4+ times)
+        for sh in face_sh["loops"]:
+            if bounded:
+                V, src = clip_polygon_bounds(sh["vertices"], sh["sources"], rcv["psi"], rcv["bounds"], tol)
+                sh = {"vertices": V, "sources": src, "unbounded": False}
+            verts = sh["vertices"]
+            if verts.shape[0] < 3:
                 continue
-        entries = []
-        for row, src in enumerate(sh["sources"]):
-            if isinstance(src, tuple):
-                if src[0] in ("ground", "bounds"):
-                    if src[0] == "ground":
-                        i, j = cyc[int(src[1])], cyc[int(src[2])]
-                        key = (min(i, j), max(i, j))
-                    else:   # a bounds-clip crossing or anchor (M4 §5.1.3.3): a point of its own
-                        key = ("clip", len(ground))
-                    if key not in ground:
-                        X = verts[row]
-                        ground[key] = (f"{oid}.s{len(ground)}.{lid}{sfx}", X[:3] / X[3])
-                    entries.append(ground[key][0])
-                else:  # ("dir", i, j) or ("arc", k): a direction vertex (w = 0)
-                    d = verts[row]
-                    entries.append({"direction": [float(d[0]) + 0.0, float(d[1]) + 0.0, float(d[2]) + 0.0]})
-            else:
-                entries.append(f"{oid}.v{cyc[int(src)]}.shadow.{lid}{sfx}")
-        unbounded = unbounded or bool(sh["unbounded"])
-        loops.append({"vertices": verts, "sources": sh["sources"], "entries": entries,
-                      "unbounded": bool(sh["unbounded"])})
+            if not sh["unbounded"]:
+                X = verts[:, :3] / verts[:, 3:4]
+                area = 0.5 * float(n @ np.sum(np.cross(X, np.roll(X, -1, axis=0)), axis=0))
+                if abs(area) <= area_tol:
+                    continue
+            entries = []
+            for row, src in enumerate(sh["sources"]):
+                if isinstance(src, tuple):
+                    if src[0] in ("ground", "bounds"):
+                        if src[0] == "ground":
+                            i, j = cyc[int(src[1])], cyc[int(src[2])]
+                            key = (min(i, j), max(i, j))
+                        else:   # a bounds-clip crossing or anchor (M4 §5.1.3.3): a point of its own
+                            key = ("clip", len(ground))
+                        if key not in ground:
+                            X = verts[row]
+                            ground[key] = (f"{oid}.s{len(ground)}.{lid}{sfx}", X[:3] / X[3])
+                        entries.append(ground[key][0])
+                    else:  # ("dir", i, j) or ("arc", k): a direction vertex (w = 0)
+                        d = verts[row]
+                        entries.append({"direction": [float(d[0]) + 0.0, float(d[1]) + 0.0, float(d[2]) + 0.0]})
+                else:
+                    entries.append(f"{oid}.v{cyc[int(src)]}.shadow.{lid}{sfx}")
+            unbounded = unbounded or bool(sh["unbounded"])
+            loops.append({"vertices": verts, "sources": sh["sources"], "entries": entries,
+                          "unbounded": bool(sh["unbounded"])})
     rec = {
         "light": lid,
         "receiver": receiver_id,
@@ -736,16 +739,18 @@ def _caster_record(oid: str, lt: dict, rcv: dict, tol: float, sil, P4, vertex_na
     out_loops, ground = [], {}
     unbounded = False
     for loop4, loop_ids in loops:
-        sh = shadow_loop(loop4, lt["M"], pi, lt["tol_w"], tol_clip=tol, frame=rcv["frame"], F=lt["F"])
-        if rcv["bounded"]:
-            V, src = clip_polygon_bounds(sh["vertices"], sh["sources"], rcv["psi"], rcv["bounds"], tol)
-            if V.shape[0] == 0:
-                continue
-            sh = {"vertices": V, "sources": src, "unbounded": False}
-        entries = _loop_entries(sh, loop_ids, origins, oid, lid, ground, suffix=sfx, vertex_prefix=vertex_prefix)
-        unbounded = unbounded or bool(sh["unbounded"])
-        out_loops.append({"vertices": sh["vertices"], "sources": sh["sources"], "entries": entries,
-                          "unbounded": bool(sh["unbounded"])})
+        loop_sh = shadow_loop(loop4, lt["M"], pi, lt["tol_w"], tol_clip=tol, frame=rcv["frame"], F=lt["F"])
+        # every component of the loop's shadow (several when the loop crosses the light plane 4+ times)
+        for sh in loop_sh["loops"]:
+            if rcv["bounded"]:
+                V, src = clip_polygon_bounds(sh["vertices"], sh["sources"], rcv["psi"], rcv["bounds"], tol)
+                if V.shape[0] == 0:
+                    continue
+                sh = {"vertices": V, "sources": src, "unbounded": False}
+            entries = _loop_entries(sh, loop_ids, origins, oid, lid, ground, suffix=sfx, vertex_prefix=vertex_prefix)
+            unbounded = unbounded or bool(sh["unbounded"])
+            out_loops.append({"vertices": sh["vertices"], "sources": sh["sources"], "entries": entries,
+                              "unbounded": bool(sh["unbounded"])})
     return {
         "light": lid,
         "receiver": rid,
