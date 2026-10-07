@@ -223,3 +223,64 @@ test("cylinder cap exactly at the light height: rows 4 and 6 at once", () => {
   assert.deepEqual(sh.conics.map((c: any) => c.which), ["base"]);
   finite_and_drawable(doc);
 });
+
+// --------------------------------------------------------------------------- M4: bounded receivers (contract §5.1.11)
+// ported from tests/test_degenerate.py::test_m4_receiver_degeneracies_warn_and_stay_finite (the wall_and_ground variants)
+function wall_and_ground(): any {
+  return {
+    version: "0.1", units: "m", up: "z",
+    objects: [{ id: "crate", type: "box", size: [1, 1, 1], transform: { position: [0, 4.5, 0] } }],
+    lights: [{ id: "lamp", type: "point", position: [0, 2, 3] }],
+    receivers: [
+      { id: "ground", type: "plane", normal: [0, 0, 1], offset: 0 },
+      { id: "wall", type: "plane", normal: [0, -1, 0], offset: 6, bounds: [[-3, 6, 0], [3, 6, 0], [3, 6, 2.5], [-3, 6, 2.5]] },
+    ],
+    camera: { position: [0, -1, 1.6], target: [0, 6, 0.8], focal_length_mm: 35, frame_mm: [36, 24] },
+    output: { canvas_mm: [273, 182] },
+  };
+}
+
+const M4_VARIANTS: Record<string, [(s: any) => void, string[]]> = {
+  "light behind the wall": [(s) => { s.lights = [{ id: "lamp", type: "point", position: [0, 8, 3] }]; }, ["RECEIVER_UNLIT"]],
+  "light in the wall plane": [(s) => { s.lights = [{ id: "lamp", type: "point", position: [0, 6, 3] }]; }, ["RECEIVER_UNLIT"]],
+  "sun parallel to the wall": [(s) => { s.lights = [{ id: "lamp", type: "directional", direction: [0.6, 0.0, 0.8] }]; }, ["RECEIVER_UNLIT"]],
+  "sun behind the wall": [(s) => { s.lights = [{ id: "lamp", type: "directional", direction: [0.0, 0.6, 0.8] }]; }, ["RECEIVER_UNLIT"]],
+  "light below the ground": [(s) => { s.lights = [{ id: "lamp", type: "point", position: [0, 2, -1] }]; },
+    ["RECEIVER_UNLIT", "LIGHT_BELOW_RECEIVER"]],
+  "sun along the wall normal": [(s) => { s.lights = [{ id: "lamp", type: "directional", direction: [0.0, -1.0, 0.0] }]; },
+    ["DIRECTIONAL_HORIZONTAL"]],
+  "plate seen edge-on": [(s) => {
+    s.camera = { position: [-6, 6, 1.6], target: [0, 6, 1.0], focal_length_mm: 35, frame_mm: [36, 24] };
+  }, []],
+  "crate straddling the wall": [(s) => { s.objects[0].transform.position = [0, 6.0, 0]; }, []],
+  "coplanar caster": [(s) => {
+    s.receivers.push({ id: "tile", type: "plane", normal: [0, -1, 0], offset: 6, bounds: [[3, 6, 0], [5, 6, 0], [5, 6, 2.5], [3, 6, 2.5]] });
+  }, []],
+};
+
+for (const [name, [mutate, expected]] of Object.entries(M4_VARIANTS)) {
+  test(`M4: ${name} warns with the closed list and stays finite`, () => {
+    const s = wall_and_ground();
+    mutate(s);
+    const doc = render(load_scene(s)).geometry as any;
+    const codes = warning_codes(doc.warnings);
+    for (const c of expected) assert.ok(codes.has(c), `${name}: ${[...codes].join(", ")}`);
+    if (name !== "light below the ground") assert.ok(!codes.has("OBJECT_BELOW_RECEIVER"), name);
+    for (const ids of ids_of(doc, "RECEIVER_UNLIT")) assert.deepEqual(ids, ["lamp", "wall"]);
+    finite_and_drawable(doc);
+    if (name === "sun along the wall normal") assert.ok(!("F.lamp.wall" in doc.points));
+    if (name === "light in the wall plane") {
+      assert.equal(doc.receivers.find((r: any) => r.id === "wall").casts.lamp, false);
+    }
+    if (name === "coplanar caster") {
+      const tile_on_wall = doc.shadows.find((sh: any) => sh.receiver === "wall" && sh.object === "tile");
+      assert.deepEqual(tile_on_wall.loops, []);
+    }
+    if (name === "crate straddling the wall") {
+      // the silent clip: crossings named <obj>.s<k>.<light>.<r>, no duplicate point at z = 0
+      const wall = doc.shadows.find((sh: any) => sh.receiver === "wall" && sh.object === "crate");
+      const names = wall.outline.filter((e: unknown) => typeof e === "string");
+      assert.equal(new Set(names).size, names.length);
+    }
+  });
+}
