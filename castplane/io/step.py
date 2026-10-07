@@ -165,9 +165,17 @@ def _arg(args, k: int, ref: str):
 def _num(v, ref: str) -> float:
     if isinstance(v, tuple) and len(v) == 2:     # a typed value, e.g. POSITIVE_LENGTH_MEASURE(300.)
         v = v[1]
-    if isinstance(v, bool) or not isinstance(v, (int, float)) or not math.isfinite(v):
+    if isinstance(v, bool) or not isinstance(v, (int, float)) or not math.isfinite(_as_float(v)):
         raise _err(f"{ref}: expected a number, found {v!r}", ref)
     return float(v)
+
+
+def _as_float(v) -> float:
+    """``float(v)``, ``inf`` for an integer beyond the double range (never ``OverflowError``)."""
+    try:
+        return float(v)
+    except OverflowError:
+        return math.inf
 
 
 def _point(entities: dict, ref) -> tuple:
@@ -299,7 +307,10 @@ def _tolerance(entities: dict, unit: str) -> float:
         if name == "CARTESIAN_POINT" and len(args) > 1 and isinstance(args[1], list):
             for c in args[1]:
                 if isinstance(c, (int, float)) and not isinstance(c, bool):
-                    extent = max(extent, abs(float(c)))
+                    v = _as_float(c)
+                    if not math.isfinite(v):     # review fix: an inf here made tol = inf
+                        raise _err(f"{ref}: non-finite coordinate {c!r}", ref)
+                    extent = max(extent, abs(v))
     extent_mm = max(1.0, k * extent)
     return 1e-6 * extent_mm / k
 
@@ -364,7 +375,10 @@ def _edge(entities: dict, ref, rec: dict) -> None:
             raise _err(f"{ref}: edge geometry {geom!r} does not exist", ref)
         gname, gargs = entities[geom]
     if gname == "CIRCLE":
-        rec["circles"].append(_num(_arg(gargs, 2, geom), geom))
+        radius = _num(_arg(gargs, 2, geom), geom)
+        if not radius > 0.0:                     # ISO 10303-42 positive_length_measure (review fix)
+            raise _err(f"{geom}: CIRCLE radius must be > 0, found {radius!r}", geom)
+        rec["circles"].append(radius)
 
 
 def _face_records(entities: dict, solid_ref: str, angle_factor: float) -> list:
@@ -389,6 +403,10 @@ def _face_records(entities: dict, solid_ref: str, angle_factor: float) -> list:
             rec["o"], rec["a"], rec["e1"], rec["e2"] = _placement(entities, _arg(gargs, 1, geom))
             if surface != "PLANE":
                 rec["radius"] = _num(_arg(gargs, 2, geom), geom)
+                # ISO 10303-42: cylindrical / spherical radius > 0, conical radius >= 0 (review fix)
+                if rec["radius"] < 0.0 or (rec["radius"] == 0.0 and surface != "CONICAL_SURFACE"):
+                    raise _err(f"{geom}: {surface} radius must be {'≥' if surface == 'CONICAL_SURFACE' else '>'} 0, "
+                               f"found {rec['radius']!r}", geom)
             if surface == "CONICAL_SURFACE":
                 rec["semi"] = _num(_arg(gargs, 3, geom), geom) * angle_factor
         bounds = _arg(fargs, 1, fref)
@@ -677,6 +695,8 @@ def import_step(path, *, fallback="error", solid=None, obj_id=None, transform=No
             doc = parse(text)
         except Part21SyntaxError as exc:
             raise _err(f"syntax: {exc.message} at offset {exc.offset}") from None
+        except RecursionError:                   # belt and braces: part21 caps the nesting depth
+            raise _err("syntax: nesting too deep") from None
         entities = doc["entities"]
         schema = doc["header"].get("FILE_SCHEMA")
         schema = schema[0][0] if (isinstance(schema, list) and schema and isinstance(schema[0], list)
@@ -692,6 +712,7 @@ def import_step(path, *, fallback="error", solid=None, obj_id=None, transform=No
         selected = list(enumerate(solid_ids)) if solid is None else [(solid, solid_ids[solid])]
         single = len(selected) == 1
         solids, objects = [], []
+        ocp_file, records, known = None, None, None
         for k, ref in selected:
             oid = obj_id if single else f"{obj_id}_{k}"
             rec, counts, reason = _recognise(entities, ref, ud, angle_factor, tol)
@@ -700,7 +721,20 @@ def import_step(path, *, fallback="error", solid=None, obj_id=None, transform=No
                     faces = ", ".join(f"{n}: {c}" for n, c in counts.items())
                     msg = f"{ref}: unsupported solid: faces {{{faces}}} (supported: {_SUPPORTED})"
                     raise _err(msg + (f"; {reason}" if reason else ""), ref)
-                tri = _tessellate(path_s, None if len(solid_ids) == 1 else k, None)
+                if known is None:                # OCC must only see resolvable references (second review)
+                    known = _ocp_entity_ids(entities)
+                _check_references(entities, known, None if len(solid_ids) == 1 else ref)
+                if ocp_file is None:             # read by OCP once per import (review fix)
+                    ocp_file = _OcpFile(path_s)
+                if len(solid_ids) == 1:
+                    shape = ocp_file.whole()
+                else:
+                    if records is None:
+                        records = {r: i for i, r in enumerate(entities, 1)}
+                    scale = ocp_file.divisor / ud
+                    shape = ocp_file.solid(ref, records[ref], len(entities), _solid_vertices(entities, ref),
+                                           scale, max(tol * scale, 1e-9))
+                tri = ocp_file.mesh(shape)
                 obj = mesh_object_from_triangles(oid, tri, transform)
                 notes.append(make_step_warning("STEP_SOLID_TESSELLATED", [ref]))
                 kind = "mesh"
@@ -754,9 +788,8 @@ def expand_step_object(obj, field, base_dir) -> tuple:
 _OCP_MISSING = "the tessellation fallback needs cadquery-ocp: pip install 'castplane[step]'"
 
 
-def _tessellate(path, solid_index=None, deflection_mm=None) -> dict:
-    """:func:`tessellate_step` of the whole shape, or of the ``solid_index``-th ``TopAbs_SOLID``
-    (explorer order, which is the file's entity order) of a multi-solid file."""
+def _ocp():
+    """The OCP names the tessellation uses (``ImportError`` naming ``castplane[step]`` without it)."""
     try:
         from OCP.Bnd import Bnd_Box
         from OCP.BRep import BRep_Tool
@@ -765,69 +798,193 @@ def _tessellate(path, solid_index=None, deflection_mm=None) -> dict:
         from OCP.IFSelect import IFSelect_RetDone
         from OCP.Interface import Interface_Static
         from OCP.STEPControl import STEPControl_Reader
-        from OCP.TopAbs import TopAbs_FACE, TopAbs_REVERSED, TopAbs_SOLID
+        from OCP.TopAbs import TopAbs_FACE, TopAbs_REVERSED, TopAbs_SOLID, TopAbs_VERTEX
         from OCP.TopExp import TopExp_Explorer
         from OCP.TopLoc import TopLoc_Location
         from OCP.TopoDS import TopoDS
     except ImportError:
         raise ImportError(_OCP_MISSING) from None
-    path = os.fspath(path)
-    reader = STEPControl_Reader()
-    if reader.ReadFile(path) != IFSelect_RetDone:
-        raise _err(f"unsupported: OCP cannot read {path}")
-    n_roots = reader.TransferRoots()
-    shape = reader.OneShape()
-    if n_roots == 0 or shape.IsNull():     # OCC returns RetDone for a file it cannot transfer (review fix)
-        raise _err(f"unsupported: OCP cannot read {path} (no transferable shape)")
-    cascade_unit = Interface_Static.CVal_s("xstep.cascade.unit")
-    divisor = {"MM": 1000.0, "M": 1.0}.get(cascade_unit)
-    if divisor is None:
-        raise _err(f"unsupported: OCP cascade unit {cascade_unit!r}")
-    if solid_index is not None:
-        explorer = TopExp_Explorer(shape, TopAbs_SOLID)
-        k = 0
-        while explorer.More() and k < solid_index:
+    return dict(locals())
+
+
+class _OcpFile:
+    """One STEP file read by OCP **once** (review fix: the mesh fallback used to re-read and
+    re-transfer the whole file for every unrecognised solid, quadratic in the number of solids).
+
+    ``whole()`` is the ``TransferRoots`` / ``OneShape`` shape of :func:`tessellate_step`;
+    ``solid(ref, record)`` transfers the one ``MANIFOLD_SOLID_BREP`` at Part-21 record number
+    ``record`` (1-based file position, which is how OCC numbers its model) with ``TransferOne``
+    (review fix: OCC's ``TopAbs_SOLID`` explorer order follows the assembly structure, not the
+    entity ids, so a positional index picked another solid)."""
+
+    def __init__(self, path):
+        self.ocp = _ocp()
+        self.path = os.fspath(path)
+        self.reader = self.ocp["STEPControl_Reader"]()
+        if self.reader.ReadFile(self.path) != self.ocp["IFSelect_RetDone"]:
+            raise _err(f"unsupported: OCP cannot read {self.path}")
+        self.cascade_unit = self.ocp["Interface_Static"].CVal_s("xstep.cascade.unit")
+        self.divisor = {"MM": 1000.0, "M": 1.0}.get(self.cascade_unit)
+        if self.divisor is None:
+            raise _err(f"unsupported: OCP cascade unit {self.cascade_unit!r}")
+
+    def whole(self):
+        n_roots = self.reader.TransferRoots()
+        shape = self.reader.OneShape()
+        if n_roots == 0 or shape.IsNull():     # OCC returns RetDone for a file it cannot transfer (review fix)
+            raise _err(f"unsupported: OCP cannot read {self.path} (no transferable shape)")
+        return shape
+
+    def solid(self, ref: str, record: int, n_records: int, vertices: list, scale: float, tol: float):
+        """The OCC solid of ``ref``; ``vertices`` (file units, times ``scale`` = cascade units) must
+        each lie within ``tol`` (cascade units) of a vertex of it, else ``StepError``."""
+        model = self.reader.Model()
+        if model.NbEntities() != n_records or \
+                model.Value(record).DynamicType().Name() != "StepShape_ManifoldSolidBrep":
+            raise _err(f"{ref}: unsupported: OCP numbers the records of {self.path} differently", ref)
+        self.reader.ClearShapes()
+        if not self.reader.TransferOne(record) or self.reader.NbShapes() != 1 or self.reader.Shape(1).IsNull():
+            raise _err(f"{ref}: unsupported: OCP cannot transfer the solid", ref)
+        shape = self.reader.Shape(1)
+        o = self.ocp
+        have = []
+        explorer = o["TopExp_Explorer"](shape, o["TopAbs_VERTEX"])
+        while explorer.More():
+            p = o["BRep_Tool"].Pnt_s(o["TopoDS"].Vertex(explorer.Current()))
+            have.append((p.X(), p.Y(), p.Z()))
             explorer.Next()
-            k += 1
-        if not explorer.More():
-            raise _err(f"unsupported: OCP finds fewer than {solid_index + 1} solids in {path}")
-        shape = TopoDS.Solid(explorer.Current())
-    if deflection_mm is None:
-        box = Bnd_Box()
-        BRepBndLib.Add_s(shape, box)
-        if box.IsVoid():                   # CornerMin() of a void box raises Standard_ConstructionError
-            raise _err(f"unsupported: OCP finds no geometry in {path}")
-        lo, hi = box.CornerMin(), box.CornerMax()
-        diagonal = math.sqrt((hi.X() - lo.X()) ** 2 + (hi.Y() - lo.Y()) ** 2 + (hi.Z() - lo.Z()) ** 2)
-        deflection_mm = max(0.01, 1e-3 * diagonal)
-    BRepMesh_IncrementalMesh(shape, float(deflection_mm), False, 0.3, False)
-    triangulation = getattr(BRep_Tool, "Triangulation_s", None) or BRep_Tool.Triangulation
-    vertices, faces = [], []
-    explorer = TopExp_Explorer(shape, TopAbs_FACE)
-    while explorer.More():
-        face = TopoDS.Face(explorer.Current())
-        loc = TopLoc_Location()
-        tri = triangulation(face, loc)
-        if tri is not None:
-            trsf = loc.Transformation()
-            offset = len(vertices)
-            for i in range(1, tri.NbNodes() + 1):
-                p = tri.Node(i).Transformed(trsf)
-                vertices.append([p.X() / divisor + 0.0, p.Y() / divisor + 0.0, p.Z() / divisor + 0.0])
-            reversed_ = face.Orientation() == TopAbs_REVERSED
-            for i in range(1, tri.NbTriangles() + 1):
-                n1, n2, n3 = tri.Triangle(i).Get()
-                f = [offset + n1 - 1, offset + n2 - 1, offset + n3 - 1]
-                faces.append([f[0], f[2], f[1]] if reversed_ else f)
-        explorer.Next()
-    return {"vertices": vertices, "faces": faces, "cascade_unit": cascade_unit}
+        cell = 2.0 * tol                       # a cheap guard against a record mismatch (grid lookup)
+        grid = {}
+        for q in have:
+            grid.setdefault(tuple(math.floor(c / cell) for c in q), []).append(q)
+        for v in vertices:
+            w = _scale(scale, v)
+            i, j, k = (math.floor(c / cell) for c in w)
+            if not any(_norm(_sub(w, q)) <= tol
+                       for di in (-1, 0, 1) for dj in (-1, 0, 1) for dk in (-1, 0, 1)
+                       for q in grid.get((i + di, j + dj, k + dk), ())):
+                raise _err(f"{ref}: unsupported: the OCP solid does not match the file's vertex {list(v)}", ref)
+        return shape
+
+    def mesh(self, shape, deflection_mm=None) -> dict:
+        """``BRepMesh_IncrementalMesh`` of ``shape`` -> the :func:`tessellate_step` dict (§5.5.7)."""
+        o = self.ocp
+        if deflection_mm is None:
+            box = o["Bnd_Box"]()
+            o["BRepBndLib"].Add_s(shape, box)
+            if box.IsVoid():                   # CornerMin() of a void box raises Standard_ConstructionError
+                raise _err(f"unsupported: OCP finds no geometry in {self.path}")
+            lo, hi = box.CornerMin(), box.CornerMax()
+            diagonal = math.sqrt((hi.X() - lo.X()) ** 2 + (hi.Y() - lo.Y()) ** 2 + (hi.Z() - lo.Z()) ** 2)
+            deflection_mm = max(0.01, 1e-3 * diagonal)
+        o["BRepMesh_IncrementalMesh"](shape, float(deflection_mm), False, 0.3, False)
+        brep_tool = o["BRep_Tool"]
+        triangulation = getattr(brep_tool, "Triangulation_s", None) or brep_tool.Triangulation
+        divisor = self.divisor
+        vertices, faces = [], []
+        explorer = o["TopExp_Explorer"](shape, o["TopAbs_FACE"])
+        while explorer.More():
+            face = o["TopoDS"].Face(explorer.Current())
+            loc = o["TopLoc_Location"]()
+            tri = triangulation(face, loc)
+            if tri is not None:
+                trsf = loc.Transformation()
+                offset = len(vertices)
+                for i in range(1, tri.NbNodes() + 1):
+                    p = tri.Node(i).Transformed(trsf)
+                    vertices.append([p.X() / divisor + 0.0, p.Y() / divisor + 0.0, p.Z() / divisor + 0.0])
+                reversed_ = face.Orientation() == o["TopAbs_REVERSED"]
+                for i in range(1, tri.NbTriangles() + 1):
+                    n1, n2, n3 = tri.Triangle(i).Get()
+                    f = [offset + n1 - 1, offset + n2 - 1, offset + n3 - 1]
+                    faces.append([f[0], f[2], f[1]] if reversed_ else f)
+            explorer.Next()
+        return {"vertices": vertices, "faces": faces, "cascade_unit": self.cascade_unit}
+
+
+def _ocp_entity_ids(entities: dict) -> set:
+    """The numeric entity ids OCC can resolve (``#091`` and ``#91`` are the same id to OCC; ``#0``
+    is none: OCC reads id 0 as "no entity", so a reference to it is unresolved)."""
+    return {n for n in (int(r[1:]) for r in entities) if n != 0}
+
+
+_REF_RE = re.compile(r"#\d+")
+
+
+def _check_references(entities: dict, known: set, root: str | None = None) -> None:
+    """Every reference of the records OCC is about to transfer resolves (the whole file for
+    ``TransferRoots``, the records reachable from ``root`` for ``TransferOne``), else a
+    ``StepError`` at the referring record (second review: a dangling reference inside the solid
+    made the OCC transfer crash the interpreter with a segmentation fault)."""
+
+    def refs(x):
+        if isinstance(x, str):
+            if _REF_RE.fullmatch(x):
+                yield x
+        elif isinstance(x, (list, tuple)):
+            for y in x:
+                yield from refs(y)
+
+    def check(r):
+        out = []
+        for _, args in _parts(entities[r]):
+            for t in refs(args):
+                n = int(t[1:])
+                if n not in known:
+                    why = "OCP numbers entities from #1" if n == 0 else "does not exist"
+                    raise _err(f"{r}: unsupported: reference {t} ({why})", r)
+                if t in entities:
+                    out.append(t)
+        return out
+
+    if root is None:
+        for r in sorted(entities, key=lambda r: int(r[1:])):
+            check(r)
+        return
+    seen, stack = set(), [root]
+    while stack:
+        r = stack.pop()
+        if r not in seen:
+            seen.add(r)
+            stack.extend(check(r))
+
+
+def _solid_vertices(entities: dict, solid_ref: str) -> list:
+    """Every ``VERTEX_POINT`` reachable from ``solid_ref`` (file units, deduplicated, in walk order)."""
+    seen, stack, points = set(), [solid_ref], []
+
+    def refs(x):
+        if isinstance(x, str):
+            if x in entities:
+                yield x
+        elif isinstance(x, (list, tuple)):
+            for y in x:
+                yield from refs(y)
+
+    while stack:
+        r = stack.pop()
+        if r in seen:
+            continue
+        seen.add(r)
+        for name, args in _parts(entities[r]):
+            if name == "VERTEX_POINT":
+                points.append(_vertex(entities, r))
+            else:
+                stack.extend(refs(args))
+    return points
+
+
+def _tessellate(path, deflection_mm=None) -> dict:
+    """:func:`tessellate_step` of the whole shape of the file."""
+    ocp_file = _OcpFile(path)
+    return ocp_file.mesh(ocp_file.whole(), deflection_mm)
 
 
 def tessellate_step(path, *, deflection_mm=None) -> dict:
     """Tessellate a STEP file with OCP (contract §5.5.7): ``{"vertices": [[x, y, z]...]`` (metres,
     per-face node blocks, unwelded), ``"faces": [[i, j, k]...]`` (0-based, outward winding),
     ``"cascade_unit": "MM" | "M"}``.  ``ImportError`` without cadquery-ocp."""
-    return _tessellate(path, None, deflection_mm)
+    return _tessellate(path, deflection_mm)
 
 
 def mesh_object_from_triangles(obj_id, tri, transform) -> dict:
