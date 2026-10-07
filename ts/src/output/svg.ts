@@ -249,6 +249,7 @@ function layer_objects(doc: AnyDoc, cv: Canvas): string[] {
 }
 
 function layer_form_shadow(doc: AnyDoc, cv: Canvas): string[] {
+  if (is_multi_light(doc)) return ml_layer_form_shadow(doc, cv, null); // M6 (contract §5.3.6): a multi-light document
   const body: string[] = [];
   const points = (doc as any).points ?? {};
   for (const entry of (doc as any).form_shadow ?? []) {
@@ -288,6 +289,7 @@ function shadow_subgroup_id(sh: any, first_receiver: string | null, suffix: stri
 }
 
 function layer_cast_shadow(doc: AnyDoc, cv: Canvas): string[] {
+  if (is_multi_light(doc)) return ml_layer_cast_shadow(doc, cv, null); // M6 (contract §5.3.6): a multi-light document
   const per_light = new Map<string, string[]>();
   const points = (doc as any).points ?? {};
   const receivers = (doc as any).receivers;
@@ -338,6 +340,7 @@ function per_receiver_entries(doc: AnyDoc, con: any): [string, any][] {
 }
 
 function layer_construction(doc: AnyDoc, cv: Canvas): string[] {
+  if (is_multi_light(doc)) return ml_layer_construction(doc, cv); // M6 (contract §5.3.6): a multi-light document
   const body: string[] = [];
   const con = (doc as any).construction ?? {};
   const lp = con.light_point;
@@ -573,6 +576,7 @@ function layer_objects_hidden(doc: AnyDoc, cv: Canvas, hidden_style: string): st
 /** The form-shadow layer with hidden lines on: `form_shadow.hidden` first (sub-groups in document order), then the v2
  * entries whose terminator keeps the visible runs only (fills unchanged). */
 function layer_form_shadow_hidden(doc: AnyDoc, cv: Canvas, hidden_style: string): string[] {
+  if (is_multi_light(doc)) return ml_layer_form_shadow(doc, cv, hidden_style); // M6 (contract §5.3.6, §5.0.6)
   const hidden_groups: [string, Seg[], UV[][]][] = [];
   const body: string[] = [];
   for (const entry of (doc as any).form_shadow ?? []) {
@@ -604,6 +608,7 @@ function layer_form_shadow_hidden(doc: AnyDoc, cv: Canvas, hidden_style: string)
  * path with `stroke="none"`, the visible conic drawables in `.conics` and the visible outline runs of the drawn polygon
  * edges in `cast_shadow.<light>.<object>[.<r>].outline`. */
 function layer_cast_shadow_hidden(doc: AnyDoc, cv: Canvas, hidden_style: string): string[] {
+  if (is_multi_light(doc)) return ml_layer_cast_shadow(doc, cv, hidden_style); // M6 (contract §5.3.6, §5.0.6)
   const receivers = (doc as any).receivers;
   const first_receiver: string | null = Array.isArray(receivers) && receivers.length > 0 ? receivers[0].id : null;
   const per_light = new Map<string, string[]>();
@@ -662,3 +667,176 @@ const HIDDEN_LAYER_BUILDERS: Record<string, (doc: AnyDoc, cv: Canvas, hidden_sty
   form_shadow: layer_form_shadow_hidden,
   cast_shadow: layer_cast_shadow_hidden,
 };
+
+// ---------------------------------------------------------------------------
+// M6: multi-light layers (contract §5.3.6, §5.0.6; port of `castplane/output/svg_multilight.py`)
+// ---------------------------------------------------------------------------
+//
+// A geometry document is multi-light iff it carries the `constructions` key (`N >= 2` lights, contract §5.3.5); its
+// `form_shadow`, `cast_shadow` and `construction` layers (and the two hidden-line builders of the first two) are then
+// written by the builders below. `N_act = max(1, number of distinct ids in the union of all umbra[].lights)` is the
+// opacity divisor; light sub-groups are ordered by light id in code-point order, object sub-groups keep document order.
+
+/** Style of the `cast_shadow.umbra` sub-group (contract §5.3.6). */
+export const UMBRA_STYLE = 'fill="#000" fill-opacity="0.3" stroke="none"';
+
+/** The writer's test for a multi-light document: the `constructions` key (contract §5.3.6). */
+export function is_multi_light(doc: AnyDoc): boolean {
+  return doc !== null && typeof doc === "object" && Object.prototype.hasOwnProperty.call(doc, "constructions");
+}
+
+/** `N_act = max(1, number of distinct ids in the union of all umbra[].lights)` (contract §5.3.6). */
+export function n_active(doc: AnyDoc): number {
+  const ids = new Set<string>();
+  for (const e of ((doc as any).umbra ?? []) as any[]) for (const lid of (e?.lights ?? []) as string[]) ids.add(lid);
+  return Math.max(1, ids.size);
+}
+
+/** The document's light ids in code-point order (the keys of `constructions`). */
+export function multi_light_ids(doc: AnyDoc): string[] {
+  return Object.keys((doc as any).constructions ?? {}).sort(cmp_code_points);
+}
+
+function ml_opacity(base: number, doc: AnyDoc): string {
+  return `fill-opacity="${fmt(base / n_active(doc))}"`;
+}
+
+/** `{object: set of face keys}` of `form_shadow_core` (a face key is its name list as JSON, the reference's tuple). */
+function ml_core_faces(doc: AnyDoc): Map<string, Set<string>> {
+  const out = new Map<string, Set<string>>();
+  for (const c of ((doc as any).form_shadow_core ?? []) as any[]) {
+    const oid = c.object ?? "";
+    let set = out.get(oid);
+    if (set === undefined) out.set(oid, (set = new Set()));
+    for (const f of (c.faces ?? []) as string[][]) set.add(JSON.stringify(f));
+  }
+  return out;
+}
+
+/** The drawable polygons of a per-light entry except the core faces (writer rule, contract §5.3.6; the document keeps
+ * them in the entry). `polygons` is parallel to `faces` for polyhedral objects; when it is not (a plate whose face is
+ * clipped away), the entry is drawn whole unless every face is a core face. */
+function ml_light_polygons(entry: any, core: ReadonlySet<string>): UV[][] {
+  const faces = (entry.faces ?? []) as string[][];
+  const polygons = (entry.polygons ?? []) as UV[][];
+  let polys: UV[][];
+  if (polygons.length === faces.length) polys = polygons.filter((_p, k) => !core.has(JSON.stringify(faces[k])));
+  else if (faces.length > 0 && faces.every((f) => core.has(JSON.stringify(f)))) polys = [];
+  else polys = [...polygons];
+  return polys.filter((p) => p.length >= 3);
+}
+
+/** Terminator drawables of one entry: `[elements, hidden segments, hidden polylines]` exactly as the single-light
+ * writer draws them (hidden runs split off when hidden lines are on). */
+function ml_terminator(entry: any, cv: Canvas, hidden: boolean, points: Record<string, any>): [string[], Seg[], UV[][]] {
+  const term: string[] = [], hid: Seg[] = [], hid_pl: UV[][] = [];
+  for (const t of entry.terminator ?? []) {
+    if (hidden) {
+      if ("segment" in t) {
+        for (const seg of t.polylines ?? []) {
+          if (seg.length !== 2) continue;
+          const [shown, h] = split_runs(seg, t);
+          term.push(...shown.map((p) => cv.polyline(p)));
+          hid.push(...h);
+        }
+        continue;
+      }
+      term.push(...drawables(t, cv));
+      hid_pl.push(...conic_hidden(t));
+      continue;
+    }
+    if ("segment" in t && !("polylines" in t)) { // no drawable: fall back to the named points' images
+      const [a, b] = t.segment.map((n: string) => points[n]?.image ?? null);
+      if (a !== null && b !== null) term.push(cv.line(a, b));
+    }
+    term.push(...drawables(t, cv));
+  }
+  return [term, hid, hid_pl];
+}
+
+/** The `form_shadow` layer body of a multi-light document (contract §5.3.6, §5.0.6): (`form_shadow.hidden` iff hidden
+ * lines are on) then per light `form_shadow.<light>` (that light's unlit faces minus the core faces, and its
+ * terminator), then `form_shadow.core`. `hidden_style` is `null` when the document's hidden lines are off. */
+function ml_layer_form_shadow(doc: AnyDoc, cv: Canvas, hidden_style: string | null): string[] {
+  const hidden = hidden_style !== null;
+  const points = (doc as any).points ?? {};
+  const entries = ((doc as any).form_shadow ?? []) as any[];
+  const core = ml_core_faces(doc);
+  const lids = multi_light_ids(doc);
+  const attrs = ml_opacity(0.18, doc);
+  const by_light = new Map<string, string[]>(lids.map((lid) => [lid, []] as [string, string[]]));
+  const hidden_groups = new Map<string, [Seg[], UV[][]]>(); // object -> (segments, polylines), first-appearance order
+  for (const entry of entries) {
+    const lid = entry.light ?? "", oid = entry.object ?? "";
+    const sub = ml_light_polygons(entry, core.get(oid) ?? new Set()).map((poly) => cv.polygon(poly));
+    const [term, hid, hid_pl] = ml_terminator(entry, cv, hidden, points);
+    if (term.length > 0) sub.push(group(`form_shadow.${lid}.${oid}.terminator`, STYLE["terminator"] as string, term));
+    if (hid.length > 0 || hid_pl.length > 0) {
+      let h = hidden_groups.get(oid);
+      if (h === undefined) hidden_groups.set(oid, (h = [[], []]));
+      h[0].push(...hid);
+      h[1].push(...hid_pl);
+    }
+    if (sub.length > 0) {
+      let list = by_light.get(lid);
+      if (list === undefined) by_light.set(lid, (list = []));
+      list.push(group(`form_shadow.${lid}.${oid}`, "", sub));
+    }
+  }
+  const body: string[] = [];
+  if (hidden) {
+    body.push(hidden_group("form_shadow", [...hidden_groups].map(([oid, [h, pl]]) => [oid, h, pl] as [string, Seg[], UV[][]]),
+      hidden_style as string, cv));
+  }
+  for (const lid of [...by_light.keys()].sort(cmp_code_points)) body.push(group(`form_shadow.${lid}`, attrs, by_light.get(lid) as string[]));
+  const core_body: string[] = [];
+  for (const c of ((doc as any).form_shadow_core ?? []) as any[]) {
+    const sub = ((c.polygons ?? []) as UV[][]).filter((p) => p.length >= 3).map((poly) => cv.polygon(poly));
+    if (sub.length > 0) core_body.push(group(`form_shadow.core.${c.object ?? ""}`, "", sub));
+  }
+  body.push(group("form_shadow.core", "", core_body));
+  return body;
+}
+
+/** `cast_shadow.umbra`: one `<path>` per `umbra[]` entry whose `polygons` is a non-empty list (one `M … Z` subpath per
+ * piece); entries with `[]` or `null` produce nothing (the group is still written). */
+function ml_umbra_group(doc: AnyDoc, cv: Canvas): string {
+  const entries = (((doc as any).umbra ?? []) as any[]).filter((e) => Array.isArray(e.polygons) && e.polygons.length > 0);
+  return group("cast_shadow.umbra", UMBRA_STYLE, entries.map((e) => cv.path(e.polygons as UV[][])));
+}
+
+/** The `cast_shadow` layer body of a multi-light document (contract §5.3.6, §5.0.6): the single-light content with
+ * `fill-opacity="<0.3/N_act>"` on every `cast_shadow.<light>` group, then `cast_shadow.umbra` on top. */
+function ml_layer_cast_shadow(doc: AnyDoc, cv: Canvas, hidden_style: string | null): string[] {
+  const plain: Record<string, any> = { ...(doc as any) };
+  delete plain["constructions"];
+  const body = hidden_style === null ? layer_cast_shadow(plain, cv) : layer_cast_shadow_hidden(plain, cv, hidden_style);
+  const attrs = ml_opacity(0.3, doc);
+  const heads = new Set(multi_light_ids(doc).map((lid) => `<g id="${attr(`cast_shadow.${lid}`)}"`));
+  const out = body.map((item) => {
+    let head = item.split(">", 1)[0] as string;
+    if (head.endsWith("/")) head = head.slice(0, -1);
+    return heads.has(head) ? `${head} ${attrs}${item.slice(head.length)}` : item;
+  });
+  out.push(ml_umbra_group(doc, cv));
+  return out;
+}
+
+/** The `construction` layer body of a multi-light document (contract §5.3.6): one `construction.<light>` group per
+ * light (code-point order) holding the single-light markers of that light's construction block (every receiver's
+ * `F′_r` included, `per_receiver` in receiver scene order) and its `construction.<light>.LP` / `.FQ` / `.PQ` groups. */
+function ml_layer_construction(doc: AnyDoc, cv: Canvas): string[] {
+  const body: string[] = [];
+  for (const lid of multi_light_ids(doc)) {
+    const inner = layer_construction({ construction: (doc as any).constructions[lid], receivers: (doc as any).receivers }, cv);
+    const renamed = inner.map((item) => {
+      for (const kind of ["LP", "FQ", "PQ"]) {
+        const head = `<g id="construction.${kind}"`;
+        if (item.startsWith(head)) return `<g id="${attr(`construction.${lid}.${kind}`)}"` + item.slice(head.length);
+      }
+      return item;
+    });
+    body.push(group(`construction.${lid}`, "", renamed));
+  }
+  return body;
+}

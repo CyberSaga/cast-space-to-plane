@@ -29,7 +29,11 @@ import { classify_document } from "./hidden.js";
 import { NotManifoldError } from "./mesh.js";
 import { MESH_MAX_RAYS, inherit_edge_smooth } from "./meshprep.js";
 import type { Mesh } from "./mesh.js";
-import { is_multi } from "./multilight.js";
+import {
+  assemble_form_shadow, construction_block, construction_blocks, construction_doc, form_table, is_multi, plate_form_lights,
+  plate_silhouette_lights, silhouette_lights, split_form, umbra_entries,
+} from "./multilight.js";
+import type { FormItem, UmbraStageEntry } from "./multilight.js";
 import { canonical } from "./output/geometry_json.js";
 import { write_svg } from "./output/svg.js";
 import { build_object, point_inside_solid } from "./primitives.js";
@@ -131,6 +135,12 @@ export interface PolyStageB {
   segment_keep: boolean[];
   form_faces: string[][];
   form_polygons: Vec2[][];
+  /** M6 (contract §5.3.3, `N >= 2` only): per edge the lights for which it is a silhouette edge (scene order). */
+  silhouette_lights?: string[][];
+  /** M6 (`N >= 2` only): per light `[faces, polygons]` of its unlit faces, sharing the drawables of `form_polygons`. */
+  form_by_light?: Map<string, [string[][], Vec2[][]]>;
+  /** M6 (`N >= 2` only): `[faces, polygons]` of the faces unlit by every light. */
+  form_core?: [string[][], Vec2[][]];
 }
 
 export interface LightStageB {
@@ -225,6 +235,8 @@ export interface PlateEdge {
   visibility: "visible";
   runs: never[];
   segment: [Vec2, Vec2] | null;
+  /** M6 (contract §5.3.3, `N >= 2` only): the lights for which the plate casts. */
+  silhouette_lights?: string[];
 }
 
 /** Stage B of a bounded receiver drawn as an opaque plate (contract §5.1.7 / §5.1.8). */
@@ -236,6 +248,10 @@ export interface PlateStageB {
   behind: boolean[];
   edges: PlateEdge[];
   form_shadow: { object: string; faces: string[][]; terminator: never[]; polygons: Vec2[][] } | null;
+  /** M6 (contract §5.1.8, §5.3.3, `N >= 2` only): per light its single-light form-shadow entry of the plate. */
+  form_by_light?: Map<string, { faces: string[][]; polygons: Vec2[][]; terminator: never[] }>;
+  /** M6 (`N >= 2` only): the plate as a core face (camera side decided, no light on it), else `null`. */
+  form_core?: { faces: string[][]; polygons: Vec2[][] } | null;
 }
 
 export interface StageB {
@@ -253,6 +269,12 @@ export interface StageB {
   construction: ConstructionStageB | null;
   warnings: Warning[];
   A: StageA;
+  /** M6 (contract §5.3.3, §5.3.4; `N >= 2` only): the light ids (scene order), one construction block per light
+   * (`construction` is the first light's, the same object) and the umbra entries (`polygons` `null` when
+   * `project_scene(..., umbra = false)`). */
+  light_ids?: string[];
+  constructions?: Map<string, ConstructionStageB>;
+  umbra?: UmbraStageEntry[];
 }
 
 // ---------------------------------------------------------------------------
@@ -1029,7 +1051,14 @@ function project_polygon(cam: CameraRecord, V4in: readonly Vec4[]): Vec2[] {
   return X.map((x) => divide(x));
 }
 
-function project_polyhedron(o: StageAObject, cam: CameraRecord, tol: number, light_id: string | null): PolyStageB {
+/** Stage B of one polyhedral object (the per-object form of the reference's batched `_project_polyhedra`). M6
+ * (contract §5.3.3): with `N >= 2` lights `silhouette` is the OR over the lights and `silhouette_lights` lists, per
+ * edge, the lights for which it is a silhouette edge; the faces unlit by at least one light are projected once and
+ * split into `form_by_light` / `form_core` referencing the same drawables. With one light everything is the v1
+ * computation. */
+function project_polyhedron(o: StageAObject, cam: CameraRecord, tol: number, light_ids: readonly string[]): PolyStageB {
+  const multi = is_multi(light_ids);
+  const light_id = light_ids.length > 0 ? (light_ids[0] as string) : null;
   const m = o.mesh;
   const V4 = m.vertices.map(h4);
   const x_h = V4.map((v) => project(cam, v));
@@ -1039,7 +1068,14 @@ function project_polyhedron(o: StageAObject, cam: CameraRecord, tol: number, lig
   const back = m.edge_faces.map(([f0, f1]) => !face_lit[f0] && !face_lit[f1]);
   const camera_silhouette = m.edge_faces.map(([f0, f1]) => face_lit[f0] !== face_lit[f1]); // M5 §5.2.4 (mesh edges only use it)
   const ol = light_id === null ? undefined : o.lights.get(light_id);
-  const silhouette = ol !== undefined ? ol.edge_silhouette : m.edges.map(() => false);
+  let silhouette = ol !== undefined ? ol.edge_silhouette : m.edges.map(() => false);
+  let sil_lists: string[][] | null = null;
+  let table: ReturnType<typeof form_table> | null = null;
+  if (multi) { // M6: OR over the lights, and the per-edge light lists (contract §5.3.3)
+    [silhouette, sil_lists] = silhouette_lights(light_ids.map((lid) => o.lights.get(lid)?.edge_silhouette ?? null), light_ids, m.edges.length);
+    // the faces unlit by at least one light replace the per-light lists
+    table = form_table(o, light_ids);
+  }
   const segments_h: ([Vec3, Vec3] | null)[] = [];
   const keep: boolean[] = [];
   for (const [i, j] of m.edges) {
@@ -1048,9 +1084,10 @@ function project_polyhedron(o: StageAObject, cam: CameraRecord, tol: number, lig
     segments_h.push(r);
     keep.push(r !== null);
   }
-  const form_faces = ol !== undefined ? ol.form_faces : [];
-  const form_polygons = ol !== undefined ? ol.form_idx.map((face) => project_polygon(cam, face.map((v) => V4[v] as Vec4))) : [];
-  return {
+  const form_idx = table !== null ? table.form_idx : ol !== undefined ? ol.form_idx : [];
+  const form_faces = table !== null ? table.form_faces : ol !== undefined ? ol.form_faces : [];
+  const form_polygons = form_idx.map((face) => project_polygon(cam, face.map((v) => V4[v] as Vec4)));
+  const rec: PolyStageB = {
     id: o.id,
     type: o.type,
     analytic: false,
@@ -1070,6 +1107,11 @@ function project_polyhedron(o: StageAObject, cam: CameraRecord, tol: number, lig
     form_faces,
     form_polygons,
   };
+  if (table !== null) {
+    rec.silhouette_lights = sil_lists as string[][];
+    [rec.form_by_light, rec.form_core] = split_form(form_faces, form_polygons, table.masks, table.core, light_ids);
+  }
+  return rec;
 }
 
 function project_light(lt: LightRecord, cam: CameraRecord, tol: number): [LightStageB, Warning[]] {
@@ -1174,42 +1216,9 @@ function project_shadow(rec: StageAShadow, cam: CameraRecord, tol: number, light
   }, warnings];
 }
 
-/**
- * One light's construction block (contract §2.7, §5.1.5, §5.4.14 (c); port of `multilight.construction_block`):
- * `light` is the stage-B record of the default receiver, `receiver_lights.get(<r>)` the stage-B records of every other
- * receiver (one per light, scene order), `shadows` the stage-B records. The flat `rays` / `checks` / `segments`
- * concatenate that light's records on the default receiver in `shadows[]` order; `per_receiver[<r>]` those on
- * receiver `r`. For one light this is the v1 / M4 `construction` block; the per-light `constructions` map of §5.3.5
- * is a loop around it.
- */
-export function construction_block(light: LightStageB, shadows: readonly ShadowStageB[],
-  receiver_lights: ReadonlyMap<string, readonly LightStageB[]> = new Map(), default_id: string | null = null): ConstructionStageB {
-  const lid = light.id;
-  const own = shadows.filter((s) => (default_id === null || s.receiver === default_id) && s.light === lid);
-  const block: ConstructionStageB = {
-    light_point: light.light_point.point,
-    light_point_at_infinity: light.light_point.at_infinity,
-    shadow_vp: light.shadow_vp.point,
-    shadow_vp_at_infinity: light.shadow_vp.at_infinity,
-    rays: own.flatMap((s) => s.rays),
-    checks: own.flatMap((s) => s.checks),
-    segments: own.flatMap((s) => s.segments),
-    per_receiver: new Map(),
-  };
-  for (const [rid, recs] of receiver_lights) {
-    const lt_r = recs.find((r) => r.id === lid);
-    if (lt_r === undefined) continue;
-    const own_r = shadows.filter((s) => s.receiver === rid && s.light === lid);
-    block.per_receiver.set(rid, {
-      shadow_vp: lt_r.shadow_vp.point,
-      shadow_vp_at_infinity: lt_r.shadow_vp.at_infinity,
-      rays: own_r.flatMap((s) => s.rays),
-      checks: own_r.flatMap((s) => s.checks),
-      segments: own_r.flatMap((s) => s.segments),
-    });
-  }
-  return block;
-}
+/** One light's construction block (contract §2.7, §5.1.5, §5.4.14 (c)): `multilight.construction_block`, re-exported
+ * here (phase 1 defined it in this module). */
+export { construction_block };
 
 /** `project_light` of a light record of a receiver other than `receivers[0]` (contract §5.1.5): `F'_r = P·F_r`;
  * `SHADOW_VP_AT_INFINITY` carries the ids `[light, receiver]`. */
@@ -1285,13 +1294,13 @@ function plate_record(rcv: ReceiverRecord, cam: CameraRecord, tol: number): [Pla
  * scene. `A` is never mutated.
  */
 export function project_scene(scene: Scene, A: StageA, camera?: unknown, umbra = true): StageB {
-  void umbra;
   const cam_dict = resolve_camera(scene, camera);
   const cam = camera_matrix(cam_dict, scene.output.canvas_mm);
   const scale = scene_scale(A.vertices, cam.C);
   const tol = tolerance(scale);
   const warnings: Warning[] = [...cam.warnings, ...A.warnings];
-  const light_id = A.lights.length > 0 ? (A.lights[0] as LightRecord).id : null;
+  const light_ids = A.lights.map((lt) => lt.id);
+  const multi = is_multi(light_ids);
   const objects: (PolyStageB | CurvedStageB)[] = [];
   const curved_objs: StageAObject[] = [];
   const curved_recs: Partial<CurvedStageB>[] = [];
@@ -1302,7 +1311,7 @@ export function project_scene(scene: Scene, A: StageA, camera?: unknown, umbra =
       curved_recs.push(rec);
       objects.push(rec as CurvedStageB);
     } else {
-      const rec = project_polyhedron(obj, cam, tol, light_id);
+      const rec = project_polyhedron(obj, cam, tol, light_ids);
       if (rec.behind.some((b) => b)) warnings.push(make_warning("POINT_BEHIND_CAMERA", [obj.id]));
       objects.push(rec);
     }
@@ -1340,11 +1349,18 @@ export function project_scene(scene: Scene, A: StageA, camera?: unknown, umbra =
     if (!rcv.bounded) continue;
     const [prec, w] = plate_record(rcv, cam, tol);
     warnings.push(...w);
+    if (multi) plate_multi(prec, rcv, cam, tol, light_ids);
     plates.push(prec);
   }
   let construction: ConstructionStageB | null = null;
-  if (lights.length > 0) construction = construction_block(lights[0] as LightStageB, shadows, receiver_lights, default_id);
-  return {
+  let constructions: Map<string, ConstructionStageB> | null = null;
+  if (multi) { // M6 (contract §5.3.3): one M4 construction block per light; construction is the alias
+    constructions = construction_blocks(lights, receiver_lights, shadows, default_id);
+    construction = constructions.get(light_ids[0] as string) as ConstructionStageB;
+  } else if (lights.length > 0) {
+    construction = construction_block(lights[0] as LightStageB, shadows, receiver_lights, default_id);
+  }
+  const out: StageB = {
     camera: cam,
     scene_scale: scale,
     tol,
@@ -1359,6 +1375,41 @@ export function project_scene(scene: Scene, A: StageA, camera?: unknown, umbra =
     warnings: merge_warnings(warnings),
     A,
   };
+  if (multi) { // M6 (contract §5.3.4): the umbra of every receiver from the stage-B drawables (canonical floats, as
+    // the reference's stage-B polygons)
+    const drawn = shadows.map((s) => ({
+      receiver: s.receiver, light: s.light, polygons: s.polygons.map((poly) => poly.map((p) => [p[0] + 0, p[1] + 0])),
+    }));
+    out.light_ids = light_ids;
+    out.constructions = constructions as Map<string, ConstructionStageB>;
+    out.umbra = umbra_entries(out.receivers, drawn, light_ids, scene.output.canvas_mm, Boolean(umbra));
+  }
+  return out;
+}
+
+/** M6 (contract §5.1.8, §5.3.3): a bounded receiver as a one-face polyhedron under `N >= 2` lights — `silhouette_lights`
+ * of its bounds edges (the lights for which it casts), its per-light form-shadow entries (`form_by_light`, the
+ * single-light rule of each light) and its `form_core` (the camera side decided and no light on it). The face is
+ * projected once. */
+function plate_multi(prec: PlateStageB, rcv: ReceiverRecord, cam: CameraRecord, tol: number, light_ids: readonly string[]): void {
+  const sl = plate_silhouette_lights(rcv.casts, light_ids);
+  for (const e of prec.edges) e.silhouette_lights = [...sl];
+  const by_id = new Map(rcv.lights.map((lt) => [lt.id, lt] as const));
+  const lts = light_ids.filter((lid) => by_id.has(lid)).map((lid) => by_id.get(lid) as LightRecord);
+  const b0 = (rcv.bounds as Vec3[])[0] as Vec3;
+  const n = rcv.pi;
+  const cam_side = n[0] * (cam.C[0] - b0[0]) + n[1] * (cam.C[1] - b0[1]) + n[2] * (cam.C[2] - b0[2]);
+  const [flags, core] = plate_form_lights(lts.map((lt) => lt.pi_L), lts.map((lt) => lt.tol_w), cam_side, tol);
+  prec.form_by_light = new Map();
+  prec.form_core = null;
+  if (!(flags.some((f) => f) || core)) return;
+  const names = [...prec.point_names];
+  const poly = project_polygon(cam, rcv.bounds4 as Vec4[]);
+  const polygons: Vec2[][] = poly.length >= 3 ? [poly.map((p) => [p[0] + 0, p[1] + 0] as Vec2)] : [];
+  lts.forEach((lt, k) => {
+    if (flags[k]) prec.form_by_light?.set(lt.id, { faces: [names], polygons, terminator: [] });
+  });
+  if (core) prec.form_core = { faces: [names], polygons };
 }
 
 // ---------------------------------------------------------------------------
@@ -1476,6 +1527,9 @@ export function compose(scene: Scene, B: StageB, hidden_lines?: boolean | null):
   const form_entries: [number, Record<string, unknown>][] = []; // (object index, entry): the block keeps object order
   const conics_by = new Map<string, Record<string, unknown>[]>();
   const conic_key = (oid: string, lid: string, rid: string): string => JSON.stringify([oid, lid, rid]);
+  const light_ids = B.constructions !== undefined ? (B.light_ids ?? []) : null; // M6: a multi-light document
+  const multi_items = new Map<number, FormItem>(); // M6: object index -> assemble_form_shadow item
+  const uv0 = (polys: readonly Vec2[][]): Vec2[][] => polys.map((poly) => poly.map((p) => [p[0] + 0, p[1] + 0] as Vec2));
   // curved objects first (their points), then the polyhedral ones, as in the Python compose
   B.objects.forEach((rec, k) => {
     if (!rec.analytic) return;
@@ -1485,7 +1539,10 @@ export function compose(scene: Scene, B: StageB, hidden_lines?: boolean | null):
     }));
     outlines.push({ object: rec.id, generators, conics: rec.outline_arcs.map((a) => conic_doc_entry(a, true)) });
     const term: Record<string, unknown>[] = [];
-    for (const items of rec.terminator.values()) {
+    // M6 (contract §5.3.3): in a multi-light document each light's terminator entries form that light's entry
+    const term_by_light = light_ids === null ? null : new Map<string, Record<string, unknown>[]>();
+    for (const [lid, items] of rec.terminator) {
+      const start = term.length;
       for (const it of items) {
         if ("segment" in it) {
           const seg = segment_uv(it.segment_h, it.keep);
@@ -1494,8 +1551,15 @@ export function compose(scene: Scene, B: StageB, hidden_lines?: boolean | null):
           term.push(conic_doc_entry(it));
         }
       }
+      if (term_by_light !== null) term_by_light.set(lid, term.slice(start));
     }
-    if (term.length > 0) form_entries.push([k, { object: rec.id, faces: [], terminator: term, polygons: [] }]);
+    if (term.length > 0 && term_by_light === null) form_entries.push([k, { object: rec.id, faces: [], terminator: term, polygons: [] }]);
+    if (term_by_light !== null) {
+      multi_items.set(k, {
+        object: rec.id, core: null,
+        by_light: new Map([...term_by_light].map(([lid, t]) => [lid, { faces: [], polygons: [], terminator: t }] as const)),
+      });
+    }
     for (const [akey, arcs] of rec.shadow_arcs) {
       const [lid, rid] = JSON.parse(akey) as [string, string];
       conics_by.set(conic_key(rec.id, lid, rid), arcs.map((a) => conic_doc_entry(a)));
@@ -1519,8 +1583,18 @@ export function compose(scene: Scene, B: StageB, hidden_lines?: boolean | null):
         entry["camera_silhouette"] = cs;
         if (t.smooth === true && !cs) entry["segment"] = null;
       }
+      if (light_ids !== null) entry["silhouette_lights"] = [...((rec.silhouette_lights as string[][])[e] as string[])];
       edges.push(entry);
     });
+    if (light_ids !== null) { // M6 (contract §5.3.3): the per-light lists and the core of the projected union
+      const [fc_faces, fc_polys] = rec.form_core as [string[][], Vec2[][]];
+      multi_items.set(k, {
+        object: rec.id,
+        core: { faces: fc_faces, polygons: uv0(fc_polys) },
+        by_light: new Map([...(rec.form_by_light as Map<string, [string[][], Vec2[][]]>)].map(([lid, [f, p]]) =>
+          [lid, { faces: f, polygons: uv0(p), terminator: [] }] as const)),
+      });
+    }
     if (rec.form_faces.length > 0) {
       form_entries.push([k, {
         object: rec.id, faces: rec.form_faces, terminator: [],
@@ -1534,9 +1608,17 @@ export function compose(scene: Scene, B: StageB, hidden_lines?: boolean | null):
     finite_points(points, prec.point_names, prec.world, prec.image_h, prec.behind);
     edges.push(...prec.edges.map((e) => ({ ...e })));
     if (prec.form_shadow !== null) form_entries.push([n_obj + j, prec.form_shadow as unknown as Record<string, unknown>]);
+    if (light_ids !== null) {
+      multi_items.set(n_obj + j, { object: prec.id, core: prec.form_core ?? null, by_light: prec.form_by_light ?? new Map() });
+    }
   });
   form_entries.sort((a, b) => a[0] - b[0]);
-  const form_shadow = form_entries.map(([, e]) => e);
+  let form_shadow: unknown[] = form_entries.map(([, e]) => e);
+  let form_core: unknown[] | null = null;
+  if (light_ids !== null) { // M6 (contract §5.3.5): light-major per-light entries and the core
+    const items = [...multi_items.keys()].sort((a, b) => a - b).map((k) => multi_items.get(k) as FormItem);
+    [form_shadow, form_core] = assemble_form_shadow(items, light_ids);
+  }
   for (const lt of B.lights) light_points(points, lt);
   for (const [rid, lts] of B.receiver_lights) for (const lt of lts) receiver_light_points(points, lt, rid);
   for (const s of B.shadows) {
@@ -1619,6 +1701,14 @@ export function compose(scene: Scene, B: StageB, hidden_lines?: boolean | null):
     form_shadow,
     outlines,
   } as unknown as GeometryDocument;
+  if (light_ids !== null) { // M6 (contract §5.3.5): the keys of multi-light documents only
+    const d = doc as unknown as Record<string, unknown>;
+    d["form_shadow_core"] = form_core;
+    const constructions: Record<string, unknown> = {};
+    for (const [lid, blk] of B.constructions as Map<string, ConstructionStageB>) constructions[lid] = construction_doc(blk);
+    d["constructions"] = constructions;
+    d["umbra"] = (B.umbra ?? []).map((e) => ({ receiver: e.receiver, lights: [...e.lights], polygons: e.polygons }));
+  }
   // M4 (contract §5.1.6.5): the sampled hidden-line removal of stage C
   if (effective) classify_document(doc, B.A, B);
   return doc;

@@ -219,12 +219,12 @@ def test_ts_render_equals_the_reference_on_the_examples(built_port, tmp_path):
     from castplane.output import geometry_json
 
     examples = sorted((ROOT / "examples").glob("*.json"))
-    # M7 phase 2 (contract §5.4.0): the examples whose geometry belongs to a phase-2 part that has not landed yet
-    # (hidden lines, meshes, N >= 2); each part shrinks this list, the final part leaves it empty
-    todo = {"two_lights.json"}
+    # M7 phase 2 (contract §5.4.0): the examples whose geometry belonged to a phase-2 part that had not landed yet
+    # (hidden lines, meshes, N >= 2); each part shrank this list, the multi-light part left it empty
+    todo: set = set()
     assert todo <= {p.name for p in examples}
     examples = [p for p in examples if p.name not in todo]
-    assert len(examples) == 7
+    assert len(examples) == 8
     inputs = [EXPANDED.get(p.name, p) for p in examples]
     proc = subprocess.run([NODE, str(TS / "scripts" / "render.mjs"), *map(str, inputs), str(tmp_path)],
                           capture_output=True, text=True, timeout=300)
@@ -328,6 +328,143 @@ def test_ts_mesh_scenes_equal_the_reference(built_port, tmp_path):
         assert (tmp_path / "out" / f"{name}.svg").read_text(encoding="utf-8") == ref["svg"], name
         port_doc = json.loads((tmp_path / "out" / f"{name}.json").read_text(encoding="utf-8"))
         assert tc.compare_documents(json.loads(geometry_json.dumps(ref["geometry"])), port_doc) == [], name
+
+
+def _multilight_scenes() -> dict:
+    """Multi-light scenes for the cross-implementation check of the port's multi-light part (contract §5.3,
+    §5.4.14): the scenes of ``tests/test_multilight.py`` (acceptance box, curved two-light scene, the three-light
+    concave scene on the ground in two light orders, inactive / identical / inside lights, cameras on and below the
+    ground, a directional light along the normal as the second light, the two-light ``wall_and_ground`` with hidden
+    lines, plates with per-light entries and core, mesh cases with a second light), hidden lines on (dashed and
+    ``omit``) for several of them, and seeded ``make_scene(seed, n_lights=2 | 3)`` scenes."""
+    import copy
+
+    from tests import test_multilight as tm
+    from tests.reference.random_scenes import make_scene
+
+    box = [{"id": "cube", "type": "box", "size": [1, 1, 1]}]
+    scenes = {"acceptance": tm.acceptance_scene(), "curved": tm.curved_scene(), "three": tm.three_light_scene(),
+              "three_permuted": tm.three_light_scene((2, 0, 1)), "wall2": tm.wall_two_lights(),
+              "plate_lamp2_behind": tm.plate_two_lights([1.0, 9.0, 3.0]),
+              "plate_core": tm.plate_two_lights([-1.5, 2.5, 3.0])}
+    scenes["inactive"] = tm.scene_of(box, [tm.WEST, {"id": "under", "type": "point", "position": [1.0, 0.5, -2.0]}],
+                                     tm.ACCEPTANCE_CAMERA)
+    scenes["twins"] = tm.scene_of(box, [tm.WEST, dict(tm.WEST, id="twin")], tm.ACCEPTANCE_CAMERA)
+    scenes["inside"] = tm.scene_of(box + [{"id": "low", "type": "box", "size": [0.6, 0.6, 0.3],
+                                           "transform": {"position": [2.0, 0.0, 0.0]}}],
+                                   [tm.WEST, {"id": "bulb", "type": "point", "position": [0.0, 0.0, 0.5]}],
+                                   dict(tm.ACCEPTANCE_CAMERA, position=[1.0, -7.0, 4.0], target=[1.5, 0.0, 0.0]))
+    scenes["camera_on_ground"] = tm.scene_of(box, [tm.WEST, tm.EAST], dict(tm.ACCEPTANCE_CAMERA, position=[0.0, -6.0, 0.0],
+                                                                          target=[0.0, 0.0, 0.5]))
+    scenes["camera_below"] = tm.scene_of(box, [tm.WEST, tm.EAST], dict(tm.ACCEPTANCE_CAMERA, position=[0.3, -6.0, -2.0],
+                                                                      target=[0.0, 0.0, 0.0]))
+    scenes["vertical_sun"] = tm.scene_of(box, [tm.WEST, {"id": "sun", "type": "directional", "direction": [0, 0, 1]}],
+                                         tm.ACCEPTANCE_CAMERA)
+    for case in ("mesh_smooth_prism16", "mesh_open_bottom_box_fallback"):
+        raw = json.loads((ROOT / "tests" / "conformance" / "cases" / f"{case}.json").read_text(encoding="utf-8"))
+        x, y, z = raw["lights"][0]["position"]
+        raw["lights"].append(dict(raw["lights"][0], id="second", position=[x + 1.0, y - 0.5, z]))
+        scenes[f"{case}_two_lights"] = raw
+    # seed 3 is left out: its ray of `obj3.g1.base.light2` (a generator foot 1e-6 m above the ground, |S' - Q'| /
+    # |F' - Q'| ~ 1.7e-7) is the deferred ill-conditioned `covering_segments` case of the part-3 notes, not a
+    # multi-light defect (the port's segment differs by 1.05e-6 mm)
+    for seed in (0, 1, 2, 4, 5, 6, 7, 8):
+        scenes[f"rand{seed}"] = make_scene(seed, n_lights=2 + seed % 2)
+    for name in ("acceptance", "curved", "three", "inside", "rand1", "rand2"):
+        for style in ("dashed", "omit"):
+            sc = copy.deepcopy(scenes[name])
+            sc.setdefault("output", {}).update({"hidden_lines": True, "hidden_style": style})
+            scenes[f"{name}_hidden_{style}"] = sc
+    return scenes
+
+
+#: Multi-light scenes whose umbra *partition* is build dependent (casters standing on the receiver: cross-light
+#: vertex pairs within rounding of each other and collinear ground-contact edges of different lights, the §5.3
+#: implementation notes "(M6 step 8)" and "(M6 review fixes)"): the port's drawables differ from the reference's by
+#: ulps, so the pieces may differ while the region does not. They are compared as a region.
+_UMBRA_REGION_ONLY = {"three", "three_permuted", "plate_core", "rand7", "three_hidden_dashed", "three_hidden_omit"}
+
+
+def _piece_area(p) -> float:
+    return 0.5 * sum(p[k][0] * p[(k + 1) % len(p)][1] - p[(k + 1) % len(p)][0] * p[k][1] for k in range(len(p)))
+
+
+def _assert_same_umbra_region(ref_doc: dict, port_doc: dict, name: str) -> None:
+    """The umbra of two implementations as a region (contract §5.3.4 "as a set"): per receiver the same lights, the
+    union areas within 1e-9 (relative), and for up to 40 pieces the corner set of the union within the §4 (i) scaled
+    1e-6 mm (``tests/test_multilight.py::assert_same_corners`` with the turning-angle threshold of the M6 notes)."""
+    from tests import test_multilight as tm
+
+    assert [e["lights"] for e in ref_doc["umbra"]] == [e["lights"] for e in port_doc["umbra"]], name
+    for er, ep in zip(ref_doc["umbra"], port_doc["umbra"]):
+        a, b = er["polygons"], ep["polygons"]
+        ta, tb = sum(map(_piece_area, a)), sum(map(_piece_area, b))
+        assert abs(ta - tb) <= 1e-9 * max(abs(ta), 1.0), (name, er["receiver"], ta, tb)
+        if 0 < len(a) <= 40:
+            scale = max(1.0, max(abs(float(x)) for piece in a for v in piece for x in v))
+            ca, cb = tm.union_corners(a, angle_tol=1e-3), tm.union_corners(b, angle_tol=1e-3)
+            assert len(ca) == len(cb), (name, er["receiver"])
+            for c in ca:
+                assert min(max(abs(c[0] - d[0]), abs(c[1] - d[1])) for d in cb) <= 1e-6 * scale, (name, c)
+
+
+def _umbra_lines(svg: str) -> set:
+    """Indices of the lines of the ``cast_shadow.umbra`` group body (its ``<path>`` elements)."""
+    lines = svg.split("\n")
+    out, inside = set(), False
+    for k, line in enumerate(lines):
+        if line.startswith('<g id="cast_shadow.umbra"'):
+            inside = not line.endswith("/>")
+            continue
+        if inside:
+            if line == "</g>":
+                inside = False
+            else:
+                out.add(k)
+    return out
+
+
+@needs_node
+def test_ts_multilight_scenes_equal_the_reference(built_port, tmp_path):
+    """The port's multi-light part (M7 phase 2 part 4) against the Python reference beyond the four conformance
+    cases: every scene of :func:`_multilight_scenes` gives the same SVG text byte for byte, a JSON document that
+    passes the comparator, and an ``umbra[]`` that the reference kernel reproduces bit for bit from the port's own
+    ``shadows[].polygons`` (contract §5.3.5 (c)). The scenes of ``_UMBRA_REGION_ONLY`` compare their umbra as a
+    region (the SVG then differs at most in the ``cast_shadow.umbra`` paths, the document only under ``umbra``)."""
+    from castplane.output import geometry_json
+    from castplane.umbra import umbra_from_document
+
+    scenes = _multilight_scenes()
+    assert _UMBRA_REGION_ONLY <= set(scenes)
+    (tmp_path / "in").mkdir()
+    paths = []
+    for name, sc in scenes.items():
+        path = tmp_path / "in" / f"{name}.json"
+        path.write_text(json.dumps(sc), encoding="utf-8")
+        paths.append(path)
+    proc = subprocess.run([NODE, str(TS / "scripts" / "render.mjs"), *map(str, paths), str(tmp_path / "out")],
+                          capture_output=True, text=True, timeout=600)
+    assert proc.returncode == 0, proc.stderr[-2000:]
+    for name, sc in scenes.items():
+        ref = castplane.render(castplane.load_scene(sc))
+        ref_doc = json.loads(geometry_json.dumps(ref["geometry"]))
+        assert "constructions" in ref_doc, name
+        svg = (tmp_path / "out" / f"{name}.svg").read_text(encoding="utf-8")
+        port_doc = json.loads((tmp_path / "out" / f"{name}.json").read_text(encoding="utf-8"))
+        # §5.3.5 (c) across implementations: the reference kernel on the port's own drawables gives the port's umbra
+        # bit for bit (the drawables of the two implementations may differ by ulps, the comparator covers that)
+        assert umbra_from_document(port_doc) == port_doc["umbra"], name
+        mismatches = tc.compare_documents(ref_doc, port_doc)
+        if name not in _UMBRA_REGION_ONLY:
+            assert svg == ref["svg"], name
+            assert mismatches == [], name
+            continue
+        assert [m for m in mismatches if not m.startswith("umbra[")] == [], name
+        _assert_same_umbra_region(ref_doc, port_doc, name)
+        a, b = ref["svg"].split("\n"), svg.split("\n")
+        assert len(a) == len(b), name
+        differing = {k for k, (x, y) in enumerate(zip(a, b)) if x != y}
+        assert differing <= _umbra_lines(ref["svg"]) & _umbra_lines(svg), name
 
 
 @needs_node

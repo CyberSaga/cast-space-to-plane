@@ -211,18 +211,16 @@ test("cases/ and expected/ correspond one to one, are non-empty, and every case 
 });
 
 /**
- * Phase 2 of contract §5.4.0 lands in parts; until the last part, the cases whose geometry is not yet ported are run
- * as node:test `todo` (reported, not failing). Each part shrinks this list; the final part leaves it EMPTY.
- * Part 1 (receivers generalisation) ports every case without hidden lines, mesh objects or a second light; part 2
- * (src/hidden.ts) the hidden-line cases; part 3 (src/meshprep.ts) the three mesh cases.
+ * Phase 2 of contract §5.4.0 landed in parts; until the last part, the cases whose geometry was not yet ported ran as
+ * node:test `todo`. Part 1 (receivers generalisation) ported every case without hidden lines, mesh objects or a second
+ * light; part 2 (src/hidden.ts) the hidden-line cases; part 3 (src/meshprep.ts) the three mesh cases; part 4
+ * (src/umbra.ts, src/multilight.ts) the four multi-light cases. The list is now EMPTY: every case of the set passes.
  */
-export const TODO_CASES: ReadonlySet<string> = new Set([
-  // two or more lights (src/umbra.ts, src/multilight.ts, §5.3)
-  "multilight_point_and_directional_curved",
-  "multilight_second_light_inactive",
-  "multilight_three_lights_concave_prism",
-  "multilight_two_point_symmetric_box",
-]);
+export const TODO_CASES: ReadonlySet<string> = new Set<string>([]);
+
+test("TODO_CASES is empty: every case of the set passes from TypeScript (phase 2 complete)", () => {
+  assert.deepEqual([...TODO_CASES], []);
+});
 
 test("TODO_CASES names existing cases only", () => {
   const names = new Set(case_names());
