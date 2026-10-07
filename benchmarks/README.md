@@ -407,8 +407,8 @@ The port now carries the whole §5.0.3 format: hidden lines, bounded receivers, 
 umbra. The acceptance command `node ts/build/bench/camera_only.js --gate both --reps 20` was run three consecutive
 times on the same container (node 22.22.0, V8 12.4.254.21-node.33; minimum over 20 repetitions, the median in
 brackets). The document of `benchmark_100.json` is unchanged by parts 2–5: 9030 drawn edges, 15171 named points,
-`warnings []`, SVG 1 960 727 bytes (byte-identical to the Python writer), JSON 10 628 469 bytes. Since this part,
-`write_svg` in the benchmark receives the scene's `output.hidden_style`, which is the default `dashed` for this scene.
+`warnings []`, SVG 1 960 727 bytes (byte-identical to the Python writer), JSON 10 628 469 bytes. As in `bench.py`,
+`write_svg` in the benchmark receives the layers only, so the hidden style is the default `dashed`.
 
 | path | run 1 | run 2 | run 3 | target | status |
 | --- | --- | --- | --- | --- | --- |

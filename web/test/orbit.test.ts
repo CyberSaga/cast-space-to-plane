@@ -318,6 +318,8 @@ test("receivers in the 3D view (phase 2 of §5.4.10): the unbounded ground and a
   for (const name of ["bounded_default_receiver", "receiver_directional_wall", "receiver_unlit_wall", "wall_and_ground"]) {
     const cs = conformance_case(name);
     assert.ok(cs.receivers.some((r) => r.bounds !== null), name);
+    // one plate per receiver, in receiver order (build_scene3d indexes the list by the receiver index)
+    assert.deepEqual(receiver_plates(cs.receivers).map((p) => p.id), cs.receivers.map((r) => r.id), name);
     for (const [i, p] of receiver_plates(cs.receivers).entries()) {
       assert.equal(p.kind, cs.receivers[i]!.bounds === null ? "ground" : "plate", `${name} ${p.id}`);
     }

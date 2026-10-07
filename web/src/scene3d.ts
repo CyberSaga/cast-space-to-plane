@@ -145,18 +145,17 @@ export function build_scene3d(scene: Scene, A?: StageA): THREE.Group {
   });
   group.add(new THREE.AmbientLight(0xffffff, 0.9));
 
-  const receiver_material = () => new THREE.MeshLambertMaterial({ color: 0xf4f4f0, side: THREE.DoubleSide,
+  const receiver_material = (colour: number) => new THREE.MeshLambertMaterial({ color: colour, side: THREE.DoubleSide,
     polygonOffset: true, polygonOffsetFactor: 1, polygonOffsetUnits: 1 });
+  const plates = receiver_plates(scene.receivers);
   scene.receivers.forEach((rec, i) => {
-    const plate = receiver_plates([rec])[0]!;
+    const plate = plates[i]!;
     if (plate.kind === "plate") {
       // a bounded receiver (phase 2): a plate over its convex `bounds` (world coordinates) and its outline
       const geometry = new THREE.BufferGeometry();
       geometry.setAttribute("position", new THREE.BufferAttribute(plate.positions, 3));
       geometry.computeVertexNormals();
-      const material = receiver_material();
-      material.color.setHex(i === 0 ? 0xf4f4f0 : 0xeceae2);
-      const mesh = new THREE.Mesh(geometry, material);
+      const mesh = new THREE.Mesh(geometry, receiver_material(i === 0 ? 0xf4f4f0 : 0xeceae2));
       mesh.name = `receiver:${rec.id}`;
       mesh.receiveShadow = false;
       group.add(mesh);
@@ -170,7 +169,7 @@ export function build_scene3d(scene: Scene, A?: StageA): THREE.Group {
     }
     // the unbounded ground: a plane of 4x the scene extent with a grid
     const size = 4 * extent;
-    const ground = new THREE.Mesh(new THREE.PlaneGeometry(size, size), receiver_material());
+    const ground = new THREE.Mesh(new THREE.PlaneGeometry(size, size), receiver_material(0xf4f4f0));
     ground.name = `receiver:${rec.id}`;
     const n = new THREE.Vector3(...rec.normal);
     ground.quaternion.setFromUnitVectors(new THREE.Vector3(0, 0, 1), n);

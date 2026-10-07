@@ -3715,7 +3715,9 @@ and the hidden-run SVG groups (§5.1.8). Nothing an M4–M6 case needs lies beyo
 - **[decision, implementation] (M7 phase 2, part 5) The web UI at the M4–M6 format (§5.4.10 phase 2).**
   - **Receivers.** The unbounded ground stays the `PlaneGeometry` of 4× the scene extent with a `GridHelper`. Each
     bounded receiver is drawn as a plate over its `bounds`: a `BufferGeometry` of the triangle fan of the validated
-    convex polygon, in world coordinates, plus a closed outline.
+    convex polygon, in world coordinates, plus a closed outline. This replaces the `PlaneGeometry` literal of
+    §5.4.10 for bounded receivers, which cannot represent a non-rectangular convex polygon (`validate_bounds`
+    accepts any convex polygon); display only.
   - **Lights.** Every light gets its own helper colour. The three.js shading lights share one total intensity
     (`2.2 / N`), so a scene with several lights is not drawn brighter. The DOM- and three-free data for both lives
     in `web/src/helpers3d.ts`, which the web tests cover.
@@ -3746,14 +3748,29 @@ and the hidden-run SVG groups (§5.1.8). Nothing an M4–M6 case needs lies beyo
     parts 2–5 did not slow the single-light path; the difference is container noise. Over all six runs of this
     tree the smallest minimum is 62 ms, and five of the six are below 70 ms. The literal stays `--gate both`, so
     nothing was loosened. The step-7 rule still governs a hosted runner.
-  - **Hidden style.** The benchmark now passes the scene's `output.hidden_style` to `write_svg`. The §5.4.9
-    protocol writes `write_svg(scene.output.layers)`; for `benchmark_100.json` (hidden lines off, default style)
-    the output is the same.
+  - **Hidden style.** The benchmark calls `write_svg(doc, scene.output.layers)` as the §5.4.9 protocol and
+    `benchmarks/bench.py` do, with no `hidden_style` (the default `dashed`); a `--scene` with
+    `hidden_style: "omit"` times the dashed document, like the Python `--hidden-lines` row (review fix below).
   - **Scene rows.** `--scene` rows were added for `wall_and_ground` (hidden lines on; camera-only ≈ 1 ms) and
     `two_lights` (umbra on; ≈ 5 ms), with no target, in `benchmarks/README.md`.
   - **Open items.** The deferred Python-side note above (`per_receiver` marker order on a reloaded document) and
     the deferred `covering_segments` ill-conditioning of part 3 remain open proposals for the owners of those
     Python files. Phase 2 adds no other deviation.
+- **[implementation] (M7 phase 2, part 5, review fixes)**
+  - The TypeScript benchmark passed `scene.output.hidden_style` to its three `write_svg` calls, which `bench.py`
+    does not; it now mirrors `bench.py` literally (`tests/test_ts_port.py::
+    test_ts_bench_writes_the_svg_of_the_bench_py_protocol`). No recorded number changes: every recorded scene
+    uses the default `dashed` style.
+  - `build_scene3d` builds the receiver plates once (`receiver_plates(scene.receivers)`, indexed by the
+    receiver index) and gives the material factory its colour; display unchanged.
+  - The intro line of `tests/conformance/README.md` is restored to its original wording; M7 only appends its
+    rule-2 / rule-3 addenda there (`docs/PLAN-v2.md` ownership table).
+  - **Open before the merge:** the §5.4.9 gate literal is still decided on container numbers only (the reviews
+    reported camera-only minima of 82.6 ms and 67.4 ms on this container, the fixer's run 66.8 ms; all exit 0
+    with `--gate both`, SVG still 1 960 727 bytes). The first
+    hosted `ts` CI run decides it by the step-7 rule; at ≥ 70 ms `ci.yml` switches to `--gate full`, the number
+    goes into `benchmarks/README.md`, and `test_ci_runs_the_port_and_the_web_ui_with_the_recorded_gate` changes
+    in the same commit.
 
 ### 5.5 M8 — STEP import (spec §9 row "STEP", spec §10 M8) — a loader, outside the core
 

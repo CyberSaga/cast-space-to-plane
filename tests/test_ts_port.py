@@ -646,6 +646,25 @@ def test_ts_bench_reports_the_bench_py_record(built_port):
     assert bad.returncode == 2 and "unknown gate" in bad.stderr
 
 
+@needs_node
+def test_ts_bench_writes_the_svg_of_the_bench_py_protocol(built_port, tmp_path):
+    """§5.4.9: the TS protocol mirrors ``benchmarks/bench.py``, whose ``write_svg(doc, layers=…)`` passes no
+    ``hidden_style``. A ``--scene`` with ``hidden_style: "omit"`` must therefore time the document of the
+    default (dashed) style, the one the Python ``--hidden-lines`` row times (review fix, M7 phase 2 part 5)."""
+    from castplane.output.svg import write_svg
+    scene = json.loads((ROOT / "examples" / "wall_and_ground.json").read_text(encoding="utf-8"))
+    scene["output"].update({"hidden_lines": True, "hidden_style": "omit"})
+    path = tmp_path / "omit.json"
+    path.write_text(json.dumps(scene), encoding="utf-8")
+    proc = subprocess.run([NODE, str(built_port / "bench" / "camera_only.js"), "--json", "--reps", "1", "--gate", "none",
+                           "--scene", str(path)], cwd=ROOT, capture_output=True, text=True, timeout=600)
+    assert proc.returncode == 0, proc.stderr[-2000:]
+    doc = castplane.compose(scene, castplane.project_scene(scene, castplane.shadow_geometry(scene)))
+    dashed = write_svg(doc, layers=scene["output"]["layers"])
+    assert len(dashed) != len(write_svg(doc, layers=scene["output"]["layers"], hidden_style="omit"))
+    assert json.loads(proc.stdout)["svg_bytes"] == len(dashed)
+
+
 # ---------------------------------------------------------------------------
 # the npm workspace and the web UI (M7 step 8)
 # ---------------------------------------------------------------------------
