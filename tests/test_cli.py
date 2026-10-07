@@ -221,10 +221,10 @@ def documented_commands() -> list:
     found = []
     for path in USER_DOCS:
         for line in path.read_text(encoding="utf-8").splitlines():
-            for m in re.finditer(r"castplane (render|validate|info|stages)\b[^`#|]*", line):
+            for m in re.finditer(r"castplane (render|validate|info|stages|import)\b[^`#|]*", line):
                 cmd = m.group(0).strip().replace("<名稱>", "basic")
-                if cmd.split()[2].isupper():          # a synopsis row (``castplane render SCENE -o OUTDIR …``)
-                    continue
+                if len(cmd.split()) < 3 or cmd.split()[2].isupper():   # a mention (``castplane import``) or a
+                    continue                                            # synopsis row (``… render SCENE -o OUTDIR``)
                 found.append((path.name, cmd))
     return found
 
@@ -367,3 +367,20 @@ def test_usage_warning_table_lists_every_warning_code():
     rows = {m.group(1) for m in re.finditer(r"^\| `([A-Z_]+)` \|", section, re.M)}
     missing = sorted(set(WARNING_CODES) - rows)
     assert not missing, f"warning codes without a docs/USAGE.md §3 row: {missing}"
+
+
+def test_documented_import_commands_run(tmp_path, monkeypatch):
+    """Every documented ``castplane import`` example (M5) runs from the repository root and writes a
+    scene that ``castplane validate`` accepts (outputs redirected into a temporary directory)."""
+    monkeypatch.chdir(ROOT)
+    cmds = [c for _, c in documented_commands() if c.split()[1] == "import"]
+    assert len(cmds) >= 3, cmds
+    for k, cmd in enumerate(cmds):
+        argv = cmd.split()[1:]
+        out = tmp_path / f"s{k}.json"
+        if "-o" in argv:
+            argv[argv.index("-o") + 1] = str(out)
+        else:
+            argv += ["-o", str(out)]
+        assert main(argv + ["-q"]) == EXIT_OK, cmd
+        assert main(["validate", str(out), "-q"]) == EXIT_OK, cmd    # mesh paths resolve from the output directory

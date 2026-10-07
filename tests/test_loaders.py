@@ -520,6 +520,11 @@ def test_import_ids_reserved_light_ids_cameras_and_defaults(tmp_path):
     nested = expand_scene(scene, tmp_path)[0]["objects"][2]["data"]   # node 2's subtree includes node 3
     assert len(nested["faces"]) == 2
     assert [lt["id"] for lt in scene["lights"]] == ["umbra_light", "hidden_light"]
+    nodes_r = [{"name": "hidden", "mesh": 0}, {"name": "core", "mesh": 0, "translation": [2.0, 0.0, 0.0]}] + nodes[4:6]
+    reserved, _ = G.import_gltf_scene(write_gltf(tmp_path, gltf_doc([TRI], nodes_r, extra=extra), "r.gltf"))
+    assert [o["id"] for o in reserved["objects"]] == ["hidden_object", "core_object"]     # reserved ids (§5.0.1)
+    one, _ = G.import_gltf_scene(write_gltf(tmp_path, gltf_doc([TRI], nodes_r, extra=extra), "r.gltf"), light="umbra")
+    assert [o["id"] for o in one["objects"]] == ["hidden_object", "core"] and one["lights"][0]["id"] == "umbra"
     assert scene["lights"][1]["type"] == "directional"                 # shines along local -Z, turned to -Y
     np.testing.assert_allclose(scene["lights"][1]["direction"], [0.0, 0.0, 1.0], atol=1e-15)
     assert scene["camera"]["position"] == [0.0, -9.0, 1.0]

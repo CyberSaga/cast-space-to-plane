@@ -563,6 +563,12 @@ def import_gltf_parts(path, *, ref=None, inline=False, node=None, camera=None, l
     keys = dict(mesh_keys or {})
     objects, raw, notes = [], {}, []
     taken = {"ground"}
+    n_lights = 1 if light is not None else sum(1 for k in order if _has_light(nodes[k]))
+
+    def object_base(name, k):
+        """Object id of a node: ``hidden`` (and, with >= 2 lights, ``core``) are reserved (§5.0.1)."""
+        base = _node_id(name, k, "node")
+        return base + "_object" if base == "hidden" or (base == "core" and n_lights >= 2) else base
 
     def mesh_object(oid, selection):
         data = gltf_raw(doc, buffers, selection)
@@ -579,7 +585,7 @@ def import_gltf_parts(path, *, ref=None, inline=False, node=None, camera=None, l
     if node is not None:
         sel = _select_nodes(doc, node, order)
         name = nodes[sel[0]].get("name") if isinstance(node, int) or nodes[sel[0]].get("name") == node else node
-        oid = _unique(_node_id(name, sel[0], "node"), taken)
+        oid = _unique(object_base(name, sel[0]), taken)
         objects.append(mesh_object(oid, node))
     else:
         names = [n.get("name") for n in nodes]
@@ -589,7 +595,7 @@ def import_gltf_parts(path, *, ref=None, inline=False, node=None, camera=None, l
             params = _primitive_node(n)
             if params is not None:
                 obj = _primitive_object(doc, k, world[k], params)
-                obj = {"id": _unique(_node_id(n.get("name"), k, "node"), taken), **obj}
+                obj = {"id": _unique(object_base(n.get("name"), k), taken), **obj}
                 objects.append(obj)
                 continue
             if "mesh" not in n or any(j in emitted for j in _ancestors(doc, k)):
@@ -598,7 +604,7 @@ def import_gltf_parts(path, *, ref=None, inline=False, node=None, camera=None, l
             unique = isinstance(name, str) and name != "" and names.count(name) == 1
             selection = name if unique else k
             try:
-                obj = mesh_object(_unique(_node_id(name, k, "node"), set(taken)), selection)
+                obj = mesh_object(_unique(object_base(name, k), set(taken)), selection)
             except SceneError as exc:
                 if exc.field == "node":       # a mesh node with points / lines only
                     continue

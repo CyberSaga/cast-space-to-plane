@@ -1878,6 +1878,48 @@ unordered world pairs with equal `silhouette` / `back` flags and `segment` endpo
   `mesh_scale_A` instead of recomputing it. The §5.2.1 usable-face guard is `meshprep.has_usable_face(vertices, faces,
   scale, weld_tolerance)` (steps 2–3 on `scale · vertices`), so `scene.py` keeps no numpy import. The §5.2.4 ray
   selection reuses the edge-silhouette mask the shadow record already computed (receiver-clipped or not).
+- **[decision, implementation] (M5 part 2) Unreadable mesh files are `OSError`s.** §5.2.1 lists a missing / unreadable
+  file among the loader errors re-raised as `SceneError(objects[i].path)`, §5.0.2 (the later, unified rule shared with
+  M8) says an unreadable file is an `OSError` (CLI exit 1). §5.0.2 is followed: `expand_mesh_object` re-raises the
+  `OSError` of the same class with the message `objects[i].path: <reason>`, so the field is still named; parse errors,
+  unsupported features and empty selections are `SceneError(objects[i].path, "<loader field>: <message>")` (OBJ loader
+  fields are `line N`, glTF loader fields the glTF JSON path), a failed `node` selection `SceneError(objects[i].node)`.
+- **[decision, implementation] (M5 part 2) Two-light glTF imports before M6.** This branch predates M6, so
+  `validate_scene` still applies the v1 "exactly one light" row: `castplane import` of a file with ≥ 2 lights emits
+  every light as §5.2.8 says, but its validation check fails with `lights` (exit 2, nothing written) until M6 is merged;
+  `--light NAME` imports one light. The re-load tests branch on `validate_scene` accepting two lights (they assert
+  the `lights` failure before M6 and the two re-loaded lights after it), so they need no edit at the M6 merge.
+- **[decision, implementation] (M5 part 2) glTF importer details.** (1) A node selection is a subtree (§5.2.1), so a
+  mesh node whose ancestor is already emitted as a mesh object is not emitted again (only the topmost mesh node of a
+  branch becomes an object; its object then holds the descendants' meshes) — otherwise the geometry would be imported
+  twice. A mesh node whose primitives are all points / lines is skipped. (2) A string `node` that matches no node name
+  but a mesh name selects the first node (traversal order) instantiating that mesh, that node alone. (3) `--node`
+  emits one mesh object for that selection (the given value; all digits = index); `--id` renames the object only when
+  the import yields exactly one object (else a usage `SceneError("--id")`). (4) Ids: empty names → `node<k>` /
+  `light<k>` with `k` the **node** index; `sun` is the id of the default light; object ids are de-duplicated against
+  the receiver id `ground` (and, with `--into`, against the scene's object ids); the reserved ids of §5.0.1 are applied
+  to objects as well (`hidden` → `hidden_object`, `core` → `core_object` when the output has ≥ 2 lights). (5) The
+  uniform scale `s` of an `extras.castplane` node is the mean column norm of its world matrix, taken as exactly 1 when
+  `|s − 1| ≤ 1e-12`, so an unscaled node keeps its parameters verbatim (a rotation's column norms are 1 ± 1 ulp).
+  (6) `meta.import_notes` is always written (an empty list when there is no note); with `--into` an existing `meta`
+  object is copied and gets the `import_notes` key. (7) `IMPORT_NOTE_CODES` is a dict code → default message (the
+  shape of `errors.WARNING_CODES`); M8 adds its `STEP_*` codes to it. (8) Reading: an accessor without `bufferView` is
+  zeros (glTF §3.6.2.1); `extensionsRequired` naming Draco, meshopt or mesh quantization is an error, other required
+  extensions (materials, textures) are ignored; strips use the glTF rule `(i, i+2, i+1)` for odd `i` (the same cyclic
+  triangle as "swapped"). The API adds `gltf.import_gltf_parts` (the pieces before the defaults, used by `--into`) next
+  to `import_gltf_scene`.
+- **[decision, implementation] (M5 part 2) `castplane import` details.** The validation check runs on the assembled
+  scene with the imported meshes' `data` filled in and, with `--into`, the SCENE's own objects expanded relative to the
+  SCENE's directory; the written raw scene copies the SCENE's objects verbatim (their relative paths stay relative to
+  the SCENE's directory, so the output should be written next to it). An OBJ selection (`node`) drops the unused
+  vertices (file order kept); a `.step` / `.stp` FILE is a usage `SceneError` until M8 registers its loader. Conformance:
+  the three mesh cases were generated on this pre-M4 branch with `--case`, so their CHANGELOG entry is numbered v4
+  here and carries a note that it becomes the M5 v5 entry at the merge (§5.0.8 rule 1).
+- **[decision, implementation] (M5 part 2) `tests/test_property.py`.** `test_vertices_above_the_light_only_warn`
+  asserted "some vertex below and some above the light ⇒ an unbounded outline" over the whole scene; hypothesis (which
+  mines constants from the imported modules, so the new `castplane/io` modules changed its draws) generated two
+  separate boxes, one wholly below and one wholly above the light, for which no outline is unbounded. The predicate is
+  now evaluated per object (one object straddling the light height), which is what the spec §5.7 row 4 statement means.
 
 ### 5.3 M6 — multiple lights (amendment to §2.0, §2.3, §2.5–2.10, §3, §3.1, §4)
 

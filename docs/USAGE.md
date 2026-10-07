@@ -14,6 +14,9 @@ castplane [--version] <command> ...
 | `castplane validate SCENE [-q]` | 只驗證場景檔，印出物件、光源、受影面數量 |
 | `castplane info SCENE [--camera JSON]` | 印出物件清單、畫布、主點、地平線 v_mm、三個消失點（軸平行畫面時印 `at infinity (axis parallel to the picture plane)`，表示該方向的線在畫面上仍平行）、L′、F′（在無窮遠時印 `at infinity, direction (…)`）、點／邊／影子／作圖線數量、自我驗證最大誤差、受影面清單（M4：有界／無界、平面、各光源的 `lit` / `casts`）與警告表 |
 | `castplane stages SCENE [--camera JSON] [-o FILE] [-q]` | 把 A 段與 B 段的中間結果以標準 JSON（`{"A": …, "B": …}`）寫到 FILE 或 stdout，除錯與移植對照用 |
+| `castplane import FILE [-o OUT.json] [--into SCENE] [--id ID] [-q] [網格選項]` | 把網格檔（OBJ、glTF / GLB、STL、PLY）匯入成場景檔（M5，見下方「`castplane import`」） |
+
+`render` / `validate` / `stages` / `info` 都以 `castplane.io.load_expanded_scene` 讀場景：帶 `path` 的 `mesh` 物件先依場景檔所在目錄讀檔、展開成內嵌的 `data`，再做驗證（合約 §5.0.2）。展開時的匯入備註以 `note: <CODE> ['id', …]: message` 印到 stderr（`-q` 不印），**不會**寫進輸出文件的 `warnings`。
 
 ### `render` 選項
 
@@ -37,7 +40,7 @@ castplane [--version] <command> ...
 | 0 | 成功 |
 | 1 | 檔案錯誤（場景檔讀不到、輸出目錄寫不了） |
 | 2 | 輸入無效：`SceneError`（訊息含 JSON 欄位路徑，例如 `error: objects[1].radius: must be > 0`）、`--formats` / `--layers` 有未知項目，或命令列用法錯誤（argparse 慣例） |
-| 3 | 缺少選用相依套件：要求 PNG 但沒有 cairosvg 也沒有 resvg（`pip install 'castplane[png]'`）。此時**不寫任何檔案**，同一次要求的 SVG / JSON 也不寫 |
+| 3 | 缺少選用相依套件：要求 PNG 但沒有 cairosvg 也沒有 resvg（`pip install 'castplane[png]'`）。此時**不寫任何檔案**，同一次要求的 SVG / JSON 也不寫。讀 STL / PLY 網格但沒有 trimesh（`pip install 'castplane[mesh]'`）也是 3 |
 
 ### 範例
 
@@ -49,6 +52,66 @@ castplane stages examples/basic.json | python3 -c "import json,sys; d=json.load(
 castplane render examples/wall_and_ground.json -o out --hidden-lines              # M4：地面 + 牆面，隱藏線畫成虛線
 castplane render examples/wall_and_ground.json -o out --hidden-lines --hidden-style omit
 ```
+
+### `castplane import`（M5 網格匯入，合約 §5.0.2、§5.2.8）
+
+```
+castplane import FILE [-o OUT.json] [--into SCENE] [--id ID] [-q]
+                 [--inline] [--node NAME|INDEX] [--camera NAME] [--light NAME]
+                 [--scale S] [--weld TOL] [--smooth-angle DEG] [--up y|z]
+```
+
+依副檔名分派：`.obj` 用內建的 OBJ 解析器、`.gltf` / `.glb` 用內建的 glTF 2.0 讀取器、`.stl` / `.ply`（以及 trimesh 認得的其他格式）用選用的 trimesh（`pip install 'castplane[mesh]'`，只讀原始頂點與面，`process=False`）。寫出的是一個完整、可直接渲染的 spec §4 場景（`json.dumps(sort_keys=True, indent=1, ensure_ascii=False)`），寫出前先跑一次 `validate_scene` 當檢查。
+
+| 選項 | 說明 |
+| --- | --- |
+| `-o, --output OUT.json` | 寫到這個檔（預設 stdout）；成功時印出路徑 |
+| `--into SCENE` | 把匯入的物件**附加**到 SCENE 原本的 `objects` 之後，SCENE 的 `version` / `units` / `up` / `lights` / `receivers` / `camera` / `output` 與未知鍵逐字照抄（檔案裡的相機、光源此時不用）；id 與既有物件重複時加 `_2`、`_3`… |
+| `--id ID` | 物件 id，預設為檔名主幹（`[A-Za-z0-9_-]` 以外的字元換成 `_`）；glTF 只在匯入結果恰好一個物件時可用（用 `--node` 選一個） |
+| `--inline` | 把幾何以 `data` 內嵌進場景，而不是寫 `path` |
+| `--node NAME\|INDEX` | 只匯入一個 glTF 節點（及其子樹）或一個 OBJ 的 `o` / `g` 名稱；全為數字時視為索引 |
+| `--camera NAME` / `--light NAME` | glTF：用這個節點的相機／只保留這盞光 |
+| `--scale S` | 檔案單位 → 公尺，寫成物件的 `scale`。在焊接**之前**套用：毫米檔要 `--scale 0.001`，否則預設 1e-6 m 的焊接容差等於 1e-9 檔案單位，接縫焊不起來 |
+| `--weld TOL`、`--smooth-angle DEG` | 寫成物件的 `weld_tolerance`（公尺，預設 1e-6）與 `smooth_angle_deg`（預設 30） |
+| `--up y\|z` | OBJ / STL / PLY 檔的上方軸（寫成物件的 `up`）；glTF 一律是 Y-up，給 `--up` 是用法錯誤 |
+| `-q, --quiet` | 不印路徑與備註 |
+
+輸出規則：網格物件以**相對於輸出檔所在目錄**的 POSIX 路徑引用 FILE（輸出到 stdout 時相對於目前目錄），或以 `--inline` 內嵌。OBJ / STL / PLY 匯入成一個 `mesh` 物件，相機與光源用預設值。glTF 的對應（合約 §5.2.8）：每個網格節點 → 一個 `mesh` 物件，`node` 寫節點名稱（名稱非空且在檔案中唯一時）否則寫節點索引，世界變換由載入器烘焙；節點的 `extras.castplane = {"type": "box" | "cylinder" | …, 參數}` → 該基元物件（參數為 castplane 局部慣例、公尺，局部 Z 朝上 = 節點局部 +Y，只接受均勻且為正的節點縮放）；透視相機 → `focal_length_mm = 12 / tan(yfov/2)`、片幅 `[24·aspectRatio, 24]`、畫布 `[240·aspectRatio, 240]`、`near_m = znear`、滾轉角由相機 up 向量求得；`KHR_lights_punctual` 的每一盞光都輸出（點光 → 點光、平行光 → 指向光源的方向、聚光燈 → 位置相同的點光）。沒有相機時用包圍盒預設相機（看向包圍盒中心、35 mm、36×24 片幅、360×240 畫布），沒有光源時用預設平行光 `[-0.5, -0.5, 0.7071067811865476]`（id `sun`）；受影面固定為地面。
+
+匯入備註（`castplane.io.IMPORT_NOTE_CODES`；寫進場景的 `meta.import_notes` 並以 `note:` 印到 stderr，不是 §3 的警告）：
+
+| 代碼 | 時機 |
+| --- | --- |
+| `IMPORT_SPOT_AS_POINT` | 聚光燈以點光匯入（ids：光源 id） |
+| `IMPORT_CAMERA_DROPPED` | 檔案有多台相機，只用遍歷順序第一台（或 `--camera` 指定的）；ids：丟掉的相機節點 |
+| `IMPORT_NO_CAMERA_DEFAULT` | 檔案沒有相機，用包圍盒預設相機 |
+| `IMPORT_NO_LIGHT_DEFAULT` | 檔案沒有光源，用預設平行光 |
+
+結束碼同上：0 成功；1 讀不到 FILE / SCENE 或寫不了輸出；2 `SceneError`（glTF 的錯誤欄位是 glTF JSON 路徑，例如 `error: nodes[3].scale: …`）、用法錯誤、或組好的場景驗證失敗（此時不寫檔）；3 缺 trimesh。在 M6 合併之前，場景驗證仍是 v1 的「恰好一盞光」，所以有兩盞以上光源的 glTF 要加 `--light NAME` 才能寫出。
+
+```sh
+castplane import tests/fixtures/meshes/box_split.obj -o scene.json
+castplane import tests/fixtures/meshes/import_scene.gltf -o scene.json --light Lamp
+castplane import tests/fixtures/meshes/box.glb --inline --into examples/basic.json -o with_box.json
+castplane import tests/fixtures/meshes/features.obj --node walls --scale 0.5 -o walls.json
+```
+
+### 場景 JSON 的 `mesh` 物件（合約 §5.2.1）
+
+| 鍵 | 規則 |
+| --- | --- |
+| `type` | `"mesh"` |
+| `path` | 非空字串：網格檔路徑，相對路徑以場景檔所在目錄為準（給 dict 時以目前工作目錄為準）。只有 `path` 的物件必須先展開（`castplane.io.expand_scene` 或 CLI）；`castplane.load_scene` 對它回報 `objects[i].path`「mesh file must be expanded first」。展開後 `path` 原樣保留、只供參考 |
+| `data` | 內嵌幾何 `{"vertices": [[x, y, z], …] (≥ 3), "faces": [[i, j, k, …], …] (≥ 1，每個 ≥ 3 個索引), "smooth_groups": [g, …] (選用，每面一個非負整數，0 = 無群組)}`。`path` 與 `data` 至少一個；兩者都有視為已展開（用 `data`） |
+| `node` | 選用：字串或非負整數。glTF：深度優先遍歷中第一個同名節點（含子樹），找不到再找同名網格；整數為 `nodes[k]`。OBJ：`o` / `g` 名稱，整數為第 k 個不同名稱 |
+| `up` | 選用：`"z"`（預設）或 `"y"`；`"y"` 以精確軸映射 `(x, y, z) ↦ (x, −z, y)` 轉成 Z-up。glTF 檔一律是 Y-up，配 `up` 是錯誤（`objects[i].up`） |
+| `scale` | 選用：> 0，預設 1；乘在局部頂點上（檔案單位 → 公尺），在焊接之前 |
+| `weld_tolerance` | 選用：≥ 0，預設 1e-6（公尺，縮放之後） |
+| `smooth_angle_deg` | 選用：[0, 180]，預設 30；相鄰面法線夾角小於它（且平滑群組相同）的邊是平滑邊，只在成為相機輪廓時才畫 |
+| `transform` | 同其他物件（`scale` 鍵不在 `transform` 裡，用物件的 `scale`） |
+| 上限 | 面數、頂點數各 ≤ 50 000；焊接並移除退化面後至少要剩一個面（`objects[i].data.faces` / 檔案來源為 `objects[i].path`：「no usable face」） |
+
+`mesh` 物件的 `edges[]` 多兩個鍵：`smooth`（與相機無關）與 `camera_silhouette`（與相機有關）。非流形網格（例如缺一個面）發 `MESH_NON_MANIFOLD` 並改用逐面影子（第 3 節）。
 
 ## 2. Python API
 
