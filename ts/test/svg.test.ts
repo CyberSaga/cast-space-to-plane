@@ -4,10 +4,11 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
+import { dumps } from "../src/output/geometry_json.js";
 import { LAYER_ORDER, STYLE, fmt, write_svg } from "../src/output/svg.js";
 import { render } from "../src/pipeline.js";
 import { load_scene } from "../src/scene.js";
-import { read_json, repo_path } from "./helpers.js";
+import { read_example, read_json, repo_path } from "./helpers.js";
 
 test("fmt table (contract §5.4.6)", () => {
   const table: [number, string][] = [
@@ -164,3 +165,70 @@ test("a sphere off the camera axis: the outline ellipse matches the Python refer
   assert.ok(Math.abs(ell.rx - 17.381912899640614) <= 1e-9 && Math.abs(ell.ry - 17.361112474632982) <= 1e-9);
   assert.ok(out.svg.includes('<ellipse cx="197.1021" cy="118.6025" rx="17.3819" ry="17.3611" transform="rotate(-4.6716 197.1021 118.6025)"/>'));
 });
+
+// --- review fix m6-umbra#1: light ids `shadow` / `foot` keep their labels (names parsed from the right) ----------------
+
+function label_texts(scene: any): string[] {
+  const doc = render(load_scene(scene)).geometry;
+  return [...write_svg(doc, ["labels"]).matchAll(/>([^<]*)<\/text>/g)].map((m) => m[1] as string).sort();
+}
+
+function wall_two_lights(): any {
+  const s = read_example("wall_and_ground.json");
+  const extra = JSON.parse(JSON.stringify(s.lights[0]));
+  extra.id = "second";
+  extra.position = extra.position.map((p: number, k: number) => p + ([0.7, -0.4, 0.3][k] as number));
+  s.lights.push(extra);
+  return s;
+}
+
+const LABEL_BASES: Record<string, () => any> = {
+  curved: () => read_json(repo_path("tests", "conformance", "cases", "multilight_point_and_directional_curved.json")),
+  basic: () => read_example("basic.json"),
+  wall: () => read_example("wall_and_ground.json"),
+  wall2: wall_two_lights,
+};
+
+for (const [make, base] of Object.entries(LABEL_BASES)) {
+  for (const reserved of ["shadow", "foot"]) {
+    test(`light id '${reserved}' keeps its labels (${make}; §5.0.4 / §5.3.11)`, () => {
+      const labels = (lid: string): string[] => {
+        const s = base();
+        s.lights[0].id = lid;
+        return label_texts(s);
+      };
+      const plain = labels("lampA");
+      assert.ok(plain.some((t) => t.includes("lampA")));
+      assert.deepEqual(labels(reserved), plain.map((t) => t.split("lampA").join(reserved)).sort());
+    });
+  }
+}
+
+// --- review fix m4-hidden#0: the construction layer follows receivers[] order, not per_receiver key order ------------
+
+function wall_and_panel(n_lights: number): any {
+  const s = read_example("wall_and_ground.json");
+  s.receivers.push({ id: "panel", type: "plane", normal: [0, -1, 0], offset: 3.5,
+    bounds: [[1.0, 3.5, 0.0], [2.5, 3.5, 0.0], [2.5, 3.5, 1.0], [1.0, 3.5, 1.0]] });
+  if (n_lights === 2) {
+    const extra = JSON.parse(JSON.stringify(s.lights[0]));
+    extra.id = "zz_second";
+    extra.position = extra.position.map((p: number, k: number) => p + ([0.9, -0.6, 0.4][k] as number));
+    s.lights.push(extra);
+  }
+  return s;
+}
+
+for (const hidden of [false, true]) {
+  for (const n_lights of [1, 2]) {
+    test(`the construction layer is independent of the per_receiver key order (hidden=${hidden}, lights=${n_lights})`, () => {
+      const scene = wall_and_panel(n_lights);
+      assert.deepEqual(scene.receivers.slice(1).map((r: any) => r.id), ["wall", "panel"]);
+      const doc = render(load_scene(scene), null, hidden).geometry;
+      const direct = write_svg(doc);
+      assert.ok(direct.includes("F′wall") && direct.includes("F′panel"));
+      assert.ok(direct.indexOf("F′wall") < direct.indexOf("F′panel"));
+      assert.equal(write_svg(JSON.parse(dumps(doc))), direct);
+    });
+  }
+}

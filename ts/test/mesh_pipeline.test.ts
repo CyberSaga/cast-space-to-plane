@@ -9,7 +9,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
-import { sphere_mesh } from "../src/mesh.js";
+import { prism_mesh, sphere_mesh } from "../src/mesh.js";
 import { dumps } from "../src/output/geometry_json.js";
 import { compose, project_scene, render, shadow_geometry } from "../src/pipeline.js";
 import { build_object, local_mesh, point_inside_solid, prepared_mesh } from "../src/primitives.js";
@@ -513,4 +513,96 @@ test("a buried manifold mesh selects the parametric box's rays on the clipped lo
   assert.ok(doc.construction.rays.length > 0);
   assert.deepEqual(doc.construction.rays, ref.construction.rays);
   assert.equal(dumps(strip_mesh_keys(doc)), dumps(ref));
+});
+
+// --- review fix m5-mesh#0: ground contact within the weld tolerance (port of tests/test_mesh_pipeline.py) ----------
+
+const L_POLY = [[-1, -1], [1, -1], [1, 0], [0, 0], [0, 1], [-1, 1]];
+
+/** A concave L prism (height 0.7) resting on the receiver, its six bottom vertices moved by `noise` (float32 /
+ * baked-matrix import noise, far below the 1e-6 m weld tolerance but above the 1e-9 scene tolerance); lamp
+ * `(1, 0.7, 3.5)`. `floor`: a bounded default receiver. */
+function noisy_l_scene(noise: readonly number[], floor = false): any {
+  const L = prism_mesh(L_POLY, 0.7);
+  const V = L.vertices.map((v) => [...v]);
+  noise.forEach((dz, k) => {
+    (V[k] as number[])[2] = dz;
+  });
+  const scene = analytic_box_scene();
+  scene.lights[0].position = [1.0, 0.7, 3.5];
+  scene.objects = [{ id: "m", type: "mesh", data: { vertices: V, faces: L.faces.map((f) => [...f]) } }];
+  if (floor) {
+    scene.receivers = [{ id: "floor", type: "plane", normal: [0, 0, 1], offset: 0, bounds: [[-6, -6, 0], [6, -6, 0], [6, 6, 0], [-6, 6, 0]] }];
+  }
+  return scene;
+}
+
+/** The noise vectors of the Python test: `np.random.default_rng(seed).uniform(-5e-8, 5e-8, 6)` for the seeds 15, 2, 11,
+ * 19 (values copied) and the deterministic case (two reflex-side bottom vertices at -1e-7). */
+const NOISE: Record<string, number[]> = {
+  15: [1.9274336796515233e-08, 3.1581711133605744e-08, -1.555932422071433e-08, -4.5516182430958115e-08, 7.1597257033730965e-09,
+    -3.5375457327640246e-08],
+  2: [-2.383878657506836e-08, -2.015088565858767e-08, 3.1422574059428036e-08, -4.0808405786490305e-08, 1.0010052596565396e-08,
+    2.2856052681179456e-08],
+  11: [-3.714297972308004e-08, -7.221375598850645e-11, 1.0149835762335746e-08, -4.7131099162805545e-08, -3.520739154225441e-08,
+    4.282110229603695e-08],
+  19: [-7.962120427073913e-09, 4.258693448167036e-08, -2.261300121017179e-08, -4.3995139587747334e-08, -1.8945654168688807e-08,
+    2.18185257872077e-08],
+  det: [0.0, 0.0, 0.0, -1e-7, 0.0, -1e-7],
+};
+
+/** Nonzero-rule raster of the finite ground loops of a document on the grid `xs × xs`. */
+function ground_mask(doc: any, xs: readonly number[]): boolean[] {
+  const polys: number[][][] = doc.shadows.flatMap((s: any) => s.loops.map((loop: any[]) =>
+    loop.map((e: any) => doc.points[e].world as number[])));
+  const out: boolean[] = [];
+  for (const y of xs) {
+    for (const x of xs) {
+      let w = 0;
+      for (const poly of polys) {
+        for (let k = 0; k < poly.length; k++) {
+          const a = poly[k] as number[], b = poly[(k + 1) % poly.length] as number[];
+          const side = ((b[0] as number) - (a[0] as number)) * (y - (a[1] as number)) - (x - (a[0] as number)) * ((b[1] as number) - (a[1] as number));
+          if ((a[1] as number) <= y && (b[1] as number) > y && side > 0) w++;
+          else if ((a[1] as number) > y && (b[1] as number) <= y && side < 0) w--;
+        }
+      }
+      out.push(w !== 0);
+    }
+  }
+  return out;
+}
+
+for (const floor of [false, true]) {
+  for (const seed of Object.keys(NOISE)) {
+    test(`noisy ground contact of a concave mesh keeps the clean outline (seed ${seed}, ${floor ? "bounded-floor" : "ground"})`, () => {
+      const clean = doc_of(noisy_l_scene([0, 0, 0, 0, 0, 0], floor));
+      const doc = doc_of(noisy_l_scene(NOISE[seed] as number[], floor));
+      assert.deepEqual(warning_set(doc), warning_set(clean));
+      assert.ok(!warning_set(doc).includes("OBJECT_BELOW_RECEIVER:m"));
+      assert.equal(doc.shadows.length, 1);
+      assert.equal(clean.shadows.length, 1);
+      const sc = clean.shadows[0], sn = doc.shadows[0];
+      assert.deepEqual(sn.outline, sc.outline);
+      assert.deepEqual(sn.loops.map((l: any[]) => l.length), sc.loops.map((l: any[]) => l.length));
+      for (const name of sn.outline) close(doc.points[name].world, clean.points[name].world, 1e-6, name);
+      if (!floor) {
+        const xs = Array.from({ length: 321 }, (_x, i) => -4.0 + (8.0 * i) / 320 + 0.0037);
+        const [a, b] = [ground_mask(clean, xs), ground_mask(doc, xs)];
+        let inter = 0, union = 0;
+        a.forEach((v, i) => {
+          if (v && b[i]) inter++;
+          if (v || b[i]) union++;
+        });
+        assert.ok(union > 0);
+        assert.equal(inter / union, 1.0);
+      }
+    });
+  }
+}
+
+test("the contact tolerance does not reach a buried mesh", () => {
+  const doc = doc_of(noisy_l_scene([-0.2, -0.2, -0.2, -0.2, -0.2, -0.2]));
+  assert.ok(warning_set(doc).includes("OBJECT_BELOW_RECEIVER:m"));
+  assert.ok(doc.shadows[0].outline.some((n: string) => n.startsWith("m.s")));
 });

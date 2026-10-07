@@ -32,9 +32,11 @@ function pick(o: any, keys: string[]): any {
 }
 
 /** The camera-free blocks of a document (contract §5.4.7 / §5.0.3, see the implementation notes of §5.4 for
- * the shadow conic entries: `conic` is the image of the ground conic under `P M E` and is left out; `kind` and `arc`
- * are camera dependent only in principle and are equal for the five examples and the test camera). */
-function camera_free(doc: any, rays = true): string {
+ * the shadow conic entries: `conic` is the image of the ground conic under `P M E` and is left out). The `conics[]`
+ * entries of an object in `no_conics` are left out (final review: §2.6 near-clips `arc` and stage B drops an arc wholly
+ * behind the near plane, so the entry list is camera-free only for objects that warn `POINT_BEHIND_CAMERA` in neither
+ * render, §5.0.3 / §5.4.7). */
+function camera_free(doc: any, rays = true, no_conics: ReadonlySet<string> = new Set()): string {
   const points: any = {};
   for (const name of Object.keys(doc.points)) {
     if (OG.test(name)) continue;
@@ -47,7 +49,7 @@ function camera_free(doc: any, rays = true): string {
     edges: doc.edges.map((e: any) => pick(e, ["object", "from", "to", "silhouette", "silhouette_lights", "smooth"])),
     shadows: doc.shadows.map((s: any) => ({
       ...pick(s, ["light", "receiver", "object", "outline", "loops", "unbounded"]),
-      conics: s.conics.map((c: any) => pick(c, ["kind", "arc", "circle", "map", "which"])),
+      conics: no_conics.has(s.object) ? null : s.conics.map((c: any) => pick(c, ["kind", "arc", "circle", "map", "which"])),
     })),
     form_shadow: doc.form_shadow.map((f: any) => ({
       ...pick(f, ["object", "faces", "light"]),
@@ -74,6 +76,36 @@ function camera_free(doc: any, rays = true): string {
 
 const rays_camera_free = (...docs: any[]): boolean =>
   !docs.some((d) => d.warnings.some((w: any) => w.code === "POINT_BEHIND_CAMERA"));
+
+/** The objects some render warns `POINT_BEHIND_CAMERA` for: their `conics[]` entries are compared by index only when
+ * neither render warns for them (and the lists then have the same length). */
+const behind_objects = (...docs: any[]): Set<string> =>
+  new Set(docs.flatMap((d) => d.warnings.filter((w: any) => w.code === "POINT_BEHIND_CAMERA").flatMap((w: any) => w.ids as string[])));
+
+/** A camera inside the construction (near plane through the drum / pillar): drops or near-cuts conics. */
+function degenerate_camera(scene: any): any {
+  return camera_override(scene.camera, [0.0, 3.0, 0.4], [3.0, 3.0, 0.4], 3.0);
+}
+
+for (const file of ["curved_demo.json", "basic.json"]) {
+  test(`camera-free conic fields need an object in front of the near plane: ${file} (final review)`, () => {
+    const scene = load_scene(read_example(file));
+    const d1 = render(scene).geometry as any;
+    const d2 = render(scene, degenerate_camera(scene)).geometry as any;
+    const behind = behind_objects(d1, d2);
+    const fields = ["kind", "arc", "circle", "map", "which"];
+    const changed = new Set<string>();
+    d1.shadows.forEach((s1: any, k: number) => {
+      const s2 = d2.shadows[k];
+      assert.deepEqual([s1.object, s1.light, s1.receiver], [s2.object, s2.light, s2.receiver]);
+      const same = s1.conics.length === s2.conics.length && s1.conics.every((c1: any, i: number) =>
+        fields.every((f) => dumps(c1[f] ?? null) === dumps(s2.conics[i][f] ?? null)));
+      if (!same) changed.add(s1.object);
+    });
+    assert.ok(changed.size > 0, "the degenerate camera must change some conic entry list");
+    for (const o of changed) assert.ok(behind.has(o), `${o} changed without POINT_BEHIND_CAMERA`);
+  });
+}
 
 test("rays are camera-dependent when a point is behind the camera (§5.1.5 nu >= 0 rule; part 1 review)", () => {
   const scene = load_scene(read_json(repo_path("tests", "conformance", "cases", "receiver_unlit_wall.json")));
@@ -120,7 +152,8 @@ for (const file of examples) {
     const k1 = Object.keys(d1.points).filter((n) => !OG.test(n)).sort();
     const k2 = Object.keys(d2.points).filter((n) => !OG.test(n)).sort();
     assert.deepEqual(k1, k2);
-    assert.equal(camera_free(d1, rays_camera_free(d1, d2)), camera_free(d2, rays_camera_free(d1, d2)));
+    const behind = behind_objects(d1, d2);
+    assert.equal(camera_free(d1, rays_camera_free(d1, d2), behind), camera_free(d2, rays_camera_free(d1, d2), behind));
     assert.notEqual(dumps(d1.camera), dumps(d2.camera));
   });
 

@@ -12,13 +12,18 @@ import type { Mesh } from "../src/mesh.js";
 import {
   COPLANAR_TOL_RAD, INSIDE_WINDING, MESH_MAX_RAYS, SMOOTH_ANGLE_DEFAULT, SMOOTH_BAND, WELD_TOLERANCE_DEFAULT, build_adjacency,
   classify_edges, compact_vertices, drop_degenerate_faces, fallback_mesh, fix_orientation, has_usable_face, inherit_edge_smooth,
-  merge_coplanar, mesh_scale, point_inside_mesh, preprocess_mesh, signed_volume, triangulate, weld_map, weld_vertices, winding_number,
+  merge_coplanar, mesh_scale, point_inside_mesh, preprocess_mesh, signed_volume, triangulate, used_vertices, weld_map, weld_vertices,
+  winding_number,
 } from "../src/meshprep.js";
 import type { PrepResult } from "../src/meshprep.js";
+import { dumps } from "../src/output/geometry_json.js";
+import { render } from "../src/pipeline.js";
+import { load_scene } from "../src/scene.js";
 import { clip_mesh_to_plane } from "../src/shadow.js";
 import type { Origin } from "../src/shadow.js";
 
 import { CUBE_F, CUBE_V, SPLIT_F, SPLIT_V } from "./mesh_fixtures.js";
+import { read_json, repo_path } from "./helpers.js";
 
 function prep(vertices: number[][], faces: number[][], groups: number[] | null = null, scale = 1.0, weld = WELD_TOLERANCE_DEFAULT,
   smooth = SMOOTH_ANGLE_DEFAULT): PrepResult {
@@ -568,3 +573,28 @@ test("has_usable_face is the validation guard", () => {
   assert.ok(!has_usable_face(CUBE_V, CUBE_F, 1.0, 10.0)); // every face collapses
   assert.ok(!has_usable_face([[0, 0, 0], [1, 0, 0], [2, 1e-14, 0]], [[0, 1, 2]], 1.0, 0.0)); // a sliver below 1e-12
 });
+
+// --- review fix m5-mesh#1: scale_A from the vertices used by a face (port of tests/test_meshprep.py) -----------------
+
+test("used_vertices keeps the rows referenced by a face, in input order", () => {
+  assert.deepEqual(used_vertices([[0, 0, 0], [9, 9, 9], [1, 0, 0], [0, 1, 0]], [[3, 0, 2]]), [[0, 0, 0], [1, 0, 0], [0, 1, 0]]);
+  assert.deepEqual(used_vertices([[0, 0, 0]], []), []);
+  assert.equal(mesh_scale(used_vertices([[0, 0, 0]], [])), 1.0);
+});
+
+for (const far of [1e6, 1e7, 1e12]) {
+  test(`an unused far vertex (${far}) does not widen scale_A`, () => {
+    const stray = [...CUBE_V.map((v) => [...v]), [far, 0.0, 0.0]];
+    const out = preprocess_mesh({ vertices: stray, faces: CUBE_F }, 1.0, 1e-6, 30.0, "m", true);
+    assert.equal(out[5], 1.0);
+    assert.deepEqual(out[4], []);
+    assert.ok(has_usable_face(stray, CUBE_F, 1.0, 1e-6));
+    const base = read_json(repo_path("tests", "conformance", "cases", "analytic_unit_box_point_light_overhead.json"));
+    const docs = [CUBE_V, stray].map((verts) => {
+      const sc = JSON.parse(JSON.stringify(base));
+      sc.objects = [{ id: "m", type: "mesh", data: { vertices: verts, faces: CUBE_F } }];
+      return dumps(render(load_scene(sc)).geometry);
+    });
+    assert.equal(docs[0], docs[1]);
+  });
+}

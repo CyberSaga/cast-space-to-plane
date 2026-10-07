@@ -386,3 +386,42 @@ test("record_pieces on a 2 000-edge loop (the M5 mesh case of §5.3.9)", () => {
   assert.ok(Math.abs(total(pieces) - Math.abs(area(loop))) <= 10 * TOL_AREA);
   for (let k = 0; k < pieces.length; k += 97) assert_convex_ccw(pieces[k] as P);
 });
+
+// --- review fix m6-umbra#0: zero-width intervals between coincident edges do not end a run (port of tests/test_umbra.py)
+
+function unit_grid(n: number): number[][][] {
+  const out: number[][][] = [];
+  for (let j = 0; j < n; j++) for (let i = 0; i < n; i++) out.push([[i, j], [i + 1, j], [i + 1, j + 1], [i, j + 1]]);
+  return out;
+}
+
+for (const n of [2, 8, 32]) {
+  test(`shared edges do not split the partition (${n} × ${n} grid of unit squares in one record)`, () => {
+    const loops = unit_grid(n);
+    const [pieces, sides] = record_pieces(loops, TOL_MM, TOL_AREA);
+    assert.equal(pieces.length, n);
+    assert.equal(sides.length, n);
+    assert.equal(total(pieces), n * n);
+    pieces.forEach((p, j) => assert.deepEqual(p, [[0.0, j], [n, j], [n, j + 1.0], [0.0, j + 1.0]]));
+    const umbra = umbra_pieces([[loops], [loops]], CANVAS);
+    assert.equal(umbra.length, n);
+    assert.equal(total(umbra), n * n);
+  });
+}
+
+test("a triangle-soup square is one piece", () => {
+  const tris = [[[0, 0], [1, 0], [1, 1]], [[0, 0], [1, 1], [0, 1]]];
+  for (const loops of [tris, [...tris].reverse()]) {
+    const [pieces] = record_pieces(loops, TOL_MM, TOL_AREA);
+    assert.deepEqual(pieces, [[[0.0, 0.0], [1.0, 0.0], [1.0, 1.0], [0.0, 1.0]]]);
+  }
+});
+
+test("separate regions are not bridged; squares touching along an edge become one", () => {
+  const a = [[0, 0], [1, 0], [1, 1], [0, 1]];
+  const far = [[1 + 1e-3, 0], [2, 0], [2, 1], [1 + 1e-3, 1]];
+  const touch = [[1, 0], [2, 0], [2, 1], [1, 1]];
+  assert.equal(record_pieces([a, far], TOL_MM, TOL_AREA)[0].length, 2);
+  const [pieces] = record_pieces([a, touch], TOL_MM, TOL_AREA);
+  assert.deepEqual(pieces, [[[0.0, 0.0], [2.0, 0.0], [2.0, 1.0], [0.0, 1.0]]]);
+});
