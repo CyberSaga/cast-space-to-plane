@@ -858,15 +858,22 @@ def _curved_pairs(doc: dict, B: dict):
             yield "conic", c_doc, a
     terms = {}
     for entry in doc.get("form_shadow", []):
-        if entry.get("terminator") and entry["object"] not in terms:
-            terms[entry["object"]] = entry
+        # M6 (contract §5.3.3): a multi-light document has one entry per (light, curved object), keyed by
+        # its ``light``; a single-light entry has no ``light`` key (key ``None``)
+        key = (entry["object"], entry.get("light"))
+        if entry.get("terminator") and key not in terms:
+            terms[key] = entry
+    multi = "constructions" in doc
     for rec in curved:
-        items = [it for its in rec.get("terminator", {}).values() for it in its]
-        entry = terms.get(rec["id"])
-        if entry is None:
-            continue
-        for t_doc, it in zip(entry["terminator"], items):
-            yield ("terminator_segment" if "segment" in it else "conic"), t_doc, it
+        if multi:
+            pairs = [(terms.get((rec["id"], lid)), its) for lid, its in rec.get("terminator", {}).items()]
+        else:
+            pairs = [(terms.get((rec["id"], None)), [it for its in rec.get("terminator", {}).values() for it in its])]
+        for entry, items in pairs:
+            if entry is None:
+                continue
+            for t_doc, it in zip(entry["terminator"], items):
+                yield ("terminator_segment" if "segment" in it else "conic"), t_doc, it
     by_id = {rec["id"]: rec for rec in curved}
     for sh in doc.get("shadows", []):
         rec = by_id.get(sh["object"])

@@ -124,6 +124,7 @@ from itertools import chain
 import numpy as np
 
 from . import curved as _curved
+from . import multilight as _multilight
 from .camera import (camera_matrix, clip_polygon_near, clip_polygon_rect_h, clip_segments_near,
                      clip_segments_rect_h, divide, horizon as camera_horizon, nu, project, project_polygons)
 from .conics import ellipse_arc_params, ellipse_params, sample_arc, sample_count
@@ -372,7 +373,8 @@ def shadow_geometry(scene: dict) -> dict:
             continue
         if obj["analytic"] is not None:
             # curved primitives: silhouette / terminator / shadow conics from castplane.curved (§5.6)
-            shadows.extend(_curved.stage_a_object(obj, lights, default, tol, warnings))
+            shadows.extend(_curved.stage_a_object(obj, lights, default, tol, warnings,
+                                                  multi=_multilight.is_multi(scene["lights"])))
             continue
         below = (to_homogeneous(obj["mesh"]["vertices"]) @ pi) < -tol
         obj["ground_mesh"] = None
@@ -663,7 +665,8 @@ def _shadow_records_for_receiver(rcv: dict, objects: list, receivers: list, tol:
     if rcv["bounded"]:
         for obj in objects:
             if obj["analytic"] is not None:
-                for rec in _curved.stage_a_object(obj, rcv["lights"], rcv, tol, warnings):
+                for rec in _curved.stage_a_object(obj, rcv["lights"], rcv, tol, warnings,
+                                                  multi=_multilight.is_multi(rcv["lights"])):
                     li = next(k for k, lt in enumerate(rcv["lights"]) if lt["id"] == rec["light"])
                     out.setdefault(li, []).append(rec)
                 continue
@@ -752,12 +755,25 @@ def _pad_polygons(polys: list) -> tuple:
     return pts, lens
 
 
-def _project_polyhedra(objs: list, cam: dict, tol: float, light_id) -> list:
+def _project_polyhedra(objs: list, cam: dict, tol: float, light_ids) -> list:
     """Vectorised projection and clipping of the vertices, edges and unlit faces of all polyhedral
     objects of a scene in a few batched numpy calls (contract §2.2; spec §8).  Returns one stage-B
-    record per object (views into the batched arrays)."""
+    record per object (views into the batched arrays).
+
+    M6 (contract §5.3.3): ``light_ids`` is the list of the scene's light ids (a single id is accepted).
+    With one light everything is the v1 computation.  With ``N >= 2`` ``silhouette`` is the OR over
+    the lights and ``silhouette_lights`` lists, per edge, the lights for which it is a silhouette edge;
+    the faces unlit by at least one light are projected once and split into ``form_by_light[lid] =
+    (faces, polygons)`` and ``form_core`` (faces unlit by every light) referencing the same drawables."""
     if not objs:
         return []
+    if light_ids is None:
+        light_ids = []
+    elif isinstance(light_ids, str):
+        light_ids = [light_ids]
+    light_ids = list(light_ids)
+    multi = _multilight.is_multi(light_ids)
+    light_id = light_ids[0] if light_ids else None
     meshes = [o["mesh"] for o in objs]
     n_v = np.array([m["vertices"].shape[0] for m in meshes], dtype=np.int64)
     n_e = np.array([m["edges"].shape[0] for m in meshes], dtype=np.int64)
@@ -781,8 +797,16 @@ def _project_polyhedra(objs: list, cam: dict, tol: float, light_id) -> list:
     ef = np.concatenate([m["edge_faces"] + off for m, off in zip(meshes, f_off.tolist())], axis=0)
     back = ~face_lit[ef[:, 0]] & ~face_lit[ef[:, 1]]
     ols = [o.get("lights", {}).get(light_id) for o in objs]
-    silhouette = np.concatenate([ol["edge_silhouette"] if ol is not None else np.zeros(m["edges"].shape[0], dtype=bool)
-                                 for ol, m in zip(ols, meshes)])
+    if multi:   # M6: OR over the lights, and the per-edge light lists (contract §5.3.3)
+        sil_pairs = [_multilight.silhouette_lights(
+            [None if o.get("lights", {}).get(lid) is None else o["lights"][lid]["edge_silhouette"] for lid in light_ids],
+            light_ids, m["edges"].shape[0]) for o, m in zip(objs, meshes)]
+        silhouette = np.concatenate([sp[0] for sp in sil_pairs])
+        # the padded table of the faces unlit by at least one light replaces the per-light one
+        ols = [_multilight.form_table(o, light_ids) for o in objs]
+    else:
+        silhouette = np.concatenate([ol["edge_silhouette"] if ol is not None
+                                     else np.zeros(m["edges"].shape[0], dtype=bool) for ol, m in zip(ols, meshes)])
     # drawing pipeline: near clip (4-D) -> P -> homogeneous rectangle clip -> divide (in compose)
     A, B, keep = clip_segments_near(cam, V4[edges[:, 0]], V4[edges[:, 1]])
     A2, B2 = project(cam, A), project(cam, B)
@@ -833,6 +857,11 @@ def _project_polyhedra(objs: list, cam: dict, tol: float, light_id) -> list:
             "form_faces": face_lists[p_off:p_off + c],
             "form_polygons": polygons[p_off:p_off + c],
         })
+        if multi:
+            rec = out[-1]
+            rec["silhouette_lights"] = sil_pairs[k][1]
+            rec["form_by_light"], rec["form_core"] = _multilight.split_form(
+                rec["form_faces"], rec["form_polygons"], ols[k]["masks"], ols[k]["core"], light_ids)
         p_off += c
     return out
 
@@ -928,6 +957,7 @@ def _project_shadows(records: list, cam: dict, tol: float, by_id: dict) -> tuple
     Q_uv = divide(np.where(ok[:, None], xQ, _ORIGIN_H))
     vertex_names = np.array([nm for rec in records for nm in rec["vertex_names"]], dtype=object)
     shadow_names = np.array([nm for rec in records for nm in rec["shadow_names"]], dtype=object)
+    foot_names = np.array([nm for rec in records for nm in rec["foot_names"]], dtype=object)
     ok_cum = np.concatenate([[0], np.cumsum(ok)])
     keep_cum = np.concatenate([[0], np.cumsum(keep)])
     n_ok_rec = ok_cum[offs[1:]] - ok_cum[offs[:-1]]          # ok / finite rows per record
@@ -944,7 +974,6 @@ def _project_shadows(records: list, cam: dict, tol: float, by_id: dict) -> tuple
         # the light projected for that receiver (its F'_r), keyed (light, receiver); a {light id: record}
         # map is accepted for single-receiver callers
         light = by_id[(lid, rid)] if (lid, rid) in by_id else by_id[lid]
-        foot_sfx = light.get("suffix", "")
         whole = len(rec_idx) == len(records)
         rows_ok = np.nonzero(ok)[0] if whole else \
             np.nonzero(np.concatenate([ok[offs[k]:offs[k + 1]] for k in rec_idx]))[0]
@@ -969,9 +998,10 @@ def _project_shadows(records: list, cam: dict, tol: float, by_id: dict) -> tuple
                                            (clipped[sel] + 0.0).tolist())]
             per_vertex = np.sum(kept.reshape(n_k, n_ok), axis=0)        # kept segments per ok vertex
             seg_cum = np.concatenate([[0], np.cumsum(per_vertex)])
-            # the §3.1 ``rays`` list: one ["L", name] / ["F", name.foot] pair per ok vertex
+            # the §3.1 ``rays`` list: one ["L", name] / ["F", name.foot] pair per ok vertex; the foot names are
+            # the records' ``foot_names`` (M6, contract §5.3.2: ``<base>.foot[.<r>]`` of the base names)
             names_ok_list = names_ok.tolist()
-            ray_flat = [[kind, nm if kind == "L" else f"{nm}.foot{foot_sfx}"] for nm in names_ok_list
+            ray_flat = [[kind, nm if kind == "L" else ft] for nm, ft in zip(names_ok_list, foot_names[rows_ok].tolist())
                         for kind in ray_kinds]
             pos = 0
             for k in rec_idx:
@@ -1035,23 +1065,29 @@ def _project_shadow(rec: dict, cam: dict, tol: float, light: dict) -> tuple[dict
     return out[0], warnings
 
 
-def project_scene(scene: dict, A: dict, camera=None) -> dict:
+def project_scene(scene: dict, A: dict, camera=None, umbra: bool = True) -> dict:
     """Stage B: project stage-A geometry with the scene camera or an override (contract §3).
 
     M4 (contract §5.1.5, §5.0.7): ``B["A"] = A`` (stage C reaches the camera-free geometry through it);
     ``lights`` are the projections for the default receiver, ``receiver_lights[<r>]`` those of every
     other receiver (``F'_r``); ``plates`` the projected bounded receivers (bounds points, edges, the
     unlit camera-facing face); ``construction.per_receiver[<r>]`` the rays / checks / segments of the
-    records on receiver ``r``.  ``A`` is never mutated."""
+    records on receiver ``r``.  ``A`` is never mutated.
+
+    M6 (contract §5.3.3, §5.3.4): with ``N >= 2`` lights ``constructions[<light>]`` holds one construction
+    block per light (``construction`` is the first light's, the same object), ``umbra`` one entry per
+    receiver from the stage-B drawables (``polygons`` ``None`` when ``umbra`` is false), the plates carry
+    their per-light form shadow and core.  With one light nothing changes."""
     cam_dict = _resolve_camera(scene, camera)
     canvas = scene["output"]["canvas_mm"]
     cam = camera_matrix(cam_dict, canvas)
     scale = scene_scale(A["vertices"], cam["C"])
     tol = tolerance(scale)
     warnings = list(cam["warnings"]) + list(A["warnings"])
-    light_id = A["lights"][0]["id"] if A.get("lights") else None
+    light_ids = [lt["id"] for lt in A.get("lights", [])]
+    multi = _multilight.is_multi(light_ids)
     # all polyhedral objects are projected together, and so are all curved ones (spec §8)
-    poly_recs = iter(_project_polyhedra([o for o in A["objects"] if o["analytic"] is None], cam, tol, light_id))
+    poly_recs = iter(_project_polyhedra([o for o in A["objects"] if o["analytic"] is None], cam, tol, light_ids))
     objects, curved_objs, curved_recs = [], [], []
     for obj in A["objects"]:
         if obj["analytic"] is not None:
@@ -1090,9 +1126,15 @@ def project_scene(scene: dict, A: dict, camera=None) -> dict:
         if rcv["bounded"]:
             prec, w = _plate_record(rcv, cam, tol)
             warnings.extend(w)
+            if multi:
+                _plate_multi(prec, rcv, cam, tol, light_ids)
             plates.append(prec)
     construction = None
-    if lights:
+    constructions = None
+    if multi:   # M6 (contract §5.3.3): one M4 construction block per light; construction is the alias
+        constructions = _multilight.construction_blocks(lights, receiver_lights, shadows, default_id)
+        construction = constructions[light_ids[0]]
+    elif lights:
         lt = lights[0]
         default_shadows = [s for s in shadows if s["receiver"] == default_id]
         construction = {
@@ -1115,7 +1157,7 @@ def project_scene(scene: dict, A: dict, camera=None) -> dict:
                 "checks": list(chain.from_iterable(s["checks"] for s in own)),
                 "segments": list(chain.from_iterable(s["segments"] for s in own)),
             }
-    return {
+    out = {
         "A": A,
         "camera": cam,
         "scene_scale": scale,
@@ -1130,6 +1172,36 @@ def project_scene(scene: dict, A: dict, camera=None) -> dict:
         "construction": construction,
         "warnings": merge_warnings(warnings),
     }
+    if multi:   # M6 (contract §5.3.4): the umbra of every receiver from the stage-B drawables
+        out["light_ids"] = light_ids
+        out["constructions"] = constructions
+        out["umbra"] = _multilight.umbra_entries(out["receivers"], shadows, light_ids, canvas, compute=bool(umbra))
+    return out
+
+
+def _plate_multi(prec: dict, rcv: dict, cam: dict, tol: float, light_ids: list) -> None:
+    """M6 (contract §5.1.8, §5.3.3): a bounded receiver as a one-face polyhedron under ``N >= 2`` lights --
+    ``silhouette_lights`` of its bounds edges (the lights for which it casts), its per-light form-shadow
+    entries (``form_by_light[lid]``, the single-light rule of each light) and its ``form_core`` (the camera
+    side decided and no light on it).  The face is projected once."""
+    sl = _multilight.plate_silhouette_lights(rcv["casts"], light_ids)
+    for e in prec["edges"]:
+        e["silhouette_lights"] = list(sl)
+    by_id = {lt["id"]: lt for lt in rcv["lights"]}
+    lts = [by_id[lid] for lid in light_ids if lid in by_id]
+    cam_side = float(rcv["pi"][:3] @ (np.asarray(cam["C"], dtype=np.float64) - rcv["bounds"][0]))
+    flags, core = _multilight.plate_form_lights([lt["pi_L"] for lt in lts], [lt["tol_w"] for lt in lts], cam_side, tol)
+    prec["form_by_light"], prec["form_core"] = {}, None
+    if not (any(flags) or core):
+        return
+    names = list(prec["point_names"])
+    poly = _project_polygon(cam, rcv["bounds4"])
+    polygons = [(np.asarray(poly) + 0.0).tolist()] if len(poly) >= 3 else []
+    for lt, flag in zip(lts, flags):
+        if flag:
+            prec["form_by_light"][lt["id"]] = {"faces": [names], "polygons": polygons, "terminator": []}
+    if core:
+        prec["form_core"] = {"faces": [names], "polygons": polygons}
 
 
 def _project_receiver_light(lt: dict, rcv: dict, cam: dict, tol: float) -> tuple[dict, list]:
@@ -1289,9 +1361,13 @@ def _segment_uv(seg_h, keep: bool):
     return (divide(np.asarray(seg_h)) + 0.0).tolist() if keep else None
 
 
-def _compose_curved(rec: dict, points: dict, edges: list, form_shadow: list, outlines: list) -> dict:
+def _compose_curved(rec: dict, points: dict, edges: list, form_shadow: list, outlines: list,
+                    term_by_light: dict | None = None) -> dict:
     """Stage C of a curved object: named points, outline generators / conics, terminator entries.
-    Returns ``{(light id, receiver id): [shadow conic entries]}`` for the ``shadows`` block."""
+    Returns ``{(light id, receiver id): [shadow conic entries]}`` for the ``shadows`` block.
+
+    M6 (contract §5.3.3): with ``term_by_light`` given (a multi-light document) each light's terminator
+    entries go to ``term_by_light[<light>]`` instead of one merged ``form_shadow`` entry."""
     oid = rec["id"]
     _finite_points(points, rec["point_names"], rec["world"], rec["image_h"], rec["behind"])
     generators = [{"from": e["from"], "to": e["to"], "back": False, "segment": _segment_uv(e["segment_h"], e["keep"]),
@@ -1300,7 +1376,8 @@ def _compose_curved(rec: dict, points: dict, edges: list, form_shadow: list, out
     outlines.append({"object": oid, "generators": generators,
                      "conics": [_conic_doc_entry(a, with_back=True) for a in rec["outline_arcs"]]})
     term = []
-    for items in rec["terminator"].values():
+    for lid, items in rec["terminator"].items():
+        start = len(term)
         for it in items:
             if "segment" in it:
                 seg = _segment_uv(it["segment_h"], it["keep"])
@@ -1308,7 +1385,9 @@ def _compose_curved(rec: dict, points: dict, edges: list, form_shadow: list, out
                              "visibility": "visible", "runs": []})
             else:
                 term.append(_conic_doc_entry(it))
-    if term:
+        if term_by_light is not None:
+            term_by_light[lid] = term[start:]
+    if term and term_by_light is None:
         form_shadow.append({"object": oid, "faces": [], "terminator": term, "polygons": []})
     return {key: [_conic_doc_entry(a) for a in arcs] for key, arcs in rec["shadow_arcs"].items()}
 
@@ -1326,14 +1405,22 @@ def compose(scene: dict, B: dict, hidden_lines=None) -> dict:
     points, edges, outlines = {}, [], []
     form_entries = []        # (object index, form_shadow entry): the block keeps the object order
     conics_by = {}
+    light_ids = B.get("light_ids") if "constructions" in B else None   # M6: a multi-light document
+    multi_items = {}         # M6: object index -> assemble_form_shadow item
     for k, rec in enumerate(B["objects"]):
         if rec.get("analytic"):
             # contract §2.4 / §2.10: a curved primitive contributes its outline generators, cap conics,
             # terminator and construction points, never its approximate mesh
             curved_form = []
-            for (lid, rid), entries in _compose_curved(rec, points, edges, curved_form, outlines).items():
+            term_by_light = None if light_ids is None else {}
+            for (lid, rid), entries in _compose_curved(rec, points, edges, curved_form, outlines,
+                                                       term_by_light).items():
                 conics_by[(rec["id"], lid, rid)] = entries
             form_entries.extend((k, e) for e in curved_form)
+            if light_ids is not None:
+                multi_items[k] = {"object": rec["id"], "core": None,
+                                  "by_light": {lid: {"faces": [], "polygons": [], "terminator": t}
+                                               for lid, t in term_by_light.items()}}
     # polyhedral objects: bulk conversion to Python floats (+ 0.0 canonicalises -0.0) over all objects at
     # once keeps the per-edge / per-point work to one dict literal each (§8 performance)
     poly = [(k, rec) for k, rec in enumerate(B["objects"]) if not rec.get("analytic")]
@@ -1362,6 +1449,14 @@ def compose(scene: dict, B: dict, hidden_lines=None) -> dict:
                 e["segment"] = seg if kp else None
                 e["runs"] = []
                 edges.append(e)
+            if light_ids is not None:   # M6 (contract §5.3.3): the additive per-edge light lists
+                for e, sl in zip(edges[len(edges) - m:], rec["silhouette_lights"]):
+                    e["silhouette_lights"] = list(sl)
+                fc_faces, fc_polys = rec["form_core"]
+                multi_items[k] = {"object": rec["id"],
+                                  "core": {"faces": fc_faces, "polygons": fc_polys},
+                                  "by_light": {lid: {"faces": f, "polygons": p, "terminator": []}
+                                               for lid, (f, p) in rec["form_by_light"].items()}}
             if rec["form_faces"]:
                 form_entries.append((k, {"object": rec["id"], "faces": rec["form_faces"], "terminator": [],
                                          "polygons": rec["form_polygons"]}))
@@ -1373,8 +1468,15 @@ def compose(scene: dict, B: dict, hidden_lines=None) -> dict:
         edges.extend(prec["edges"])
         if prec["form_shadow"] is not None:
             form_entries.append((n_obj + j, prec["form_shadow"]))
+        if light_ids is not None:
+            multi_items[n_obj + j] = {"object": prec["id"], "core": prec.get("form_core"),
+                                      "by_light": prec.get("form_by_light", {})}
     form_entries.sort(key=lambda t: t[0])
     form_shadow = [e for _k, e in form_entries]
+    form_core = None
+    if light_ids is not None:   # M6 (contract §5.3.5): light-major per-light entries and the core
+        form_shadow, form_core = _multilight.assemble_form_shadow([multi_items[k] for k in sorted(multi_items)],
+                                                                  light_ids)
     for lt in B.get("lights", []):
         _light_points(points, lt)
     for rid, lts in B.get("receiver_lights", {}).items():
@@ -1459,6 +1561,11 @@ def compose(scene: dict, B: dict, hidden_lines=None) -> dict:
     doc["shadows"] = shadows
     doc["form_shadow"] = form_shadow
     doc["outlines"] = outlines
+    if light_ids is not None:   # M6 (contract §5.3.5): the keys of multi-light documents only
+        doc["form_shadow_core"] = form_core
+        doc["constructions"] = {lid: _multilight.construction_doc(blk) for lid, blk in B["constructions"].items()}
+        doc["umbra"] = [{"receiver": e["receiver"], "lights": list(e["lights"]),
+                         "polygons": e["polygons"]} for e in B["umbra"]]
     if doc["hidden_lines"]:
         _classify_hidden(doc, B)
     return doc
@@ -1486,12 +1593,12 @@ def _receiver_light_points(points: dict, lt: dict, rid: str):
                         "at_infinity": True, "image": img["point"]}
 
 
-def render(scene: dict, camera=None, hidden_lines=None, hidden_style=None) -> dict:
+def render(scene: dict, camera=None, hidden_lines=None, hidden_style=None, umbra: bool = True) -> dict:
     """Run stages A, B, C and write the SVG with the scene's layer subset (contract §3, §5.0.7):
     ``hidden_lines`` / ``hidden_style`` override ``scene["output"]`` (``None`` = the scene's values; the
-    scene itself is not rewritten)."""
+    scene itself is not rewritten); ``umbra`` (M6) is passed to :func:`project_scene`."""
     A = shadow_geometry(scene)
-    B = project_scene(scene, A, camera=camera)
+    B = project_scene(scene, A, camera=camera, umbra=umbra)
     doc = compose(scene, B, hidden_lines=hidden_lines)
     style = scene["output"].get("hidden_style", "dashed") if hidden_style is None else hidden_style
     return {"geometry": doc, "svg": write_svg(doc, layers=scene["output"]["layers"], hidden_style=style)}
