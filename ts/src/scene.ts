@@ -7,6 +7,7 @@
  */
 
 import { SceneError } from "./errors.js";
+import { has_usable_face } from "./meshprep.js";
 import type { Vec2, Vec3 } from "./types.js";
 
 /** Object kinds of the core (contract §2.0; M5 adds `mesh`, §5.2.1 / §5.0.1). */
@@ -622,16 +623,6 @@ export function validate_mesh_data(value: unknown, field: string, source_field: 
   return { vertices, faces, smooth_groups };
 }
 
-/** Usable-face guard of a mesh object (contract §5.2.1 [decision]: "validated => renders"). Installed by
- * `src/meshprep.ts` (phase 2, the mesh part of §5.4.14) through `set_mesh_usable_face_guard`; until then every mesh
- * that passes `validate_mesh_data` is accepted. */
-type UsableFaceGuard = (vertices: readonly Vec3[], faces: readonly number[][], scale: number, weld_tolerance: number) => boolean;
-let usable_face_guard: UsableFaceGuard | null = null;
-
-export function set_mesh_usable_face_guard(guard: UsableFaceGuard | null): void {
-  usable_face_guard = guard;
-}
-
 /** The `mesh` branch of `validate_object` (contract §5.2.1, §5.0.1): `data` is required ("expand first" for a
  * `path`-only object); both together mean "already expanded"; `up: "y"` converts `data` with `to_z_up` and is
  * rewritten to `"z"`. */
@@ -656,7 +647,9 @@ export function validate_mesh_object(o: Record<string, unknown>, field: string):
   const source_field = path !== null ? `${field}.path` : null;
   const data = validate_mesh_data(o["data"], `${field}.data`, source_field);
   if (up === "y") data.vertices = to_z_up(data.vertices);
-  if (usable_face_guard !== null && !usable_face_guard(data.vertices, data.faces, scale, weld)) {
+  // usable-face guard (contract §5.2.1 [decision]): "validated => renders" (meshprep.has_usable_face: steps 2-3 of
+  // §5.2.3 on `scale · vertices`; the validated `data` stays the raw, unwelded data)
+  if (!has_usable_face(data.vertices, data.faces, scale, weld)) {
     throw new SceneError(source_field ?? `${field}.data.faces`, "no usable face");
   }
   return {

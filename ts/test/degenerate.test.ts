@@ -285,12 +285,17 @@ for (const [name, [mutate, expected]] of Object.entries(M4_VARIANTS)) {
   });
 }
 
-test("interim guard (M7 phase 2 part 1 review): unported mesh input is a typed SceneError; hidden lines render (part 2)", async () => {
-  const { SceneError } = await import("../src/errors.js");
+test("interim guards removed: mesh input renders (part 3), hidden lines render (part 2)", async () => {
   const { compose, project_scene, shadow_geometry } = await import("../src/pipeline.js");
-  const mesh = { id: "m", type: "mesh", data: { vertices: [[0, 0, 0], [1, 0, 0], [0, 1, 0]], faces: [[0, 1, 2]] } };
-  const s1 = scene_with([BOX, mesh], { id: "sun", type: "directional", direction: [0.6, 0, -0.8] }, SIDE_CAMERA);
-  assert.throws(() => render(s1), (e: unknown) => e instanceof SceneError && e.field === "objects[1].type");
+  // part 3 (src/meshprep.ts) removed the part-1 mesh guard: a single open triangle takes the per-face fallback
+  const mesh = { id: "m", type: "mesh", data: { vertices: [[0, 0, 0.5], [1, 0, 0.5], [0, 1, 0.5]], faces: [[0, 1, 2]] } };
+  const s1 = scene_with([BOX, mesh], { id: "sun", type: "directional", direction: [0.6, 0, 0.8] }, SIDE_CAMERA);
+  const g1 = render(s1).geometry as any;
+  // the Python reference: FACE_PARALLEL_TO_LIGHT (crate) + MESH_NON_MANIFOLD (m), one loop, no rays for the fallback
+  assert.deepEqual(g1.warnings.map((w: any) => [w.code, w.ids]), [["FACE_PARALLEL_TO_LIGHT", ["crate"]], ["MESH_NON_MANIFOLD", ["m"]]]);
+  assert.match(g1.warnings[1].message, /\(3 edge\(s\) with 1 face, 0 edge\(s\) with >= 3 faces\); per-face shadow fallback$/);
+  assert.deepEqual(g1.shadows[1].loops, [["m.v0.shadow.sun", "m.v1.shadow.sun", "m.v2.shadow.sun"]]);
+  assert.ok(g1.construction.rays.every(([, p]: [string, string]) => p.startsWith("crate.")));
   // part 2 (src/hidden.ts) removed the hidden-line guard: the argument and the scene's output.hidden_lines both work,
   // and the explicit switch-off override still gives the switch-off document
   const s2 = scene_with([BOX], { id: "sun", type: "directional", direction: [0.6, 0, -0.8] }, SIDE_CAMERA);

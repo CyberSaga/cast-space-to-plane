@@ -22,6 +22,9 @@ export interface Mesh {
   edge_faces: [number, number][];
   edge_flipped: [boolean, boolean][];
   vertex_names: string[];
+  /** M5 (contract §5.2.3 step 7): the edge is smooth (not drawn unless it is a camera silhouette edge, §5.2.4); added
+   * by `primitives.build_object` (all false for the primitives, `meshprep.classify_edges` for `mesh` objects). */
+  edge_smooth?: boolean[];
 }
 
 /** Faces grouped by vertex count in order of first appearance of each count (the numpy grouping). */
@@ -241,4 +244,22 @@ export function mesh_bbox(mesh: Mesh): [Vec3, Vec3] {
 /** `V − E + F` (2 for a closed genus-0 surface). */
 export function euler_characteristic(mesh: Mesh): number {
   return mesh.vertices.length - mesh.edges.length + mesh.faces.length;
+}
+
+/**
+ * Fan triangulation `(f0, f_k, f_{k+1})` of every face of a `-1`-padded face table (contract §5.2.3 step 4): columns
+ * `(0, k, k+1)` masked by `face_lens`; face-major order (the triangles of face 0 first, `k` ascending).
+ */
+export function triangulate_faces(faces_padded: readonly (readonly number[])[], face_lens: readonly number[]): [number, number, number][] {
+  const out: [number, number, number][] = [];
+  if (faces_padded.length === 0) return out;
+  const width = (faces_padded[0] as readonly number[]).length;
+  if (width < 3) return out;
+  faces_padded.forEach((row, f) => {
+    const len = face_lens[f] as number;
+    for (let k = 1; k < width - 1; k++) {
+      if (k + 1 < len) out.push([row[0] as number, row[k] as number, row[k + 1] as number]);
+    }
+  });
+  return out;
 }

@@ -8,8 +8,11 @@
  * the vertices as canonical lists (`world_lists`, shared by reference with every document).
  */
 
+import type { Warning } from "./errors.js";
 import { box_mesh, cone_mesh, cylinder_mesh, mesh_bbox, prism_mesh, sphere_mesh, transform_mesh } from "./mesh.js";
 import type { Mesh } from "./mesh.js";
+import { SMOOTH_ANGLE_DEFAULT, WELD_TOLERANCE_DEFAULT, point_inside_mesh, preprocess_mesh } from "./meshprep.js";
+import type { MeshInput, Triangle } from "./meshprep.js";
 import type { SceneObject } from "./scene.js";
 import { transform_frame } from "./transform.js";
 import type { Mat3, Vec3 } from "./types.js";
@@ -35,6 +38,8 @@ export interface EdgeTemplate {
   back: boolean;
   visibility: string;
   segment: null;
+  /** M5 (contract §5.2.4): mesh objects only, the camera-free `edge_smooth` flag of the edge. */
+  smooth?: boolean;
 }
 
 export interface ObjectRecord {
@@ -50,7 +55,34 @@ export interface ObjectRecord {
   face_point_names: string[][];
   world_lists: Vec3[];
   edge_templates: EdgeTemplate[];
+  /** M5 (contract §5.2.3 step 8): the per-face fallback of §5.2.5 is used (non-manifold mesh); false for primitives. */
+  fallback: boolean;
+  /** The `MESH_*` warnings of the preprocessing (merged into the stage-A warnings); `[]` for primitives. */
+  prep_warnings: Warning[];
+  /** Mesh objects only: the fan triangles of the kept (oriented) faces on the welded vertices (the original surface). */
+  triangles?: Triangle[];
+  /** Mesh objects only: the smoothing group of every final face. */
+  smooth_groups?: number[];
+  /** Mesh objects only: the §5.2.3 length scale `scale_A` (the fallback's area test, the M5 note "Fallback area test"). */
+  mesh_scale_A?: number;
   [key: string]: unknown;
+}
+
+/** The preprocessed local mesh of a validated `mesh` object (contract §5.2.3): `{mesh, triangles, fallback,
+ * smooth_groups, warnings, scale_A}` of `meshprep.preprocess_mesh` (`scale` applied, `transform` not). */
+export interface PreparedMesh {
+  mesh: Mesh;
+  triangles: Triangle[];
+  fallback: boolean;
+  smooth_groups: number[];
+  warnings: Warning[];
+  scale_A: number;
+}
+
+export function prepared_mesh(obj: SceneObject): PreparedMesh {
+  const [mesh, triangles, fallback, smooth_groups, warnings, scale_A] = preprocess_mesh(obj.data as MeshInput, obj.scale ?? 1.0,
+    obj.weld_tolerance ?? WELD_TOLERANCE_DEFAULT, obj.smooth_angle_deg ?? SMOOTH_ANGLE_DEFAULT, obj.id, true);
+  return { mesh, triangles, fallback, smooth_groups, warnings, scale_A };
 }
 
 /** Mesh of a validated object in its local frame (contract §2.1). */
@@ -66,6 +98,8 @@ export function local_mesh(obj: SceneObject): Mesh {
       return cone_mesh(obj.radius as number, obj.height as number);
     case "sphere":
       return sphere_mesh(obj.radius as number);
+    case "mesh":
+      return prepared_mesh(obj).mesh;
     default:
       throw new Error(`unknown object type '${obj.type}'`);
   }
@@ -101,13 +135,16 @@ export function face_tables(mesh: Mesh, names: readonly string[]): { face_first:
   };
 }
 
-/** The object record of a validated `objects[i]` entry with the world transform applied. */
+/** The object record of a validated `objects[i]` entry with the world transform applied. M5 (contract §5.2.3 step 8):
+ * every record carries `fallback` / `prep_warnings` and `mesh.edge_smooth` (all false for the primitives); mesh records
+ * also `triangles`, `smooth_groups` and `mesh_scale_A`, and their edge templates the camera-free `smooth` key. */
 export function build_object(obj: SceneObject): ObjectRecord {
   const [R, position] = transform_frame(obj.transform);
-  const mesh = transform_mesh(local_mesh(obj), R, position);
+  const prep = obj.type === "mesh" ? prepared_mesh(obj) : null;
+  const mesh = transform_mesh(prep === null ? local_mesh(obj) : prep.mesh, R, position);
   const names = mesh.vertex_names.map((n) => `${obj.id}.${n}`);
   const tables = face_tables(mesh, names);
-  return {
+  const rec: ObjectRecord = {
     id: obj.id,
     type: obj.type,
     mesh,
@@ -123,7 +160,24 @@ export function build_object(obj: SceneObject): ObjectRecord {
       object: obj.id, from: names[i] as string, to: names[j] as string, silhouette: false, back: false,
       visibility: "visible", segment: null,
     })),
+    fallback: false,
+    prep_warnings: [],
   };
+  if (prep === null) {
+    mesh.edge_smooth = mesh.edges.map(() => false);
+  } else {
+    if (mesh.faces.length === 0) throw new Error("a validated mesh object keeps at least one face (usable-face guard)");
+    rec.triangles = prep.triangles;
+    rec.fallback = prep.fallback;
+    rec.smooth_groups = [...prep.smooth_groups];
+    rec.prep_warnings = [...prep.warnings];
+    rec.mesh_scale_A = prep.scale_A;
+    const smooth = mesh.edge_smooth as boolean[];
+    rec.edge_templates.forEach((t, e) => {
+      t.smooth = smooth[e] as boolean;
+    });
+  }
+  return rec;
 }
 
 function point_in_polygon_margin(x: number, y: number, poly: readonly (readonly number[])[], margin: number): boolean {
@@ -145,6 +199,11 @@ function point_in_polygon_margin(x: number, y: number, poly: readonly (readonly 
  * (contract §2.5 / §2.9 `LIGHT_INSIDE_OBJECT`); always false for curved objects. */
 export function point_inside_solid(rec: ObjectRecord, x: readonly number[], tol = 0.0): boolean {
   if (rec.analytic !== null) return false;
+  if (rec.type === "mesh") {
+    // contract §5.2.3 step 8: generalised winding number of the original surface; a fallback mesh has no inside
+    if (rec.fallback) return false;
+    return point_inside_mesh(rec.mesh.vertices, rec.triangles ?? [], x, tol);
+  }
   const [R, position] = rec.frame;
   const d0 = (x[0] as number) - position[0], d1 = (x[1] as number) - position[1], d2 = (x[2] as number) - position[2];
   // R^T · d

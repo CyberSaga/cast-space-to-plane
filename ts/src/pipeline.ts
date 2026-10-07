@@ -27,6 +27,7 @@ import { TOL_DIR, row_max_abs, scene_scale, tolerance } from "./homogeneous.js";
 import { face_lit_flags, light_vector, lit_value, silhouette_loops } from "./light.js";
 import { classify_document } from "./hidden.js";
 import { NotManifoldError } from "./mesh.js";
+import { MESH_MAX_RAYS, inherit_edge_smooth } from "./meshprep.js";
 import type { Mesh } from "./mesh.js";
 import { is_multi } from "./multilight.js";
 import { canonical } from "./output/geometry_json.js";
@@ -123,6 +124,8 @@ export interface PolyStageB {
   edges: [number, number][];
   edge_templates: EdgeTemplate[];
   back: boolean[];
+  /** M5 (contract §5.2.4): the two faces of the edge differ in `lit(n_f, p, (C, 1))` (mesh edges only use it). */
+  camera_silhouette: boolean[];
   silhouette: boolean[];
   segments_h: ([Vec3, Vec3] | null)[];
   segment_keep: boolean[];
@@ -329,7 +332,9 @@ function object_light_data(obj: StageAObject, lt: LightRecord): [ObjectLightData
     light_inside: inside,
     edge_silhouette: edge_sil,
     silhouette_vertices: [...sil_set].sort((a, b) => a - b),
-    loops: silhouette_loops(mesh, lit),
+    // M5 §5.2.5: a fallback (non-manifold) mesh has no silhouette loops (its edge_faces are only [f_min, f_max]); its
+    // shadow is the per-face union of fallback_shadow_record
+    loops: obj.fallback ? [] : silhouette_loops(mesh, lit),
     form_idx: unlit.map((k) => mesh.faces[k] as number[]),
     form_faces: unlit.map((k) => obj.face_point_names[k] as string[]),
   }, warnings];
@@ -397,16 +402,18 @@ function poly_shadow_record(obj: StageAObject, ol: ObjectLightData, lt: LightRec
   const mesh = obj.mesh;
   const oid = obj.id, lid = lt.id;
   const V4 = mesh.vertices.map(h4);
-  let loop_mesh: Mesh, origins: Origin[] | null, sil_loops: number[][], sil: number[];
+  let loop_mesh: Mesh, origins: Origin[] | null, sil_loops: number[][], sil: number[], edge_sil: boolean[];
   if (obj.ground_mesh === null || obj.ground_mesh === undefined) {
     loop_mesh = mesh;
     origins = null;
     sil_loops = ol.loops;
     sil = ol.silhouette_vertices;
+    edge_sil = ol.edge_silhouette;
   } else {
     [loop_mesh, origins] = obj.ground_mesh;
     const lit_c = face_lit_flags(loop_mesh, lt.L, lt.tol_lit).lit;
     sil_loops = silhouette_loops(loop_mesh, lit_c);
+    edge_sil = loop_mesh.edge_faces.map(([f0, f1]) => lit_c[f0] !== lit_c[f1]);
     sil = clipped_silhouette_vertices(loop_mesh, origins, lit_c);
   }
   const P4 = sil.map((k) => V4[k] as Vec4);
@@ -435,11 +442,20 @@ function poly_shadow_record(obj: StageAObject, ol: ObjectLightData, lt: LightRec
     unbounded = unbounded || sh.unbounded;
     loops.push({ vertices: sh.vertices, sources: sh.sources, entries, unbounded: sh.unbounded });
   }
+  // M5 §5.2.4: rays / checks only for the first MESH_MAX_RAYS feature silhouette vertices of a mesh (silhouette-loop
+  // order); every other record draws the rays of all its silhouette vertices
+  let ray_vertices: boolean[] | undefined;
+  if (obj.type === "mesh") {
+    let capped: boolean;
+    [ray_vertices, capped] = mesh_ray_vertices(obj, sil, sil_loops, loop_mesh, origins, edge_sil);
+    if (capped) warnings.push(make_warning("MESH_RAYS_CAPPED", [oid]));
+  }
   return [{
     light: lid,
     receiver: receiver_id,
     object: oid,
     keep,
+    ...(ray_vertices === undefined ? {} : { ray_vertices }),
     P_world: sil.map((k) => [...(mesh.vertices[k] as Vec3)] as Vec3),
     S_world,
     Q_world,
@@ -451,6 +467,169 @@ function poly_shadow_record(obj: StageAObject, ol: ObjectLightData, lt: LightRec
     loops,
     unbounded,
   }, warnings];
+}
+
+/**
+ * `[ray_vertices, capped]` of a mesh shadow record (contract §5.2.4 [decision]). Candidates are the original silhouette
+ * vertices that are endpoints of at least one **feature** silhouette edge of the loop mesh actually used (the object's
+ * mesh, or the receiver-clipped mesh whose edges inherit `edge_smooth` through `meshprep.inherit_edge_smooth`; cut-face
+ * edges are feature; crossing vertices are never candidates). The first `MESH_MAX_RAYS` in silhouette-loop order (loops
+ * in order, vertices in loop order, first occurrence) are selected; the mask is aligned with the record's rows
+ * (ascending original index), so the emission order is unchanged. `edge_sil` is the light-silhouette mask of the edges
+ * of `loop_mesh` that the shadow record already computed.
+ */
+function mesh_ray_vertices(obj: StageAObject, sil: readonly number[], sil_loops: readonly (readonly number[])[], loop_mesh: Mesh,
+  origins: readonly Origin[] | null, edge_sil: readonly boolean[]): [boolean[], boolean] {
+  const mesh = obj.mesh;
+  const smooth = origins === null ? (mesh.edge_smooth ?? mesh.edges.map(() => false))
+    : inherit_edge_smooth(loop_mesh, origins, mesh, mesh.edge_smooth ?? mesh.edges.map(() => false));
+  const candidates = new Set<number>();
+  loop_mesh.edges.forEach(([i, j], e) => {
+    if (edge_sil[e] && !smooth[e]) {
+      candidates.add(i);
+      candidates.add(j);
+    }
+  });
+  const order: number[] = [];
+  const seen = new Set<number>();
+  for (const loop of sil_loops) {
+    for (const v of loop) {
+      if (!candidates.has(v)) continue;
+      const o = origins === null ? v : (origins[v] as Origin);
+      if (typeof o === "object" || seen.has(o)) continue;
+      seen.add(o);
+      order.push(o);
+    }
+  }
+  const selected = new Set(order.slice(0, MESH_MAX_RAYS));
+  return [sil.map((k) => selected.has(k)), order.length > MESH_MAX_RAYS];
+}
+
+/**
+ * Per-face shadow record of a non-manifold mesh (contract §5.2.5), replacing `poly_shadow_record`: the rows are every
+ * vertex used by a kept face (ascending), each with its `.shadow` and `.foot` point when finite and above the receiver;
+ * `ray_vertices` all false (no rays, checks or segments). Every face that is not parallel to the light (lit or not; an
+ * unlit face reversed with `[f0] + f[1:][::-1]` so that the lit side is on the left) goes through `shadow_loop`; a loop
+ * with fewer than 3 vertices, or a bounded loop whose receiver-plane area is `<= tol·scale_A`, is dropped. Crossings are
+ * named `<obj>.s<k>.<light>` in order of first appearance keyed by the undirected original edge (one point per crossed
+ * edge). `rcv` (the M4 / M5 merge note): a bounded receiver; each face loop is shadowed with the receiver frame and cut
+ * by `clip_polygon_bounds`, names carry the receiver suffix, every bounds-clip row is a crossing of its own,
+ * `VERTEX_NOT_BELOW_LIGHT` is not emitted and `ray_keep` marks the shadow points inside the bounds. `null` = the
+ * unbounded ground.
+ */
+function fallback_shadow_record(obj: StageAObject, ol: ObjectLightData, lt: LightRecord, pi: Vec4, tol: number, receiver_id: string,
+  rcv: ReceiverRecord | null = null): [ShadowRecord, Warning[]] {
+  const mesh = obj.mesh;
+  const oid = obj.id, lid = lt.id;
+  const bounded = rcv !== null && rcv.bounded;
+  const sfx = rcv !== null ? rcv.suffix : "";
+  const V4 = mesh.vertices.map(h4);
+  const id_set = new Set<number>();
+  for (const f of mesh.faces) for (const v of f) id_set.add(v);
+  const ids = [...id_set].sort((a, b) => a - b);
+  const P4 = ids.map((k) => V4[k] as Vec4);
+  const w_S = P4.map((P) => shadow_w(pi, lt.L, P));
+  const finite = w_S.map((w) => w > lt.tol_w);
+  const keep = P4.map((P, i) => (finite[i] as boolean) && dot4(P, pi) >= -tol);
+  const warnings: Warning[] = [];
+  // the fallback analogue of "some silhouette vertex": a vertex of a face that is not parallel to the light, i.e. one
+  // that can reach a shadow loop (light-parallel faces are skipped below; the M5 note "Fallback VERTEX_NOT_BELOW_LIGHT")
+  const in_loop_faces = new Set<number>();
+  mesh.faces.forEach((f, fi) => {
+    if (!ol.parallel[fi]) for (const v of f) in_loop_faces.add(v);
+  });
+  if (!bounded && ids.some((k, i) => in_loop_faces.has(k) && !finite[i])) warnings.push(make_warning("VERTEX_NOT_BELOW_LIGHT", [oid]));
+  const S4 = P4.map((P) => mat4_vec(lt.M, P));
+  const S_world = S4.map((S, i): Vec3 => {
+    if (!keep[i]) return [0.0, 0.0, 0.0];
+    const w = w_S[i] as number;
+    return [S[0] / w, S[1] / w, S[2] / w];
+  });
+  const Q_world = P4.map((P): Vec3 => {
+    const Q = foot(pi, P);
+    return [Q[0] / Q[3], Q[1] / Q[3], Q[2] / Q[3]];
+  });
+  const nn = Math.sqrt(pi[0] * pi[0] + pi[1] * pi[1] + pi[2] * pi[2]);
+  const n: Vec3 = [pi[0] / nn, pi[1] / nn, pi[2] / nn];
+  const area_tol = tol * (obj.mesh_scale_A ?? 1.0);
+  const loops: ShadowRecord["loops"] = [];
+  const ground = new Map<string, [string, Vec3]>();
+  let unbounded = false;
+  mesh.faces.forEach((face, fi) => {
+    if (ol.parallel[fi]) return;
+    const cyc = ol.lit[fi] ? [...face] : [face[0] as number, ...face.slice(1).reverse()];
+    const pts = cyc.map((v) => V4[v] as Vec4);
+    let sh = rcv === null ? shadow_loop(pts, lt.M, pi, lt.tol_w, tol) : shadow_loop(pts, lt.M, pi, lt.tol_w, tol, rcv.frame, lt.F);
+    if (bounded) {
+      const [V, src] = clip_polygon_bounds(sh.vertices, sh.sources, (rcv as ReceiverRecord).psi as Vec4[], (rcv as ReceiverRecord).bounds as Vec3[], tol);
+      sh = { vertices: V, sources: src, unbounded: false, below_ground: sh.below_ground };
+    }
+    const verts = sh.vertices;
+    if (verts.length < 3) return;
+    if (!sh.unbounded) {
+      // ½·n̂·Σ X_i × X_{i+1} (np.sum over axis 0: a sequential sum per component; the M5 note "Fallback area test")
+      const X = verts.map((v): Vec3 => [v[0] / v[3], v[1] / v[3], v[2] / v[3]]);
+      let s0 = 0, s1 = 0, s2 = 0;
+      X.forEach((a, k) => {
+        const b = X[(k + 1) % X.length] as Vec3;
+        s0 += a[1] * b[2] - a[2] * b[1];
+        s1 += a[2] * b[0] - a[0] * b[2];
+        s2 += a[0] * b[1] - a[1] * b[0];
+      });
+      const area = 0.5 * (n[0] * s0 + n[1] * s1 + n[2] * s2);
+      if (Math.abs(area) <= area_tol) return;
+    }
+    const entries: LoopEntry[] = [];
+    sh.sources.forEach((src, row) => {
+      if (is_tag(src)) {
+        if (src.kind === "ground" || src.kind === "bounds") {
+          let key: string;
+          if (src.kind === "ground") {
+            const i = cyc[(src.i as VertexTag).index] as number, j = cyc[(src.j as VertexTag).index] as number;
+            key = `e:${Math.min(i, j)},${Math.max(i, j)}`;
+          } else { // a bounds-clip crossing or anchor (M4 §5.1.3.3): a point of its own
+            key = `clip:${ground.size}`;
+          }
+          let g = ground.get(key);
+          if (g === undefined) {
+            const X = verts[row] as Vec4;
+            g = [`${oid}.s${ground.size}.${lid}${sfx}`, [X[0] / X[3], X[1] / X[3], X[2] / X[3]]];
+            ground.set(key, g);
+          }
+          entries.push(g[0]);
+        } else { // a direction vertex (w = 0)
+          const d = verts[row] as Vec4;
+          entries.push({ direction: [d[0] + 0, d[1] + 0, d[2] + 0] });
+        }
+      } else {
+        entries.push(`${oid}.v${cyc[src.index] as number}.shadow.${lid}${sfx}`);
+      }
+    });
+    unbounded = unbounded || sh.unbounded;
+    loops.push({ vertices: verts, sources: sh.sources, entries, unbounded: sh.unbounded });
+  });
+  const rec: ShadowRecord = {
+    light: lid,
+    receiver: receiver_id,
+    object: oid,
+    keep,
+    ray_vertices: ids.map(() => false),
+    P_world: ids.map((k) => [...(mesh.vertices[k] as Vec3)] as Vec3),
+    S_world,
+    Q_world,
+    w_S,
+    shadow_names: ids.map((k) => `${oid}.v${k}.shadow.${lid}${sfx}`),
+    foot_names: ids.map((k) => `${oid}.v${k}.foot${sfx}`),
+    vertex_names: ids.map((k) => obj.point_names[k] as string),
+    ground_points: [...ground.values()],
+    loops,
+    unbounded,
+  };
+  if (bounded) {
+    const psi = (rcv as ReceiverRecord).psi as Vec4[];
+    rec.ray_keep = S4.map((S, i) => (keep[i] as boolean) && psi.every((row) => dot4(S, row) >= -tol * Math.abs(S[3])));
+  }
+  return [rec, warnings];
 }
 
 function empty_shadow(lid: string, receiver_id: string, oid: string): ShadowRecord {
@@ -468,12 +647,6 @@ function canonical3(v: readonly number[]): Vec3 {
  * ordered receiver (scene order) → light (scene order) → caster (objects in scene order, then the other bounded
  * receivers), contract §5.1.3.1. */
 export function shadow_geometry(scene: Scene): StageA {
-  // interim guard until src/meshprep.ts lands (M7 phase 2, mesh part): a typed SceneError, never a plain Error
-  scene.objects.forEach((o, i) => {
-    if (o.type === "mesh") {
-      throw new SceneError(`objects[${i}].type`, "mesh objects are not ported yet (M7 phase 2, mesh part of contract §5.4.14)");
-    }
-  });
   const objects = scene.objects.map((o) => build_object(o) as StageAObject);
   const receivers = scene.receivers.map((r, i) => receiver_record(r, i));
   // contract §5.1.2: bounds vertices are scene geometry (the ground has none: v2 scales unchanged)
@@ -509,6 +682,7 @@ export function shadow_geometry(scene: Scene): StageA {
   for (const obj of objects) {
     obj.lights = new Map();
     obj.clipped = new Map();
+    warnings.push(...obj.prep_warnings); // M5: MESH_* warnings of the preprocessing
     if (dflt.bounded) {
       bounded_default_object(obj, receivers, lights, tol, warnings);
       continue;
@@ -522,7 +696,8 @@ export function shadow_geometry(scene: Scene): StageA {
     if (obj.mesh.vertices.some((v) => dot4(h4(v), pi) < -tol)) {
       warnings.push(make_warning("OBJECT_BELOW_RECEIVER", [obj.id]));
       try {
-        obj.ground_mesh = clip_mesh_to_plane(obj.mesh, pi, tol);
+        // M5 §5.2.5: a fallback mesh is never cut (the cut would close its open rim into caps)
+        obj.ground_mesh = obj.fallback ? null : clip_mesh_to_plane(obj.mesh, pi, tol);
       } catch (exc) {
         // degenerate contact (Python: `except ValueError`); any other error is a bug and propagates
         if (!(exc instanceof NotManifoldError)) throw exc;
@@ -538,7 +713,8 @@ export function shadow_geometry(scene: Scene): StageA {
         shadows.push(empty_shadow(lt.id, receiver.id, obj.id));
         continue;
       }
-      const [rec, w2] = poly_shadow_record(obj, ol, lt, pi, tol, receiver.id);
+      const [rec, w2] = obj.fallback ? fallback_shadow_record(obj, ol, lt, pi, tol, receiver.id)
+        : poly_shadow_record(obj, ol, lt, pi, tol, receiver.id);
       warnings.push(...w2);
       shadows.push(rec);
     }
@@ -651,6 +827,7 @@ function receiver_lit_casts(receivers: readonly ReceiverRecord[], ground_unlit: 
 /** `obj.clipped[r]` (contract §5.1.2): the part of the solid in front of `π_r` as a closed mesh, `null` when no
  * vertex is behind `π_r` or the cut surface is not a closed manifold. */
 function clip_object(obj: StageAObject, rcv: ReceiverRecord, tol: number): [Mesh, Origin[]] | null {
+  if (obj.fallback) return null; // M5 §5.2.5 [decision, synthesis]: clip_mesh_to_plane is never called on a fallback mesh
   if (!obj.mesh.vertices.some((v) => dot4(h4(v), rcv.pi) < -tol)) return null;
   try {
     return clip_mesh_to_plane(obj.mesh, rcv.pi, tol);
@@ -745,26 +922,37 @@ function caster_record(oid: string, lt: LightRecord, rcv: ReceiverRecord, tol: n
 function bounded_object_record(obj: StageAObject, ol: ObjectLightData, lt: LightRecord, rcv: ReceiverRecord, tol: number): [ShadowRecord, Warning[]] {
   const oid = obj.id, lid = lt.id, rid = rcv.id;
   if (!lt.active || ol.light_inside) return [empty_shadow(lid, rid, oid), []];
+  // M5 §5.2.5 / §5.2.7: per-face shadow_loop + bounds clip on this receiver
+  if (obj.fallback) return fallback_shadow_record(obj, ol, lt, rcv.pi, tol, rid, rcv);
   const mesh = obj.mesh;
   const V4 = mesh.vertices.map(h4);
   const clipped = obj.clipped.get(rid) ?? null;
-  let loop_mesh: Mesh, origins: Origin[] | null, sil_loops: number[][], sil: number[];
+  let loop_mesh: Mesh, origins: Origin[] | null, sil_loops: number[][], sil: number[], edge_sil: boolean[];
   if (clipped === null) {
     loop_mesh = mesh;
     origins = null;
     sil_loops = ol.loops;
     sil = ol.silhouette_vertices;
+    edge_sil = ol.edge_silhouette;
   } else {
     [loop_mesh, origins] = clipped;
     if (loop_mesh.faces.length === 0) return [empty_shadow(lid, rid, oid), []]; // the whole solid is behind the plane
     const lit_c = face_lit_flags(loop_mesh, lt.L, lt.tol_lit).lit;
     sil_loops = silhouette_loops(loop_mesh, lit_c);
+    edge_sil = loop_mesh.edge_faces.map(([f0, f1]) => lit_c[f0] !== lit_c[f1]);
     sil = clipped_silhouette_vertices(loop_mesh, origins, lit_c);
   }
   const V4c = loop_mesh.vertices.map(h4);
   const loops = sil_loops.map((loop) => [loop.map((v) => V4c[v] as Vec4), loop] as [Vec4[], number[]]);
-  return caster_record(oid, lt, rcv, tol, sil, sil.map((k) => V4[k] as Vec4), sil.map((k) => obj.point_names[k] as string), loops,
-    origins, "v");
+  const [rec, warnings] = caster_record(oid, lt, rcv, tol, sil, sil.map((k) => V4[k] as Vec4), sil.map((k) => obj.point_names[k] as string),
+    loops, origins, "v");
+  if (obj.type === "mesh") {
+    // M5 §5.2.4: the feature-vertex ray selection on the loop mesh actually used (per object, light, receiver)
+    let capped: boolean;
+    [rec.ray_vertices, capped] = mesh_ray_vertices(obj, sil, sil_loops, loop_mesh, origins, edge_sil);
+    if (capped) warnings.push(make_warning("MESH_RAYS_CAPPED", [oid]));
+  }
+  return [rec, warnings];
 }
 
 /** Shadow record of the bounded receiver `plate` (an opaque plate) on the receiver `rcv` (contract §5.1.3.2). */
@@ -849,6 +1037,7 @@ function project_polyhedron(o: StageAObject, cam: CameraRecord, tol: number, lig
   const C4: Vec4 = [cam.C[0], cam.C[1], cam.C[2], 1.0];
   const face_lit = m.faces.map((_f, k) => lit_value(m.face_normals[k] as Vec3, m.vertices[o.face_first[k] as number] as Vec3, C4) > tol);
   const back = m.edge_faces.map(([f0, f1]) => !face_lit[f0] && !face_lit[f1]);
+  const camera_silhouette = m.edge_faces.map(([f0, f1]) => face_lit[f0] !== face_lit[f1]); // M5 §5.2.4 (mesh edges only use it)
   const ol = light_id === null ? undefined : o.lights.get(light_id);
   const silhouette = ol !== undefined ? ol.edge_silhouette : m.edges.map(() => false);
   const segments_h: ([Vec3, Vec3] | null)[] = [];
@@ -874,6 +1063,7 @@ function project_polyhedron(o: StageAObject, cam: CameraRecord, tol: number, lig
     edges: m.edges,
     edge_templates: o.edge_templates,
     back,
+    camera_silhouette,
     silhouette,
     segments_h,
     segment_keep: keep,
@@ -1317,10 +1507,19 @@ export function compose(scene: Scene, B: StageB, hidden_lines?: boolean | null):
   B.objects.forEach((rec, k) => {
     if (rec.analytic) return;
     rec.edge_templates.forEach((t, e) => {
-      edges.push({
+      const entry: Record<string, unknown> = {
         ...t, silhouette: rec.silhouette[e], back: rec.back[e],
         segment: segment_uv(rec.segments_h[e] ?? null, rec.segment_keep[e] as boolean), runs: [],
-      });
+      };
+      if (rec.type === "mesh") {
+        // the two mesh-only edge keys (contract §5.2.4): `smooth` (from the stage-A template) and `camera_silhouette`
+        // (stage B); a smooth edge that is not a camera silhouette edge is not a drawable (`segment: null`;
+        // `visibility` keeps the template's "visible")
+        const cs = rec.camera_silhouette[e] as boolean;
+        entry["camera_silhouette"] = cs;
+        if (t.smooth === true && !cs) entry["segment"] = null;
+      }
+      edges.push(entry);
     });
     if (rec.form_faces.length > 0) {
       form_entries.push([k, {
