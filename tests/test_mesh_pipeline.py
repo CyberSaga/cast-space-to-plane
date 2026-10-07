@@ -623,3 +623,21 @@ def test_buried_mesh_rays_reuse_the_shadow_record_silhouette(monkeypatch):
     assert ("OBJECT_BELOW_RECEIVER", ("cube",)) in warning_set(doc)
     assert doc["construction"]["rays"] == ref["construction"]["rays"] != []
     assert dumps(strip_mesh_keys(doc)) == dumps(ref)
+
+
+# --- step 8: acceptance 1 end-to-end through the loaders (contract §5.2.11) ------------------------
+
+@pytest.mark.parametrize("name, keys", [("box_split.obj", {}), ("box_split_y.obj", {"up": "y"}), ("box.gltf", {}),
+                                        ("box.glb", {})])
+def test_acceptance_1_end_to_end_through_load_expanded_scene(name, keys):
+    """``mesh`` + ``path`` (relative to the scene file) -> ``castplane.io.load_expanded_scene`` -> the
+    parametric box document, byte for byte after deleting the two mesh-only edge keys."""
+    from castplane.io import load_expanded_scene
+
+    scene = analytic_box_scene()
+    scene["objects"] = [dict({"id": "cube", "type": "mesh", "path": f"../../fixtures/meshes/{name}"}, **keys)]
+    loaded, notes = load_expanded_scene(scene, base_dir=CASES)
+    assert notes == [] and loaded["objects"][0]["data"]["faces"] == SPLIT_F
+    assert loaded["objects"][0]["path"] == f"../../fixtures/meshes/{name}" and loaded["objects"][0]["up"] == "z"
+    doc = render(loaded)["geometry"]
+    assert dumps(strip_mesh_keys(doc)) == dumps(doc_of(analytic_box_scene()))
