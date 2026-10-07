@@ -26,6 +26,7 @@ from castplane.io.step import (DEFAULT_SCENE_TEMPLATE, STEP_WARNING_CODES, StepE
                                expand_step_object, import_step, make_step_warning, recognise_solid, to_metres)
 from castplane.output.geometry_json import dumps as geometry_dumps
 from castplane.transform import euler_zyx_matrix
+from tests.build_identity import exact_build
 from tests.test_conformance import CASES, EXPECTED, compare_documents, recorded_numpy_version
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
@@ -484,7 +485,7 @@ def test_box_fixture_within_1e9_and_conformance():
     # the OCC 8.0 numbers recorded in contract §5.5.5
     assert crate["size"] == [1.00000000000002, 0.8000000000003888, 0.6]
     assert crate["transform"]["position"] == [2.0000000000000004, 4.0, 0.0]
-    if recorded_numpy_version() == np.__version__:      # atan2's last bit is per build (§5.5.5)
+    if exact_build(recorded_numpy_version()):           # atan2's last bit is per build (§5.5.5)
         assert crate["transform"]["rotation_deg"] == [0.0, 0.0, 30.000000000012566]
     doc = json.loads(geometry_dumps(_geometry(_basic_with("crate", crate))))
     expected = json.loads((EXPECTED / "example_basic.json").read_text(encoding="utf-8"))
@@ -761,7 +762,7 @@ def test_euler_exact_180_with_signed_zeros():
     assert euler_zyx_deg(np.eye(3)) == [0.0, 0.0, 0.0]
     e = euler_zyx_deg(euler_zyx_matrix([0, 0, 30]))
     assert e[0] == e[1] == 0.0 and abs(e[2] - 30.0) < 1e-12
-    if recorded_numpy_version() == np.__version__:      # atan2's last bit is per build (§5.5.5)
+    if exact_build(recorded_numpy_version()):           # atan2's last bit is per build (§5.5.5)
         assert e == [0.0, 0.0, 29.999999999999996]
 
 

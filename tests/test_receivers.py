@@ -15,6 +15,7 @@ import pathlib
 import pytest
 
 import castplane
+from tests.build_identity import exact_build
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 CASES = ROOT / "tests" / "conformance" / "cases"
@@ -43,7 +44,7 @@ def test_switch_off_svg_and_stripped_json_are_byte_identical_to_v2(name):
     from castplane.output.geometry_json import dumps
     scene = castplane.load_scene(CASES / f"{name}.json")
     result = castplane.render(scene)
-    recorded_build = GOLDEN["build"].endswith(f"numpy {__import__('numpy').__version__}")
+    recorded_build = exact_build(GOLDEN["build"].rsplit("numpy ", 1)[1])
     if recorded_build:
         assert hashlib.sha256(result["svg"].encode("utf-8")).hexdigest() == GOLDEN["sha256"][name]
     full_text = dumps(result["geometry"]) + "\n"

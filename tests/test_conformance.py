@@ -38,6 +38,8 @@ import pathlib
 import re
 
 import numpy
+
+from tests.build_identity import exact_build
 import pytest
 
 import castplane
@@ -339,6 +341,15 @@ def test_image_path_classification():
 REGEN = CONFORMANCE.parents[1] / "tools" / "regen_conformance.py"
 
 
+def test_build_fingerprint_is_recorded_for_the_recorded_numpy():
+    """``tests/golden/build_fingerprint.json`` names the NumPy of the last rendering changelog entry (refresh it
+    with ``python -m tests.build_identity --write`` on the machine that regenerates the set), and the
+    fingerprint is a pure function of the build."""
+    from tests import build_identity
+    assert build_identity.recorded()["numpy"] == recorded_numpy_version()
+    assert build_identity.fingerprint() == build_identity.fingerprint()
+
+
 def run_regen(*argv: str):
     import subprocess
     import sys
@@ -385,7 +396,7 @@ def test_regen_tool_exit_codes_match_its_docstring(tmp_path):
     # v4 regeneration on the merged branch, contract §5.0.8 rule 2): such drift is checked after
     # strip_new_keys, any other drift fails as before
     pre_v4 = {name for name in drifted if "hidden_lines" not in load_expected(name)}
-    if recorded_numpy_version() == numpy.__version__:
+    if exact_build(recorded_numpy_version()):
         assert not set(drifted) - pre_v4, f"expected files drift on the recorded NumPy build: {r.stdout}"
     for name in drifted:
         actual = render_case(name)
