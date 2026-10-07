@@ -133,7 +133,9 @@ function cell_quotients(V: readonly (readonly number[])[], tol: number): number[
  * preserved exactly; a computed gap of distinct integral floats is `>= 2` whenever the true gap is), offset by 1, and
  * combined as `(c0·R + c1)·R + c2` with `R = max + 2`, so the 27 neighbours are `key + (dx·R + dy)·R + dz` without
  * carry. Only an encoding of the reference loop's dictionary keys: the visiting order and the lowest-index rule are
- * unchanged. `null` when `R³` would leave the exact integers (more than ~10^5 vertices): the string keys are used then.
+ * unchanged. `null` when `R³` would leave the exact integers (more than ~10^5 distinct cells on one axis): the string
+ * keys are used then. That fallback is reachable only by a direct `weld_map` call: a validated mesh has at most
+ * `MESH_MAX_VERTICES` = 50 000 vertices, so `R <= 2·50 000 + 1` and `R³ < 2^53` (`ts/test/meshprep.test.ts` forces it).
  */
 function compressed_cells(cells: readonly (readonly number[])[]): [number[], number] | null {
   const cols: number[][] = [];

@@ -74,11 +74,63 @@ test("weld: tau = 0 is exact equality (-0.0 == 0.0); a tau below every float spa
   assert.deepEqual(weld_map([[1, 0, 0], [1, 0, 0], [1 + 2 ** -52, 0, 0]], 5e-324), [0, 0, 2]);
 });
 
-test("weld: cells beyond 2^52 keep exact integer neighbours (BigInt keys)", () => {
-  // tau = 1e-300: x / tau ~ 1e300 (finite), so the 27-cell rule runs on integers far above 2^53
+test("weld: huge cell indices (far above 2^53) stay exact on the compressed number keys", () => {
+  // tau = 1e-300: x / tau ~ 1e300 (finite); the per-axis renumbering gives R = 5, so this runs on number keys
   const tau = 1e-300;
   const V = [[1.0, 0, 0], [1.0, 0, 0], [2.0, 0, 0], [1.0, 1e-300, 0]];
   assert.deepEqual(weld_map(V, tau), [0, 0, 2, 0]);
+});
+
+/** The `typeof` of every key the weld's cell dictionary stores while `f` runs (`Map.prototype.set` instrumented). */
+function map_key_types(f: () => void): Set<string> {
+  const kinds = new Set<string>();
+  const set = Map.prototype.set;
+  Map.prototype.set = function (this: Map<unknown, unknown>, k: unknown, v: unknown) {
+    kinds.add(typeof k);
+    return set.call(this, k, v);
+  };
+  try {
+    f();
+  } finally {
+    Map.prototype.set = set;
+  }
+  return kinds;
+}
+
+test("weld: more than ~1e5 distinct cells per axis falls back to decimal-string keys (BigInt beyond 2^52)", () => {
+  // 105 000 points at spacing 3·tau along x: per-axis gaps cap at 2, so R = 2·105 000 + 1 > 2^53^(1/3) ≈ 208 064 and
+  // compressed_cells gives up; the reference loop then runs on string keys. None of the grid points weld together.
+  const tau = 1e-3, n = 105_000;
+  const V: number[][] = [];
+  for (let k = 0; k < n; k++) V.push([3 * tau * k, 0, 0]);
+  const probes = [
+    [3 * tau * 5 + 0.9 * tau, 0.9 * tau, -0.9 * tau], // within tau of point 5 on every axis
+    [3 * tau * 7 + 1.1 * tau, 0, 0], // 1.1·tau from 7, 1.9·tau from 8: a new representative
+    [3 * tau * 9 - 0.5 * tau, 0, 0], // the neighbour cell below point 9's
+    [1e13, 0, 0], // x / tau = 1e16 > 2^52: the BigInt branch of cell_part
+    [1e13, 5e-4, 0], // the cell above in y, same x cell: joins the previous probe
+    [1e13 + 2 ** -9, 0, 0], // the next float above 1e13 (spacing 2^-9 > tau): not welded
+  ];
+  V.push(...probes);
+  let rep: number[] = [];
+  const kinds = map_key_types(() => {
+    rep = weld_map(V, tau);
+  });
+  assert.ok(kinds.has("string"), "the cell dictionary is keyed by strings"); // (number keys: compressed_cells' own index)
+  assert.ok(!map_key_types(() => weld_map(V.slice(0, 1000), tau)).has("string")); // the compressed path below the cap
+  for (let k = 0; k < n; k++) assert.equal(rep[k], k);
+  assert.deepEqual(rep.slice(n), [5, n + 1, 9, n + 3, n + 3, n + 5]);
+  // the brute-force rule on the probes: the lowest index within tau (max norm) among the representatives before it
+  for (let i = n; i < V.length; i++) {
+    const p = V[i] as number[];
+    let best = i;
+    for (let r = 0; r < i; r++) {
+      if (rep[r] !== r) continue;
+      const w = V[r] as number[];
+      if (w.every((x, a) => Math.abs(x - (p[a] as number)) <= tau)) { best = r; break; }
+    }
+    assert.equal(rep[i], best, `probe ${i - n}`);
+  }
 });
 
 test("weld: the split-vertex box reproduces the parametric vertices", () => {

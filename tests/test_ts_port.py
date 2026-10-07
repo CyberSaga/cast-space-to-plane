@@ -197,6 +197,18 @@ def test_ts_suite_passes(built_port):
 
 
 @needs_node
+def test_ts_and_web_sources_have_no_unused_locals(built_port):
+    """No dead imports or locals in the port, its tests or the web UI: ``tsc --noEmit --noUnusedLocals`` on the
+    normative configs (the flag is passed here because the §5.4.1 ``ts/tsconfig.json`` block is literal)."""
+    if not TSC.is_file():
+        pytest.skip("typescript is not installed (npm ci)")
+    for cwd, config in ((TS, "tsconfig.test.json"), (ROOT / "web", "tsconfig.json"), (ROOT / "web", "tsconfig.test.json")):
+        proc = subprocess.run([NODE, str(TSC), "--noEmit", "--noUnusedLocals", "-p", config], cwd=cwd,
+                              capture_output=True, text=True, timeout=600)
+        assert proc.returncode == 0, (cwd.name, config, proc.stdout[-4000:] + proc.stderr[-2000:])
+
+
+@needs_node
 def test_ts_render_equals_the_reference_on_the_examples(built_port, tmp_path):
     """``node ts/scripts/render.mjs``: the port's SVG of every example is the Python writer's text byte for byte
     (§5.4.6) and its JSON document passes the conformance comparator against the Python document (§5.4.8).  An
@@ -319,9 +331,43 @@ def test_ts_mesh_scenes_equal_the_reference(built_port, tmp_path):
 
 
 @needs_node
+def test_ts_mesh_seed60_is_the_deferred_covering_segments_case(built_port, tmp_path):
+    """``make_mesh_scene(60)`` (outside the seeds 0–11 of :func:`_mesh_scenes`) is the one mesh scene of seeds 0–99
+    where the JSON comparator fails: the M7-review note "[implementation, deferred] ``covering_segments`` is
+    ill-conditioned when ``S' ≈ Q'``". Pins that the difference is exactly that case — SVG byte-identical, every
+    difference a ``construction.segments[].points`` entry of a ray whose vertex sits within 1e-5 m above the receiver —
+    so the seed range of the mesh differential is not widened past it unknowingly."""
+    from castplane.output import geometry_json
+    from tests.reference.random_scenes import make_mesh_scene
+
+    sc = make_mesh_scene(60)
+    path = tmp_path / "seed60.json"
+    path.write_text(json.dumps(sc), encoding="utf-8")
+    proc = subprocess.run([NODE, str(TS / "scripts" / "render.mjs"), str(path), str(tmp_path / "out")],
+                          capture_output=True, text=True, timeout=600)
+    assert proc.returncode == 0, proc.stderr[-2000:]
+    scene = castplane.load_scene(sc)
+    ref = castplane.render(scene)
+    assert (tmp_path / "out" / "seed60.svg").read_text(encoding="utf-8") == ref["svg"]
+    ref_doc = json.loads(geometry_json.dumps(ref["geometry"]))
+    diffs = tc.compare_documents(ref_doc, json.loads((tmp_path / "out" / "seed60.json").read_text(encoding="utf-8")))
+    assert diffs, "seed 60 now agrees: the deferred covering_segments amendment may have landed; update the note"
+    world_z = {}
+    for rec in castplane.shadow_geometry(scene)["objects"]:
+        for name, v in zip(rec["point_names"], rec["mesh"]["vertices"]):
+            world_z[name] = float(v[2])
+    for d in diffs:
+        m = re.match(r"construction\.segments\[(\d+)\]\.points\[", d)
+        assert m, d
+        seg = ref_doc["construction"]["segments"][int(m.group(1))]
+        assert 0.0 <= world_z[seg["point"]] <= 1e-5, (d, seg["point"], world_z[seg["point"]])
+
+
+@needs_node
 def test_ts_weld_map_equals_the_reference_loop(built_port, tmp_path):
-    """``meshprep.weld_map`` of the port (the reference loop of contract §5.2.3 step 2 on compressed number keys,
-    string keys beyond 2^53) against Python's reference loop: clustered near-duplicates straddling cell borders,
+    """``meshprep.weld_map`` of the port (the reference loop of contract §5.2.3 step 2 on compressed number keys;
+    the string-key fallback needs ~1e5 distinct cells on one axis, out of reach here and of validated meshes, and is
+    forced by ``ts/test/meshprep.test.ts``) against Python's reference loop: clustered near-duplicates straddling cell borders,
     exact copies, points exactly on cell borders and at distance exactly ``τ``, for six tolerances incl. 0."""
     import numpy as np
 

@@ -18,7 +18,7 @@ import type { CameraBlock, CameraRecord, Horizon } from "./camera.js";
 import { ellipse_arc_params, ellipse_params, sample_arc, sample_count } from "./conics.js";
 import { clip_segments_uv, coincidence_check, covering_segments, extended_segments, self_check, special_point_image } from "./construction.js";
 import type { SpecialPointImage } from "./construction.js";
-import { shadow_arc_key, stage_a_object, stage_b_objects } from "./curved.js";
+import { stage_a_object, stage_b_objects } from "./curved.js";
 import type { ArcRecord, CurvedStageB, CurvedStore, LoopEntry, ReceiverRecordLike, ShadowRecord } from "./curved.js";
 import type { GeometryDocument } from "./document.js";
 import { SceneError, make_warning, merge_warnings } from "./errors.js";

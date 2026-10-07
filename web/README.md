@@ -25,8 +25,9 @@ npm run -w web test        # orbit / download unit tests (node:test, web/test/)
   geometry inline (`data`), so the bundled `mesh_demo` example, which names `meshes/house.obj`, shows the
   "mesh file must be expanded first" error; load an expanded scene instead (`castplane.io.expand_scene` of the
   example, or `castplane import FILE -o scene.json --inline` for a new scene).
-- **3D view** (`src/scene3d.ts`, `src/threeCamera.ts`): boxes, cylinders, cones, spheres, prisms and inline meshes
-  (a `BufferGeometry` of the core's preprocessed triangles, `prepared_mesh`, both sides drawn) placed with
+- **3D view** (`src/scene3d.ts`, `src/mesh3d.ts`, `src/threeCamera.ts`): boxes, cylinders, cones, spheres, prisms
+  and inline meshes (a `BufferGeometry` of the core's preprocessed triangles, taken from stage A so a mesh is not
+  preprocessed twice, both sides drawn) placed with
   the core's `transform_frame`, light helpers (a sphere for a point light, an arrow for a directional light), and the
   ground plane with a grid. The three.js camera is built from the core's `camera_matrix` (no `lookAt` and no
   `fov`), so the WebGL image and the SVG overlay are two renderings of one castplane camera. Three.js casts no

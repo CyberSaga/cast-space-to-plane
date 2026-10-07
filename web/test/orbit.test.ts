@@ -8,7 +8,8 @@ import { test } from "node:test";
 import { fileURLToPath } from "node:url";
 
 import {
-  LAYER_ORDER, camera_matrix, compose, load_scene, load_scene_text, project_scene, shadow_geometry, validate_camera,
+  LAYER_ORDER, camera_matrix, compose, load_scene, load_scene_text, project_scene, shadow_geometry, transform_frame,
+  validate_camera,
 } from "castplane";
 import type { Scene } from "castplane";
 
@@ -18,6 +19,7 @@ import {
 } from "../src/orbit.js";
 import type { OrbitState } from "../src/orbit.js";
 import { camera_block_text, json_blob, ordered_layers, scene_blob, svg_blob } from "../src/download.js";
+import { mesh_positions } from "../src/mesh3d.js";
 
 // web/build/test/orbit.test.js -> repository root
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..", "..");
@@ -255,4 +257,26 @@ test("mesh scenes (phase 2 of §5.4.10): an expanded mesh scene renders and orbi
   assert.ok(doc.edges.some((e: any) => e.object === "house" && "camera_silhouette" in e));
   const again = load_scene_text(scene_blob(sc, cam, "mesh_demo").text);
   assert.deepEqual(again.objects[0]!.data, sc.objects[0]!.data);
+});
+
+test("mesh scenes: the 3D view reuses stage A's triangles (world frame) instead of preprocessing again", () => {
+  const sc = scene_file("ts", "test", "fixtures", "mesh_demo.expanded.json");
+  const A = shadow_geometry(sc);
+  const obj = sc.objects[0]!;
+  const rec = A.objects[0]!;
+  const from_a = mesh_positions(obj, rec);
+  const local = mesh_positions(obj);
+  assert.equal(from_a.world, true);
+  assert.equal(local.world, false);
+  assert.equal(from_a.positions.length, 16 * 9);
+  assert.equal(local.positions.length, from_a.positions.length);
+  // the same triangles: the local soup placed by transform_frame is the world soup (float32 rounding)
+  const [R, p] = transform_frame(obj.transform);
+  for (let k = 0; k < local.positions.length; k += 3) {
+    const x = [local.positions[k]!, local.positions[k + 1]!, local.positions[k + 2]!];
+    const w = [0, 1, 2].map((a) => R[a]![0]! * x[0]! + R[a]![1]! * x[1]! + R[a]![2]! * x[2]! + p[a]!);
+    close3(w, [from_a.positions[k]!, from_a.positions[k + 1]!, from_a.positions[k + 2]!], 1e-5, `vertex ${k / 3}`);
+  }
+  // a record of another object is not used
+  assert.equal(mesh_positions(obj, { ...rec, id: "other" }).world, false);
 });

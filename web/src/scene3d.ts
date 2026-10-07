@@ -6,15 +6,18 @@
 
 import * as THREE from "three";
 
-import { prepared_mesh, transform_frame } from "castplane";
-import type { Scene, SceneObject, StageA, Vec3 } from "castplane";
+import { transform_frame } from "castplane";
+import type { ObjectRecord, Scene, SceneObject, StageA, Vec3 } from "castplane";
+
+import { mesh_positions } from "./mesh3d.js";
 
 /** Per-object colours (cycled). */
 const PALETTE = [0xc9d6e8, 0xe8d3c3, 0xd2e3c8, 0xe6d9ef, 0xf0e2b6, 0xc8e4e4, 0xebc9cf, 0xd9d9d9];
 const LIGHT_COLOUR = 0xffcc33;
 
-/** The local-frame geometry of a primitive (castplane local frames: base on `z = 0`, axis `+z`). */
-export function primitive_geometry(obj: SceneObject): THREE.BufferGeometry {
+/** The geometry of a primitive in its local frame (castplane local frames: base on `z = 0`, axis `+z`); a mesh object
+ * with its stage-A record `rec` is the exception: world coordinates (`mesh_positions(...).world`, identity matrix). */
+export function primitive_geometry(obj: SceneObject, rec?: ObjectRecord): THREE.BufferGeometry {
   switch (obj.type) {
     case "box": {
       const [sx, sy, sz] = obj.size as Vec3;
@@ -38,15 +41,10 @@ export function primitive_geometry(obj: SceneObject): THREE.BufferGeometry {
       return new THREE.ExtrudeGeometry(shape, { depth: obj.height as number, bevelEnabled: false });
     }
     case "mesh": {
-      // contract §5.4.10 (phase 2): a BufferGeometry from the record's triangles — the core's preprocessing
-      // (`prepared_mesh`: scale applied, welded, the original surface's fans) in the local frame; flat normals
-      const prep = prepared_mesh(obj);
-      const positions = new Float32Array(prep.triangles.length * 9);
-      prep.triangles.forEach((t, k) => {
-        t.forEach((v, j) => positions.set(prep.mesh.vertices[v] as Vec3, 9 * k + 3 * j));
-      });
+      // contract §5.4.10 (phase 2): a BufferGeometry from the core's triangles (scale applied, welded, the original
+      // surface's fans) — stage A's record when given (no second preprocessing), else `prepared_mesh`; flat normals
       const geometry = new THREE.BufferGeometry();
-      geometry.setAttribute("position", new THREE.BufferAttribute(positions, 3));
+      geometry.setAttribute("position", new THREE.BufferAttribute(mesh_positions(obj, rec).positions, 3));
       geometry.computeVertexNormals();
       return geometry;
     }
@@ -100,10 +98,13 @@ export function build_scene3d(scene: Scene, A?: StageA): THREE.Group {
     // a mesh object may be open (the per-face fallback of §5.2.5): draw both sides of its triangles
     const material = new THREE.MeshLambertMaterial({ color: PALETTE[i % PALETTE.length],
       side: obj.type === "mesh" ? THREE.DoubleSide : THREE.FrontSide });
-    const mesh = new THREE.Mesh(primitive_geometry(obj), material);
+    // stage A's record of a mesh object carries its triangles over world-frame vertices: drawn with the identity
+    const rec = obj.type === "mesh" ? A?.objects.find((o) => o.id === obj.id) : undefined;
+    const world = rec !== undefined && rec.triangles !== undefined;
+    const mesh = new THREE.Mesh(primitive_geometry(obj, rec), material);
     mesh.name = obj.id;
     mesh.matrixAutoUpdate = false;
-    mesh.matrix.copy(object_matrix(obj));
+    mesh.matrix.copy(world ? new THREE.Matrix4() : object_matrix(obj));
     mesh.matrixWorldNeedsUpdate = true;
     mesh.castShadow = false;
     mesh.receiveShadow = false;

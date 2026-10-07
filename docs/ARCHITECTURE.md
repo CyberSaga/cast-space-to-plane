@@ -3536,7 +3536,9 @@ and the hidden-run SVG groups (§5.1.8). Nothing an M4–M6 case needs lies beyo
   verbatim. Python's cell indices are unbounded `int`s; the port keys its cell dictionary by one exact number per cell
   — the per-axis renumbering with gaps capped at 2 of the Python fast path (`_compressed_cell_keys`; a computed gap of
   two distinct integral floats is `>= 2` exactly when the true gap is), combined as `(c0·R + c1)·R + c2` — and falls
-  back to decimal-string keys (through `BigInt` beyond 2^52) when `R³ >= 2^53`. This is an encoding of the same
+  back to decimal-string keys (through `BigInt` beyond 2^52) when `R³ >= 2^53` (more than ~1.04e5 distinct cells on
+  one axis: reachable only by a direct `weld_map` call, `MESH_MAX_VERTICES` bounds `R` by 2·50 000 + 1 for a
+  validated mesh; `ts/test/meshprep.test.ts` forces it with 105 006 points). This is an encoding of the same
   dictionary: the visiting order, the 27 neighbours and the lowest-index rule are unchanged
   (`tests/test_ts_port.py::test_ts_weld_map_equals_the_reference_loop` compares the port with Python's
   `fast=False` loop on 13 point sets). The exact (`τ = 0`) path keys the float triple by its shortest decimal text, which
@@ -3564,8 +3566,10 @@ and the hidden-run SVG groups (§5.1.8). Nothing an M4–M6 case needs lies beyo
   list is now `{"two_lights.json"}`, the multi-light part's), and `tools/compare_svg.py` expands every scene with a
   mesh `path` before the port renders it. The web UI bundles `examples/*.json` as before, so `mesh_demo` shows the
   expand-first `SceneError` there; an expanded scene renders, its mesh drawn as a `BufferGeometry` of
-  `prepared_mesh`'s triangles in the local frame (both sides: a fallback mesh may be open), placed by
-  `transform_frame` like every primitive (§5.4.10 phase 2; `web/test/orbit.test.ts` checks both). No OBJ parser was
+  the core's triangles (both sides: a fallback mesh may be open): stage A's record (`triangles` over the welded
+  world-frame vertices, identity object matrix) when `build_scene3d` receives `A`, else `prepared_mesh`'s triangles
+  in the local frame placed by `transform_frame` like every primitive (§5.4.10 phase 2; `web/src/mesh3d.ts`,
+  `web/test/orbit.test.ts` checks both). No OBJ parser was
   added to `web/` (§5.4.10 does not ask for one).
 - **[implementation] (M7 phase 2, part 3) Cross-implementation evidence and cost.** Set v6: 46 of 50 cases pass
   `compare_documents` (the four `multilight_*` cases stay on `TODO_CASES`); `tools/compare_svg.py` on the 46 cases and
@@ -3575,12 +3579,33 @@ and the hidden-run SVG groups (§5.1.8). Nothing an M4–M6 case needs lies beyo
   smooth prisms incl. the 64-ray cap, a smooth UV sphere, centre-fan caps, a hollow box with the light in its cavity, a
   light inside the box, Möbius and Klein connectivity, meshes on bounded receivers, nine of them with hidden lines on)
   with both implementations: SVG byte-identical and JSON comparator-equal on all 47. A wider scratch differential (not
-  committed: 104 scenes, 60 seeds) agrees on every scene. The three ulp-amplifying scenes of the part-2 note were
+  committed: 104 scenes, seeds 0–59) agrees on every scene; `make_mesh_scene(60)` does not (the review-fix note
+  below). The three ulp-amplifying scenes of the part-2 note were
   re-measured and are unchanged (the canvas-corner polygon 4 vs 6 vertices, `zbuffer_random_scene(28)`'s `rx`, the
   light at the camera centre): none involves a mesh. On the CI container (node 22.22.0) the `bench.py --scene mesh10k`
   scene (one mesh of 10 000 unwelded triangles) takes ≈ 0.2–0.3 s for `render` and ≈ 0.17–0.25 s for
   `preprocess_mesh` (the weld ≈ 60 ms of it), against ≈ 0.22–0.25 s / 0.09–0.11 s for the Python reference; not gated
   (§5.2.7).
+- **[decision, implementation] (M7 phase 2, part 3 review fixes)** (1) *Mesh differential and the deferred
+  `covering_segments` note.* `make_mesh_scene(60)` is the only mesh scene of seeds 0–99 where `compare_documents`
+  fails (`construction.segments[1].points[1][1]`: 38.84676025274651 vs 38.8467587612719, SVG byte-identical): the ray
+  of `obj1.v0`, a vertex at world `z = 1e-6` m with `|S' − Q'| / |L' − Q'|` ≈ 3.2e-7, i.e. the M7-review case
+  "`covering_segments` is ill-conditioned when `S' ≈ Q'`" — not a mesh defect. The mesh differential is subject to the
+  same `|S' − Q'| >= 1e-3 · |L' − Q'|` condition; `tests/test_ts_port.py::test_ts_mesh_seed60_is_the_deferred_covering_segments_case`
+  pins that every difference of that scene is such a ray, and `_mesh_scenes` keeps seeds 0–11 (widen it only past
+  scenes that pass, or after the maintainers' versioned amendment). (2) *Weld string keys.* The string / `BigInt`
+  fallback stays (Python's `weld_map` accepts any point count; a direct call can need it) and is now covered: the old
+  test "cells beyond 2^52 … (BigInt keys)" ran on the compressed number keys (`R = 5`) and is renamed for what it
+  checks; a new test welds 105 000 points at spacing `3τ` plus six probes (one at `x = 1e13`, cell index `1e16 > 2^52`)
+  and asserts string keys and the brute-force lowest-index rule. (3) *Dead code.* An unused `shadow_arc_key` import of
+  `pipeline.ts` is removed; since the §5.4.1 `ts/tsconfig.json` block is literal, `noUnusedLocals` is not added there:
+  `tests/test_ts_port.py::test_ts_and_web_sources_have_no_unused_locals` runs `tsc --noEmit --noUnusedLocals` on the
+  `ts` test config and both `web` configs. (4) *Web mesh geometry.* `build_scene3d(scene, A)` no longer runs
+  `preprocess_mesh` a second time per mesh object (≈ 0.2 s for the 10k-triangle mesh): `web/src/mesh3d.ts::mesh_positions`
+  (DOM- and three-free) takes stage A's `triangles` over the record's world vertices and the mesh is drawn with the
+  identity matrix; without `A` it falls back to `prepared_mesh` in the local frame. To test it under node,
+  `web/tsconfig.test.json` compiles `src/mesh3d.ts` besides `src/orbit.ts` and `src/download.ts` (an addition to the
+  §5.4.1 file list of that config).
 
 ### 5.5 M8 — STEP import (spec §9 row "STEP", spec §10 M8) — a loader, outside the core
 
