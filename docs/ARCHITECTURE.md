@@ -1889,6 +1889,12 @@ unordered world pairs with equal `silhouette` / `back` flags and `segment` endpo
   every light as §5.2.8 says, but its validation check fails with `lights` (exit 2, nothing written) until M6 is merged;
   `--light NAME` imports one light. The re-load tests branch on `validate_scene` accepting two lights (they assert
   the `lights` failure before M6 and the two re-loaded lights after it), so they need no edit at the M6 merge.
+  **Obsolete since M6 (updated at the M8 merge):** M6 lifted the one-light row, so `castplane import` of the fixture
+  `import_scene.gltf` writes both lights (`Lamp`, `Spot` as a point light, note `IMPORT_SPOT_AS_POINT`, exit 0) and
+  `castplane render` of the result draws `cast_shadow.Lamp`, `cast_shadow.Spot` and `cast_shadow.umbra` (one umbra
+  entry on `ground` with lights `[Lamp, Spot]`, `warnings []`). The branch and its pre-M6 assertions were removed:
+  `test_import_fixture_reloads_with_both_lights_or_one_light` and `test_cli_import_gltf_with_two_lights` now assert
+  the two-light re-load and render unconditionally.
 - **[decision, implementation] (M5 part 2) glTF importer details.** (1) A node selection is a subtree (§5.2.1), so a
   mesh node whose ancestor is already emitted as a mesh object is not emitted again (only the topmost mesh node of a
   branch becomes an object; its object then holds the descendants' meshes) — otherwise the geometry would be imported

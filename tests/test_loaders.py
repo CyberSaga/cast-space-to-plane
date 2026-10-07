@@ -50,18 +50,6 @@ def mesh_scene(path, **keys) -> dict:
     return scene
 
 
-def multi_light_supported() -> bool:
-    """M6 lifts the v1 "exactly one light" row; until then a two-light scene fails at ``lights``."""
-    scene = basic_scene()
-    scene["lights"].append({"id": "lamp2", "type": "point", "position": [1.0, 3.0, 3.5]})
-    try:
-        validate_scene(scene)
-    except SceneError as exc:
-        assert exc.field == "lights"
-        return False
-    return True
-
-
 # --------------------------------------------------------------------------- glTF building helpers
 def gltf_doc(meshes_positions, nodes, *, indices=None, extra=None, mode=4):
     """A glTF dict with one data-URI buffer; ``meshes_positions[m]`` are glTF-axis float32 positions."""
@@ -506,12 +494,13 @@ def test_import_fixture_meshes_reload_through_their_node_references():
 def test_import_fixture_reloads_with_both_lights_or_one_light():
     scene, _ = fixture_import()
     expanded, _ = expand_scene(scene, FIX)
-    if multi_light_supported():
-        assert [lt["id"] for lt in validate_scene(expanded)["lights"]] == ["Lamp", "Spot"]
-    else:
-        with pytest.raises(SceneError) as info:                  # until M6 the v1 lights row applies
-            validate_scene(expanded)
-        assert info.value.field == "lights"
+    # M6 lifted the v1 "exactly one light" row: both imported lights re-load and render
+    assert [lt["id"] for lt in validate_scene(expanded)["lights"]] == ["Lamp", "Spot"]
+    two = render(validate_scene(expanded))["geometry"]
+    assert {(o["light"], o["object"]) for o in two["shadows"]} == \
+        {(lt, ob) for lt in ("Lamp", "Spot") for ob in ("node3", "Cube", "Pillar")}
+    assert [(u["receiver"], u["lights"]) for u in two["umbra"]] == [("ground", ["Lamp", "Spot"])]
+    assert two["umbra"][0]["polygons"] and two["warnings"] == []
     one, notes = fixture_import(light="Lamp")
     assert [lt["id"] for lt in one["lights"]] == ["Lamp"] and notes == []
     doc = render(validate_scene(expand_scene(one, FIX)[0]))["geometry"]
@@ -693,12 +682,12 @@ def test_cli_import_is_deterministic_and_quiet(tmp_path, capsys):
 def test_cli_import_gltf_with_two_lights(tmp_path, capsys):
     code, scene = run_import(tmp_path, FIX / "import_scene.gltf")
     err = capsys.readouterr().err
-    if multi_light_supported():
-        assert code == EXIT_OK and [lt["id"] for lt in scene["lights"]] == ["Lamp", "Spot"]
-        assert "note: IMPORT_SPOT_AS_POINT ['Spot']" in err
-    else:
-        # until M6 merges, the assembled two-light scene fails the validation check (exit 2, nothing written)
-        assert code == EXIT_INPUT and scene is None and "error: lights:" in err
+    # M6 lifted the one-light rule: the two-light import is written and renders with both lights
+    assert code == EXIT_OK and [lt["id"] for lt in scene["lights"]] == ["Lamp", "Spot"]
+    assert "note: IMPORT_SPOT_AS_POINT ['Spot']" in err
+    assert main(["render", str(tmp_path / "scene.json"), "-o", str(tmp_path / "two"), "-q"]) == EXIT_OK
+    svg = next((tmp_path / "two").glob("*.svg")).read_text(encoding="utf-8")
+    assert all(f'id="{g}"' in svg for g in ("cast_shadow.Lamp", "cast_shadow.Spot", "cast_shadow.umbra"))
     code, scene = run_import(tmp_path, FIX / "import_scene.gltf", "--light", "Spot", out="spot.json")
     assert code == EXIT_OK and scene["lights"] == [{"id": "Spot", "type": "point", "position": [-2.0, 0.0, 3.0]}]
     assert "note: IMPORT_SPOT_AS_POINT ['Spot']" in capsys.readouterr().err
