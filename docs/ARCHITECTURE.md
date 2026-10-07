@@ -2554,6 +2554,14 @@ dependency (shapely, pyclipper); `float32` or GPU paths.
   and off: 8 312 names, 0 differences), so no golden or expected file changes. The §5.0.4 label sentence is amended
   accordingly; the TS writer (§5.4.6) must use the same parse. Test:
   `tests/test_multilight.py::test_light_ids_shadow_and_foot_keep_their_labels`.
+- **[decision, implementation] (final review, determinism-perf#2 / m4-hidden#1) Benchmark rows without a target.**
+  `benchmarks/bench.py` printed the single-light spec §8 verdicts (`target < 1000 ms FAIL`, `< 100 ms FAIL`, `soft target
+  < 5000 ms miss`) on the `--lights 2|3` and `--scene mesh10k` rows, to which §5.0.9 / §5.3.9 / §5.2.7 attach no target.
+  Those rows now print `no target (spec §8: the benchmark scene, one light)`; the `--json` output and the exit status
+  (`--gate`) are unchanged. The mesh10k hidden-lines row (≈ 5.8 s on the container, brute-force Möller–Trumbore in
+  `hidden._first_mesh`, which §5.1.6.2 permits) is recorded in `benchmarks/README.md` as informational; no BVH is added.
+  Tests: `tests/test_bench.py::test_bench_target_free_variants_print_no_target`,
+  `test_bench_readme_records_the_mesh10k_hidden_lines_row`.
 
 ### 5.4 M7 — TypeScript port of the core and the three.js web UI (spec §9 row "TypeScript 移植", spec §10 M7)
 

@@ -9,3 +9,5 @@
 - m4-hidden#2: the M4 depth-buffer guard note counts 29 scenes (was 28).
 - docs-contract#5: README, USAGE and contract §5.0.6 / §5.1.8 document the `cast_shadow.<light>.<object>.<r>.outline` / `.conics` ids of records on non-default receivers.
 - docs-contract#6: contract §5.0.1 names both reserved-id messages (`reserved id`, `reserved id in a multi-light scene`), matching the loader.
+- determinism-perf#2: `benchmarks/bench.py` prints `no target` instead of a single-light PASS/FAIL verdict on the full / camera-only / hidden-lines rows of the target-free `--lights 2|3` and `--scene mesh10k` variants.
+- m4-hidden#1: `benchmarks/README.md` records the informational mesh10k hidden-lines row (≈ 5.8 s, no target; brute-force occluder test permitted by §5.1.6.2); no code change.
