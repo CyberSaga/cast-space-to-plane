@@ -3702,6 +3702,58 @@ and the hidden-run SVG groups (§5.1.8). Nothing an M4–M6 case needs lies beyo
   on the Python side (order `per_receiver` by `doc["receivers"]`, which leaves every `render` output unchanged), in
   files M7 may not touch (`docs/PLAN-v2.md` ownership table); it is deferred to the owner of `svg.py` /
   `svg_multilight.py`.
+- **[implementation] (M7 phase 2, part 5, closing) Step 11 is complete on `wt/m7`; acceptance recorded.** Both
+  runners are green on set v6: the Python runner passes 50 of 50 cases. The TypeScript runner reports 50 `ok
+  conformance: <case>` tests with `# fail 0`, `# skipped 0` and `# todo 0`. The line "both runners green on v6" is
+  in the v6 entry of `tests/conformance/CHANGELOG.md` (§5.4.0 (iii), §5.0.8); no expected file or rules change.
+  The runner is final. `TODO_CASES` of `ts/test/conformance.test.ts` and `TODO_EXAMPLES` of
+  `ts/test/determinism.test.ts` are removed, not just empty. The `ts` CI job gains a step that runs the conformance
+  runner alone with the TAP reporter and fails on a failed, skipped or todo case. `tests/test_ts_port.py` checks
+  the same from Python (`test_ts_conformance_runner_is_green_on_the_whole_set`, which compares every case of
+  `case_names()`). It also compares the SVG byte for byte, and the JSON through the comparator, on all eight
+  examples. `mesh_demo` goes through its committed expansion.
+- **[decision, implementation] (M7 phase 2, part 5) The web UI at the M4–M6 format (§5.4.10 phase 2).**
+  - **Receivers.** The unbounded ground stays the `PlaneGeometry` of 4× the scene extent with a `GridHelper`. Each
+    bounded receiver is drawn as a plate over its `bounds`: a `BufferGeometry` of the triangle fan of the validated
+    convex polygon, in world coordinates, plus a closed outline.
+  - **Lights.** Every light gets its own helper colour. The three.js shading lights share one total intensity
+    (`2.2 / N`), so a scene with several lights is not drawn brighter. The DOM- and three-free data for both lives
+    in `web/src/helpers3d.ts`, which the web tests cover.
+  - **Hidden style.** A *Hidden style* select (`dashed` / `omit`, disabled while *Hidden lines* is off) is
+    initialised from `output.hidden_style`. It is passed to `write_svg`, to the SVG download and to the scene
+    download (`output.hidden_style`). The contract names only the checkbox; the select is the UI side of the
+    `hidden_style` argument that §5.1.8 gives the writer.
+  - **Examples menu.** It lists every `examples/*.json` (eight files), because the `import.meta.glob` of
+    §5.4.10 lists them all. The "five files" of §5.4.10 is the phase-1 count.
+  - **Display fix in `scene3d.ts`.** The point of the unbounded ground plane nearest the scene centre now uses
+    the receiver convention `n·X + offset = 0`. Phase 1 used `n·X = offset`, which agrees for the ground; only
+    the ground can be unbounded, so no picture changes.
+  - **Smoke check.** `web/scripts/smoke.mjs` ran three times in headless Chromium 141 and exited 0 with no failed
+    check. The bundled core wrote SVG byte-identical to Python for all eight examples. It loaded the path-only
+    `mesh_demo` example from its expansion, after reporting the "expanded first" error. Its phase-2 checks passed:
+    - `wall_and_ground`: hidden lines on and dashed, the `objects.hidden` sub-groups present, emptied by `omit`
+      and gone when switched off; the wall drawn as a plate;
+    - the house mesh shown;
+    - `two_lights`: two helpers, 119 umbra pieces at rest, 0 during a drag, recomputed after it.
+
+    The screenshots are `docs/images/web_ui_{wall_and_ground,mesh_demo,two_lights}.png`, and `web_ui.png` was
+    refreshed for the new toolbar.
+- **[implementation] (M7 phase 2, part 5) The benchmark at the close of phase 2 (§5.4.9).**
+  - **Acceptance runs.** The three runs of the acceptance command all exit 0 with `--gate both`. The camera-only
+    minima are 72, 62 and 68 ms; the full renders 387, 394 and 344 ms.
+  - **Gate decision.** Run 1 lies above the 70 ms margin line. Run interleaved against the part-1 tree
+    (`d041afe`, three runs each), the camera-only minima are 61–66 ms for part 1 and 62–63 ms for this tree, so
+    parts 2–5 did not slow the single-light path; the difference is container noise. Over all six runs of this
+    tree the smallest minimum is 62 ms, and five of the six are below 70 ms. The literal stays `--gate both`, so
+    nothing was loosened. The step-7 rule still governs a hosted runner.
+  - **Hidden style.** The benchmark now passes the scene's `output.hidden_style` to `write_svg`. The §5.4.9
+    protocol writes `write_svg(scene.output.layers)`; for `benchmark_100.json` (hidden lines off, default style)
+    the output is the same.
+  - **Scene rows.** `--scene` rows were added for `wall_and_ground` (hidden lines on; camera-only ≈ 1 ms) and
+    `two_lights` (umbra on; ≈ 5 ms), with no target, in `benchmarks/README.md`.
+  - **Open items.** The deferred Python-side note above (`per_receiver` marker order on a reloaded document) and
+    the deferred `covering_segments` ill-conditioning of part 3 remain open proposals for the owners of those
+    Python files. Phase 2 adds no other deviation.
 
 ### 5.5 M8 — STEP import (spec §9 row "STEP", spec §10 M8) — a loader, outside the core
 

@@ -196,6 +196,20 @@ def test_ts_suite_passes(built_port):
     assert m and int(m.group(1)) >= len(tc.case_names()), tail
 
 
+def test_v6_changelog_entry_records_both_runners_green():
+    """Acceptance of M7 phase 2 (contract §5.4.0 (iii), §5.0.8 row "v6 M7 phase 2"): the v6 entry of the conformance
+    changelog records "both runners green on v6" with the TypeScript runner's result (phase 2 changes no expected
+    file and no rule, so it adds no version of its own)."""
+    text = (ROOT / "tests" / "conformance" / "CHANGELOG.md").read_text(encoding="utf-8")
+    versions = [int(v) for v in re.findall(r"^## v(\d+) ", text, re.M)]
+    assert 6 in versions
+    v6 = re.split(r"^## v\d+ ", text, flags=re.M)[versions.index(6) + 1]
+    line = next((ln for ln in v6.splitlines() if ln.startswith("- both runners green on v6")), None)
+    assert line is not None, "the v6 entry lacks the 'both runners green on v6' line"
+    assert "50 of 50 cases" in line
+    assert "ts/test/conformance.test.ts" in line and "# todo 0" in line and "# fail 0" in line
+
+
 @needs_node
 def test_ts_conformance_runner_is_green_on_the_whole_set(built_port):
     """The final TypeScript conformance runner (contract §5.4.8, §5.4.0 phase 2: "both runners green on v6"): run

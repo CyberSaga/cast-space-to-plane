@@ -629,7 +629,7 @@ M4 改變的適用範圍（合約 §5.1.9）：`LIGHT_BELOW_RECEIVER`、`DIRECTI
 
 ## 4. TypeScript API 與網頁 UI（合約 §5.4）
 
-核心有一份 TypeScript 移植（`ts/`，npm 套件名 `castplane`，版本與 Python 相同為 `0.1.0`，不發佈）。另有一個 three.js 網頁 UI（`web/`）建在移植之上。Python 仍是**參考實作**：移植以一致性測試集（目前 34 案例，v3）驗收，對測試集沒有任何權限（`tests/conformance/README.md` 規則 3）。
+核心有一份 TypeScript 移植（`ts/`，npm 套件名 `castplane`，版本與 Python 相同為 `0.1.0`，不發佈）。另有一個 three.js 網頁 UI（`web/`）建在移植之上。Python 仍是**參考實作**：移植以一致性測試集驗收，對測試集沒有任何權限（`tests/conformance/README.md` 規則 3）。第一階段以 v3 的 34 個案例驗收；第二階段（合約 §5.4.0 / §5.4.14，M7 第 11 步）把 M4–M6 的格式（有界受影面、取樣式消隱、網格、多光源與本影）移植完成，v6 的 50 個案例兩個執行器都全部通過，記錄在 `tests/conformance/CHANGELOG.md` 的 v6 條目。
 
 ### 4.1 建置、測試、基準
 
@@ -646,7 +646,7 @@ npm run -w web build && npm run -w web preview             # 網頁 UI（靜態�
 npm run -w web test                                        # orbit / download 單元測試
 ```
 
-`npm test` 與 `npm run build` 會依 ts → web 的順序執行兩個 workspace。Python 的 `tests/test_ts_port.py` 檢查兩邊共用的檔案：版本、`rules.json` 與比對常數、`INT_KEYS`、核心不碰 node API、npm 版本釘選。PATH 上有 node 時，它也會建置並執行移植的整套測試、比對五個範例的 SVG（逐位元組）與 JSON，並跑網頁的單元測試。
+`npm test` 與 `npm run build` 會依 ts → web 的順序執行兩個 workspace。Python 的 `tests/test_ts_port.py` 檢查兩邊共用的檔案：版本、`rules.json` 與比對常數、`INT_KEYS`、核心不碰 node API、npm 版本釘選。PATH 上有 node 時，它也會建置並執行移植的整套測試；單獨執行 TypeScript 一致性執行器，要求每個案例各有一個通過的測試、沒有失敗、略過或 todo；比對全部八個範例（含 M4–M6 的 `wall_and_ground`、`mesh_demo`、`two_lights`）的 SVG（逐位元組）與 JSON；並跑網頁的單元測試。
 
 ### 4.2 API
 
@@ -683,7 +683,7 @@ const out   = render(scene, camera, hidden_lines, hidden_style); // {geometry: d
 
 **相機覆寫一律明確建構。** 傳給 `project_scene` 的相機區塊要從鏡頭欄位逐一建出：`{position, target, roll_deg, focal_length_mm, frame_mm, shift_mm, near_m}`，不要寫 `{...scene.camera, position, target}`。若場景相機是 yaw/pitch 形式（例如 `examples/directional.json`），展開後會同時帶 `yaw_deg` 與 `target`，`validate_camera` 會拒絕。`ts/test/helpers.ts` 的 `camera_override` 與網頁 UI 的 `camera_from_orbit` 都照這個規則建構。
 
-**數值與確定性。** 全程 binary64，V8 不做 FMA 收縮。因為 numpy / BLAS 的求和順序不同，兩個實作在最後幾位會有 ulp 差異，所以 JSON 以測試集的容差比對。實測 34/34 通過，最差的葉節點為容差的 0.22。SVG 寫出器在 34 個案例、五個範例與 `benchmark_100.json` 上都與 Python 逐位元組相同。同一個 node 版本中，相同輸入的 JSON 與 SVG 字串位元相同。
+**數值與確定性。** 全程 binary64，V8 不做 FMA 收縮。因為 numpy / BLAS 的求和順序不同，兩個實作在最後幾位會有 ulp 差異，所以 JSON 以測試集的容差比對。第一階段實測 34/34 通過，最差的葉節點為容差的 0.22；第二階段 v6 的 50/50 通過。SVG 寫出器在 50 個案例、八個範例與 `benchmark_100.json` 上都與 Python 逐位元組相同（多光源場景若物體立在受影面上，本影碎片的切分可能不同而區域相同，見 §4.2 多光源一段；測試集與範例中沒有這種差異）。同一個 node 版本中，相同輸入的 JSON 與 SVG 字串位元相同。
 
 ### 4.3 基準（規格 §8）
 
@@ -693,6 +693,8 @@ const out   = render(scene, camera, hidden_lines, hidden_style); // {geometry: d
 - 只換相機約 55–63 ms（最小值），低於 100 ms 目標，也低於 70 ms 的餘裕線，所以 CI 的 `ts` job 以 `--gate both` 為閘門；
 - Python 端維持 `--gate full`（D17）。
 
+第二階段收尾時（移植已含 M4–M6）重新量了三次：完整渲染 344–394 ms，只換相機 62–72 ms（最小值），三次都以 `--gate both` 通過。其中一次的 72 ms 超過 70 ms 餘裕線。為了判斷是不是退步，把第一部分的版本（`d041afe`）與目前版本交錯各量三次，結果相同（61–66 ms 對 62–63 ms），差異來自容器的雜訊，所以閘門字面值不變（`--gate both`）。`--scene` 可量其他場景（不設目標）：`examples/wall_and_ground.json`（場景設定開啟消隱）只換相機約 1 ms，`examples/two_lights.json`（本影開啟）約 5 ms。
+
 數字見 `benchmarks/README.md`。
 
 ### 4.4 網頁 UI（`web/`）
@@ -700,12 +702,13 @@ const out   = render(scene, camera, hidden_lines, hidden_style); // {geometry: d
 vite + three.js（版本釘選：three 0.186.1、vite 8.3.3）。`vite build` 產生靜態檔，不需要伺服器。執行時不連網，範例在建置時打包進去。
 
 - **載入**：
-  - 「Example」選單（五個 `examples/*.json`）、檔案選擇器，或把 JSON 檔拖放到頁面任何位置；
+  - 「Example」選單（全部 `examples/*.json`，八個檔案）、檔案選擇器，或把 JSON 檔拖放到頁面任何位置；
   - 不是 JSON 的檔案顯示「not a JSON file」；
   - 場景無效時，錯誤面板顯示 `SceneError` 的欄位路徑與訊息，原本的場景保留。
 - **3D 顯示**：
-  - 方塊、圓柱、圓錐、球、稜柱與內嵌網格（核心前處理後的三角形 `prepared_mesh`，雙面繪製）以核心的 `transform_frame` 擺放；範例 `mesh_demo` 只有 `path`，網頁上顯示「必須先展開」的錯誤，請載入展開後的場景；
-  - 點光源畫成小球，平行光畫成箭頭；地面加格線；
+  - 方塊、圓柱、圓錐、球、稜柱與內嵌網格（直接取 A 段紀錄裡核心前處理後的三角形，不再前處理一次，雙面繪製）以核心的 `transform_frame` 擺放；範例 `mesh_demo` 只有 `path`，網頁上顯示「必須先展開」的錯誤，請載入展開後的場景（例如 `ts/test/fixtures/mesh_demo.expanded.json`，或 `castplane import FILE -o scene.json --inline` 的輸出）；
+  - 每盞光源各有一個輔助物件與自己的顏色：點光源畫成小球，平行光畫成箭頭；三維著色用的 three.js 光源平分同一個總亮度，所以多盞光源不會讓畫面變亮；
+  - 無界的地面畫成大平面加格線；每個有界受影面（例如 `wall_and_ground` 的牆）依它的 `bounds` 畫成一塊板子（凸多邊形的三角扇形）並描出邊框；
   - three.js 相機直接由核心的 `camera_matrix` 建出，所以 WebGL 畫面與 SVG 疊圖是同一台 castplane 相機的兩種渲染；
   - three.js 不產生任何陰影，畫面上的影子全部來自移植的核心。
 - **相機**：
@@ -715,15 +718,16 @@ vite + three.js（版本釘選：three 0.186.1、vite 8.3.3）。`vite build` �
 - **SVG 疊圖**：
   - 每個動畫影格最多重算一次（最新的相機為準）：沿用快取的 A 段，執行 `project_scene` → `compose` → `write_svg`；
   - 圖層勾選框以 CSS 隱藏圖層；「3D view」勾選框隱藏 WebGL 畫面；
-  - 「Hidden lines」勾選框（第二階段）：初值取場景的 `output.hidden_lines`，以 `hidden_lines` 傳給 `compose`，SVG 用場景的 `output.hidden_style`；拖曳中的影格不做消隱（合約 §5.4.11 允許），放開後的靜止影格重算；
+  - 「Hidden lines」勾選框（第二階段）：初值取場景的 `output.hidden_lines`，以 `hidden_lines` 傳給 `compose`；「Hidden style」選單（`dashed` / `omit`，勾選框關閉時停用）初值取場景的 `output.hidden_style`，傳給 `write_svg`；
+  - 拖曳中的影格不做消隱，兩盞以上光源時也不算本影（`project_scene(..., umbra = false)`；合約 §5.4.11 允許），放開後的靜止影格重算；A 段在載入場景時算一次並快取，每個影格只走換相機的路徑；
   - SVG 超過 250 000 字元的場景（例如 `benchmark_100.json`）在拖曳時改用 `<img src="blob:…">` 顯示同一份寫出器文字，放開滑鼠後恢復 DOM 疊圖。
 - **下載**：
   - 「Download SVG」：勾選的圖層，`<名稱>.svg`；
   - 「Download JSON」：§6.2 文件，`<名稱>.json`；
-  - 「Download scene (current camera)」：場景加上目前的相機區塊與「Hidden lines」的狀態（寫成 `output.hidden_lines`），`<名稱>.scene.json`。用 Python 命令列的 `render` 指令渲染這個檔案會重現同一張 SVG（已驗證逐位元組相同）；
+  - 「Download scene (current camera)」：場景加上目前的相機區塊、「Hidden lines」的狀態（寫成 `output.hidden_lines`）與「Hidden style」（寫成 `output.hidden_style`），`<名稱>.scene.json`。用 Python 命令列的 `render` 指令渲染這個檔案會重現同一張 SVG（已驗證逐位元組相同）；
   - 「Copy camera block」：把目前的相機區塊複製到剪貼簿。
 - **面板**：
-  - 狀態列顯示 A 段 ms（快取）、`core ms`（B + C + SVG）、`dom ms`（疊圖更新）、疊圖模式，以及點／邊／作圖線數量；
+  - 狀態列顯示 A 段 ms（快取）、`core ms`（B + C + SVG）、`dom ms`（疊圖更新）、疊圖模式、點／邊／作圖線數量（所有光源的作圖線）、本影碎片數（兩盞以上光源），以及光源與受影面的 id；
   - 警告表列出目前文件的 `code`、`ids` 與 `message`。
 
-五個範例與 `benchmark_100.json` 拖曳時的 `core ms` / `dom ms` 實測見 `web/README.md`：範例每格約 1–2 ms，`benchmark_100.json` 約 57–63 ms（`<img>` 模式）。截圖見 `docs/images/web_ui.png`。
+範例與 `benchmark_100.json` 拖曳時的 `core ms` / `dom ms` 實測見 `web/README.md`：八個範例每格約 1–3 ms，`benchmark_100.json` 約 66–78 ms（`<img>` 模式，第二階段量測）。截圖見 `docs/images/web_ui.png`，第二階段的三張是 `docs/images/web_ui_wall_and_ground.png`（開啟消隱：箱子背面的邊畫成虛線，牆畫成有界的板子）、`docs/images/web_ui_mesh_demo.png`（網格房子與圓柱，房子由展開後的場景載入）與 `docs/images/web_ui_two_lights.png`（兩盞點光源各有一個輔助小球，兩組影子與較深的本影）。

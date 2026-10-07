@@ -79,10 +79,11 @@ B = castplane.project_scene(scene, A, camera=camera, umbra=False)   # umbra[].po
 
 ### 網頁 UI / TypeScript
 
-核心另有一份 TypeScript 移植（`ts/`，零執行期相依，函式名稱與 Python 相同），以同一個一致性測試集驗收（34/34）。SVG 輸出與 Python 逐位元組相同。只換相機的重算在 node 上約 55–63 ms，達到規格 §8 的 < 100 ms。`web/` 是建在移植上的 three.js 網頁 UI，功能包括：
+核心另有一份 TypeScript 移植（`ts/`，零執行期相依，函式名稱與 Python 相同），涵蓋 M4–M6 的全部格式：有界受影面、取樣式消隱、網格物件（吃展開後的內嵌 `data`）、多光源與本影。它以同一個一致性測試集驗收：v6 的 50/50，兩個執行器都通過。SVG 輸出在全部案例與範例上都與 Python 逐位元組相同。只換相機的重算在 node 上約 55–72 ms，達到規格 §8 的 < 100 ms。`web/` 是建在移植上的 three.js 網頁 UI，功能包括：
 
 - 開啟或拖放場景 JSON，也可以從範例選單載入；
-- 以 3D 顯示物件、光源與地面，用滑鼠拖曳相機，用滑桿調整焦距與滾轉；
+- 以 3D 顯示物件（含網格）、每盞光源、地面與有界受影面（板子），用滑鼠拖曳相機，用滑桿調整焦距與滾轉；
+- 消隱開關與虛線／省略樣式選單；
 - 作圖線稿每個影格由移植的核心重新寫出 SVG，疊在 3D 畫面上；
 - 可下載 SVG、JSON，以及帶目前相機的場景檔（Python 命令列可重現同一張圖）。
 
@@ -94,7 +95,7 @@ npm run -w web preview           # 本機開啟 web/dist
 npm test                         # TypeScript 與網頁的測試
 ```
 
-說明見 [`docs/USAGE.md`](docs/USAGE.md) §4、[`ts/README.md`](ts/README.md) 與 [`web/README.md`](web/README.md)。截圖：[`docs/images/web_ui.png`](docs/images/web_ui.png)。
+說明見 [`docs/USAGE.md`](docs/USAGE.md) §4、[`ts/README.md`](ts/README.md) 與 [`web/README.md`](web/README.md)。截圖：[`docs/images/web_ui.png`](docs/images/web_ui.png)，以及第二階段的 [`web_ui_wall_and_ground.png`](docs/images/web_ui_wall_and_ground.png)（開啟消隱）、[`web_ui_mesh_demo.png`](docs/images/web_ui_mesh_demo.png)、[`web_ui_two_lights.png`](docs/images/web_ui_two_lights.png)。
 
 ## 作圖線是什麼
 
@@ -229,7 +230,7 @@ npm test                         # TypeScript 與網頁的測試
 | M4 多受影面與隱藏線 | 有界受影面、逐面裁切、轉折影、取樣式隱藏線、visibility 欄位 | 完成（已合併到主分支，一致性測試集 v4）：任意平面的有界凸受影面、bounds 裁切與錨點規則、轉折影、`RECEIVER_UNLIT`、逐受影面作圖線、取樣式消隱（`hidden_lines` 預設關閉，`--hidden-lines`）、9 個一致性案例；34 個既有案例在合併時做了一次鍵新增重產（一致性 v4，合約 §5.0.8） |
 | M5 網格匯入 | OBJ、glTF/GLB 載入、前處理管線 | 完成（已合併到主分支，一致性測試集 v5）：`mesh` 物件（`path` / 內嵌 `data`）、`castplane.meshprep` 前處理（焊接 → 退化面 → 流形與方向 → 共面合併 → 平滑／特徵邊）、非流形逐面退路、`castplane.io` 載入器（OBJ、glTF / GLB、STL / PLY 經選用的 trimesh）與 `castplane import`；3 個網格一致性案例；`benchmarks/bench.py --scene mesh10k` |
 | M6 多光源 | 多光源影子分組、疊影規則、SVG 子圖層 | 完成（已合併到主分支，一致性測試集 v6）：任意數量的光源、每個光源單獨以 v1 / M4 公式計算（與單光源文件逐位元相同）、本影（`castplane.umbra` 純 numpy 掃描線核心，只讀畫出的影子多邊形）、半影由各光源子群組的較淡填色呈現、`form_shadow_core`、`constructions`、曲面作圖點帶光源 id、SVG 每光源子群組與 `cast_shadow.umbra` / `form_shadow.core`、`castplane info` 列出每個光源；4 個多光源一致性案例；`benchmarks/bench.py --lights 2\|3`、`--no-umbra`；單光源文件與 SVG 完全不變 |
-| M7 TypeScript 移植與網頁 UI | 核心移植、three.js 場景顯示、相機拖曳 | 第一階段完成（合約 §5.4 第 1–10 步）：TypeScript 核心（一致性測試集 v3 34/34，SVG 與 Python 逐位元組相同）、TypeScript 基準（只換相機 55–63 ms，CI `--gate both`）、three.js 網頁 UI（`web/`）、CI 的 `ts` / `web` job。第二階段（M4–M6 格式的移植、v6）待 M4–M6 合併後進行（`docs/PLAN-v2.md`） |
+| M7 TypeScript 移植與網頁 UI | 核心移植、three.js 場景顯示、相機拖曳 | 完成（合約 §5.4 第 1–11 步，在 `wt/m7` 分支）：第一階段為 TypeScript 核心（一致性測試集 v3 34/34，SVG 與 Python 逐位元組相同）、TypeScript 基準（只換相機 55–63 ms，CI `--gate both`）、three.js 網頁 UI（`web/`）與 CI 的 `ts` / `web` job；第二階段移植 M4–M6 的格式（有界受影面、消隱、網格、多光源與本影），v6 的 50/50 兩個執行器都通過（記錄於 `tests/conformance/CHANGELOG.md` v6），執行器沒有 todo 清單；網頁 UI 顯示有界受影面、網格與多盞光源，加上消隱開關與樣式選單；重新量測只換相機 62–72 ms，閘門維持 `--gate both` |
 | M8 STEP 評估 | 可行性報告、原型解析器 | 完成（已合併到主分支，一致性測試集仍為 v6，不新增案例）：原型完成（Part-21 解析器、四種基元、`castplane import`）；網格退路經 M5 內嵌網格型別：可行性報告 [`docs/STEP.md`](docs/STEP.md)；`castplane.io.part21`（純 stdlib）與 `castplane.io.step`（`cylinder` / `sphere` / `cone` / `box` 辨識、mm → m 以除法換算）、場景裡的 `{"type": "step", "path": …}` 物件在驗證前展開、`castplane import` 讀 `.step` / `.stp`（選項 `--solid K`、`--fallback error\|mesh`）；`cylinder.step` 展開後渲染與 `examples/basic.json` 逐位元相同；網格化退路需選用的 `castplane[step]`（cadquery-ocp）；一致性測試集不變 |
 
 ## 與規格文件的差異
@@ -252,7 +253,7 @@ npm test                         # TypeScript 與網頁的測試
 14. **相機滾轉方向、yaw/pitch 形式、`det R = −1`** 等慣例在規格中未定義，見 `docs/ARCHITECTURE.md` §2.2（含測試向量）。
 15. **確定性。** 每個輸出浮點數先 `+ 0.0`（消除 −0.0），警告去重並排序，相同輸入兩次渲染必須位元相同（有測試）。
 16. **一致性測試集的比對。** 畫面座標 1e-6 mm 絕對容差，其餘數值 1e-9 相對容差，警告比對 `code` 集合與 `(code, ids)` 集合，不比對訊息；expected 只能由 `tools/regen_conformance.py --reason` 產生並記錄於 `CHANGELOG.md`。比對常數寫在 `tests/conformance/rules.json`（v3 起；兩個執行器共用），唯一的逐案例放寬是 `degenerate_cylinder_cap_at_light_height` 的四個方向頂點改以 1e-6 絕對容差比對（D60）；比對規則的任何修改都經 `--rules-only` 記成新版本。
-17. **只換相機 < 100 ms 是目標值。** 目前約 110–130 ms（見 `benchmarks/README.md`），CI 以 `--gate full` 為閘門，收斂留到 M7。
+17. **只換相機 < 100 ms 是目標值。** Python 端目前約 100–130 ms（見 `benchmarks/README.md`），CI 以 `--gate full` 為閘門（D17）；M7 的 TypeScript 移植約 55–72 ms 達標，CI 的 `ts` job 以 `--gate both` 為閘門（合約 §5.4.9）。
 18. **自我驗證的範圍。** L′P′ ∩ F′Q′ = S′ 的驗證只對會畫出作圖線的頂點做（P、S、Q 都在近平面前方）；在相機平面附近的影子點沒有有意義的 mm 座標，兩線幾乎平行（正規化交點 < 1e-6）時略過並回報 `CONSTRUCTION_CHECK_SKIPPED`。
 19. **`LIGHT_BEHIND_CAMERA` 只對點光源。** 規格 §5.7 第 1 列沒有區分光源種類；平行光指向相機後方時 L′ 一樣是地平線下方的反光點，但那只是一個方向的普通影像、作圖線畫法不變，所以不發警告（`examples/directional.json` 即此例）。
 20. **§7.1 第 3 列的 1e-4 m 改為推導出的上界。** 點光源從原點沿太陽方向退 D 公尺時，影子是平行光影子以原點為中心放大 D sin e / (D sin e − h) 倍的位似（h 頂點高度、e 太陽仰角），差距 δ = h·|S_dir| / (D sin e − h) 在測試域邊緣（2.95 m 頂點、20° 太陽）達 1.001e-4 m，而程式庫與閉式解只差 1e-15 m；測試改為差距 ≤ max(1e-4 m, 2·δ)、多面體頂點與位似式在 1e-9 m 內相等、退到 10⁷ m 時差距縮十倍（D20，合約 §4 第三個例外）。

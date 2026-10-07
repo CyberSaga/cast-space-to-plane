@@ -1,6 +1,6 @@
 # 一致性測試集（spec §7.5）
 
-一致性測試集是 castplane 的**輸出合約**：固定一組場景輸入與對應的幾何輸出，任何實作（Python 參考實作、未來的 TypeScript 移植）都必須在規定的容差內重現這些輸出。擴充功能時先改測試集、再改實作；測試集的每一次變更都要記錄版本與原因。
+一致性測試集是 castplane 的**輸出合約**：固定一組場景輸入與對應的幾何輸出，任何實作（Python 參考實作、TypeScript 移植 `ts/`）都必須在規定的容差內重現這些輸出。擴充功能時先改測試集、再改實作；測試集的每一次變更都要記錄版本與原因。
 
 ## 位置
 
@@ -93,6 +93,7 @@
    **比對規則也版本化（v3 起）。** `rules.json` 的任何修改都是一致性合約的修改：改完檔案後執行 `python3 tools/regen_conformance.py --rules-only --reason "…"`，工具不渲染、不碰 `expected/`，在 `CHANGELOG.md` 追加一筆 `## v<N>`（「comparator amendment, no expected file changed」），列出與上一筆紀錄的規則差異並完整記下新規則；`rules.json` 未變時拒絕記錄（結束碼 1），`--rules-only` 不能與 `--case` 併用（結束碼 2）。測試檢查最後一筆紀錄的規則等於 `rules.json`，所以比對器不能被悄悄放寬。這種條目不記錄建置版本（沒有渲染任何檔案），位元相同的判定沿用前一筆有 `build` 的條目。
 3. **TypeScript 移植必須全數通過**（spec §9、§10 M7）：移植版讀取 `cases/*.json`，產生同格式文件，依上表規則與 `expected/*.json` 比對。Python 為參考實作；兩邊不一致時先判定哪邊違反 spec / contract，再改測試集。
    TypeScript 執行器是 `ts/test/conformance.test.ts`（合約 §5.4.8）：直接讀取倉庫中的 `cases/`、`expected/` 與 `rules.json`（不複製、不產生 expected），比對器是 `tests/test_conformance.py` 的逐字移植，同樣套用 `case_overrides`。兩個執行器必須在同一個 commit 上都通過。TS 失敗先當成 TS 的錯；若審查發現是 Python 輸出違反 spec / contract，修 Python 並以 `--reason` 重新產生（CHANGELOG 註明 TS 的發現）；若不一致來自案例刻意坐落的 ulp 放大邊界，則經 `--rules-only` 加一筆 `case_overrides`，並在 `reason` 寫下實測的敏感度。兩條路都是有版本的 CHANGELOG 條目，沒有任何東西可以悄悄改。
+   M7 第二階段（合約 §5.4.0）的驗收：兩個執行器在 v6 的 50 個案例上都通過，記錄在 `CHANGELOG.md` v6 條目的「both runners green on v6」一行；TypeScript 執行器每個案例一個測試，沒有 todo 清單，CI 的 `ts` job 另外單獨執行它，有失敗、略過或 todo 的案例就讓 job 失敗。
    **已知的跨實作邊界（M7 第二輪審查，合約 §5.4 implementation notes）。** 移植版的建構射線遠端點（`construction.segments[].points`）只在 `|S' − Q'|` 不小於 `1e-3 · |L' − Q'|` 時保證落在影像容差內（頂點離受影面僅數微米時 `covering_segments` 病態，實測兩實作差到 4e-5 mm）；正圓影像橢圓的 `rotation_deg`（如球心在相機軸上）、兩個等高標籤點的物件 id 位置、點光源距相機中心 ~1e-7 m 內的 `light_point`、以及光源幾乎落在圓盤平面上的影子圓錐曲線也都坐落在 ulp 放大邊界上。新案例不得放在這些邊界上；修正規則是待維護者決定的版本化變更。
 4. **退化情況以警告代碼為準。** 退化案例的重點是 `warnings` 代碼集合與輸出仍然完整有限，不是特定數值。
 

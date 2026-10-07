@@ -2,11 +2,16 @@
 
 The TypeScript port of the castplane core (contract `docs/ARCHITECTURE.md` §5.4): scene validation, the three-stage
 pipeline (stage A camera independent, stage B projection, stage C the spec §6.2 geometry document), the deterministic
-JSON writer and the spec §6.1 SVG writer. Python (`castplane/`) is the reference implementation; the port is accepted
-against the conformance set `tests/conformance/` (phase 1: 34/34 cases at set v3; phase 2 at set v6: 50 of 50
-cases incl. the three hidden-line cases (`src/hidden.ts`, part 2), the three mesh cases (`src/meshprep.ts`, part 3)
-and the four multi-light cases (`src/umbra.ts`, `src/multilight.ts`, part 4); `TODO_CASES` of
-`test/conformance.test.ts` is empty, contract §5.4.0 / §5.4.14). The core reads expanded scenes only: a `mesh` object carries its
+JSON writer and the spec §6.1 SVG writer, at the full M4–M6 document format of contract §5.0.3: bounded receivers
+with folds and per-receiver records, sampled hidden-line removal (`src/hidden.ts`), mesh objects with the
+preprocessing pipeline and its fallback (`src/meshprep.ts`), and several lights with per-light shadows, the umbra and
+the multi-light SVG groups (`src/umbra.ts`, `src/multilight.ts`). Python (`castplane/`) is the reference
+implementation; the port is accepted against the conformance set `tests/conformance/`: phase 1 34/34 cases at set
+v3; phase 2 (M7 step 11, contract §5.4.0 / §5.4.14) **50 of 50 cases at set v6**, both runners green, recorded in the
+v6 entry of `tests/conformance/CHANGELOG.md`. The runner `test/conformance.test.ts` is final: one `node:test` test
+per case, no todo list (the five phase-2 parts shrank one, part 5 removed it). The SVG of every case and of every
+example (the M4–M6 ones `wall_and_ground`, `mesh_demo` and `two_lights` included) is byte-identical to the Python
+writer (`tests/test_ts_port.py`, `tools/compare_svg.py`). The core reads expanded scenes only: a `mesh` object carries its
 geometry inline (`data`); `objects[i].path` alone is the "must be expanded first" `SceneError` (expand with
 `castplane.io.expand_scene` or `castplane import --inline`). Zero runtime dependencies; the core under
 `src/` compiles with `types: []` and `lib: ["ES2022"]`, so it runs unchanged in node and in the browser.
