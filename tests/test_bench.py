@@ -454,3 +454,18 @@ def test_bench_readme_records_the_mesh10k_hidden_lines_row():
     section = text.split("## Final review", 1)[1]
     assert "--scene mesh10k" in section and "--hidden-lines" in section and "no target" in section
     assert "§5.1.6.6" in section and "§5.1.6.2" in section and "BVH" in section
+    # second pass: the review measured that a smaller Möller–Trumbore block / an AABB cull do help (2-3x,
+    # result-identical); the note must not claim otherwise, and it names the umbra escape hatch
+    flat = " ".join(section.split())
+    assert "does not help" not in flat and "`_MT_BLOCK`" in flat and "result-identical" in flat
+    assert "O(events × active edges)" in flat and "umbra=False" in flat
+
+
+def test_bench_mesh10k_rows_print_no_target(capsys):
+    """Final review (second pass): the ``--scene mesh10k`` variant is target-free too (§5.2.7 attaches no gate
+    to it; spec §8 names the benchmark scene), so its full and camera-only rows say "no target"."""
+    assert bench.main(["--scene", "mesh10k", "-n", "1", "--gate", "none"]) == 0
+    rows = _rows(capsys.readouterr().out)
+    for name in ("full render (A+B+C+SVG+JSON)", "camera-only re-render (B+C+SVG)"):
+        assert "no target" in rows[name] and "target <" not in rows[name], rows[name]
+        assert "FAIL" not in rows[name] and "PASS" not in rows[name], rows[name]

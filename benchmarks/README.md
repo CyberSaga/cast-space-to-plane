@@ -333,12 +333,18 @@ minimum of 3): cylinder 4.0 ms (170 nodes / 164 triangles), frustum 7.8 ms (400 
   counts are unchanged — `record_pieces` per light `lamp` 3637, `lamp_mx` 3652, `lamp_my` 3651; umbra
   3514 (`--lights 2`) / 4129 (`--lights 3`); 2000-edge loop 1998. On a per-face fallback mesh (open UV
   sphere shell, two point lights, not a benchmark scene) the umbra goes from 5584 to 27 pieces at 672
-  faces and from 47 697 to 55 at 2752 faces.
+  faces and from 47 697 to 55 at 2752 faces. Its time only halves (2752 faces: 1.69 s → 0.81 s of
+  umbra in stage B, against 0.02 s for stage B without it; 672 faces 0.11 s, 1488 faces 0.38 s): a
+  per-face fallback mesh under N ≥ 2 lights still costs O(events × active edges), because every input
+  vertex is a slab event. `project_scene(..., umbra=False)` stays the escape hatch for such meshes with
+  10k+ faces.
 - **mesh10k with hidden lines** (informational, no target: §5.1.6.6's soft target is for the spec §8
   scene only, §5.2.7 attaches no gate to mesh10k): `python3 benchmarks/bench.py --scene mesh10k
   --hidden-lines -n 2 --gate none` → full render with hidden lines on **5797 ms (6236)**, SVG 619 kB,
   JSON 5863 kB (14 510 drawn edges); the review measured 5.9–8.3 s and a peak RSS of ≈ 460 MB. The cost
   is the brute-force Möller–Trumbore occluder test of `hidden._first_mesh` (every sampled ray against all
-  10 000 triangles), which §5.1.6.2 allows ("a BVH is an optional result-identical optimisation"); a
-  per-block AABB cull of the ray segments does not help here (the C→X rays of a block fan over the whole
-  mesh), so a real speed-up needs a BVH or grid and is left as future work.
+  10 000 triangles), which §5.1.6.2 allows ("a BVH is an optional result-identical optimisation"). A
+  smaller `_MT_BLOCK` (2^17 instead of 2^21) or a mesh-AABB-clipped per-block triangle cull are
+  result-identical options that the review measured at 2–3× faster; on this container `_MT_BLOCK = 1 << 17`
+  gives a byte-identical document in 4.29 s instead of 5.93 s (min of 2) with a peak RSS of 120 MB instead
+  of 468 MB. Not implemented (no BVH or grid either).

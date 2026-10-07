@@ -706,7 +706,10 @@ only when `project_scene(..., umbra=False)` was used. Serialisation unchanged (�
 **Camera-free parts** (byte-identical for two cameras; amends the M7 list of §5.4.7 for the final format):
 `hidden_lines`, `receivers[]`, `points[*].world / direction / at_infinity` for every name except the camera outline points
 `/\.og\d+\.(base|top)$/`, `edges[].{object, from, to, silhouette, silhouette_lights, smooth}`,
-`shadows[].{light, receiver, object, outline, loops, unbounded}` and `conics[].{arc, circle, map, which}`,
+`shadows[].{light, receiver, object, outline, loops, unbounded}` and `conics[].{arc, circle, map, which}` (of an
+object without `POINT_BEHIND_CAMERA`: §2.6 restricts `arc` to the sub-arcs in front of the near plane and stage B
+drops an arc with nothing in front, so for an object whose conics the near plane cuts — it then carries
+`POINT_BEHIND_CAMERA` — the `conics[]` entry list and `arc` are camera-dependent; final review, second pass),
 `form_shadow[].{object, faces, light}` and `form_shadow_core[].{object, faces}` of **object** entries (a plate's entries exist
 iff the camera faces its unlit side, §5.1.8, so their *presence* is camera-dependent; their `faces` are not), `outlines[].object`,
 `construction.rays` / `per_receiver[*].rays` / `constructions[*].rays`, `umbra[].{receiver, lights}`, the camera-independent
@@ -2562,6 +2565,17 @@ dependency (shapely, pyclipper); `float32` or GPU paths.
   `hidden._first_mesh`, which §5.1.6.2 permits) is recorded in `benchmarks/README.md` as informational; no BVH is added.
   Tests: `tests/test_bench.py::test_bench_target_free_variants_print_no_target`,
   `test_bench_readme_records_the_mesh10k_hidden_lines_row`.
+- **[decision, implementation] (final review, second pass of group 'misc') Cost of the bridged kernel; the mesh10k
+  occluder block.** Zero-width bridging (m6-umbra#0 above) fixes the piece count of a per-face fallback mesh under
+  `N ≥ 2` lights, not its time: the slab events of every input vertex remain, so the kernel still costs
+  O(events × active edges) — measured on the open UV-sphere shell under two point lights, umbra time in stage B 0.11 s
+  (672 faces), 0.38 s (1 488), 0.81 s (2 752; 1.69 s before the bridging) against 0.02 s for stage B without the umbra.
+  `project_scene(..., umbra=False)` (§5.3.3) stays the escape hatch for such meshes with 10k+ faces; no kernel change.
+  For the mesh10k hidden-lines row (determinism-perf#2 / m4-hidden#1 above) a smaller `hidden._MT_BLOCK` (2^17 instead
+  of 2^21) or a mesh-AABB-clipped per-block triangle cull are result-identical options measured at 2–3× faster
+  (`_MT_BLOCK = 1 << 17`: byte-identical document, 4.29 s instead of 5.93 s, peak RSS 120 MB instead of 468 MB); not
+  implemented, recorded in `benchmarks/README.md`. Tests: `tests/test_bench.py::test_bench_mesh10k_rows_print_no_target`,
+  `test_bench_readme_records_the_mesh10k_hidden_lines_row`.
 
 ### 5.4 M7 — TypeScript port of the core and the three.js web UI (spec §9 row "TypeScript 移植", spec §10 M7)
 
@@ -2917,7 +2931,9 @@ const out   = render(scene, camera?, hidden_lines?, hidden_style?, umbra?);   //
   6 of 8 `og` points differ between the scene camera and the test camera, every other point is identical — and the two key
   sets agree after removing those names; `edges[].{object, from, to, silhouette}`; `shadows[].{light, receiver, object,
   outline, loops, unbounded}` and every `conics[].{arc, circle, map, which}` (not `conic` / `kind` / `sampled`: the image
-  conic depends on `P`, §2.6, §5.0.3); `form_shadow[].{object, faces}`
+  conic depends on `P`, §2.6, §5.0.3; and only for an object without `POINT_BEHIND_CAMERA`: when the near plane cuts
+  an object's conics the entry list itself and `arc` change with the camera, §5.0.3, so a test compares entries by
+  index only when both lists have the same length and neither render warns `POINT_BEHIND_CAMERA` for the object); `form_shadow[].{object, faces}`
   and the terminator entries' `segment` names; `outlines[].object`; `construction.rays`; `warnings` restricted to the codes
   that are not camera predicates — `CAMERA_LOOKING_ALONG_UP`, `LIGHT_BEHIND_CAMERA`, `LIGHT_POINT_AT_INFINITY`,
   `SHADOW_VP_AT_INFINITY`, `POINT_BEHIND_CAMERA`, `CONSTRUCTION_CHECK_SKIPPED` are camera-dependent).
@@ -3254,6 +3270,17 @@ and the hidden-run SVG groups (§5.1.8). Nothing an M4–M6 case needs lies beyo
   `tests/test_conformance.py::test_rules_json_is_versioned_in_the_changelog` requires the last recorded rules to equal
   `rules.json`, so a comparator change without a changelog entry fails the suite. A rules-only entry renders nothing and
   therefore records no `- build:` line; `recorded_numpy_version()` takes the build of the last entry that has one.
+- **[decision, implementation] (final review, second pass of group 'misc') Camera-free conic fields need the object in
+  front of the near plane.** The §5.0.3 / §5.4.7 lists called `conics[].{arc, circle, map, which}` camera-free, which
+  assumes both cameras produce the same entries. §2.6 restricts `arc` to the sub-arcs in front of the near plane and
+  stage B (`curved.arc_record` → `None`) drops an arc with nothing in front, so a camera whose near plane cuts an
+  object's conics changes that object's `conics[]` entry list and `arc` — e.g. `examples/curved_demo.json` with the
+  camera at `(0, 3, 0.4)` looking at `(3, 3, 0.4)` gives the drum's shadow 1 conic instead of 2 (its `top` arc cut to
+  `[−0.337, 0.402]`), and `examples/basic.json` loses both pillar shadow conics. Every such object carries
+  `POINT_BEHIND_CAMERA`. Code unchanged (this is the §2.6 drawing rule); both lists now restrict the claim to objects
+  without that warning, and a cross-implementation test compares conic entries by index only when both lists have the
+  same length and neither render warns `POINT_BEHIND_CAMERA` for the object. Test:
+  `tests/test_contract_wording.py::test_camera_free_conic_fields_need_an_object_in_front_of_the_near_plane`.
 
 ### 5.5 M8 — STEP import (spec §9 row "STEP", spec §10 M8) — a loader, outside the core
 

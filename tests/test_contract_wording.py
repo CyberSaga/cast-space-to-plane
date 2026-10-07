@@ -55,6 +55,8 @@ def test_camera_free_conic_fields_are_camera_free(example):
     scene = castplane.load_scene(str(ROOT / "examples" / example))
     d1 = castplane.render(scene)["geometry"]
     d2 = castplane.render(scene, camera=_other_camera(scene))["geometry"]
+    assert [len(s["conics"]) for s in d1["shadows"]] == [len(s["conics"]) for s in d2["shadows"]]
+    assert "POINT_BEHIND_CAMERA" not in {w["code"] for w in d1["warnings"] + d2["warnings"]}
     entries = [(c1, c2) for s1, s2 in zip(d1["shadows"], d2["shadows"]) for c1, c2 in zip(s1["conics"], s2["conics"])]
     assert entries, "the example must have conic shadows"
     for fields in camera_free_conic_fields():
@@ -111,3 +113,38 @@ def test_depth_buffer_note_counts_the_scenes():
     from tests.test_hidden import ZBUFFER_SCENES
     m = re.search(r"over the (\d+) depth-buffer scenes of `tests/test_hidden.py`", _arch())
     assert m and int(m.group(1)) == len(ZBUFFER_SCENES)
+
+
+def _degenerate_camera(scene):
+    """A camera inside the construction (near plane through the drum / pillar): drops or near-cuts conics."""
+    cam = dict(scene["camera"])
+    for k in ("yaw_deg", "pitch_deg"):
+        cam.pop(k, None)
+    cam.update(position=[0.0, 3.0, 0.4], target=[3.0, 3.0, 0.4], roll_deg=3.0)
+    return cam
+
+
+@pytest.mark.parametrize("example", ["curved_demo.json", "basic.json"])
+def test_camera_free_conic_fields_need_an_object_in_front_of_the_near_plane(example):
+    """Final review, second pass: §2.6 near-clips ``arc`` and stage B drops an arc wholly behind the near plane,
+    so the ``conics[]`` entry list and ``arc`` change with the camera exactly for the objects that warn
+    ``POINT_BEHIND_CAMERA``; §5.0.3 / §5.4.7 restrict the camera-free claim to the other objects."""
+    scene = castplane.load_scene(str(ROOT / "examples" / example))
+    d1 = castplane.render(scene)["geometry"]
+    d2 = castplane.render(scene, camera=_degenerate_camera(scene))["geometry"]
+    behind = {i for w in d1["warnings"] + d2["warnings"] if w["code"] == "POINT_BEHIND_CAMERA" for i in w["ids"]}
+    fields = set.union(*camera_free_conic_fields())
+    changed = set()
+    for s1, s2 in zip(d1["shadows"], d2["shadows"]):
+        assert (s1["object"], s1["light"], s1["receiver"]) == (s2["object"], s2["light"], s2["receiver"])
+        same = len(s1["conics"]) == len(s2["conics"]) and all(
+            json.dumps(c1.get(f), sort_keys=True) == json.dumps(c2.get(f), sort_keys=True)
+            for c1, c2 in zip(s1["conics"], s2["conics"]) for f in fields)
+        if not same:
+            changed.add(s1["object"])
+    assert changed, "the degenerate camera must change some conic entry list"
+    assert changed <= behind, (changed, behind)
+    text = _arch()
+    for paragraph in (_between(text, "**Camera-free parts**", "Camera-dependent:"),
+                      _between(text, "**Camera-free parts of a document [decision, exact list]**", "camera-dependent).")):
+        assert "POINT_BEHIND_CAMERA" in paragraph and "entry list" in paragraph
