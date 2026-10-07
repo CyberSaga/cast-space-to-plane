@@ -26,6 +26,7 @@ python3 benchmarks/bench.py --gate full    # exit status from the full-render ta
 python3 benchmarks/bench.py --profile      # cProfile hot spots of both paths
 python3 benchmarks/bench.py --json         # machine-readable measurements (incl. "gate" and "pass")
 python3 benchmarks/bench.py --no-curved    # prisms only
+python3 benchmarks/bench.py --hidden-lines # M4: + full render with output.hidden_lines on (informational)
 ```
 
 Timings are the minimum over the repetitions (the least noisy estimate of the cost
@@ -137,3 +138,37 @@ TypeScript measurement of §5.4.9.
 | stage A only | 151 ms | 161 ms | 156 ms | – | – |
 | SVG writer only | 54 ms | 56 ms | 62 ms | – | – |
 | JSON dumps only | 223 ms | 217 ms | 223 ms | – | – |
+
+## M4 (2026-10-07): switch-off cost and the `--hidden-lines` row
+
+Contract §5.1.6.6 / §5.0.9: the hard gate stays `python3 benchmarks/bench.py --gate full` on the
+committed scene with hidden lines **off** (unchanged; it exited 0 in all six runs below). The M4 keys
+(`hidden_lines`, `receivers`, `construction.per_receiver`, `runs`, `visibility`, `hidden_polylines`,
+`polygon_edges`) are the only switch-off cost. "before M4" is the branch point `fb17986`
+(`git archive` of it, run from its own tree); "after M4" is the M4 worktree (`--hidden-lines` adds the
+row `full render, hidden lines on`, informational, soft target < 5 s). `python3 benchmarks/bench.py -n 5
+--gate full [--hidden-lines] --json`, three consecutive runs each, on the same container (Python
+3.13.16, numpy 2.5.3; min over the repetitions, median in brackets):
+
+| path | before M4: run 1 | run 2 | run 3 | after M4: run 1 | run 2 | run 3 | target |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| full render (switch off) | 343 ms (365) | 355 ms (358) | 337 ms (372) | 365 ms (386) | 295 ms (342) | 362 ms (368) | < 1 s, **PASS** 6/6 |
+| camera-only re-render | 108 ms (114) | 115 ms (129) | 86 ms (88) | 108 ms (111) | 109 ms (111) | 111 ms (127) | < 100 ms (informational, D17) |
+| same, cyclic GC disabled | 89 ms | 93 ms | 75 ms | 91 ms | 91 ms | 87 ms | – |
+| stage A only | 83 ms | 65 ms | 84 ms | 78 ms | 80 ms | 84 ms | – |
+| SVG writer only | 33 ms | 27 ms | 34 ms | 32 ms | 36 ms | 43 ms | – |
+| JSON dumps only | 129 ms | 100 ms | 142 ms | 109 ms | 132 ms | 139 ms | – |
+| full render, hidden lines on | – | – | – | 958 ms (1076) | 1126 ms (1208) | 932 ms (1219) | soft < 5 s (informational): pass 3/3 |
+
+| size (switch off) | before M4 | after M4 | change |
+| --- | --- | --- | --- |
+| JSON bytes | 10 484 284 | 10 628 057 | +143 773 (+1.4 %): the added keys with their switch-off values |
+| SVG bytes | 1 960 727 | 1 960 727 | 0 (the SVG is byte-identical with the switch off, §5.1.8) |
+| JSON bytes, hidden lines on | – | 12 027 699 | +13.2 % over switch-off (runs, `polygon_edges`, `hidden_polylines`) |
+| SVG bytes, hidden lines on | – | 2 430 336 | +24.0 % (hidden sub-groups, split visible runs) |
+
+The switch-off rows before and after M4 lie within the container's run-to-run noise (±15 %); the
+document has the same 9030 drawn edges and 15171 named points. With hidden lines on the full render
+takes ≈ 1 s, a fifth of the soft target: every edge, generator, conic interval and shadow-polygon
+edge is sampled at 1 mm (≥ 8 samples) against the exact occluders of the 100 primitives, with the
+image-bounds cull of §5.1.6.4.

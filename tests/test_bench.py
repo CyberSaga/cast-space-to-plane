@@ -321,3 +321,30 @@ def test_bench_default_input_is_the_committed_file():
     assert source6.startswith("make_benchmark_scene(6") and raw6 == random_scenes.make_benchmark_scene(6)
     raw_nc, _ = bench.benchmark_input(100, no_curved=True)
     assert raw_nc == random_scenes.make_benchmark_scene(100, include_curved=False)
+
+
+# ---------------------------------------------------------------------------
+# M4 (contract §5.1.6.6, §5.0.9): the --hidden-lines row and the before / after switch-off rows
+# ---------------------------------------------------------------------------
+
+def test_bench_hidden_lines_row(capsys):
+    status = bench.main(["--objects", "4", "-n", "1", "--json", "--gate", "none", "--hidden-lines"])
+    out = json.loads(capsys.readouterr().out)
+    assert status == 0
+    hl = out["hidden_lines_full_render_s"]
+    assert hl["min"] > 0.0 and hl["median"] >= hl["min"] and hl["target"] == bench.SOFT_TARGET_HIDDEN_S == 5.0
+    assert isinstance(hl["soft_pass"], bool)
+    assert out["hidden_lines_json_bytes"] > out["json_bytes"] and out["hidden_lines_svg_bytes"] > 0
+    assert set(out["pass"]) == {"full_render", "camera_only"}          # the row is never gated
+    bench.main(["--objects", "4", "-n", "1", "--gate", "none", "--hidden-lines"])
+    assert "full render, hidden lines on" in capsys.readouterr().out
+    bench.main(["--objects", "4", "-n", "1", "--json", "--gate", "none"])
+    assert "hidden_lines_full_render_s" not in json.loads(capsys.readouterr().out)
+
+
+def test_bench_readme_records_the_m4_rows():
+    text = (ROOT / "benchmarks" / "README.md").read_text(encoding="utf-8")
+    section = text.split("## M4", 1)[1]
+    assert "--hidden-lines" in section and "full render, hidden lines on" in section
+    assert "before M4" in section and "after M4" in section and "JSON bytes" in section
+    assert "--gate full" in section

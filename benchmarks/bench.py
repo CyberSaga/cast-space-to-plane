@@ -13,7 +13,7 @@ edges, one point light, one receiver):
 Usage::
 
     python3 benchmarks/bench.py [-n REPS] [--objects N] [--no-curved] [--gate both|full|none]
-                                [--profile] [--json]
+                                [--profile] [--json] [--hidden-lines]
 
 With the default arguments (100 objects, curved primitives included) the scene is **loaded from
 the committed file** ``benchmarks/scenes/benchmark_100.json`` (written by
@@ -28,7 +28,9 @@ target alone (the camera-only row is then informational), ``none`` always exits 
 camera-only path is also timed with the cyclic garbage collector disabled, as an
 informational row that shows the collector's share (the library never touches the
 collector).  With ``--profile`` the slowest functions of each path are listed
-(``cProfile``).  It is not part of the default test suite (see ``benchmarks/README.md``).
+(``cProfile``).  ``--hidden-lines`` (M4, contract §5.1.6.6 / §5.0.9) adds one informational row: the
+full render of the same scene with ``output.hidden_lines`` switched on (soft target < 5 s, never part of
+the exit status); every other row keeps the switch off.  It is not part of the default test suite (see ``benchmarks/README.md``).
 """
 
 from __future__ import annotations
@@ -59,6 +61,8 @@ GATES = ("both", "full", "none")
 #: The committed spec §8 benchmark scene (contract §5.4.9); the default input of this script.
 SCENE_FILE = ROOT / "benchmarks" / "scenes" / "benchmark_100.json"
 DEFAULT_OBJECTS = 100
+#: M4 (contract §5.1.6.6): the soft target of the full render with hidden lines on (informational, no gate).
+SOFT_TARGET_HIDDEN_S = 5.0
 
 
 def benchmark_input(objects: int = DEFAULT_OBJECTS, no_curved: bool = False) -> tuple[dict, str]:
@@ -148,6 +152,9 @@ def main(argv=None) -> int:
                     help="which targets decide the exit status (default both; full: camera-only row informational)")
     ap.add_argument("--profile", action="store_true", help="print cProfile hot spots of both paths")
     ap.add_argument("--json", action="store_true", help="print the measurements as JSON instead of text")
+    ap.add_argument("--hidden-lines", action="store_true",
+                    help="M4: also time the full render with output.hidden_lines on (informational row, soft "
+                         "target < 5 s; the other rows keep the switch off)")
     args = ap.parse_args(argv)
 
     raw, source = benchmark_input(args.objects, args.no_curved)
@@ -187,6 +194,14 @@ def main(argv=None) -> int:
     result["pass"] = {"full_render": ok_full, "camera_only": ok_cam}
     result["gate"] = args.gate
     status = exit_status(ok_full, ok_cam, args.gate)
+    if args.hidden_lines:   # M4: the same scene with the switch on (contract §5.1.6.6); not gated
+        hl_scene = castplane.load_scene(dict(raw, output=dict(raw.get("output") or {}, hidden_lines=True)))
+        _doc_h, svg_h, text_h = full_render(hl_scene)
+        t_hl = timeit(lambda: full_render(hl_scene), args.reps)
+        result["hidden_lines_full_render_s"] = {"min": min(t_hl), "median": statistics.median(t_hl),
+                                                "target": SOFT_TARGET_HIDDEN_S,
+                                                "soft_pass": min(t_hl) < SOFT_TARGET_HIDDEN_S}
+        result["hidden_lines_svg_bytes"], result["hidden_lines_json_bytes"] = len(svg_h), len(text_h)
 
     if args.json:
         print(json.dumps(result, indent=1, sort_keys=True))
@@ -209,6 +224,12 @@ def main(argv=None) -> int:
         row("  stage A only", t_stage_a)
         row("  SVG writer only", t_svg)
         row("  JSON dumps only", t_json)
+        if args.hidden_lines:
+            hl = result["hidden_lines_full_render_s"]
+            print(f"  {'full render, hidden lines on':<34} min {hl['min'] * 1e3:8.1f} ms   median "
+                  f"{hl['median'] * 1e3:8.1f} ms   soft target < {SOFT_TARGET_HIDDEN_S * 1e3:6.0f} ms   "
+                  f"{'pass' if hl['soft_pass'] else 'miss'} (informational; SVG "
+                  f"{result['hidden_lines_svg_bytes'] / 1024:.0f} kB, JSON {result['hidden_lines_json_bytes'] / 1024:.0f} kB)")
         print(f"RESULT: {'PASS' if status == 0 else 'FAIL'} (gate: {args.gate})")
 
     if args.profile:
