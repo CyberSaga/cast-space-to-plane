@@ -289,3 +289,32 @@ equal): M6 adds nothing to the single-light path but a `len(lights) ≥ 2` test.
 The deltas are inside the container's run-to-run drift (the v5 and M6 minima overlap on every row); the
 camera-only row is at 100–114 ms for both trees today (the M5 part 2 reading above was 94–100 ms on a
 quieter container), so it is not an M6 regression.
+
+## M8 (2026-10-07): STEP import (loader only, not on any benchmark path)
+
+M8 changes no core module: the STEP importer (`castplane/io/part21.py`, `castplane/io/step.py`) runs
+in the expansion step before `validate_scene` (contract §5.5, §5.0.2), so `benchmarks/bench.py
+--gate full` and its document are unchanged. The only bound is the test
+`tests/test_step.py::test_step_import_is_not_slow`: the **minimum of 3** timed `import_step` runs on
+each committed fixture must be < 500 ms (a flakiness-safe bound, not a target). Measured on the
+container (Python 3.13, `import_step` = read + Part 21 parse + units + assembly check +
+recognition; minimum of 5 runs, the median in brackets):
+
+| fixture | bytes | entities | `import_step` | of which `part21.parse` |
+| --- | --- | --- | --- | --- |
+| `cylinder.step` | 5 684 | 118 | 1.40 ms (1.45) | 1.18 ms |
+| `cylinder_down.step` | 5 715 | 118 | 1.39 ms (1.47) | 1.19 ms |
+| `cylinder_tilted.step` | 6 195 | 118 | 1.42 ms (1.50) | 1.21 ms |
+| `sphere.step` | 2 076 | 32 | 0.45 ms (0.47) | 0.39 ms |
+| `cone.step` | 4 415 | 87 | 1.06 ms (1.12) | 0.89 ms |
+| `box.step` | 16 430 | 350 | 4.13 ms (4.16) | 3.53 ms |
+| `frustum.step` (raises `StepError`) | 5 726 | 118 | 1.33 ms (1.38) | 1.21 ms |
+| `two_solids.step` | 9 304 | 176 | 2.12 ms (2.21) | 1.79 ms |
+
+Informational (not gated, not committed): a compound of 200 OCC cylinders on a 20 × 10 grid,
+written by `tools/make_step_fixtures.py`'s `write_step` (an identity assembly of 200 solids,
+1 244 553 bytes, 24 220 entities), imports to 200 `cylinder` objects in **0.34 s / 0.40 s / 0.35 s**
+(minimum of 3 per run, three runs; the prototype quoted 0.63 s for a 1.25 MB file). Parsing is about
+85 % of the time on every file. The OCP tessellation fallback (§5.5.7, cadquery-ocp 8.0.1.1.0,
+minimum of 3): cylinder 4.0 ms (170 nodes / 164 triangles), frustum 7.8 ms (400 / 598), box 5.1 ms
+(24 / 12), sphere 17.2 ms (1447 / 2836).
