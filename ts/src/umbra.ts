@@ -254,8 +254,8 @@ interface Raw {
 }
 
 /** Steps 4–5: per slab the active edges ordered by `(x(y_m), edge index)`, the inside intervals (every group's winding
- * number nonzero), the maximal runs of inside intervals bounded by their outer edges, clamped per end; a raw piece is
- * dropped iff both ends are at most `tol_mm` wide. */
+ * number nonzero), the maximal runs of inside intervals (zero-width intervals, `<= tol_mm` wide at `y_m`, bridge a run)
+ * bounded by their outer edges, clamped per end; a raw piece is dropped iff both ends are at most `tol_mm` wide. */
 function raw_pieces(T: EdgeTable, ev: readonly number[], n_groups: number, tol_mm: number): Raw | null {
   const { u0, v0, u1, v1 } = T;
   const E = u0.length;
@@ -299,10 +299,20 @@ function raw_pieces(T: EdgeTable, ev: readonly number[], n_groups: number, tol_m
       ins[k] = inside && k < m - 1;
     }
     const a = ev[s] as number, b = ev[s + 1] as number;
-    for (let k = 0; k < m; k++) {
-      if (!ins[k] || (k > 0 && ins[k - 1])) continue;
-      let k1 = k;
-      while (k1 + 1 < m && ins[k1 + 1]) k1++;
+    // step 5, zero-width bridging (M6 review note, m6-umbra#0): an interval of width <= tol_mm at y_m (coincident
+    // edges, e.g. an edge shared by two loops of one record) does not end a run; a run is a maximal sequence of
+    // inside-or-zero-width intervals holding at least one inside interval, trimmed to its first and last inside one
+    const xs = ord.map((k) => xm[k] as number);
+    const memb = ins.map((v, k) => v || (k < m - 1 && (xs[k + 1] as number) - (xs[k] as number) <= tol_mm));
+    for (let r0 = 0; r0 < m; r0++) {
+      if (!memb[r0] || (r0 > 0 && memb[r0 - 1])) continue;
+      let r1 = r0;
+      while (r1 + 1 < m && memb[r1 + 1]) r1++;
+      let k = r0;
+      while (k <= r1 && !ins[k]) k++;
+      if (k > r1) continue; // no inside interval in this run
+      let k1 = r1;
+      while (!ins[k1]) k1--;
       const el = es[k] as number, er = es[k1 + 1] as number;
       const xla = x_at(u0[el] as number, v0[el] as number, u1[el] as number, v1[el] as number, a);
       const xra = x_at(u0[er] as number, v0[er] as number, u1[er] as number, v1[er] as number, a);

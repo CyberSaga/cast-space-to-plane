@@ -9,7 +9,7 @@
 
 import { mesh_from_faces } from "./mesh.js";
 import type { Mesh } from "./mesh.js";
-import { pymod } from "./pyfloat.js";
+import { py_round, pymod } from "./pyfloat.js";
 import { radians } from "./transform.js";
 import type { Mat4, Vec3, Vec4 } from "./types.js";
 
@@ -322,11 +322,24 @@ function light_foot_from_matrix(M: Mat4, pi: readonly number[]): Vec4 | null {
   return [F[0] / F[3], F[1] / F[3], F[2] / F[3], F[3] / F[3]];
 }
 
+/** One component of a shadow loop (review fix, §5.1 implementation note "arc pairing"): its vertices, sources, whether it
+ * reaches infinity and its arcs at infinity `[theta_out, signed sweep]` in emission order (angles as `arc_angle`). */
+export interface ShadowComponent {
+  vertices: Vec4[];
+  unbounded: boolean;
+  sources: Source[];
+  arcs: [number, number][];
+}
+
 export interface ShadowLoop {
   vertices: Vec4[];
   unbounded: boolean;
   sources: Source[];
   below_ground: boolean;
+  /** The polygon's components: one for a loop with at most one excursion to infinity (the top-level arrays themselves,
+   * possibly empty); one per cycle of the angular arc pairing for a loop that crosses the light plane `2p >= 4` times
+   * (the top-level arrays are the first one). Callers draw every component. */
+  loops: ShadowComponent[];
 }
 
 /**
@@ -338,13 +351,24 @@ export interface ShadowLoop {
  * ground; the arc at infinity is then swept counter-clockwise about `n` in `(e1, e2)` coordinates and the last-resort
  * direction is `(e1, 0)`. `F` is the light foot on the receiver (the "edge through the light" fallback; recovered from
  * `M` when the receiver is the ground). `frame === null` runs the literal v2 code (byte identity on the ground).
+ *
+ * Review fixes (port of `castplane/shadow.py`, §5.1 implementation notes "arc pairing" and "Base level of the arcs at
+ * infinity"): a loop with `p >= 2` excursions to infinity gets its arcs from the angular order of its crossings
+ * (`arc_components`, one component per cycle); `turns` adds `2π·turns` to the signed sweep of the first arc emitted
+ * (`turns = 0` is the code above, byte for byte). Every component carries `arcs`.
  */
 export function shadow_loop(points4: readonly (readonly number[])[], M: Mat4, pi: readonly number[], tol = 0.0,
-  tol_clip?: number | null, frame: readonly [Vec3, Vec3] | null = null, F_in: readonly number[] | null = null): ShadowLoop {
+  tol_clip?: number | null, frame: readonly [Vec3, Vec3] | null = null, F_in: readonly number[] | null = null,
+  turns = 0): ShadowLoop {
   const tc = tol_clip === undefined || tol_clip === null ? tol : tol_clip;
   const [P, src, below] = clip_loop_to_plane(points4, pi, tc);
   const n = P.length;
-  const empty: ShadowLoop = { vertices: [], unbounded: false, sources: [], below_ground: below };
+  const empty_vertices: Vec4[] = [];
+  const empty_sources: Source[] = [];
+  const empty: ShadowLoop = {
+    vertices: empty_vertices, unbounded: false, sources: empty_sources, below_ground: below,
+    loops: [{ vertices: empty_vertices, unbounded: false, sources: [], arcs: [] }],
+  };
   if (n === 0) return empty;
   const S = P.map((p) => mat4_vec(M, p));
   const w = S.map((s) => s[3]);
@@ -352,12 +376,12 @@ export function shadow_loop(points4: readonly (readonly number[])[], M: Mat4, pi
   if (!finite.some((f) => f)) return empty;
   let F: Vec4 | null;
   let last_resort: Vec4 | null = null;
-  let e1: Vec3 = [1, 0, 0], e2: Vec3 = [0, 1, 0];
+  let e12: readonly [Vec3, Vec3] | null = null;
   if (frame === null) {
     F = light_foot_from_matrix(M, pi); // only used when an edge passes through the light
   } else {
-    e1 = frame[0];
-    e2 = frame[1];
+    const e1 = frame[0], e2 = frame[1];
+    e12 = [e1, e2];
     F = null;
     if (F_in !== null) {
       const f3 = F_in[3] as number;
@@ -390,10 +414,24 @@ export function shadow_loop(points4: readonly (readonly number[])[], M: Mat4, pi
       kinds.push("in");
     }
   }
+  const outs: number[] = [];
+  kinds.forEach((k, i) => {
+    if (k === "out") outs.push(i);
+  });
+  if (outs.length >= 2) {
+    // several excursions to infinity: the arcs are fixed by the angular order of the crossings, not by the loop order
+    // (contract §2.5 as amended by the §5.1 implementation note "arc pairing", D70); one output loop per cycle of chains
+    const components = arc_components(verts, sources, kinds, outs, e12, turns);
+    const first = components[0] as ShadowComponent;
+    return { vertices: first.vertices, unbounded: true, sources: first.sources, below_ground: below, loops: components };
+  }
+  // insert the arc at infinity between the outgoing and the following incoming direction (at most one pair here: the
+  // literal v1/v2 code path, byte identity)
   const out_verts: Vec4[] = [];
   const out_sources: Source[] = [];
   const m = verts.length;
   let unbounded = false;
+  const arcs: [number, number][] = [];
   for (let k = 0; k < m; k++) {
     out_verts.push(verts[k] as Vec4);
     out_sources.push(sources[k] as Source);
@@ -401,31 +439,229 @@ export function shadow_loop(points4: readonly (readonly number[])[], M: Mat4, pi
       unbounded = true;
       const nxt = (k + 1) % m;
       if (kinds[nxt] !== "in") throw new Error("an outgoing direction must be followed by an incoming one");
-      const d_out = verts[k] as Vec4, d_in = verts[nxt] as Vec4;
-      let th0: number, th1: number;
-      if (frame === null) { // the ground: literal v2 expressions (contract §5.1.2 [decision])
-        th0 = Math.atan2(d_out[1], d_out[0]);
-        th1 = Math.atan2(d_in[1], d_in[0]);
-      } else { // counter-clockwise about n in the receiver frame (e1, e2)
-        th0 = Math.atan2(dot3(d_out, e2), dot3(d_out, e1));
-        th1 = Math.atan2(dot3(d_in, e2), dot3(d_in, e1));
-      }
+      const th0 = arc_angle(verts[k] as Vec4, e12);
+      const th1 = arc_angle(verts[nxt] as Vec4, e12);
       let delta = pymod(th1 - th0, 2.0 * Math.PI);
       if (!Number.isFinite(delta) || delta <= 1e-12) delta = 2.0 * Math.PI;
-      const steps = Math.max(1, Math.ceil(delta / radians(ARC_STEP_DEG) - 1e-12));
-      for (let s = 1; s < steps; s++) {
-        const th = th0 + delta * s / steps;
-        if (frame === null) {
-          out_verts.push([Math.cos(th), Math.sin(th), 0.0, 0.0]);
-        } else {
-          const c = Math.cos(th), sn = Math.sin(th);
-          out_verts.push([c * e1[0] + sn * e2[0], c * e1[1] + sn * e2[1], c * e1[2] + sn * e2[2], 0.0]);
-        }
-        out_sources.push({ kind: "arc", k: s - 1 });
-      }
+      if (turns && arcs.length === 0) delta = delta + 2.0 * Math.PI * turns; // base-level correction (first arc only)
+      sweep_arc(th0, delta, e12, out_verts, out_sources);
+      arcs.push([th0, delta]);
     }
   }
-  return { vertices: out_verts, unbounded, sources: out_sources, below_ground: below };
+  return {
+    vertices: out_verts, unbounded, sources: out_sources, below_ground: below,
+    loops: [{ vertices: out_verts, unbounded, sources: out_sources, arcs }],
+  };
+}
+
+/** Angle of the direction `d` (`w = 0`) counter-clockwise about `n`: in ground `(x, y)` when `e12` is null (the literal
+ * v2 expression, contract §5.1.2 [decision]), else in the receiver frame. */
+export function arc_angle(d: readonly number[], e12: readonly [Vec3, Vec3] | null): number {
+  if (e12 === null) return Math.atan2(d[1] as number, d[0] as number);
+  return Math.atan2(dot3(d, e12[1]), dot3(d, e12[0]));
+}
+
+/** Append the intermediate direction vertices of the arc at infinity from `th0` swept counter-clockwise by `delta`
+ * (`ceil(delta / 60°)` equal steps, contract §2.5; sources `{kind: "arc", k}`). A negative `delta` (only after a
+ * base-level correction) sweeps clockwise by `|delta|` with `ceil(|delta| / 60°)` steps. */
+export function sweep_arc(th0: number, delta: number, e12: readonly [Vec3, Vec3] | null, out_verts: Vec4[],
+  out_sources: Source[]): void {
+  const steps = Math.max(1, Math.ceil(Math.abs(delta) / radians(ARC_STEP_DEG) - 1e-12));
+  for (let s = 1; s < steps; s++) {
+    const th = th0 + delta * s / steps;
+    if (e12 === null) {
+      out_verts.push([Math.cos(th), Math.sin(th), 0.0, 0.0]);
+    } else {
+      const [e1, e2] = e12;
+      const c = Math.cos(th), sn = Math.sin(th);
+      out_verts.push([c * e1[0] + sn * e2[0], c * e1[1] + sn * e2[1], c * e1[2] + sn * e2[2], 0.0]);
+    }
+    out_sources.push({ kind: "arc", k: s - 1 });
+  }
+}
+
+/** Python tuple order of `(angle, is_out, j)` (`sorted` in `_arc_components`). */
+function cmp_crossing(a: readonly [number, number, number], b: readonly [number, number, number]): number {
+  if (a[0] < b[0]) return -1;
+  if (a[0] > b[0]) return 1;
+  return a[1] - b[1] || a[2] - b[2];
+}
+
+/**
+ * Arcs at infinity of a loop with `p >= 2` excursions to infinity (port of `shadow._arc_components`; contract §2.5 as
+ * amended by the §5.1 implementation note "arc pairing"; D70): the `2p` crossings sorted by angle (an incoming one first
+ * at equal angles), started at the first crossing of minimal running level and matched outgoing `(` with incoming `)`
+ * like parentheses; the finite chains `in -> ... -> out` re-linked through the matched arcs, one component per cycle
+ * (the cycle of the start vertex first, in the loop's own vertex order). Each sweep is the literal v1
+ * `(theta_in − theta_out) mod 2π` on the raw angles (`2π` when `<= 1e-12`) plus `2π·round(…)` whole turns of the
+ * matched unwrapped difference; `turns` adds `2π·turns` to the first arc emitted.
+ */
+export function arc_components(verts: readonly Vec4[], sources: readonly Source[], kinds: readonly string[], outs: readonly number[],
+  e12: readonly [Vec3, Vec3] | null, turns = 0): ShadowComponent[] {
+  const m = verts.length;
+  const p = outs.length;
+  // chain j runs from its incoming vertex ins[j] to outs[j]; chain 0 holds the start vertex (index 0) and wraps: its
+  // head is verts[0 .. outs[0]] and its tail verts[outs[p-1] + 1 .. m-1] (beginning with its "in")
+  const ins: number[] = [(outs[p - 1] as number) + 1];
+  for (let j = 1; j < p; j++) ins.push((outs[j - 1] as number) + 1);
+  for (let j = 0; j < p; j++) {
+    if (!((ins[j] as number) < m && kinds[ins[j] as number] === "in")) {
+      throw new Error("an outgoing direction must be followed by an incoming one");
+    }
+  }
+  const th_out = outs.map((k) => arc_angle(verts[k] as Vec4, e12));
+  const th_in = ins.map((k) => arc_angle(verts[k] as Vec4, e12));
+  const two_pi = 2.0 * Math.PI;
+  const crossings: [number, number, number][] = [];
+  for (let j = 0; j < p; j++) crossings.push([pymod(th_in[j] as number, two_pi), 0, j]);
+  for (let j = 0; j < p; j++) crossings.push([pymod(th_out[j] as number, two_pi), 1, j]);
+  crossings.sort(cmp_crossing);
+  let level = 0;
+  const levels: number[] = [];
+  for (const [, is_out] of crossings) {
+    levels.push(level);
+    level += is_out ? 1 : -1;
+  }
+  let start = 0;
+  for (let i = 1; i < 2 * p; i++) if ((levels[i] as number) < (levels[start] as number)) start = i;
+  const rotated: [number, number, number, number][] = [
+    ...crossings.slice(start).map(([a, o, j]) => [a, o, j, 0.0] as [number, number, number, number]),
+    ...crossings.slice(0, start).map(([a, o, j]) => [a, o, j, two_pi] as [number, number, number, number]),
+  ];
+  const stack: [number, number][] = [];
+  const match = new Map<number, [number, number]>();
+  for (const [a, is_out, j, wrap] of rotated) {
+    if (is_out) {
+      stack.push([j, a + wrap]);
+    } else {
+      const top = stack.pop();
+      if (top === undefined) throw new Error("unbalanced crossings at infinity");
+      const [j_out, a_out] = top;
+      // the literal v1 sweep on the raw angles (bit identity with the loop-order code) ...
+      let delta = pymod((th_in[j] as number) - (th_out[j_out] as number), two_pi);
+      if (!Number.isFinite(delta) || delta <= 1e-12) delta = two_pi; // coincident crossings: the full circle (§2.5)
+      // ... corrected by the whole turns of the matched difference (0 unless the two disagree by ~2π)
+      const unwrapped = a + wrap - a_out;
+      const k = Number.isFinite(unwrapped) ? py_round((unwrapped - delta) / two_pi) : 0;
+      if (k) delta = delta + two_pi * k;
+      match.set(j_out, [j, delta]);
+    }
+  }
+  if (stack.length !== 0 || match.size !== p) throw new Error("unbalanced crossings at infinity");
+  const components: ShadowComponent[] = [];
+  const seen = new Set<number>();
+  for (let j0 = 0; j0 < p; j0++) {
+    if (seen.has(j0)) continue;
+    const out_verts: Vec4[] = [];
+    const out_sources: Source[] = [];
+    const arcs: [number, number][] = [];
+    let j = j0;
+    for (;;) {
+      seen.add(j);
+      for (let k = j === 0 ? 0 : (ins[j] as number); k <= (outs[j] as number); k++) {
+        out_verts.push(verts[k] as Vec4);
+        out_sources.push(sources[k] as Source);
+      }
+      const [nxt, d] = match.get(j) as [number, number];
+      let delta = d;
+      if (turns && j === 0) delta = delta + two_pi * turns; // base-level correction (the first arc emitted)
+      sweep_arc(th_out[j] as number, delta, e12, out_verts, out_sources);
+      arcs.push([th_out[j] as number, delta]);
+      if (nxt === j0) break;
+      j = nxt;
+    }
+    if (j0 === 0) {
+      for (let k = ins[0] as number; k < m; k++) {
+        out_verts.push(verts[k] as Vec4);
+        out_sources.push(sources[k] as Source);
+      }
+    }
+    components.push({ vertices: out_verts, unbounded: true, sources: out_sources, arcs });
+  }
+  return components;
+}
+
+/**
+ * Absolute level at infinity of a closed mesh's lit patch (port of `shadow.light_plane_level`; review fix, §5.1
+ * implementation note "Base level of the arcs at infinity"): `[theta_ref, count]` for the reference direction at the
+ * midpoint of the largest angular gap between the crossings of the light plane (through `L`, parallel to `pi`) with the
+ * edges adjacent to a lit face (a vertex is below the light iff `shadow_w > tol`; the crossing is the `t* = w_a / (w_a −
+ * w_b)` point); `count` is the number of lit faces whose plane the ray points at (`n_f · u < 0`) and that an odd number
+ * of their edge crossings lie on the left of. `null` when no lit face crosses the light plane or the light is
+ * directional. `theta_ref` is measured like `arc_angle` (ground `(x, y)` when `frame` is null, else `(e1, e2)`).
+ */
+export function light_plane_level(mesh: Mesh, lit: readonly boolean[], L: readonly number[], pi: readonly number[], tol: number,
+  frame: readonly [Vec3, Vec3] | null = null): [number, number] | null {
+  if ((L[3] as number) === 0.0) return null;
+  const V = mesh.vertices, E = mesh.edges, EF = mesh.edge_faces, N = mesh.face_normals;
+  if (E.length === 0 || lit.length === 0) return null;
+  const e1: Vec3 = frame === null ? [1.0, 0.0, 0.0] : frame[0];
+  const e2: Vec3 = frame === null ? [0.0, 1.0, 0.0] : frame[1];
+  const w = V.map((v) => shadow_w(pi, L, [v[0], v[1], v[2], 1.0]));
+  const below = w.map((x) => x > tol);
+  const L3: Vec3 = [(L[0] as number) / (L[3] as number), (L[1] as number) / (L[3] as number), (L[2] as number) / (L[3] as number)];
+  const xs: number[] = [], ys: number[] = [];
+  const efc: [number, number][] = [];
+  E.forEach(([a, b], e) => {
+    const [f0, f1] = EF[e] as [number, number];
+    const lit_adj = (f0 >= 0 && (lit[f0] as boolean)) || (f1 >= 0 && (lit[f1] as boolean));
+    if (below[a] === below[b] || !lit_adj) return;
+    const wa = w[a] as number, wb = w[b] as number;
+    const t = wa / (wa - wb);
+    const Va = V[a] as Vec3, Vb = V[b] as Vec3;
+    const C: Vec3 = [
+      (1.0 - t) * Va[0] + t * Vb[0] - L3[0],
+      (1.0 - t) * Va[1] + t * Vb[1] - L3[1],
+      (1.0 - t) * Va[2] + t * Vb[2] - L3[2],
+    ];
+    xs.push(dot3(C, e1));
+    ys.push(dot3(C, e2));
+    efc.push([f0, f1]);
+  });
+  if (xs.length === 0) return null;
+  const two_pi = 2.0 * Math.PI;
+  const az = xs.map((x, k) => pymod(Math.atan2(ys[k] as number, x), two_pi)).sort((a, b) => a - b);
+  let i = 0, best = -Infinity;
+  for (let k = 0; k < az.length; k++) {
+    const nxt = k + 1 < az.length ? (az[k + 1] as number) : (az[0] as number) + two_pi;
+    const gap = nxt - (az[k] as number);
+    if (gap > best) {
+      best = gap;
+      i = k;
+    }
+  }
+  let theta = (az[i] as number) + 0.5 * best;
+  if (theta >= two_pi) theta -= two_pi;
+  const c = Math.cos(theta), s = Math.sin(theta);
+  const parity = new Array<number>(lit.length).fill(0);
+  xs.forEach((x, k) => {
+    if (!(c * (ys[k] as number) - s * x > 0.0)) return;
+    for (const f of efc[k] as [number, number]) if (f >= 0) parity[f] = (parity[f] as number) + 1;
+  });
+  const u: Vec3 = [c * e1[0] + s * e2[0], c * e1[1] + s * e2[1], c * e1[2] + s * e2[2]];
+  let count = 0;
+  lit.forEach((l, f) => {
+    if (l && dot3(N[f] as Vec3, u) < 0.0 && ((parity[f] as number) & 1) === 1) count++; // parity counts are non-negative
+  });
+  return [theta, count];
+}
+
+/** Winding number at infinity, in the direction `theta` (not an arc end), of the arcs `[theta_out, signed sweep]` of
+ * `shadow_loop` components: each counter-clockwise arc adds the number of times it passes over `theta`, each clockwise
+ * one (a negative sweep) subtracts it (port of `shadow.arc_level`). */
+export function arc_level(arcs: readonly (readonly [number, number])[], theta: number): number {
+  const two_pi = 2.0 * Math.PI;
+  let level = 0;
+  for (const [th0, sweep] of arcs) {
+    let r = pymod(theta - th0, two_pi);
+    if (sweep > 0.0) {
+      if (sweep > r) level += Math.ceil((sweep - r) / two_pi);
+    } else if (sweep < 0.0) {
+      r = two_pi - r;
+      if (-sweep > r) level -= Math.ceil((-sweep - r) / two_pi);
+    }
+  }
+  return level;
 }
 
 function dot3(a: readonly number[], b: readonly number[]): number {

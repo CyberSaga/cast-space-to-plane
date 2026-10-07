@@ -9,7 +9,8 @@
  * with the steps of contract §5.2.3 in this order: scale -> weld -> degenerate faces -> adjacency / manifold /
  * orientation -> (triangles) -> coplanar merge -> edge classification. A mesh that is not a closed, consistently
  * orientable manifold takes the per-face fallback of §5.2.5 (`fallback_mesh`). Every tolerance is relative to
- * `scale_A = max(1, max extent of the bounding box of scale·vertices)` (`mesh_scale`).
+ * `scale_A = max(1, max extent of the bounding box of the scale·vertices used by at least one face)` (`mesh_scale` of
+ * `used_vertices`; an unused vertex never widens the tolerances).
  *
  * Port notes (contract §5.4.4, the §5.4 implementation notes): the weld is the reference O(27·n) loop of §5.2.3 step 2
  * (the numpy fast path is a performance device that is result-identical to it, so `fast` is accepted and ignored);
@@ -98,6 +99,14 @@ export function mesh_scale(V: readonly (readonly number[])[]): number {
     if (hi - lo > ext) ext = hi - lo;
   }
   return Math.max(1.0, ext);
+}
+
+/** The rows of `V` referenced by at least one face (input order): the vertex set whose bounding box defines `scale_A`
+ * (port of `meshprep.used_vertices`; contract §5.2.3 step 1 as amended by the review fixes, m5-mesh#1). */
+export function used_vertices<T>(V: readonly T[], faces: readonly (readonly number[])[]): T[] {
+  const used = new Array<boolean>(V.length).fill(false);
+  for (const f of faces) for (const k of f) used[k] = true;
+  return V.filter((_v, k) => used[k]);
 }
 
 // ---------------------------------------------------------------------------
@@ -771,7 +780,7 @@ export function preprocess_mesh(data: MeshInput, scale: number, weld_tolerance: 
   const n_faces = data.faces.length;
   const sg = data.smooth_groups;
   const groups_in: readonly number[] = sg !== undefined && sg !== null && sg.length > 0 ? sg : new Array<number>(n_faces).fill(0);
-  const scale_A = mesh_scale(V);
+  const scale_A = mesh_scale(used_vertices(V, data.faces));
   const warnings: Warning[] = [];
   const [W0, faces_w] = weld_vertices(V, data.faces, weld_tolerance);
   const [kept, kept_idx] = drop_degenerate_faces(W0, faces_w, scale_A);
@@ -818,6 +827,6 @@ export function has_usable_face(vertices: readonly (readonly number[])[], faces:
   weld_tolerance: number): boolean {
   const V: Vec3[] = vertices.map((v) => [scale * (v[0] as number), scale * (v[1] as number), scale * (v[2] as number)]);
   const [W, faces_w] = weld_vertices(V, faces, weld_tolerance);
-  const [kept] = drop_degenerate_faces(W, faces_w, mesh_scale(V));
+  const [kept] = drop_degenerate_faces(W, faces_w, mesh_scale(used_vertices(V, faces)));
   return kept.length > 0;
 }

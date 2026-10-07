@@ -319,9 +319,10 @@ function layer_cast_shadow(doc: AnyDoc, cv: Canvas): string[] {
   return [...per_light.keys()].sort(cmp_code_points).map((light) => group(`cast_shadow.${light}`, "", per_light.get(light) as string[]));
 }
 
-/** The `per_receiver` blocks of a construction block in the order of the Python dict: scene order of the receivers
- * (`doc.receivers`, the order `project_scene` inserts them), never `Object.keys` order (contract §5.4.4 (8): integer-like
- * ids would move to the front); keys not named by `doc.receivers` follow in their own order. */
+/** The `per_receiver` blocks of a construction block in `receivers[]` document order (final review m4-hidden#0: never in
+ * the key order of `per_receiver`, which the canonical JSON writer sorts; nor in `Object.keys` order, contract §5.4.4
+ * (8): integer-like ids would move to the front); keys not named by `doc.receivers` follow in code-point order (the
+ * Python `sorted(per_receiver, key=lambda r: (order.get(r, len(order)), r))`). */
 function per_receiver_entries(doc: AnyDoc, con: any): [string, any][] {
   const per = (con.per_receiver ?? {}) as Record<string, any>;
   const out: [string, any][] = [];
@@ -335,7 +336,7 @@ function per_receiver_entries(doc: AnyDoc, con: any): [string, any][] {
       }
     }
   }
-  for (const rid of Object.keys(per)) if (!seen.has(rid)) out.push([rid, per[rid]]);
+  for (const rid of Object.keys(per).filter((r) => !seen.has(r)).sort(cmp_code_points)) out.push([rid, per[rid]]);
   return out;
 }
 
@@ -372,10 +373,53 @@ function layer_construction(doc: AnyDoc, cv: Canvas): string[] {
   return body;
 }
 
-/** Some part after the first of the dotted name is `shadow` or `foot` (contract §5.0.4). */
-function has_shadow_or_foot_part(name: string): boolean {
-  const parts = name.split(".").slice(1);
-  return parts.includes("shadow") || parts.includes("foot");
+/** Python `str.isdigit` for the generated index parts (`sil.<k>`, `g<k>`): a non-empty run of decimal digits. */
+function is_digits(s: string): boolean {
+  return /^\p{Nd}+$/u.test(s);
+}
+
+/** `[light ids, receiver ids, multi-light]` of a document, for the right-to-left parse of the point names (port of
+ * `svg._name_ids`, contract §5.0.4): the light ids are the keys of `constructions`, `shadows[].light`,
+ * `receivers[].lit` and the `L.<light>` / `F.<light>[.<r>]` names. */
+function name_ids(doc: AnyDoc): [Set<string>, Set<string>, boolean] {
+  const d = doc as any;
+  const lights = new Set<string>(Object.keys(d.constructions ?? {}));
+  for (const sh of d.shadows ?? []) lights.add(sh.light);
+  const receivers = new Set<string>();
+  for (const r of d.receivers ?? []) {
+    receivers.add(r.id);
+    for (const l of Object.keys(r.lit ?? {})) lights.add(l);
+  }
+  for (const n of Object.keys(d.points ?? {})) {
+    const head = n.slice(0, 2);
+    if (head === "L." || head === "F.") lights.add(n.split(".")[1] as string);
+  }
+  return [lights, receivers, "constructions" in d];
+}
+
+/** Contract §5.0.4 parsed from the right against the known light and receiver ids (port of
+ * `svg._is_shadow_or_foot_name`; final review m6-umbra#1: a light called `shadow` / `foot` is a light id, not a marker):
+ * `name` is a shadow point `<base>.shadow.<light>[.<r>]` or a foot `<base>.foot[.<r>]`. `L.<light>` / `F.<light>[.<r>]`
+ * and the light-dependent curved stems of a multi-light document (`<obj>.sil.<k>.<light>`, `<obj>.g<k>.base|top.<light>`)
+ * are never shadow / foot names. */
+function is_shadow_or_foot_name(name: string, lights: ReadonlySet<string>, receivers: ReadonlySet<string>, multi: boolean): boolean {
+  const parts = name.split(".");
+  const q = parts.slice(1);
+  const p0 = parts[0] as string;
+  if ((p0 === "L" || p0 === "F") && q.length > 0 && lights.has(q[0] as string)
+    && (q.length === 1 || (q.length === 2 && p0 === "F" && receivers.has(q[1] as string)))) return false;
+  if (multi && q.length === 3 && lights.has(q[2] as string)) {
+    const q0 = q[0] as string, q1 = q[1] as string;
+    if ((q0 === "sil" && is_digits(q1)) || (q0.slice(0, 1) === "g" && is_digits(q0.slice(1)) && (q1 === "base" || q1 === "top"))) {
+      return false;
+    }
+  }
+  const tails = q.length >= 3 && receivers.has(q[q.length - 1] as string) ? [q, q.slice(0, -1)] : [q];
+  for (const tail of tails) {
+    if (tail.length >= 2 && tail[tail.length - 1] === "foot") return true;
+    if (tail.length >= 3 && tail[tail.length - 2] === "shadow" && lights.has(tail[tail.length - 1] as string)) return true;
+  }
+  return false;
 }
 
 function partition(s: string, sep: string): [string, string, string] {
@@ -388,10 +432,12 @@ function layer_labels(doc: AnyDoc, cv: Canvas): string[] {
   const top = new Map<string, [number, UV]>();
   const pts: [UV, string][] = [];
   const lf: [UV, string][] = [];
-  // contract §5.0.4: a name is unlabelled iff a part after the first is "shadow" or "foot" (the receiver suffix may
-  // follow "foot")
-  const names = Object.keys(points).filter((n) => !((n.includes(".shadow") || n.includes(".foot")) && has_shadow_or_foot_part(n)))
-    .sort(cmp_code_points);
+  // contract §5.0.4: shadow and foot points are unlabelled, the names parsed from the right against the known light and
+  // receiver ids (a light may be called "shadow" / "foot", §5.3.11); the substring pre-filter only lets candidate
+  // names through to the exact parse
+  const [lights, receivers, multi] = name_ids(doc);
+  const names = Object.keys(points).filter((n) => !((n.includes(".shadow") || n.includes(".foot"))
+    && is_shadow_or_foot_name(n, lights, receivers, multi))).sort(cmp_code_points);
   for (const name of names) {
     const p = points[name];
     const img = p.image;

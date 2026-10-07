@@ -39,9 +39,10 @@ export {
 export type { CameraRecord } from "./camera.js";
 export { face_lit_flags, is_parallel, light_vector, lit, lit_state, silhouette_edges, silhouette_loops } from "./light.js";
 export {
-  ARC_STEP_DEG, bounds_functionals, clip_loop_to_plane, clip_mesh_to_plane, clip_polygon_bounds, foot, plate_loop, receiver_frame,
-  shadow_loop, shadow_matrix, shadow_w,
+  ARC_STEP_DEG, arc_level, bounds_functionals, clip_loop_to_plane, clip_mesh_to_plane, clip_polygon_bounds, foot, light_plane_level,
+  plate_loop, receiver_frame, shadow_loop, shadow_matrix, shadow_w,
 } from "./shadow.js";
+export type { ShadowComponent, ShadowLoop } from "./shadow.js";
 export {
   CURVED_SEGMENTS, SPHERE_RINGS, box_mesh, cone_mesh, cylinder_mesh, euler_characteristic, face_normals_newell, mesh_bbox,
   mesh_from_faces, prism_mesh, sphere_mesh, transform_mesh, triangulate_faces,
