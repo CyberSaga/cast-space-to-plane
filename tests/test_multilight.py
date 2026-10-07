@@ -43,7 +43,9 @@ def cube_light_data(obj, lights=(WEST, EAST)):
 
 
 def load(name):
-    return load_scene(str(EXAMPLES / name))
+    # examples may hold loader-level objects (M5 ``mesh`` with ``path``): expand them first (§5.0.2)
+    from castplane.io import load_expanded_scene
+    return load_expanded_scene(str(EXAMPLES / name))[0]
 
 
 # --- names (§5.3.2) ----------------------------------------------------------------
