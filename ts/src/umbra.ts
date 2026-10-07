@@ -22,6 +22,8 @@
  * a `(value, index)` order, every emitted float goes through `+ 0`.
  */
 
+import { pyimod } from "./pyfloat.js";
+
 /** A `[u, v]` canvas-mm point. */
 export type UV = [number, number];
 /** The `(line_left, line_right)` line ids of a piece. */
@@ -214,7 +216,7 @@ function crossing_events(T: EdgeTable, kept: readonly number[], tol_mm: number):
       if (!((umin[i] as number) <= (umax[j] as number) && (umin[j] as number) <= (umax[i] as number))) continue;
       if (T.poly[i] === T.poly[j]) {
         const n = T.size[i] as number;
-        const dl = ((((T.local[j] as number) - (T.local[i] as number)) % n) + n) % n;
+        const dl = pyimod((T.local[j] as number) - (T.local[i] as number), n);
         if (dl === 1 || dl === n - 1) continue;
       }
       const ru = (u1[i] as number) - (u0[i] as number), rv = (v1[i] as number) - (v0[i] as number);
@@ -408,7 +410,7 @@ function scan_flat(F: Flat, n_groups: number, tol_mm: number, tol_area: number):
     const r0 = emitted.indexOf(start_slot);
     const piece: UV[] = [];
     for (let j = 0; j < nv; j++) {
-      const slot = emitted[(r0 + j) % nv] as number;
+      const slot = emitted[(r0 + j) % nv] as number; // pyimod-free: r0, j >= 0
       piece.push([(U[slot] as number) + 0, (V[slot] as number) + 0]);
     }
     out.pieces.push(piece);
