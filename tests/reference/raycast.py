@@ -327,3 +327,164 @@ def occluded_on_receiver(scene: dict, light: dict, receiver_id: str, origins: np
                 continue
             hit[start:start + chunk] |= hit_plate(r, o_chunk, dirs, tmax)
     return hit
+
+
+# --------------------------------------------------------------------------- M4: first-hit parameters (contract §5.1.6.2, §5.1.11)
+# ``first_hit_t`` versions of the hitters above: instead of "does the segment meet the solid", the smallest
+# boundary-crossing parameter ``t > eps`` of the ray ``o + t d`` (``inf`` when none).  Same mathematics as the
+# boolean hitters (local frame, slab test, quadrics with the height range, discs, side quads + caps with the
+# even-odd test); the frame change is rigid, so ``t`` is the world ray parameter.  Used by
+# ``tests/reference/zbuffer.py`` (nearest depth per pixel) and by the point-wise hidden-line reference.
+def _nearest(cands, eps) -> np.ndarray:
+    best = None
+    for t in cands:
+        t = np.where((~np.isnan(t)) & (t > eps), t, np.inf)
+        best = t if best is None else np.minimum(best, t)
+    return best
+
+
+def _first_of(t_near: np.ndarray, t_far: np.ndarray, eps) -> np.ndarray:
+    """Entry ``t_near`` when it lies beyond ``eps``, else the exit ``t_far`` (origin inside), else ``inf``."""
+    met = (~np.isnan(t_near)) & (t_near <= t_far)
+    t = np.where(t_near > eps, t_near, np.where(t_far > eps, t_far, np.inf))
+    return np.where(met, t, np.inf)
+
+
+def first_hit_t_box(obj: dict, o: np.ndarray, d: np.ndarray, eps: float = T_EPS) -> np.ndarray:
+    sx, sy, sz = (float(v) for v in obj["size"])
+    lo = np.array([-sx / 2, -sy / 2, 0.0])
+    hi = np.array([sx / 2, sy / 2, sz])
+    with np.errstate(divide="ignore", invalid="ignore"):
+        inv = 1.0 / d
+        t0 = (lo[None, :] - o) * inv
+        t1 = (hi[None, :] - o) * inv
+    par = d == 0.0
+    inside_slab = (o >= lo[None, :] - GEOM_EPS) & (o <= hi[None, :] + GEOM_EPS)
+    tn = np.where(par, np.where(inside_slab, -np.inf, np.inf), np.fmin(t0, t1))
+    tf = np.where(par, np.where(inside_slab, np.inf, -np.inf), np.fmax(t0, t1))
+    return _first_of(np.max(tn, axis=1), np.min(tf, axis=1), eps)
+
+
+def first_hit_t_sphere(obj: dict, o: np.ndarray, d: np.ndarray, eps: float = T_EPS) -> np.ndarray:
+    r = float(obj["radius"])
+    oc = o - np.array([0.0, 0.0, r])[None, :]
+    a = np.einsum("ij,ij->i", d, d)
+    b = 2.0 * np.einsum("ij,ij->i", d, oc)
+    c = np.einsum("ij,ij->i", oc, oc) - r * r
+    t1, t2 = _quadratic_roots(a, b, c)
+    return _first_of(t1, np.where(np.isnan(t2), -np.inf, t2), eps)
+
+
+def _lateral_t(a, b, c, o, d, zlo, zhi) -> list:
+    out = []
+    for t in _quadratic_roots(a, b, c):
+        z = o[:, 2] + t * d[:, 2]
+        out.append(np.where((z >= zlo - GEOM_EPS) & (z <= zhi + GEOM_EPS), t, np.nan))
+    return out
+
+
+def _disc_t(o, d, z_plane, radius) -> np.ndarray:
+    t = _safe_div(z_plane - o[:, 2], d[:, 2])
+    x = o[:, 0] + t * d[:, 0]
+    y = o[:, 1] + t * d[:, 1]
+    return np.where(x * x + y * y <= radius * radius * (1 + 1e-9) + GEOM_EPS, t, np.nan)
+
+
+def first_hit_t_cylinder(obj: dict, o: np.ndarray, d: np.ndarray, eps: float = T_EPS) -> np.ndarray:
+    r = float(obj["radius"])
+    h = float(obj["height"])
+    a = d[:, 0] ** 2 + d[:, 1] ** 2
+    b = 2.0 * (o[:, 0] * d[:, 0] + o[:, 1] * d[:, 1])
+    c = o[:, 0] ** 2 + o[:, 1] ** 2 - r * r
+    cands = _lateral_t(a, b, c, o, d, 0.0, h) + [_disc_t(o, d, 0.0, r), _disc_t(o, d, h, r)]
+    return _nearest(cands, eps)
+
+
+def first_hit_t_cone(obj: dict, o: np.ndarray, d: np.ndarray, eps: float = T_EPS) -> np.ndarray:
+    r = float(obj["radius"])
+    h = float(obj["height"])
+    k = r / h
+    hz = h - o[:, 2]
+    a = d[:, 0] ** 2 + d[:, 1] ** 2 - k * k * d[:, 2] ** 2
+    b = 2.0 * (o[:, 0] * d[:, 0] + o[:, 1] * d[:, 1] + k * k * hz * d[:, 2])
+    c = o[:, 0] ** 2 + o[:, 1] ** 2 - k * k * hz * hz
+    cands = _lateral_t(a, b, c, o, d, 0.0, h) + [_disc_t(o, d, 0.0, r)]
+    return _nearest(cands, eps)
+
+
+def first_hit_t_prism(obj: dict, o: np.ndarray, d: np.ndarray, eps: float = T_EPS) -> np.ndarray:
+    poly = np.asarray(obj["polygon"], dtype=np.float64).reshape(-1, 2)
+    h = float(obj["height"])
+    n = poly.shape[0]
+    cands = []
+    for i in range(n):
+        p0 = poly[i]
+        e = poly[(i + 1) % n] - p0
+        ee = float(e @ e)
+        if ee == 0.0:
+            continue
+        nrm = np.array([e[1], -e[0]])
+        t = _safe_div((p0[0] - o[:, 0]) * nrm[0] + (p0[1] - o[:, 1]) * nrm[1], d[:, 0] * nrm[0] + d[:, 1] * nrm[1])
+        x = o[:, 0] + t * d[:, 0]
+        y = o[:, 1] + t * d[:, 1]
+        z = o[:, 2] + t * d[:, 2]
+        s = ((x - p0[0]) * e[0] + (y - p0[1]) * e[1]) / ee
+        ok = (z >= -GEOM_EPS) & (z <= h + GEOM_EPS) & (s >= -GEOM_EPS) & (s <= 1.0 + GEOM_EPS)
+        cands.append(np.where(ok, t, np.nan))
+    for z_plane in (0.0, h):
+        t = _safe_div(z_plane - o[:, 2], d[:, 2])
+        x = o[:, 0] + np.nan_to_num(t) * d[:, 0]
+        y = o[:, 1] + np.nan_to_num(t) * d[:, 1]
+        inside = point_in_polygon(x, y, poly)
+        cands.append(np.where(inside, t, np.nan))
+    return _nearest(cands, eps)
+
+
+FIRST_HIT_T = {
+    "box": first_hit_t_box,
+    "sphere": first_hit_t_sphere,
+    "cylinder": first_hit_t_cylinder,
+    "cone": first_hit_t_cone,
+    "prism": first_hit_t_prism,
+}
+
+
+def first_hit_t_plate(receiver: dict, o: np.ndarray, d: np.ndarray, eps: float = T_EPS) -> np.ndarray:
+    """First crossing of the opaque convex plate ``receiver`` (world rays; see :func:`hit_plate`)."""
+    n, d0 = receiver_plane(receiver)
+    B = np.asarray(receiver["bounds"], dtype=np.float64).reshape(-1, 3)
+    t = _safe_div(-(o @ n + d0), d @ n)
+    X = o + np.nan_to_num(t)[:, None] * d
+    S = np.stack([np.cross(B[(k + 1) % B.shape[0]] - B[k], X - B[k]) @ n for k in range(B.shape[0])], axis=1)
+    inside = np.all(S >= -GEOM_EPS, axis=1) | np.all(S <= GEOM_EPS, axis=1)
+    return np.where((~np.isnan(t)) & (t > eps) & inside, t, np.inf)
+
+
+def first_hit_t_ground(o: np.ndarray, d: np.ndarray, eps: float = T_EPS) -> np.ndarray:
+    """First crossing of the unbounded ground ``z = 0`` (``inf`` for rays parallel to it or crossing behind)."""
+    t = _safe_div(-o[:, 2], d[:, 2])
+    return np.where((~np.isnan(t)) & (t > eps), t, np.inf)
+
+
+def first_hit_t(scene: dict, origins: np.ndarray, dirs: np.ndarray, eps: float = T_EPS,
+                chunk: int = CHUNK) -> np.ndarray:
+    """Nearest boundary crossing ``t > eps`` of the world rays ``origins + t dirs`` with every object, every
+    bounded receiver (opaque plate) and the unbounded ground (``receivers[0]`` without ``bounds``; no ground
+    receiver -> no ground); ``inf`` when the ray meets nothing."""
+    origins = np.asarray(origins, dtype=np.float64).reshape(-1, 3)
+    dirs = np.broadcast_to(np.asarray(dirs, dtype=np.float64).reshape(-1, 3), origins.shape)
+    out = np.full(origins.shape[0], np.inf)
+    receivers = scene.get("receivers", [])
+    for start in range(0, origins.shape[0], max(1, int(chunk))):
+        oc, dc = origins[start:start + chunk], np.ascontiguousarray(dirs[start:start + chunk])
+        best = out[start:start + chunk]
+        for obj in scene["objects"]:
+            o, d = to_local(obj, oc, dc)
+            best = np.minimum(best, FIRST_HIT_T[obj["type"]](obj, o, d, eps))
+        for k, r in enumerate(receivers):
+            if r.get("bounds") is not None:
+                best = np.minimum(best, first_hit_t_plate(r, oc, dc, eps))
+            elif k == 0:
+                best = np.minimum(best, first_hit_t_ground(oc, dc, eps))
+        out[start:start + chunk] = best
+    return out
