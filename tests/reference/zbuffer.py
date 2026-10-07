@@ -15,7 +15,8 @@ pixels a test looks at, each once, cached) -- the values are those of the full b
 
 :func:`hidden_at` is the three-valued predicate: ``True`` when ``Z[px] < depth·(1 − DEPTH_BAND)``, ``False``
 when ``Z[px] > depth·(1 + DEPTH_BAND)``, ``None`` (undecided) inside the band and -- the silhouette guard, an
-implementation note of contract §5.1 -- on a pixel whose 3 x 3 neighbourhood holds both decided states.  :func:`occluded_points` is the
+implementation note of contract §5.1 -- when a pixel of the 3 x 3 neighbourhood lies on the other side of the
+sample's depth than the centre pixel.  :func:`occluded_points` is the
 point-wise ray-cast reference used at run boundaries: some boundary crossing of the segment ``C → X`` at a
 parameter in ``(eps, 1 − eps)``.
 """
@@ -139,11 +140,13 @@ class DepthBuffer:
 def hidden_states(Z: DepthBuffer, uv, depth, guard: bool = True) -> tuple[np.ndarray, np.ndarray]:
     """Vectorised :func:`hidden_at`: ``(decided, hidden)`` bool arrays.
 
-    ``guard`` (default) also leaves a sample undecided when the 3 x 3 pixel neighbourhood of its pixel holds
-    both a "hidden" and a "visible" depth (``< depth·(1 − band)`` and ``> depth·(1 + band)``): the depth
-    changes by more than the band within one pixel there -- the sample sits on an occluder's silhouette (a
-    face seen edge-on, the rim of a sphere) or on a surface seen at a grazing angle (the ground near the
-    horizon), the two documented limits of the reference.  ``guard=False`` is the bare band rule."""
+    ``guard`` (default) also leaves a sample undecided when some pixel of the 3 x 3 neighbourhood of its pixel
+    lies on the other side of the sample's depth than the centre pixel (a "hidden" centre with a neighbour
+    ``Z >= depth``, a "visible" centre with a neighbour ``Z <= depth``): a depth edge then passes within
+    1.5 px of the sample and the pixel-centre ray may pass on the other side of it than the sample's own ray
+    -- an occluder's silhouette (the rim of a sphere, the silhouette generator of a cylinder, a face seen
+    edge-on) or a surface seen at a grazing angle (the ground near the horizon), the two documented limits
+    of the reference.  ``guard=False`` is the bare band rule."""
     depth = np.asarray(depth, dtype=np.float64).reshape(-1)
     iy, ix = pixel_of(Z.cam, uv, Z.px_mm)
     z = Z[iy, ix]
@@ -152,14 +155,14 @@ def hidden_states(Z: DepthBuffer, uv, depth, guard: bool = True) -> tuple[np.nda
     decided = hid | vis
     if guard and depth.shape[0]:
         ny, nx = Z.shape
-        any_h = np.zeros(depth.shape[0], dtype=bool)
-        any_v = np.zeros(depth.shape[0], dtype=bool)
+        nearer = np.zeros(depth.shape[0], dtype=bool)
+        farther = np.zeros(depth.shape[0], dtype=bool)
         for dy in (-1, 0, 1):
             for dx in (-1, 0, 1):
                 zz = Z[np.clip(iy + dy, 0, ny - 1), np.clip(ix + dx, 0, nx - 1)]
-                any_h |= zz < depth * (1.0 - DEPTH_BAND)
-                any_v |= zz > depth * (1.0 + DEPTH_BAND)
-        decided &= ~(any_h & any_v)
+                nearer |= zz <= depth
+                farther |= zz >= depth
+        decided &= ~((hid & farther) | (vis & nearer))
     return decided, hid & decided
 
 

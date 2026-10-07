@@ -1365,6 +1365,25 @@ worktree and the merge rule are in `docs/PLAN-v2.md`.
   notch at `(0,4,0)`, lamp `(0, 4.5, 0.5)`, plate `[−3,3]×[1,7]`: area 36 − 2 − 2.625 = 31.375). The conformance case
   uses the first geometry; both agree with `raycast.occluded_on_receiver` at IoU ≥ 0.99
   (`test_concave_prism_on_plate_geometries_against_the_raycast`).
+- **[decision, implementation] (M4 H-track) Silhouette guard of the depth-buffer reference.** The bare three-valued
+  rule of §5.1.11 misjudges a sample that lies within a pixel of an occluder's silhouette **behind** it: the ray through
+  the pixel centre (up to 0.07 mm from the sample) passes beside the occluder and sees the background (`Z > depth·1.02`,
+  "visible") while the sample's own ray grazes the occluder (`first_hit < 1 − ε_t`, correctly hidden). Light terminators
+  near the camera silhouette produce whole runs of such samples (the terminator generator of a cylinder lit from nearly
+  the camera's side; a sphere's light-silhouette circle just behind its rim): up to 2.4 % disagreement on seeded random
+  scenes with every disagreeing sample confirmed hidden by the point-wise ray cast. `zbuffer.hidden_states` therefore
+  leaves a sample **undecided** also when some pixel of the 3 × 3 neighbourhood of its pixel lies on the other side of
+  the sample's depth than the centre pixel (centre "hidden" and a neighbour `Z ≥ depth`, or centre "visible" and a
+  neighbour `Z ≤ depth`): a depth edge then passes within 1.5 px of the sample — the "silhouette pixels" the contract
+  names as a limit of the reference. The band rule itself is unchanged (`guard=False` gives it). With the guard every
+  M4 scene and the 20 random scenes of `tests/test_hidden.py` agree at 100 % of the decided samples (≥ 99 % required),
+  both states are decided in quantity, and a document with every state flipped fails
+  (`test_depth_buffer_comparison_is_not_vacuous`). Test-side choices the contract leaves open: the world point of a
+  sample is recovered by the reference (the image point back-projected onto the drawable's 3-D line, onto its receiver
+  plane for `polygon_edges`, the exact circle point / its exact shadow at the run's `theta` for conics, sampled by image
+  length along the exact curve); which `polygon_edges` are subjects comes from `hidden.clip_polygon_4d`'s provenance;
+  the random scenes are `random_scenes.make_scene(5000 + seed, 1 + seed % 6)` with `seed % 3` plates (a wall behind the
+  objects as seen from the camera, then a low panel in front of them).
 
 ### 5.2 M5 — mesh import (spec §9 rows 網格匯入 / 匯入格式, spec §10 M5, spec §11.3)
 

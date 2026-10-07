@@ -605,3 +605,393 @@ def test_partly_hidden_conics_become_arcs_and_hidden_polylines():
         assert any(arc["theta"] == r_["theta"] for r_ in vis_runs)
     hidden_cs = _group(root, "cast_shadow.hidden.lamp")
     assert any(e.tag == f"{SVG_NS}polyline" for e in hidden_cs)
+
+
+# --------------------------------------------------------------------------- depth-buffer reference (§5.1.11)
+# For every run of every subject drawable: samples every 0.5 mm along the run (0.3 mm kept clear of each end)
+# against the three-valued depth buffer of tests/reference/zbuffer.py, and every run boundary against the
+# point-wise ray cast 0.15 mm before and after it.  World points of the samples are recovered by the
+# reference itself (back-projection of the image point onto the drawable's 3-D line, its receiver plane, or
+# the exact circle / its exact shadow), never through castplane.
+from tests.reference import random_scenes
+from tests.reference import zbuffer as zb
+
+ZB_STEP_MM = 0.5
+ZB_END_MM = 0.3
+ZB_BOUNDARY_MM = 0.15
+
+
+def _straight_runs(item: dict, length: float) -> list:
+    """``[(m0, m1, visible)]`` of a straight drawable (one run for a non-partial one)."""
+    if item["visibility"] == "partial":
+        return [(r["mm"][0], r["mm"][1], r["visible"]) for r in item["runs"]]
+    return [(0.0, length, item["visibility"] == "visible")]
+
+
+def _circle_point(circle: dict, theta) -> np.ndarray:
+    theta = np.asarray(theta, dtype=np.float64).reshape(-1)
+    c, e1, e2 = (np.asarray(circle[k], dtype=np.float64) for k in ("centre", "e1", "e2"))
+    r = float(circle["radius"])
+    return c[None, :] + r * (np.cos(theta)[:, None] * e1[None, :] + np.sin(theta)[:, None] * e2[None, :])
+
+
+def _shadow_of(P: np.ndarray, light: dict, plane) -> np.ndarray:
+    """Exact cast shadow on the plane ``n·x + d = 0`` of the world points ``P`` (central / parallel projection)."""
+    n, d = np.asarray(plane[:3], dtype=np.float64), float(plane[3])
+    if light["type"] == "point":
+        L = np.asarray(light["position"], dtype=np.float64)
+        lam = -(L @ n + d) / ((P - L[None, :]) @ n)
+        return L[None, :] + lam[:, None] * (P - L[None, :])
+    D = np.asarray(light["direction"], dtype=np.float64)
+    mu = -(P @ n + d) / float(D @ n)
+    return P + mu[:, None] * D[None, :]
+
+
+class _Collector:
+    """Buffer samples and boundary probes of one document, then evaluate them in bulk."""
+
+    def __init__(self, scene: dict):
+        self.scene = scene
+        self.cm = zb.camera_model(scene)
+        self.samples = []         # (uv (n,2), X (n,3), visible bool, tag)
+        self.bounds = []          # (X_before (3,), X_after (3,), vis_before, vis_after, tag)
+
+    # straight drawables: image segment a -> b, world_of(uv) back-projection
+    def straight(self, seg, item: dict, world_of, tag: str) -> None:
+        a, b = np.asarray(seg[0], dtype=np.float64), np.asarray(seg[1], dtype=np.float64)
+        du, dv = float(b[0] - a[0]), float(b[1] - a[1])
+        length = math.sqrt(du * du + dv * dv)
+        if length <= 2 * ZB_END_MM:
+            return
+        runs = _straight_runs(item, length)
+
+        def uv_at(m):
+            s = np.asarray(m, dtype=np.float64).reshape(-1) / length
+            return a[None, :] + s[:, None] * (b - a)[None, :]
+
+        for m0, m1, vis in runs:
+            m = np.arange(m0 + ZB_END_MM, m1 - ZB_END_MM + 1e-12, ZB_STEP_MM)
+            if m.shape[0]:
+                uv = uv_at(m)
+                self.samples.append((uv, world_of(uv), bool(vis), tag))
+        for (_a0, m_b, v0), (_b0, _b1, v1) in zip(runs, runs[1:]):
+            mm = np.clip([m_b - ZB_BOUNDARY_MM, m_b + ZB_BOUNDARY_MM], 0.0, length)
+            X = world_of(uv_at(mm))
+            self.bounds.append((X[0], X[1], bool(v0), bool(v1), tag))
+
+    # conic drawables: the exact curve X(theta) (circle point, or its shadow on the receiver)
+    def conic(self, entry: dict, world_of_theta, tag: str) -> None:
+        if not entry.get("visible"):
+            return
+        by_interval = {}
+        for r in entry["runs"]:
+            by_interval.setdefault(r["interval"], []).append((r["theta"][0], r["theta"][1], r["visible"]))
+        for k, (lo, hi) in enumerate(entry["visible"]):
+            runs = by_interval.get(k) or [(lo, hi, entry["visibility"] == "visible")]
+            coarse = np.linspace(lo, hi, 257)
+            uvc, _ = zb.project(self.cm, world_of_theta(coarse))
+            approx = float(np.sum(np.hypot(*np.diff(uvc, axis=0).T)))
+            n = int(min(200000, max(256, math.ceil(approx / 0.02))))
+            th = np.linspace(lo, hi, n + 1)
+            uv, _ = zb.project(self.cm, world_of_theta(th))
+            cum = np.concatenate([[0.0], np.cumsum(np.hypot(*np.diff(uv, axis=0).T))])
+            ends = [(float(np.interp(t0, th, cum)), float(np.interp(t1, th, cum)), vis) for t0, t1, vis in runs]
+            for m0, m1, vis in ends:
+                m = np.arange(m0 + ZB_END_MM, m1 - ZB_END_MM + 1e-12, ZB_STEP_MM)
+                if m.shape[0]:
+                    X = world_of_theta(np.interp(m, cum, th))
+                    uvs, _ = zb.project(self.cm, X)
+                    self.samples.append((uvs, X, bool(vis), tag))
+            for (_a0, m_b, v0), (_b0, _b1, v1) in zip(ends, ends[1:]):
+                mm = np.clip([m_b - ZB_BOUNDARY_MM, m_b + ZB_BOUNDARY_MM], 0.0, cum[-1])
+                X = world_of_theta(np.interp(mm, cum, th))
+                self.bounds.append((X[0], X[1], bool(v0), bool(v1), tag))
+
+    def evaluate(self, guard: bool = True) -> dict:
+        """Per tag: ``[decided, agreeing, decided hidden]`` sample counts; ``boundaries: [total, agreeing]``."""
+        out = {"boundaries": [0, 0]}
+        if self.samples:
+            Z = zb.DepthBuffer(self.scene)
+            uv = np.concatenate([s[0] for s in self.samples])
+            X = np.concatenate([s[1] for s in self.samples])
+            vis = np.concatenate([np.full(s[0].shape[0], s[2]) for s in self.samples])
+            tags = np.concatenate([np.full(s[0].shape[0], s[3], dtype=object) for s in self.samples])
+            ok = np.all(np.isfinite(X), axis=1)
+            _uv, depth = zb.project(self.cm, X[ok])
+            decided, hid = zb.hidden_states(Z, uv[ok], depth, guard)
+            agree = decided & (hid != vis[ok])
+            for tag in sorted(set(tags.tolist())):
+                sel = tags[ok] == tag
+                out[tag] = [int(np.sum(decided[sel])), int(np.sum(agree[sel])), int(np.sum(hid[sel]))]
+        if self.bounds:
+            Xa = np.array([b[0] for b in self.bounds])
+            Xb = np.array([b[1] for b in self.bounds])
+            occ = zb.occluded_points(self.scene, np.concatenate([Xa, Xb]))
+            n = len(self.bounds)
+            va = np.array([b[2] for b in self.bounds])
+            vb = np.array([b[3] for b in self.bounds])
+            good = (~occ[:n] == va) & (~occ[n:] == vb)
+            out["boundaries"] = [n, int(np.sum(good))]
+        return out
+
+
+def collect_document(scene: dict, doc: dict) -> _Collector:
+    """Every subject drawable of a hidden-lines document (contract §5.1.6.1) into a :class:`_Collector`.
+    Tags: ``"poly_edge"`` (edges[] of boxes / prisms, the 100 % set) and ``"other"``."""
+    col = _Collector(scene)
+    cm = col.cm
+    pts = doc["points"]
+    kinds = {o["id"]: o["type"] for o in scene["objects"]}
+    planes = {r["id"]: r["plane"] for r in doc["receivers"]}
+    lights = {lt["id"]: lt for lt in scene["lights"]}
+
+    def line_world(a_name, b_name):
+        A, B = pts[a_name]["world"], pts[b_name]["world"]
+        return lambda uv: zb.on_line(cm, uv, A, B)
+
+    for e in doc["edges"]:
+        if e["segment"] is None:
+            continue
+        tag = "poly_edge" if kinds.get(e["object"]) in ("box", "prism") else "other"
+        col.straight(e["segment"], e, line_world(e["from"], e["to"]), tag)
+    for o in doc["outlines"]:
+        for g in o["generators"]:
+            if g["segment"] is not None:
+                col.straight(g["segment"], g, line_world(g["from"], g["to"]), "other")
+        for c in o["conics"]:
+            col.conic(c, lambda th, c=c: _circle_point(c["circle"], th), "other")
+    for f in doc["form_shadow"]:
+        for t in f["terminator"]:
+            if "segment" in t:
+                if t["polylines"]:
+                    col.straight(t["polylines"][0], t, line_world(*t["segment"]), "other")
+            else:
+                col.conic(t, lambda th, t=t: _circle_point(t["circle"], th), "other")
+    # shadow polygon edges: subjects are the edges on an original outline edge (clip edges and drawn horizon
+    # segments are not subjects, §5.1.6.4); the provenance comes from the 4-D clip of the stage-A loop
+    A = castplane.shadow_geometry(scene)
+    cam = castplane.project_scene(scene, A)["camera"]
+    for sh, a_sh in zip(doc["shadows"], A["shadows"]):
+        plane = planes[sh["receiver"]]
+        world_of = lambda uv, plane=plane: zb.on_plane(cm, uv, plane[:3], plane[3])
+        for poly, recs, loop in zip(sh["polygons"], sh["polygon_edges"], a_sh["loops"]):
+            if len(poly) < 3:
+                continue
+            p4, ids = hidden.clip_polygon_4d(cam, loop["vertices"])
+            if len(p4) != len(poly):
+                continue
+            n = len(poly)
+            for k in range(n):
+                if ids[k] is None or (p4[k, 3] == 0.0 and p4[(k + 1) % n, 3] == 0.0):
+                    continue
+                col.straight([poly[k], poly[(k + 1) % n]], recs[k], world_of, "other")
+        for c in sh["conics"]:
+            light = lights[sh["light"]]
+            col.conic(c, lambda th, c=c, light=light, plane=plane: _shadow_of(_circle_point(c["circle"], th),
+                                                                                light, plane), "other")
+    return col
+
+
+def zbuffer_random_scene(seed: int) -> dict:
+    """A seeded random scene for the depth-buffer comparison: ``1 + seed % 6`` objects and ``seed % 3`` plates
+    (a wall behind the objects as seen from the camera, then a low free-standing panel in front of them)."""
+    n_obj, n_plates = 1 + seed % 6, seed % 3
+    scene = random_scenes.make_scene(5000 + seed, n_obj)
+    pts = np.vstack([random_scenes.world_extreme_points(o) for o in scene["objects"]])
+    centre = 0.5 * (pts.min(axis=0) + pts.max(axis=0))
+    C = np.asarray(scene["camera"]["position"], dtype=np.float64)
+    view = np.array([centre[0] - C[0], centre[1] - C[1], 0.0])
+    view /= np.linalg.norm(view)
+    side = np.array([-view[1], view[0], 0.0])
+    rel = pts[:, :2] - centre[None, :2]
+    depth_ext = float(np.max(rel @ view[:2]))
+    width = float(np.max(np.abs(rel @ side[:2]))) + 2.0
+    dist = float(np.linalg.norm((centre - C)[:2]))
+    rng = np.random.default_rng(seed)
+
+    def plate(rid, at, half, height):
+        n = -view
+        d = -float(n @ at)
+        b = [at - half * side, at + half * side, at + half * side + [0, 0, height], at - half * side + [0, 0, height]]
+        return {"id": rid, "type": "plane", "normal": [float(v) + 0.0 for v in n], "offset": d,
+                "bounds": [[float(v) + 0.0 for v in p] for p in b]}
+
+    if n_plates >= 1:
+        at = np.array([centre[0], centre[1], 0.0]) + (depth_ext + float(rng.uniform(0.3, 1.0))) * view
+        scene["receivers"].append(plate("wall", at, width, float(rng.uniform(2.0, 3.5))))
+    if n_plates >= 2:
+        at = np.array([centre[0], centre[1], 0.0]) - min(0.45 * dist, float(rng.uniform(1.0, 2.5))) * view
+        at = at + float(rng.uniform(-1.0, 1.0)) * side
+        scene["receivers"].append(plate("panel", at, float(rng.uniform(0.6, 1.5)), float(rng.uniform(0.4, 1.2))))
+    scene["output"]["hidden_lines"] = True
+    return scene
+
+
+def m4_hidden_scenes() -> dict:
+    """The M4 conformance scenes of contract §5.1.11 (built as in ``tests/test_receivers.py``), switch on."""
+    from tests.test_receivers import _concave_prism_scene
+
+    def unlit():
+        sc = wall_and_ground_scene()
+        sc["lights"] = [{"id": "lamp", "type": "point", "position": [0, 8, 3]}]
+        return sc
+
+    def directional():
+        sc = wall_and_ground_scene()
+        d = np.array([0.3, -0.5, 0.8]) / math.sqrt(0.98)
+        sc["lights"] = [{"id": "sun", "type": "directional", "direction": d.tolist()}]
+        sc["camera"] = {"position": [0, -1, 1.6], "target": [0, 6, 1.6], "focal_length_mm": 35, "frame_mm": [36, 24]}
+        return sc
+
+    def bounded_default():
+        sc = wall_and_ground_scene()
+        sc["receivers"] = [{"id": "floor", "type": "plane", "normal": [0, 0, 1], "offset": 0,
+                            "bounds": [[-2, 2, 0], [2, 2, 0], [2, 5.5, 0], [-2, 5.5, 0]]}]
+        return sc
+
+    def concave():
+        u = [[-1, -1], [1, -1], [1, 1], [0.5, 1], [0.5, -0.5], [-0.5, -0.5], [-0.5, 1], [-1, 1]]
+        return _concave_prism_scene([[-3, -4.5, 0], [3, -4.5, 0], [3, -2, 0], [-3, -2, 0]], [0, 0, 0], u,
+                                    [0, 0.2, 0.7])
+
+    makers = {"wall_and_ground_hidden": wall_and_ground_scene, "receiver_unlit_wall": unlit,
+              "receiver_directional_wall": directional, "fold_curved_cylinder": fold_curved_cylinder_scene,
+              "bounded_default_receiver": bounded_default, "hidden_lines_curved_unbounded": curved_unbounded_scene,
+              "hidden_lines_vp_in_canvas": vp_in_canvas_scene, "concave_prism_on_plate": concave}
+    out = {}
+    for name, make in makers.items():
+        sc = make()
+        sc.setdefault("output", {})["hidden_lines"] = True
+        out[name] = sc
+    return out
+
+
+ZBUFFER_SCENES = dict(m4_hidden_scenes(), **{f"random_{s}": zbuffer_random_scene(s) for s in range(20)})
+
+
+def _zbuffer_result(name: str) -> dict:
+    scene = castplane.load_scene(ZBUFFER_SCENES[name])
+    doc = castplane.render(scene, hidden_lines=True)["geometry"]
+    return collect_document(scene, doc).evaluate()
+
+
+@pytest.mark.parametrize("name", sorted(ZBUFFER_SCENES))
+def test_runs_agree_with_the_depth_buffer_reference(name):
+    """Contract §5.1.11: samples every 0.5 mm along every run (0.3 mm clear of the ends) agree with the
+    three-valued depth buffer for >= 99 % of the decided samples of the document and for 100 % of the decided
+    samples on edges[] of boxes / prisms; every run boundary agrees with the point-wise ray cast 0.15 mm
+    before and after it for >= 98 % of the boundaries."""
+    res = _zbuffer_result(name)
+    decided = sum(v[0] for k, v in res.items() if k != "boundaries")
+    agree = sum(v[1] for k, v in res.items() if k != "boundaries")
+    assert decided > 50, (name, res)
+    assert agree >= 0.99 * decided, (name, res)
+    if "poly_edge" in res:
+        assert res["poly_edge"][1] == res["poly_edge"][0], (name, res)
+    total, good = res["boundaries"]
+    assert good >= 0.98 * total, (name, res)
+
+
+def test_depth_buffer_comparison_is_not_vacuous():
+    """The comparison decides both states, sees run boundaries, and rejects a wrong classification: with every
+    state flipped the agreement collapses (wall_and_ground_hidden and two random scenes with plates)."""
+    totals = {"hidden": 0, "visible": 0, "boundaries": 0}
+    for name in ("wall_and_ground_hidden", "random_5", "random_11"):
+        scene = castplane.load_scene(ZBUFFER_SCENES[name])
+        doc = castplane.render(scene, hidden_lines=True)["geometry"]
+        res = collect_document(scene, doc).evaluate()
+        for k, v in res.items():
+            if k != "boundaries":
+                totals["hidden"] += v[2]
+                totals["visible"] += v[0] - v[2]
+        totals["boundaries"] += res["boundaries"][0]
+        flipped = json.loads(dumps(doc))
+        for item in [e for e in flipped["edges"]] + [r for s in flipped["shadows"] for pe in s["polygon_edges"]
+                                                       for r in pe]:
+            item["visibility"] = {"visible": "hidden", "hidden": "visible"}.get(item["visibility"], "partial")
+            for r in item["runs"]:
+                r["visible"] = not r["visible"]
+        bad = collect_document(scene, flipped).evaluate()
+        decided = sum(v[0] for k, v in bad.items() if k != "boundaries")
+        agree = sum(v[1] for k, v in bad.items() if k != "boundaries")
+        assert agree < 0.9 * decided, (name, bad)
+    assert totals["hidden"] > 500 and totals["visible"] > 500 and totals["boundaries"] > 50, totals
+
+
+def test_zbuffer_camera_reproduces_the_document_images():
+    """The reference camera (re-implemented from the spec) gives the document's images and depths."""
+    for name in ("camera_roll_and_shift", "camera_yaw_pitch_form", "example_three_point"):
+        scene = castplane.load_scene(load_case(name))
+        doc = castplane.render(scene)["geometry"]
+        cm = zb.camera_model(scene)
+        n = 0
+        for pt in doc["points"].values():
+            if "world" in pt and pt.get("image") is not None:
+                uv, z = zb.project(cm, [pt["world"]])
+                assert np.allclose(uv[0], pt["image"], atol=1e-9) and z[0] == pytest.approx(pt["depth"], rel=1e-12)
+                n += 1
+        assert n >= 8, name
+    scene = castplane.load_scene(wall_and_ground_scene())
+    cm = zb.camera_model(scene)
+    assert cm["rect"] == (-0.75 * 273, 0.75 * 273, -0.75 * 182, 0.75 * 182)
+    assert zb.grid_shape(cm) == (2730, 4095)
+
+
+def test_zbuffer_three_valued_rule_and_lazy_buffer():
+    scene = castplane.load_scene(wall_and_ground_scene())
+    Z = zb.DepthBuffer(scene)
+    cm = Z.cam
+    window = (1500, 1504, 1800, 1806)
+    full = Z.full(window)
+    IY, IX = np.meshgrid(np.arange(1500, 1504), np.arange(1800, 1806), indexing="ij")
+    assert np.array_equal(Z[IY.ravel(), IX.ravel()].reshape(full.shape), full)
+    # the middle of the back bottom edge v2-v3 of the crate (y = 5, z = 0) is behind the front face
+    X = np.array([[0.0, 5.0, 0.0]])
+    uv, depth = zb.project(cm, X)
+    assert zb.hidden_at(Z, uv[0], depth[0]) is True
+    assert zb.occluded_points(scene, X)[0]
+    # a point on the visible front face: undecided (inside the band), not occluded point-wise
+    Y = np.array([[0.1, 4.0, 0.5]])
+    uv, depth = zb.project(cm, Y)
+    assert zb.hidden_at(Z, uv[0], depth[0]) is None
+    assert not zb.occluded_points(scene, Y)[0]
+    # a point in front of everything along its ray: visible
+    W = np.array([[2.0, 3.0, 2.0]])
+    uv, depth = zb.project(cm, W)
+    assert zb.hidden_at(Z, uv[0], depth[0]) is False
+
+
+@pytest.mark.parametrize("kind, shape", [
+    ("box", {"size": [1.2, 0.7, 0.9]}),
+    ("prism", {"polygon": [[-1, -1], [1, -1], [1, 1], [0.5, 1], [0.5, -0.5], [-0.5, -0.5], [-0.5, 1], [-1, 1]],
+               "height": 0.8}),
+    ("cylinder", {"radius": 0.6, "height": 1.1}),
+    ("cone", {"radius": 0.7, "height": 1.3}),
+    ("sphere", {"radius": 0.6}),
+])
+def test_reference_first_hit_t_equals_the_core_occluders(kind, shape):
+    """``raycast.first_hit_t`` (the reference) and ``hidden.first_hit`` (the core, re-implemented) give the
+    same first crossing on random rays, incl. rays starting inside the solid."""
+    from tests.reference import raycast
+    obj = {"id": "o", "type": kind, "transform": {"position": [0.3, -0.2, 0.1],
+                                                    "rotation_deg": [0, 0, 35] if kind == "sphere" else [10, -20, 35]}}
+    obj.update(shape)
+    sc = {"version": "0.1", "units": "m", "up": "z", "objects": [obj],
+          "lights": [{"id": "l", "type": "point", "position": [0, 0, 5]}],
+          "receivers": [{"id": "g", "type": "plane", "normal": [0, 0, 1], "offset": 0}],
+          "camera": {"position": [0, -8, 3], "target": [0, 0, 0.5], "focal_length_mm": 35, "frame_mm": [36, 24]},
+          "output": {"canvas_mm": [360, 240]}}
+    scene = castplane.load_scene(sc)
+    occ = hidden.occluder(castplane.shadow_geometry(scene)["objects"][0])
+    rng = np.random.default_rng(11)
+    O = rng.uniform(-3, 3, size=(5000, 3))
+    O[:500] = [0.3, -0.2, 0.5] + rng.uniform(-0.1, 0.1, size=(500, 3))            # inside
+    target = np.array([0.3, -0.2, 0.5]) + rng.uniform(-0.9, 0.9, size=(5000, 3))
+    D = target - O
+    o, d = raycast.to_local(scene["objects"][0], O, D)
+    t_ref = raycast.FIRST_HIT_T[kind](scene["objects"][0], o, d, 1e-9)
+    t_core = hidden.first_hit(occ, O, D, 1e-9)
+    fin = np.isfinite(t_ref) & np.isfinite(t_core)
+    assert fin.sum() > 1500
+    assert np.mean(np.isfinite(t_ref) == np.isfinite(t_core)) > 0.999
+    assert np.max(np.abs(t_ref[fin] - t_core[fin])) < 1e-7
