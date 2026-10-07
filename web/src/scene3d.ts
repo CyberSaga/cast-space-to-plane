@@ -6,7 +6,7 @@
 
 import * as THREE from "three";
 
-import { transform_frame } from "castplane";
+import { prepared_mesh, transform_frame } from "castplane";
 import type { Scene, SceneObject, StageA, Vec3 } from "castplane";
 
 /** Per-object colours (cycled). */
@@ -36,6 +36,19 @@ export function primitive_geometry(obj: SceneObject): THREE.BufferGeometry {
     case "prism": {
       const shape = new THREE.Shape((obj.polygon ?? []).map(([x, y]) => new THREE.Vector2(x, y)));
       return new THREE.ExtrudeGeometry(shape, { depth: obj.height as number, bevelEnabled: false });
+    }
+    case "mesh": {
+      // contract §5.4.10 (phase 2): a BufferGeometry from the record's triangles — the core's preprocessing
+      // (`prepared_mesh`: scale applied, welded, the original surface's fans) in the local frame; flat normals
+      const prep = prepared_mesh(obj);
+      const positions = new Float32Array(prep.triangles.length * 9);
+      prep.triangles.forEach((t, k) => {
+        t.forEach((v, j) => positions.set(prep.mesh.vertices[v] as Vec3, 9 * k + 3 * j));
+      });
+      const geometry = new THREE.BufferGeometry();
+      geometry.setAttribute("position", new THREE.BufferAttribute(positions, 3));
+      geometry.computeVertexNormals();
+      return geometry;
     }
     default:
       throw new Error(`build_scene3d: unsupported object type ${JSON.stringify(obj.type)}`);
@@ -84,7 +97,9 @@ export function build_scene3d(scene: Scene, A?: StageA): THREE.Group {
   const { centre, extent } = extent_of(scene, A);
 
   scene.objects.forEach((obj, i) => {
-    const material = new THREE.MeshLambertMaterial({ color: PALETTE[i % PALETTE.length] });
+    // a mesh object may be open (the per-face fallback of §5.2.5): draw both sides of its triangles
+    const material = new THREE.MeshLambertMaterial({ color: PALETTE[i % PALETTE.length],
+      side: obj.type === "mesh" ? THREE.DoubleSide : THREE.FrontSide });
     const mesh = new THREE.Mesh(primitive_geometry(obj), material);
     mesh.name = obj.id;
     mesh.matrixAutoUpdate = false;

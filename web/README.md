@@ -21,8 +21,12 @@ npm run -w web test        # orbit / download unit tests (node:test, web/test/)
 - **Loading**: the *Example* menu (the five `examples/*.json`, embedded by `import.meta.glob`), the file picker,
   or a file dropped anywhere on the page. A dropped file that is not JSON shows "not a JSON file". A scene
   that fails validation shows the `SceneError` field path and message in the error panel, and the previous
-  scene stays loaded.
-- **3D view** (`src/scene3d.ts`, `src/threeCamera.ts`): boxes, cylinders, cones, spheres and prisms placed with
+  scene stays loaded. The core reads expanded scenes only (contract §5.4.0): a `mesh` object must carry its
+  geometry inline (`data`), so the bundled `mesh_demo` example, which names `meshes/house.obj`, shows the
+  "mesh file must be expanded first" error; write an expanded scene with `castplane import house.obj --inline`
+  (or `castplane.io.expand_scene`) and load that file instead.
+- **3D view** (`src/scene3d.ts`, `src/threeCamera.ts`): boxes, cylinders, cones, spheres, prisms and inline meshes
+  (a `BufferGeometry` of the core's preprocessed triangles, `prepared_mesh`, both sides drawn) placed with
   the core's `transform_frame`, light helpers (a sphere for a point light, an arrow for a directional light), and the
   ground plane with a grid. The three.js camera is built from the core's `camera_matrix` (no `lookAt` and no
   `fov`), so the WebGL image and the SVG overlay are two renderings of one castplane camera. Three.js casts no

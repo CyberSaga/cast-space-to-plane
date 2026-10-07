@@ -240,3 +240,19 @@ test("hidden lines in the downloads (phase 2 of §5.4.10): the scene's switch an
   const off = compose(sc, project_scene(sc, A, cam), false);
   assert.ok(!svg_blob(off, LAYER_ORDER, "wall_and_ground").text.includes(".hidden"));
 });
+
+test("mesh scenes (phase 2 of §5.4.10): an expanded mesh scene renders and orbits; a path-only one is a SceneError", () => {
+  // the core reads expanded scenes only (§5.4.0): the bundled example names its OBJ file and shows the expand-first
+  // error; its Python expansion (the port's test fixture) renders, and the scene download re-validates
+  assert.throws(() => example("mesh_demo"), (e: any) => e.field === "objects[0].path" && /expanded first/.test(e.message));
+  const sc = scene_file("ts", "test", "fixtures", "mesh_demo.expanded.json");
+  const A = shadow_geometry(sc);
+  const house = A.objects[0] as any;
+  assert.equal(house.type, "mesh");
+  assert.equal(house.triangles.length, 16); // scene3d's BufferGeometry: 5 quads and 2 pentagons as fans
+  const cam = camera_from_orbit(orbit_from_camera(sc.camera, sc), sc.camera);
+  const doc = compose(sc, project_scene(sc, A, cam));
+  assert.ok(doc.edges.some((e: any) => e.object === "house" && "camera_silhouette" in e));
+  const again = load_scene_text(scene_blob(sc, cam, "mesh_demo").text);
+  assert.deepEqual(again.objects[0]!.data, sc.objects[0]!.data);
+});
