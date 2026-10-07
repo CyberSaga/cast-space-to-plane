@@ -1,6 +1,6 @@
 # STEP 匯入：可行性報告與原型（M8）
 
-對應規格 §9「STEP」列與 §10 M8（「可行性報告、原型解析器」）；規範性的細節是 [`ARCHITECTURE.md`](ARCHITECTURE.md) §5.5（以下「合約」），本文件說明為什麼這樣做、量到了什麼、還缺什麼。命令列與 API 見 [`USAGE.md`](USAGE.md) 的「`castplane import` 的 STEP 檔」與 §2.19。
+對應規格 §9「STEP」列與 §10 M8（「可行性報告、原型解析器」）；規範性的細節是 [`ARCHITECTURE.md`](ARCHITECTURE.md) §5.5（以下「合約」），本文件說明為什麼這樣做、量到了什麼、還缺什麼。命令列與 API 見 [`USAGE.md`](USAGE.md) 的「`castplane import` 的 STEP 檔」與 §2.22。
 
 ## 1. 目的與結論
 

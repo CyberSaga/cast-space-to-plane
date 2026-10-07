@@ -1,6 +1,6 @@
 # 使用說明：命令列與 API 參考
 
-對應程式版本 `castplane 0.1.0`（M3）。概念與數學見 [`spec/spec-v0.1.md`](spec/spec-v0.1.md)，規範性的實作細節見 [`ARCHITECTURE.md`](ARCHITECTURE.md)。
+對應程式版本 `castplane 0.1.0`（M3–M6、M8）。概念與數學見 [`spec/spec-v0.1.md`](spec/spec-v0.1.md)，規範性的實作細節見 [`ARCHITECTURE.md`](ARCHITECTURE.md)。
 
 ## 1. 命令列
 
@@ -109,11 +109,12 @@ castplane import FILE [-o OUT.json] [--into SCENE] [--id ID] [-q]
 | `IMPORT_NO_CAMERA_DEFAULT` | 檔案沒有相機，用包圍盒預設相機 |
 | `IMPORT_NO_LIGHT_DEFAULT` | 檔案沒有光源，用預設平行光 |
 
-結束碼同上：0 成功；1 讀不到 FILE / SCENE 或寫不了輸出；2 `SceneError`（glTF 的錯誤欄位是 glTF JSON 路徑，例如 `error: nodes[3].scale: …`）、用法錯誤、或組好的場景驗證失敗（此時不寫檔）；3 缺 trimesh。在 M6 合併之前，場景驗證仍是 v1 的「恰好一盞光」，所以有兩盞以上光源的 glTF 要加 `--light NAME` 才能寫出。
+結束碼同上：0 成功；1 讀不到 FILE / SCENE 或寫不了輸出；2 `SceneError`（glTF 的錯誤欄位是 glTF JSON 路徑，例如 `error: nodes[3].scale: …`）、用法錯誤、或組好的場景驗證失敗（此時不寫檔）；3 缺 trimesh。glTF 的每一盞光都會寫出（M6 起場景可有任意多個光源）；`--light NAME` 只在想保留一盞時使用。
 
 ```sh
 castplane import tests/fixtures/meshes/box_split.obj -o scene.json
-castplane import tests/fixtures/meshes/import_scene.gltf -o scene.json --light Lamp
+castplane import tests/fixtures/meshes/import_scene.gltf -o scene.json
+castplane import tests/fixtures/meshes/import_scene.gltf -o scene_lamp_only.json --light Lamp
 castplane import tests/fixtures/meshes/box.glb --inline --into examples/basic.json -o with_box.json
 castplane import tests/fixtures/meshes/features.obj --node walls --scale 0.5 -o walls.json
 ```
@@ -225,7 +226,7 @@ castplane import tests/fixtures/step/two_solids.step --solid 1 -o sphere.json
 | 函式 | 說明 |
 | --- | --- |
 | `SceneError(field, message)` | 見上 |
-| `WARNING_CODES` | 封閉的警告代碼表 `{代碼: 預設訊息}`（合約 §2.9 的 13 個代碼） |
+| `WARNING_CODES` | 封閉的警告代碼表 `{代碼: 預設訊息}`（18 個代碼：v1 的 13 個加 M4 的 `RECEIVER_UNLIT` 與 M5 的四個 `MESH_*`，合約 §5.0.5） |
 | `make_warning(code, ids=(), message=None) -> dict` | 見上 |
 | `merge_warnings(*lists) -> list` | 見上 |
 | `warning_codes(warnings) -> set` | 警告清單中出現的代碼集合 |

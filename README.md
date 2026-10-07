@@ -187,7 +187,7 @@ B = castplane.project_scene(scene, A, camera=camera, umbra=False)   # umbra[].po
 
 | 層 | 內容 | 執行 |
 | --- | --- | --- |
-| 單元與不變量（§7.1） | 作圖法 = 直接計算（1e-6 mm）、影子與相機無關（1e-9 m）、點光趨近平行光（max(1e-4 m, 2·δ)，δ 為 D20 推導的位似差距，並須在 10⁷ m 時縮十倍）、剛體等變（1e-6 mm）、齊次尺度不變（1e-9）、無 NaN / Inf | `python3 -m pytest -q`（全套約 1610 個測試，2–3 分鐘；`test_raycast.py` 與 `test_property.py` 最慢） |
+| 單元與不變量（§7.1） | 作圖法 = 直接計算（1e-6 mm）、影子與相機無關（1e-9 m）、點光趨近平行光（max(1e-4 m, 2·δ)，δ 為 D20 推導的位似差距，並須在 10⁷ m 時縮十倍）、剛體等變（1e-6 mm）、齊次尺度不變（1e-9）、無 NaN / Inf | `python3 -m pytest -q`（全套約 1720 個測試，2–3 分鐘；`test_raycast.py` 與 `test_property.py` 最慢） |
 | 解析案例（§7.2） | 單位方塊 h/(h−1)、太陽 45° / 30° 影長、球影橢圓閉式解、平視與俯仰相機 | `python3 -m pytest tests/test_analytic.py tests/test_curved.py -q` |
 | 退化情況（§5.7） | 每列至少一個測試，檢查警告代碼與輸出有限 | `python3 -m pytest tests/test_degenerate.py -q` |
 | 光線投射對照組（§7.3） | 亂數場景（1–10 個基元，含凹稜柱與光源垂足在凹口內的案例），地面取樣網格逐點射線測試，影子多邊形柵格化後 IoU ≥ 0.99（另逐物件比對）；與幾何法零程式碼共用 | `python3 -m pytest tests/test_raycast.py -q`（較慢） |
