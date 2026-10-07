@@ -3356,6 +3356,55 @@ and the hidden-run SVG groups (§5.1.8). Nothing an M4–M6 case needs lies beyo
   - *Local verification*: the same commands were run under node 20.20.0 and 22.22.0 (120 TS tests, 13 web
     tests, `vite build`), and `npm ci` was run from the committed lockfile. The node-20 camera-only time is
     ≈ 89 ms, so the benchmark is gated on node 22 only, as §5.4.12 specifies.
+- **[implementation] (M7 phase 2, part 1) Phase 2 lands in parts; the runner's explicit todo list.** Step 11 is
+  delivered in five parts on `wt/m7` after the rebase onto the v6 base: (1) document shape, warning codes,
+  `INT_KEYS`, rules v6, the phase-2 validation rows and the M4 receiver generalisation; then hidden lines, meshes,
+  multiple lights and the closing part. `ts/test/conformance.test.ts` runs every v6 case and marks the cases whose
+  geometry belongs to a later part as node:test `todo` through the explicit `TODO_CASES` list (hidden lines:
+  `hidden_lines_curved_unbounded`, `hidden_lines_vp_in_canvas`, `wall_and_ground_hidden`; meshes: the three
+  `mesh_*` cases; `N ≥ 2`: the four `multilight_*` cases); `ts/test/determinism.test.ts` has the same list for the
+  examples (`mesh_demo.json`). Each part shrinks the lists; the last part leaves both empty. After part 1 the other
+  40 cases pass `compare_documents` with the v6 rules, and `tools/compare_svg.py` reports 0 mismatches and 0 boundary
+  differences on them and on the five v2 examples (`examples/wall_and_ground.json` has `hidden_lines: true` and waits
+  for the hidden-line part; its case `wall_and_ground` with the switch off matches byte for byte).
+- **[decision, implementation] (M7 phase 2, part 1) `LOADER_TYPES` in the port ahead of the reference.** §5.0.1 /
+  §5.4.2 list `LOADER_TYPES = ("step",)` and the "must be expanded first" row; the Python reference on the v6 base
+  does not carry them yet (M8's loader is not merged), so a `type: "step"` object fails there with the generic
+  `objects[i].type` "must be one of …" message. The port implements the contract row: the same field path
+  (`objects[i].type`), the §5.0.1 message. Messages are informative only (§5.4.3); no case uses `step` (§5.5.10).
+- **[decision, implementation] (M7 phase 2, part 1) Integer predicates on a one-number-type language.** Python's
+  `validate_mesh_data` accepts only JSON integers (`numbers.Integral`) as face indices and smooth groups, so a face
+  index written `2.0` is rejected there; JSON.parse gives the same `number` for `2` and `2.0`, so the port accepts
+  integral numbers (`Number.isInteger`). Non-integral numbers (`2.5`), booleans and out-of-range indices are
+  rejected with the same field paths. No case writes an index as `2.0`; the difference is confined to that
+  spelling.
+- **[implementation] (M7 phase 2, part 1) Usable-face guard of a mesh object.** `validate_mesh_object` runs the
+  §5.2.1 guard (weld + degenerate-face removal on `scale · vertices`) through a hook,
+  `scene.ts::set_mesh_usable_face_guard`, which the mesh part installs from `src/meshprep.ts`; until then every
+  mesh that passes `validate_mesh_data` is accepted (the mesh cases are on the todo list).
+- **[implementation] (M7 phase 2, part 1) Receiver generalisation: what the port carries.** `shadow.ts` gains
+  `receiver_frame`, `bounds_functionals`, `clip_polygon_bounds` (band, own-crossing band of a direction
+  `|ψ_k·D| <= 1e-9 max|D|` as in the M4 implementation note, zero-vector filter, anchor rule, merge, `w <= 0` drop,
+  sliver test) and `plate_loop`; `shadow_loop(points4, M, pi, tol, tol_clip, frame, F)` keeps the literal v2 ground
+  expressions for `frame === null`. Bounds-clip sources are the tagged objects `{kind: "bounds", k, a, b}` /
+  `{kind: "bounds", k, anchor: true}` of §5.4.2, generic over the polyhedral and the curved source types.
+  `curved.ts` threads the frame through `_ground_section` / `_ground_chain` / `_ground_ring` / `shadow_outline` /
+  `shadow_polygon_h` / `_direction_from`, bounds-clips the curved polygon and the conic pieces in closed form, and
+  stores `obj.curved` as `Map<receiver id, Map<light id, …>>` (stage B takes points and terminators from the first
+  receiver, conics per (light, receiver), as `curved._stage_b_prepare`). `pipeline.ts` ports `_receiver_record`,
+  `_receiver_light_records` (`RECEIVER_UNLIT` with the four messages), `_receiver_lit_casts`, the clipped meshes per
+  receiver, `_caster_record`, `_bounded_object_record`, `_plate_shadow_record`, `_shadow_records_for_receiver` with
+  the receiver → light → caster bucket order, `_project_receiver_light`, `_plate_record`, `_receiver_doc_entry`,
+  `F.<light>.<r>` points and the switch-off values of every M4 key. `construction_block(light, shadows,
+  receiver_lights?, default_id?)` is the port of `multilight.construction_block` (the flat block of the default
+  receiver plus `per_receiver`); with one light it is the `construction` block, and the M6 part loops it. Rays name
+  the feet by the records' `foot_names` (`<base>.foot[.<r>]`), as `_project_shadows` does since M6. `src/multilight.ts`
+  starts with `is_multi`, `is_light_dependent_stem` and `curved_stem_name` (the identity for one light).
+- **[decision, implementation] (M7 phase 2, part 1) Order of the `per_receiver` markers in the SVG.** `svg.py`
+  writes the `F′<r>` markers and rays in the dict order of `construction.per_receiver`, which `project_scene` fills
+  in scene order of `receivers[1:]`. The document's `per_receiver` is a plain object in the port, whose key order
+  would put integer-like ids first (§5.4.2, §5.4.4 (8)); `svg.ts` therefore iterates in the order of
+  `doc.receivers` (keys not listed there follow), which is the Python order for every document `render` produces.
 
 ### 5.5 M8 — STEP import (spec §9 row "STEP", spec §10 M8) — a loader, outside the core
 

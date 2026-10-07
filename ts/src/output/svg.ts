@@ -278,9 +278,20 @@ function layer_form_shadow(doc: AnyDoc, cv: Canvas): string[] {
   return body;
 }
 
+/** `cast_shadow.<light>.<object>.<suffix>` for a record on `receivers[0]` and for every record of a v2 document (no
+ * `receivers` block), `cast_shadow.<light>.<object>.<receiver>.<suffix>` for a record on any other receiver, so that
+ * an object casting on several receivers keeps unique ids (M4 implementation note, §5.1). */
+function shadow_subgroup_id(sh: any, first_receiver: string | null, suffix: string): string {
+  const rid = sh.receiver;
+  const infix = first_receiver === null || rid === undefined || rid === null || rid === first_receiver ? "" : `.${rid}`;
+  return `cast_shadow.${sh.light ?? ""}.${sh.object ?? ""}${infix}.${suffix}`;
+}
+
 function layer_cast_shadow(doc: AnyDoc, cv: Canvas): string[] {
   const per_light = new Map<string, string[]>();
   const points = (doc as any).points ?? {};
+  const receivers = (doc as any).receivers;
+  const first_receiver: string | null = Array.isArray(receivers) && receivers.length > 0 ? receivers[0].id : null; // null: a v2 document
   for (const sh of (doc as any).shadows ?? []) {
     let polygons = sh.polygons;
     if (polygons === null || polygons === undefined) {
@@ -296,7 +307,7 @@ function layer_cast_shadow(doc: AnyDoc, cv: Canvas): string[] {
     const conics: string[] = [];
     for (const entry of sh.conics ?? []) conics.push(...drawables(entry, cv));
     if (conics.length > 0) {
-      items.push(group(`cast_shadow.${sh.light ?? ""}.${sh.object ?? ""}.conics`, STYLE["cast_shadow_conics"] as string, conics));
+      items.push(group(shadow_subgroup_id(sh, first_receiver, "conics"), STYLE["cast_shadow_conics"] as string, conics));
     }
     const light = sh.light ?? "";
     let list = per_light.get(light);
@@ -304,6 +315,26 @@ function layer_cast_shadow(doc: AnyDoc, cv: Canvas): string[] {
     list.push(...items);
   }
   return [...per_light.keys()].sort(cmp_code_points).map((light) => group(`cast_shadow.${light}`, "", per_light.get(light) as string[]));
+}
+
+/** The `per_receiver` blocks of a construction block in the order of the Python dict: scene order of the receivers
+ * (`doc.receivers`, the order `project_scene` inserts them), never `Object.keys` order (contract §5.4.4 (8): integer-like
+ * ids would move to the front); keys not named by `doc.receivers` follow in their own order. */
+function per_receiver_entries(doc: AnyDoc, con: any): [string, any][] {
+  const per = (con.per_receiver ?? {}) as Record<string, any>;
+  const out: [string, any][] = [];
+  const seen = new Set<string>();
+  const receivers = (doc as any).receivers;
+  if (Array.isArray(receivers)) {
+    for (const r of receivers) {
+      if (typeof r?.id === "string" && Object.prototype.hasOwnProperty.call(per, r.id) && !seen.has(r.id)) {
+        seen.add(r.id);
+        out.push([r.id, per[r.id]]);
+      }
+    }
+  }
+  for (const rid of Object.keys(per)) if (!seen.has(rid)) out.push([rid, per[rid]]);
+  return out;
 }
 
 function layer_construction(doc: AnyDoc, cv: Canvas): string[] {
@@ -319,12 +350,29 @@ function layer_construction(doc: AnyDoc, cv: Canvas): string[] {
     body.push(cv.diamond(fp, 1.0, 'fill="none" stroke="#36c"'));
     body.push(cv.text(fp, "F′", 'font-size="2.5" fill="#36c" font-family="sans-serif" stroke="none"', 1.4));
   }
-  const drawn = (con.segments ?? []).filter((seg: any) => ["LP", "FQ", "PQ"].includes(seg.kind) && seg.points && seg.points.length === 2);
+  // M4 (contract §5.0.6): every other receiver's F'_r marker (labelled F′<receiver id>) and its rays go to the same
+  // three groups (no per-receiver sub-group)
+  const segments: any[] = [...(con.segments ?? [])];
+  for (const [rid, blk] of per_receiver_entries(doc, con)) {
+    const fpr = blk.shadow_vp;
+    if (fpr !== null && fpr !== undefined) {
+      body.push(cv.diamond(fpr, 1.0, 'fill="none" stroke="#36c"'));
+      body.push(cv.text(fpr, `F′${rid}`, 'font-size="2.5" fill="#36c" font-family="sans-serif" stroke="none"', 1.4));
+    }
+    segments.push(...(blk.segments ?? []));
+  }
+  const drawn = segments.filter((seg: any) => ["LP", "FQ", "PQ"].includes(seg.kind) && seg.points && seg.points.length === 2);
   for (const kind of ["LP", "FQ", "PQ"]) {
     const lines = drawn.filter((seg: any) => seg.kind === kind).map((seg: any) => cv.line(seg.points[0], seg.points[1]));
     if (lines.length > 0) body.push(group(`construction.${kind}`, STYLE[`ray_${kind}`] as string, lines));
   }
   return body;
+}
+
+/** Some part after the first of the dotted name is `shadow` or `foot` (contract §5.0.4). */
+function has_shadow_or_foot_part(name: string): boolean {
+  const parts = name.split(".").slice(1);
+  return parts.includes("shadow") || parts.includes("foot");
 }
 
 function partition(s: string, sep: string): [string, string, string] {
@@ -337,20 +385,24 @@ function layer_labels(doc: AnyDoc, cv: Canvas): string[] {
   const top = new Map<string, [number, UV]>();
   const pts: [UV, string][] = [];
   const lf: [UV, string][] = [];
-  const names = Object.keys(points).filter((n) => !n.includes(".shadow.") && !n.endsWith(".foot")).sort(cmp_code_points);
+  // contract §5.0.4: a name is unlabelled iff a part after the first is "shadow" or "foot" (the receiver suffix may
+  // follow "foot")
+  const names = Object.keys(points).filter((n) => !((n.includes(".shadow") || n.includes(".foot")) && has_shadow_or_foot_part(n)))
+    .sort(cmp_code_points);
   for (const name of names) {
     const p = points[name];
     const img = p.image;
     if (img === null || img === undefined) continue;
     const [oid, , rest] = partition(name, ".");
     if (!rest) continue;
-    if ((oid === "L" || oid === "F") && !rest.includes(".")) {
+    if (oid === "L" || oid === "F") {
+      // L.<light> and F.<light>[.<r>] go through the L/F branch and never set an object's top label
       lf.push([img, name]);
       continue;
     }
+    // ground points s<k> and camera outline points og<k> are unlabelled
     const head = partition(rest, ".")[0];
-    if (head.startsWith("og") || (head.slice(0, 1) === "s" && /^[0-9]+$/.test(head.slice(1))) || rest === "foot"
-      || oid === "shadow" || rest === "shadow" || rest.endsWith(".shadow")) continue;
+    if (head.startsWith("og") || (head.slice(0, 1) === "s" && /^[0-9]+$/.test(head.slice(1)))) continue;
     pts.push([img, rest]);
     const z = (p.world ?? [0.0, 0.0, 0.0])[2] as number;
     const t = top.get(oid);
@@ -373,12 +425,20 @@ const LAYER_BUILDERS: Record<string, [(doc: AnyDoc, cv: Canvas) => string[], str
   labels: [layer_labels, STYLE["labels"] as string],
 };
 
+/** `hidden_style` values of `write_svg` (contract §5.1.8). */
+export const HIDDEN_STYLES = ["dashed", "omit"] as const;
+
 /**
  * Write the §6.1 SVG of a geometry document; `layers` selects a subset of the six ids (an unknown id throws, the
- * Python `ValueError`). `hidden_style` is the M4 switch (phase 2, §5.4.14); it has no effect on a v1 document.
+ * Python `ValueError`). `hidden_style` (contract §5.1.8 / §5.0.6): an unknown value throws; the hidden-run groups of a
+ * document with `hidden_lines == true` come with the hidden-line part of phase 2 (a document with `hidden_lines` false
+ * is written exactly as by the v2 writer).
  */
-export function write_svg(doc: AnyDoc, layers?: readonly string[] | null, hidden_style?: string | null): string {
-  void hidden_style;
+export function write_svg(doc: AnyDoc, layers?: readonly string[] | null, hidden_style: string | null = "dashed"): string {
+  const style = hidden_style ?? "dashed";
+  if (!(HIDDEN_STYLES as readonly string[]).includes(style)) {
+    throw new Error(`unknown hidden_style '${style}'; expected one of ${HIDDEN_STYLES.join(", ")}`);
+  }
   let selected: string[];
   if (layers === undefined || layers === null) {
     selected = [...LAYER_ORDER];

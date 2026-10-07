@@ -17,6 +17,10 @@ import { camera_override, deep_freeze, read_json, repo_path } from "./helpers.js
 
 const EXAMPLES = repo_path("examples");
 const examples = readdirSync(EXAMPLES).filter((f) => f.endsWith(".json")).sort();
+/** Examples whose geometry belongs to a phase-2 part that has not landed yet (contract §5.4.0): run as node:test
+ * `todo`; each part shrinks this list and the final part leaves it empty. */
+const TODO_EXAMPLES: ReadonlySet<string> = new Set(["mesh_demo.json"]);
+const todo = (file: string): { todo: string | false } => ({ todo: TODO_EXAMPLES.has(file) ? "phase 2 part not yet landed" : false });
 
 const CAMERA_CODES = new Set([
   "CAMERA_LOOKING_ALONG_UP", "LIGHT_BEHIND_CAMERA", "LIGHT_POINT_AT_INFINITY", "SHADOW_VP_AT_INFINITY", "POINT_BEHIND_CAMERA",
@@ -30,7 +34,7 @@ function pick(o: any, keys: string[]): any {
   return out;
 }
 
-/** The camera-free blocks of a v1 document (contract §5.4.7 / §5.0.3, see the implementation notes of §5.4 for
+/** The camera-free blocks of a document (contract §5.4.7 / §5.0.3, see the implementation notes of §5.4 for
  * the shadow conic entries: `conic` is the image of the ground conic under `P M E` and is left out; `kind` and `arc`
  * are camera dependent only in principle and are equal for the five examples and the test camera). */
 function camera_free(doc: any): string {
@@ -40,6 +44,8 @@ function camera_free(doc: any): string {
     points[name] = pick(doc.points[name], ["world", "direction", "at_infinity"].filter((k) => k in doc.points[name]));
   }
   return dumps({
+    hidden_lines: doc.hidden_lines,
+    receivers: doc.receivers,
     points,
     edges: doc.edges.map((e: any) => pick(e, ["object", "from", "to", "silhouette"])),
     shadows: doc.shadows.map((s: any) => ({
@@ -52,12 +58,13 @@ function camera_free(doc: any): string {
     })),
     outlines: doc.outlines.map((o: any) => o.object),
     rays: doc.construction.rays,
+    per_receiver_rays: Object.keys(doc.construction.per_receiver).sort().map((r) => [r, doc.construction.per_receiver[r].rays]),
     warnings: doc.warnings.filter((w: any) => !CAMERA_CODES.has(w.code)).map((w: any) => [w.code, w.ids]),
   });
 }
 
 for (const file of examples) {
-  test(`deterministic render: ${file}`, () => {
+  test(`deterministic render: ${file}`, todo(file), () => {
     const a = render(load_scene(read_json(`${EXAMPLES}/${file}`)));
     const b = render(load_scene(read_json(`${EXAMPLES}/${file}`)));
     assert.equal(dumps(a.geometry), dumps(b.geometry));
@@ -65,7 +72,7 @@ for (const file of examples) {
     assert.equal(write_svg(a.geometry), write_svg(b.geometry));
   });
 
-  test(`camera-free blocks are identical for two cameras: ${file}`, () => {
+  test(`camera-free blocks are identical for two cameras: ${file}`, todo(file), () => {
     const scene = load_scene(read_json(`${EXAMPLES}/${file}`));
     const other = camera_override(scene.camera, [6, -28, 12], [0, 0, 0.5], 3);
     const d1 = render(scene).geometry as any;
@@ -77,7 +84,7 @@ for (const file of examples) {
     assert.notEqual(dumps(d1.camera), dumps(d2.camera));
   });
 
-  test(`stage A never reads scene.camera and A is never mutated: ${file}`, () => {
+  test(`stage A never reads scene.camera and A is never mutated: ${file}`, todo(file), () => {
     const scene = load_scene(read_json(`${EXAMPLES}/${file}`));
     const trap = new Proxy({}, { get() { throw new Error("stage A read scene.camera"); } });
     const A_free = shadow_geometry({ ...scene, camera: trap } as unknown as Scene);
@@ -109,6 +116,7 @@ test("construction_block (contract §5.4.14 (c)) builds the construction block o
 
 test("stage B shares the camera-free point lists of stage A by reference (contract §5.4.7, M7 review)", () => {
   for (const f of examples) {
+    if (TODO_EXAMPLES.has(f)) continue;
     const scene = load_scene(read_json(repo_path("examples", f)));
     const A = shadow_geometry(scene);
     const B = project_scene(scene, A);

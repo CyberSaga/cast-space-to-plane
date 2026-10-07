@@ -18,8 +18,8 @@ import type { CameraBlock, CameraRecord, Horizon } from "./camera.js";
 import { ellipse_arc_params, ellipse_params, sample_arc, sample_count } from "./conics.js";
 import { clip_segments_uv, coincidence_check, covering_segments, extended_segments, self_check, special_point_image } from "./construction.js";
 import type { SpecialPointImage } from "./construction.js";
-import { stage_a_object, stage_b_objects } from "./curved.js";
-import type { ArcRecord, CurvedData, CurvedStageB, LoopEntry, ShadowRecord } from "./curved.js";
+import { shadow_arc_key, stage_a_object, stage_b_objects } from "./curved.js";
+import type { ArcRecord, CurvedStageB, CurvedStore, LoopEntry, ReceiverRecordLike, ShadowRecord } from "./curved.js";
 import type { GeometryDocument } from "./document.js";
 import { SceneError, make_warning, merge_warnings } from "./errors.js";
 import type { Warning } from "./errors.js";
@@ -27,13 +27,17 @@ import { TOL_DIR, row_max_abs, scene_scale, tolerance } from "./homogeneous.js";
 import { face_lit_flags, light_vector, lit_value, silhouette_loops } from "./light.js";
 import { NotManifoldError } from "./mesh.js";
 import type { Mesh } from "./mesh.js";
+import { is_multi } from "./multilight.js";
 import { canonical } from "./output/geometry_json.js";
 import { write_svg } from "./output/svg.js";
 import { build_object, point_inside_solid } from "./primitives.js";
 import type { EdgeTemplate, ObjectRecord } from "./primitives.js";
 import { validate_camera } from "./scene.js";
 import type { Light, Receiver, Scene } from "./scene.js";
-import { clip_mesh_to_plane, foot, mat4_vec, shadow_loop, shadow_matrix, shadow_w } from "./shadow.js";
+import {
+  bounds_functionals, clip_mesh_to_plane, clip_polygon_bounds, foot, mat4_vec, plate_loop, receiver_frame, shadow_loop, shadow_matrix,
+  shadow_w,
+} from "./shadow.js";
 import type { Origin, Source, VertexTag } from "./shadow.js";
 import { degrees } from "./transform.js";
 import type { Mat4, Vec2, Vec3, Vec4 } from "./types.js";
@@ -54,6 +58,18 @@ export interface LightRecord {
   tol_w: number;
   tol_lit: number;
   warnings: Warning[];
+  /** The receiver this record belongs to (contract §5.1.2) and its name suffix (`""` for `receivers[0]`). */
+  receiver: string;
+  suffix: string;
+}
+
+/** Stage-A record of one receiver (contract §5.1.2). */
+export interface ReceiverRecord extends ReceiverRecordLike {
+  index: number;
+  bounds4: Vec4[] | null;
+  lights: LightRecord[];
+  lit: Map<string, boolean>;
+  casts: Map<string, boolean>;
 }
 
 export interface ObjectLightData {
@@ -72,7 +88,9 @@ export interface ObjectLightData {
 export interface StageAObject extends ObjectRecord {
   lights: Map<string, ObjectLightData>;
   ground_mesh?: [Mesh, Origin[]] | null;
-  curved?: Map<string, CurvedData>;
+  /** Per receiver id: the part of the solid in front of `π_r` (`null`: no vertex behind it, contract §5.1.2). */
+  clipped: Map<string, [Mesh, Origin[]] | null>;
+  curved?: CurvedStore;
 }
 
 export interface StageA {
@@ -82,6 +100,7 @@ export interface StageA {
   scene_scale: number;
   tol: number;
   receiver: { id: string; pi: Vec4 };
+  receivers: ReceiverRecord[];
   lights: LightRecord[];
   shadows: StageAShadow[];
   warnings: Warning[];
@@ -121,6 +140,9 @@ export interface LightStageB {
   shadow_vp: SpecialPointImage;
   L_depth: number | null;
   F_depth: number | null;
+  /** Receivers other than `receivers[0]` (`receiver_lights`). */
+  receiver?: string;
+  suffix?: string;
 }
 
 export interface RaySegment {
@@ -162,6 +184,14 @@ export interface ShadowStageB {
   checks: Check[];
 }
 
+export interface ReceiverConstructionStageB {
+  shadow_vp: Vec2 | null;
+  shadow_vp_at_infinity: Vec2 | null;
+  rays: [string, string][];
+  checks: Check[];
+  segments: RaySegment[];
+}
+
 export interface ConstructionStageB {
   light_point: Vec2 | null;
   light_point_at_infinity: Vec2 | null;
@@ -170,6 +200,38 @@ export interface ConstructionStageB {
   rays: [string, string][];
   checks: Check[];
   segments: RaySegment[];
+  per_receiver: Map<string, ReceiverConstructionStageB>;
+}
+
+/** The camera-free §5.1.7 `receivers[]` entry. */
+export interface ReceiverDocEntry {
+  id: string;
+  plane: Vec4;
+  bounds: Vec3[] | null;
+  lit: Record<string, boolean>;
+  casts: Record<string, boolean>;
+}
+
+export interface PlateEdge {
+  object: string;
+  from: string;
+  to: string;
+  silhouette: boolean;
+  back: false;
+  visibility: "visible";
+  runs: never[];
+  segment: [Vec2, Vec2] | null;
+}
+
+/** Stage B of a bounded receiver drawn as an opaque plate (contract §5.1.7 / §5.1.8). */
+export interface PlateStageB {
+  id: string;
+  point_names: string[];
+  world: Vec3[];
+  image_h: Vec3[];
+  behind: boolean[];
+  edges: PlateEdge[];
+  form_shadow: { object: string; faces: string[][]; terminator: never[]; polygons: Vec2[][] } | null;
 }
 
 export interface StageB {
@@ -178,6 +240,10 @@ export interface StageB {
   tol: number;
   objects: (PolyStageB | CurvedStageB)[];
   lights: LightStageB[];
+  /** Per receiver other than `receivers[0]`: the projections of its light records (`F'_r`). */
+  receiver_lights: Map<string, LightStageB[]>;
+  receivers: ReceiverDocEntry[];
+  plates: PlateStageB[];
   horizon: Horizon;
   shadows: ShadowStageB[];
   construction: ConstructionStageB | null;
@@ -227,7 +293,10 @@ function light_record(light: Light, pi: Vec4, tol: number): LightRecord {
   }
   const F = foot(pi, L);
   const F_defined = light.type === "point" || row_max_abs(F) > TOL_DIR;
-  return { id: light.id, type: light.type, L, M: shadow_matrix(pi, L), F, F_defined, pi_L, active, tol_w, tol_lit: tol_w, warnings };
+  return {
+    id: light.id, type: light.type, L, M: shadow_matrix(pi, L), F, F_defined, pi_L, active, tol_w, tol_lit: tol_w, warnings,
+    receiver: "", suffix: "",
+  };
 }
 
 function object_light_data(obj: StageAObject, lt: LightRecord): [ObjectLightData, Warning[]] {
@@ -269,13 +338,18 @@ function is_tag(s: Source): s is Exclude<Source, VertexTag> {
   return s.kind !== "vertex";
 }
 
+/**
+ * Outline entries of one shadow loop from its `sources` (contract §3.1 naming). M4 (contract §5.1.2 / §5.1.3.3):
+ * `suffix` is `".<receiver id>"` for every receiver other than `receivers[0]`; the `bounds` rows of the bounds clip
+ * (crossings and anchors) are named as ground points of the receiver; `vertex_prefix` is `"b"` for a plate caster.
+ */
 function poly_loop_entries(sources: readonly Source[], V: readonly Vec4[], loop_vertex_ids: readonly number[], origins: readonly Origin[] | null,
-  oid: string, lid: string, ground: Map<string, [string, Vec3]>): LoopEntry[] {
+  oid: string, lid: string, ground: Map<string, [string, Vec3]>, suffix = "", vertex_prefix = "v"): LoopEntry[] {
   const entries: LoopEntry[] = [];
   const ground_name = (key: string, xyz: Vec3): string => {
     let g = ground.get(key);
     if (g === undefined) {
-      g = [`${oid}.s${ground.size}.${lid}`, xyz];
+      g = [`${oid}.s${ground.size}.${lid}${suffix}`, xyz];
       ground.set(key, g);
     }
     return g[0];
@@ -283,7 +357,7 @@ function poly_loop_entries(sources: readonly Source[], V: readonly Vec4[], loop_
   sources.forEach((src, row) => {
     const X = V[row] as Vec4;
     if (is_tag(src)) {
-      if (src.kind === "ground") {
+      if (src.kind === "ground" || src.kind === "bounds") {
         entries.push(ground_name(`clip:${ground.size}`, [X[0] / X[3], X[1] / X[3], X[2] / X[3]]));
       } else {
         entries.push({ direction: [X[0] + 0, X[1] + 0, X[2] + 0] });
@@ -294,11 +368,27 @@ function poly_loop_entries(sources: readonly Source[], V: readonly Vec4[], loop_
       if (typeof origin === "object") {
         entries.push(ground_name(`v:${vid}`, [X[0] / X[3], X[1] / X[3], X[2] / X[3]]));
       } else {
-        entries.push(`${oid}.v${origin}.shadow.${lid}`);
+        entries.push(`${oid}.${vertex_prefix}${origin}.shadow.${lid}${suffix}`);
       }
     }
   });
   return entries;
+}
+
+/** Silhouette vertices of a clipped mesh that are original vertices (a vertex on the plane may be a silhouette vertex
+ * there without being one of the full mesh: cut-face edges are silhouette edges), ascending. */
+function clipped_silhouette_vertices(loop_mesh: Mesh, origins: readonly Origin[], lit_c: readonly boolean[]): number[] {
+  const set = new Set<number>();
+  loop_mesh.edges.forEach(([i, j], e) => {
+    const [f0, f1] = loop_mesh.edge_faces[e] as [number, number];
+    if (lit_c[f0] !== lit_c[f1]) {
+      for (const v of [i, j]) {
+        const o = origins[v] as Origin;
+        if (typeof o === "number") set.add(o);
+      }
+    }
+  });
+  return [...set].sort((a, b) => a - b);
 }
 
 function poly_shadow_record(obj: StageAObject, ol: ObjectLightData, lt: LightRecord, pi: Vec4, tol: number,
@@ -316,17 +406,7 @@ function poly_shadow_record(obj: StageAObject, ol: ObjectLightData, lt: LightRec
     [loop_mesh, origins] = obj.ground_mesh;
     const lit_c = face_lit_flags(loop_mesh, lt.L, lt.tol_lit).lit;
     sil_loops = silhouette_loops(loop_mesh, lit_c);
-    const set = new Set<number>();
-    loop_mesh.edges.forEach(([i, j], e) => {
-      const [f0, f1] = loop_mesh.edge_faces[e] as [number, number];
-      if (lit_c[f0] !== lit_c[f1]) {
-        for (const v of [i, j]) {
-          const o = (origins as Origin[])[v] as Origin;
-          if (typeof o === "number") set.add(o);
-        }
-      }
-    });
-    sil = [...set].sort((a, b) => a - b);
+    sil = clipped_silhouette_vertices(loop_mesh, origins, lit_c);
   }
   const P4 = sil.map((k) => V4[k] as Vec4);
   const w_S = P4.map((P) => shadow_w(pi, lt.L, P));
@@ -383,22 +463,52 @@ function canonical3(v: readonly number[]): Vec3 {
   return [(v[0] as number) + 0, (v[1] as number) + 0, (v[2] as number) + 0];
 }
 
-/** Stage A: camera-independent geometry (contract §3). Never touches `scene.camera`. */
+/** Stage A: camera-independent geometry (contract §3, §5.1.2, §5.1.3). Never touches `scene.camera`. `shadows` is
+ * ordered receiver (scene order) → light (scene order) → caster (objects in scene order, then the other bounded
+ * receivers), contract §5.1.3.1. */
 export function shadow_geometry(scene: Scene): StageA {
   const objects = scene.objects.map((o) => build_object(o) as StageAObject);
+  const receivers = scene.receivers.map((r, i) => receiver_record(r, i));
+  // contract §5.1.2: bounds vertices are scene geometry (the ground has none: v2 scales unchanged)
   const vertices: Vec3[] = [];
   for (const o of objects) for (const v of o.mesh.vertices) vertices.push(v);
+  for (const r of receivers) if (r.bounded) for (const b of r.bounds as Vec3[]) vertices.push(b);
   const scale = scene_scale(vertices);
   const tol = tolerance(scale);
   const receiver = scene.receivers[0] as Receiver;
-  const pi = receiver_plane(receiver);
-  const lights = scene.lights.map((lt) => light_record(lt, pi, tol));
-  const warnings: Warning[] = lights.flatMap((lt) => lt.warnings);
+  const dflt = receivers[0] as ReceiverRecord;
+  const pi = dflt.pi;
+  let lights: LightRecord[];
+  let ground_unlit: Set<string>;
+  if (dflt.bounded) {
+    lights = receiver_light_records(dflt, scene.lights, tol, new Set());
+    ground_unlit = new Set();
+  } else {
+    lights = scene.lights.map((lt) => light_record(lt, pi, tol));
+    // contract §5.1.2: the unbounded ground is opaque to light
+    ground_unlit = new Set(lights.filter((lt) => lt.warnings.some((w) => w.code === "LIGHT_BELOW_RECEIVER")).map((lt) => lt.id));
+    for (const lt of lights) {
+      lt.receiver = dflt.id;
+      lt.suffix = "";
+    }
+  }
+  dflt.lights = lights;
+  for (const rcv of receivers.slice(1)) rcv.lights = receiver_light_records(rcv, scene.lights, tol, ground_unlit);
+  receiver_lit_casts(receivers, ground_unlit);
+  const warnings: Warning[] = receivers.flatMap((rcv) => rcv.lights.flatMap((lt) => lt.warnings));
+  const light_index = new Map(scene.lights.map((lt, k) => [lt.id, k] as const));
+  const multi = is_multi(scene.lights);
   const shadows: ShadowRecord[] = [];
   for (const obj of objects) {
     obj.lights = new Map();
+    obj.clipped = new Map();
+    if (dflt.bounded) {
+      bounded_default_object(obj, receivers, lights, tol, warnings);
+      continue;
+    }
     if (obj.analytic !== null) {
-      shadows.push(...stage_a_object(obj, lights, pi, tol, receiver.id, warnings));
+      // curved primitives: silhouette / terminator / shadow conics from curved.ts (§5.6)
+      shadows.push(...stage_a_object(obj, lights, dflt, tol, warnings, multi));
       continue;
     }
     obj.ground_mesh = null;
@@ -412,6 +522,7 @@ export function shadow_geometry(scene: Scene): StageA {
         obj.ground_mesh = null;
       }
     }
+    clip_object_to_receivers(obj, receivers, tol);
     for (const lt of lights) {
       const [ol, w] = object_light_data(obj, lt);
       warnings.push(...w);
@@ -425,7 +536,24 @@ export function shadow_geometry(scene: Scene): StageA {
       shadows.push(rec);
     }
   }
-  const shadows_a: StageAShadow[] = shadows.map((rec) => Object.assign(rec, {
+  // (receiver index, light index) -> records in caster order (§5.1.3.1); the unbounded default receiver's records
+  // above are object-major: regroup them by light
+  const buckets = new Map<string, { ri: number; li: number; recs: ShadowRecord[] }>();
+  const bucket = (ri: number, li: number): ShadowRecord[] => {
+    const key = `${ri},${li}`;
+    let b = buckets.get(key);
+    if (b === undefined) {
+      b = { ri, li, recs: [] };
+      buckets.set(key, b);
+    }
+    return b.recs;
+  };
+  for (const rec of shadows) bucket(0, light_index.get(rec.light) as number).push(rec);
+  for (const rcv of receivers) {
+    for (const [li, recs] of shadow_records_for_receiver(rcv, objects, receivers, tol, warnings)) bucket(rcv.index, li).push(...recs);
+  }
+  const ordered = [...buckets.values()].sort((a, b) => a.ri - b.ri || a.li - b.li).flatMap((b) => b.recs);
+  const shadows_a: StageAShadow[] = ordered.map((rec) => Object.assign(rec, {
     S_lists: rec.S_world.filter((_s, i) => rec.keep[i]).map(canonical3),
     Q_lists: rec.Q_world.filter((_s, i) => rec.keep[i]).map(canonical3),
     G_lists: rec.ground_points.map((g) => canonical3(g[1])),
@@ -444,10 +572,242 @@ export function shadow_geometry(scene: Scene): StageA {
     scene_scale: scale,
     tol,
     receiver: { id: receiver.id, pi },
+    receivers,
     lights,
     shadows: shadows_a,
     warnings: merge_warnings(warnings),
   };
+}
+
+// ---------------------------------------------------------------------------
+// stage A, M4: receivers other than the unbounded ground (contract §5.1.2, §5.1.3)
+// ---------------------------------------------------------------------------
+
+/** Stage-A record of one validated receiver (contract §5.1.2): `pi`, `bounded`, the name `suffix` (`""` for
+ * `receivers[0]`, `".<id>"` otherwise), and for a bounded receiver its frame, `bounds`, `bounds4` and `psi`. */
+function receiver_record(receiver: Receiver, index: number): ReceiverRecord {
+  const pi = receiver_plane(receiver);
+  const bounded = receiver.bounds !== null;
+  const rec: ReceiverRecord = {
+    id: receiver.id, index, pi, bounded, suffix: index === 0 ? "" : `.${receiver.id}`, frame: null, bounds: null, bounds4: null,
+    psi: null, lights: [], lit: new Map(), casts: new Map(),
+  };
+  if (bounded) {
+    const B = (receiver.bounds as Vec3[]).map((b) => [b[0], b[1], b[2]] as Vec3);
+    const n: Vec3 = [pi[0], pi[1], pi[2]];
+    rec.frame = receiver_frame(n);
+    rec.bounds = B;
+    rec.bounds4 = B.map(h4);
+    rec.psi = bounds_functionals(B, n);
+  }
+  return rec;
+}
+
+/** `RECEIVER_UNLIT` messages per case (contract §5.1.2, §5.0.5). */
+const UNLIT_MESSAGES: Readonly<Record<string, string>> = {
+  ground: "light below the ground; the bounded receiver receives no shadow from it",
+  point: "point light is behind the bounded receiver or in its plane; it receives no shadow",
+  parallel: "directional light is parallel to the bounded receiver; it receives no shadow",
+  behind: "directional light is behind the bounded receiver; it receives no shadow",
+};
+
+/** Per-light records of one receiver (the §2.3 formulas with `π_r`); a bounded receiver replaces the ground codes by
+ * `RECEIVER_UNLIT` (ids `[light, receiver]`) in the three band cases and when the ground is unlit by that light. */
+function receiver_light_records(rcv: ReceiverRecord, scene_lights: readonly Light[], tol: number, ground_unlit: ReadonlySet<string>): LightRecord[] {
+  return scene_lights.map((light) => {
+    const lt = light_record(light, rcv.pi, tol);
+    lt.receiver = rcv.id;
+    lt.suffix = rcv.suffix;
+    if (rcv.bounded) {
+      let kase: string | null = null;
+      if (ground_unlit.has(light.id)) kase = "ground";
+      else if (light.type === "point") kase = lt.pi_L <= tol ? "point" : null;
+      else if (Math.abs(lt.pi_L) <= TOL_DIR) kase = "parallel";
+      else if (lt.pi_L < -TOL_DIR) kase = "behind";
+      lt.active = kase === null;
+      lt.warnings = kase === null ? [] : [make_warning("RECEIVER_UNLIT", [light.id, rcv.id], UNLIT_MESSAGES[kase])];
+    }
+    return lt;
+  });
+}
+
+/** `lit[<light>]` and `casts[<light>]` of every receiver (contract §5.1.2). */
+function receiver_lit_casts(receivers: readonly ReceiverRecord[], ground_unlit: ReadonlySet<string>): void {
+  for (const rcv of receivers) {
+    for (const lt of rcv.lights) {
+      rcv.lit.set(lt.id, lt.active);
+      rcv.casts.set(lt.id, rcv.bounded && !ground_unlit.has(lt.id) && Math.abs(lt.pi_L) > lt.tol_w);
+    }
+  }
+}
+
+/** `obj.clipped[r]` (contract §5.1.2): the part of the solid in front of `π_r` as a closed mesh, `null` when no
+ * vertex is behind `π_r` or the cut surface is not a closed manifold. */
+function clip_object(obj: StageAObject, rcv: ReceiverRecord, tol: number): [Mesh, Origin[]] | null {
+  if (!obj.mesh.vertices.some((v) => dot4(h4(v), rcv.pi) < -tol)) return null;
+  try {
+    return clip_mesh_to_plane(obj.mesh, rcv.pi, tol);
+  } catch (exc) {
+    if (!(exc instanceof NotManifoldError)) throw exc;
+    return null;
+  }
+}
+
+function clip_object_to_receivers(obj: StageAObject, receivers: readonly ReceiverRecord[], tol: number): void {
+  obj.clipped.set((receivers[0] as ReceiverRecord).id, obj.ground_mesh ?? null);
+  for (const rcv of receivers) if (rcv.bounded) obj.clipped.set(rcv.id, clip_object(obj, rcv, tol));
+}
+
+/** Stage A, bounded default receiver: clipped meshes and per-light data of a polyhedral object (its shadow records
+ * come from `shadow_records_for_receiver`, like curved objects'). */
+function bounded_default_object(obj: StageAObject, receivers: readonly ReceiverRecord[], lights: readonly LightRecord[], tol: number,
+  warnings: Warning[]): void {
+  if (obj.analytic !== null) return;
+  for (const rcv of receivers) if (rcv.bounded) obj.clipped.set(rcv.id, clip_object(obj, rcv, tol));
+  obj.ground_mesh = obj.clipped.get((receivers[0] as ReceiverRecord).id) ?? null;
+  for (const lt of lights) {
+    const [ol, w] = object_light_data(obj, lt);
+    warnings.push(...w);
+    obj.lights.set(lt.id, ol);
+  }
+}
+
+/** Shadow record of one caster (an object part or a plate) on one receiver under one active light (contract §5.1.3);
+ * on a bounded receiver every loop goes through `clip_polygon_bounds` (empty results dropped), `unbounded` is false,
+ * `VERTEX_NOT_BELOW_LIGHT` is not emitted and rays / checks exist only for shadow points inside the bounds. */
+function caster_record(oid: string, lt: LightRecord, rcv: ReceiverRecord, tol: number, sil: readonly number[], P4: readonly Vec4[],
+  vertex_names: readonly string[], loops: readonly [Vec4[], readonly number[]][], origins: readonly Origin[] | null,
+  vertex_prefix: string): [ShadowRecord, Warning[]] {
+  const lid = lt.id, rid = rcv.id, sfx = rcv.suffix;
+  const pi = rcv.pi;
+  const w_S = P4.map((P) => shadow_w(pi, lt.L, P));
+  const finite = w_S.map((w) => w > lt.tol_w);
+  const keep = P4.map((P, i) => (finite[i] as boolean) && dot4(P, pi) >= -tol);
+  const warnings: Warning[] = [];
+  if (!rcv.bounded && sil.length > 0 && !finite.every((f) => f)) warnings.push(make_warning("VERTEX_NOT_BELOW_LIGHT", [oid]));
+  const S4 = P4.map((P) => mat4_vec(lt.M, P));
+  const S_world = S4.map((S, i): Vec3 => {
+    if (!keep[i]) return [0.0, 0.0, 0.0];
+    const w = w_S[i] as number;
+    return [S[0] / w, S[1] / w, S[2] / w];
+  });
+  const Q_world = P4.map((P): Vec3 => {
+    const Q = foot(pi, P);
+    return [Q[0] / Q[3], Q[1] / Q[3], Q[2] / Q[3]];
+  });
+  let ray_keep = keep;
+  if (rcv.bounded) {
+    const psi = rcv.psi as Vec4[];
+    ray_keep = S4.map((S, i) => (keep[i] as boolean) && psi.every((row) => dot4(S, row) >= -tol * Math.abs(S[3])));
+  }
+  const out_loops: ShadowRecord["loops"] = [];
+  const ground = new Map<string, [string, Vec3]>();
+  let unbounded = false;
+  for (const [loop4, loop_ids] of loops) {
+    let sh = shadow_loop(loop4, lt.M, pi, lt.tol_w, tol, rcv.frame, lt.F);
+    if (rcv.bounded) {
+      const [V, src] = clip_polygon_bounds(sh.vertices, sh.sources, rcv.psi as Vec4[], rcv.bounds as Vec3[], tol);
+      if (V.length === 0) continue;
+      sh = { vertices: V, sources: src, unbounded: false, below_ground: sh.below_ground };
+    }
+    const entries = poly_loop_entries(sh.sources, sh.vertices, loop_ids, origins, oid, lid, ground, sfx, vertex_prefix);
+    unbounded = unbounded || sh.unbounded;
+    out_loops.push({ vertices: sh.vertices, sources: sh.sources, entries, unbounded: sh.unbounded });
+  }
+  return [{
+    light: lid,
+    receiver: rid,
+    object: oid,
+    keep,
+    ray_keep,
+    P_world: P4.map((P) => [P[0] / P[3], P[1] / P[3], P[2] / P[3]] as Vec3),
+    S_world,
+    Q_world,
+    w_S,
+    shadow_names: sil.map((k) => `${oid}.${vertex_prefix}${k}.shadow.${lid}${sfx}`),
+    foot_names: sil.map((k) => `${oid}.${vertex_prefix}${k}.foot${sfx}`),
+    vertex_names: [...vertex_names],
+    ground_points: [...ground.values()],
+    loops: out_loops,
+    unbounded,
+  }, warnings];
+}
+
+/** Shadow record of a polyhedral object on a bounded receiver (contract §5.1.3.2): the solid cut to `π_rᵀX >= 0`
+ * (silent; crossings `<obj>.s<k>.<light>.<r>`), the loops shadowed with `M_r` and clipped to the bounds. */
+function bounded_object_record(obj: StageAObject, ol: ObjectLightData, lt: LightRecord, rcv: ReceiverRecord, tol: number): [ShadowRecord, Warning[]] {
+  const oid = obj.id, lid = lt.id, rid = rcv.id;
+  if (!lt.active || ol.light_inside) return [empty_shadow(lid, rid, oid), []];
+  const mesh = obj.mesh;
+  const V4 = mesh.vertices.map(h4);
+  const clipped = obj.clipped.get(rid) ?? null;
+  let loop_mesh: Mesh, origins: Origin[] | null, sil_loops: number[][], sil: number[];
+  if (clipped === null) {
+    loop_mesh = mesh;
+    origins = null;
+    sil_loops = ol.loops;
+    sil = ol.silhouette_vertices;
+  } else {
+    [loop_mesh, origins] = clipped;
+    if (loop_mesh.faces.length === 0) return [empty_shadow(lid, rid, oid), []]; // the whole solid is behind the plane
+    const lit_c = face_lit_flags(loop_mesh, lt.L, lt.tol_lit).lit;
+    sil_loops = silhouette_loops(loop_mesh, lit_c);
+    sil = clipped_silhouette_vertices(loop_mesh, origins, lit_c);
+  }
+  const V4c = loop_mesh.vertices.map(h4);
+  const loops = sil_loops.map((loop) => [loop.map((v) => V4c[v] as Vec4), loop] as [Vec4[], number[]]);
+  return caster_record(oid, lt, rcv, tol, sil, sil.map((k) => V4[k] as Vec4), sil.map((k) => obj.point_names[k] as string), loops,
+    origins, "v");
+}
+
+/** Shadow record of the bounded receiver `plate` (an opaque plate) on the receiver `rcv` (contract §5.1.3.2). */
+function plate_shadow_record(plate: ReceiverRecord, lt: LightRecord, rcv: ReceiverRecord, tol: number): [ShadowRecord, Warning[]] {
+  const pid = plate.id, lid = lt.id, rid = rcv.id;
+  if (!lt.active || !(plate.casts.get(lid) ?? false)) return [empty_shadow(lid, rid, pid), []];
+  const B4 = plate.bounds4 as Vec4[];
+  if (B4.every((b) => Math.abs(dot4(b, rcv.pi)) <= tol)) return [empty_shadow(lid, rid, pid), []]; // coplanar: casts nothing
+  const plate_light = plate.lights.find((p) => p.id === lid) as LightRecord;
+  const loop = plate_loop(plate.bounds as Vec3[], plate.pi, lt.L, plate_light.tol_w);
+  if (loop === null) return [empty_shadow(lid, rid, pid), []];
+  const [loop4, ids] = loop;
+  const range = B4.map((_b, j) => j);
+  return caster_record(pid, lt, rcv, tol, range, B4, range.map((j) => `${pid}.b${j}`), [[loop4, ids]], null, "b");
+}
+
+/** The records of one receiver not produced by the v2 ground code (contract §5.1.3.1): on a bounded receiver every
+ * object, and on every receiver the other bounded receivers as plates. Returns `light index -> records`. */
+function shadow_records_for_receiver(rcv: ReceiverRecord, objects: readonly StageAObject[], receivers: readonly ReceiverRecord[], tol: number,
+  warnings: Warning[]): Map<number, ShadowRecord[]> {
+  const out = new Map<number, ShadowRecord[]>();
+  const push = (li: number, rec: ShadowRecord): void => {
+    let l = out.get(li);
+    if (l === undefined) out.set(li, (l = []));
+    l.push(rec);
+  };
+  if (rcv.bounded) {
+    for (const obj of objects) {
+      if (obj.analytic !== null) {
+        for (const rec of stage_a_object(obj, rcv.lights, rcv, tol, warnings, is_multi(rcv.lights))) {
+          push(rcv.lights.findIndex((lt) => lt.id === rec.light), rec);
+        }
+        continue;
+      }
+      rcv.lights.forEach((lt, li) => {
+        const [rec, w] = bounded_object_record(obj, obj.lights.get(lt.id) as ObjectLightData, lt, rcv, tol);
+        warnings.push(...w);
+        push(li, rec);
+      });
+    }
+  }
+  for (const plate of receivers) {
+    if (!plate.bounded || plate.id === rcv.id) continue;
+    rcv.lights.forEach((lt, li) => {
+      const [rec, w] = plate_shadow_record(plate, lt, rcv, tol);
+      warnings.push(...w);
+      push(li, rec);
+    });
+  }
+  return out;
 }
 
 // ---------------------------------------------------------------------------
@@ -556,9 +916,13 @@ function project_shadow(rec: StageAShadow, cam: CameraRecord, tol: number, light
   const xG = G4.map((x) => project(cam, x));
   const G_behind = G4.map((x) => nu(cam, x) < 0.0);
   const polygons = rec.loops.map((loop) => project_polygon(cam, loop.vertices));
+  // construction rays (contract §2.7): only rows with P, S, Q all in front; M4 (§5.1.3.3): on a bounded receiver only
+  // shadow points inside the bounds (`ray_keep`); M5 (§5.2.4): `ray_vertices` when the record carries it
+  const ray_keep = rec.ray_keep ?? rec.keep;
   const rows_ok: number[] = [];
   rec.keep.forEach((k, i) => {
-    if (k && (nuP[i] as number) >= 0.0 && (nuS[i] as number) >= 0.0 && (nuQ[i] as number) >= 0.0) rows_ok.push(i);
+    if (k && (nuP[i] as number) >= 0.0 && (nuS[i] as number) >= 0.0 && (nuQ[i] as number) >= 0.0 && (ray_keep[i] as boolean)
+      && (rec.ray_vertices === undefined || (rec.ray_vertices[i] as boolean))) rows_ok.push(i);
   });
   const lp_undefined = light.light_point.undefined, fp_undefined = light.shadow_vp.undefined;
   const kinds_of_rays = [...(lp_undefined ? [] : ["L"]), ...(fp_undefined ? [] : ["F"])];
@@ -575,7 +939,8 @@ function project_shadow(rec: StageAShadow, cam: CameraRecord, tol: number, light
         const c = clipped[r];
         if (c !== null && c !== undefined) segments.push({ kind, point: name, points: [[c[0][0] + 0, c[0][1] + 0], [c[1][0] + 0, c[1][1] + 0]] });
       }
-      for (const kind of kinds_of_rays) rays.push([kind, kind === "L" ? name : `${name}.foot`]);
+      // the §3.1 `rays` list: the foot names are the records' `foot_names` (`<base>.foot[.<r>]`, M4 / M6)
+      for (const kind of kinds_of_rays) rays.push([kind, kind === "L" ? name : (rec.foot_names[i] as string)]);
     });
   }
   const pick = (xs: Vec3[]): Vec3[] => rows_ok.map((i) => xs[i] as Vec3);
@@ -613,26 +978,115 @@ function project_shadow(rec: StageAShadow, cam: CameraRecord, tol: number, light
 }
 
 /**
- * Stage B: project stage-A geometry with the scene camera or an override (contract §3). `umbra` is the M6 switch
- * (phase 2, §5.4.14); it has no effect on a single-light scene.
+ * One light's construction block (contract §2.7, §5.1.5, §5.4.14 (c); port of `multilight.construction_block`):
+ * `light` is the stage-B record of the default receiver, `receiver_lights.get(<r>)` the stage-B records of every other
+ * receiver (one per light, scene order), `shadows` the stage-B records. The flat `rays` / `checks` / `segments`
+ * concatenate that light's records on the default receiver in `shadows[]` order; `per_receiver[<r>]` those on
+ * receiver `r`. For one light this is the v1 / M4 `construction` block; the per-light `constructions` map of §5.3.5
+ * is a loop around it.
  */
-/**
- * The stage-B `construction` block of one light (contract §2.7, §5.4.14 (c)): `L'`, `F'` and the rays, self-checks
- * and segments of that light's shadow records, flattened in record order. Phase 1 calls it once for the single
- * light; the per-light `constructions` map of §5.3.5 (phase 2) is a loop around it.
- */
-export function construction_block(light: LightStageB, shadows: readonly ShadowStageB[]): ConstructionStageB {
-  return {
+export function construction_block(light: LightStageB, shadows: readonly ShadowStageB[],
+  receiver_lights: ReadonlyMap<string, readonly LightStageB[]> = new Map(), default_id: string | null = null): ConstructionStageB {
+  const lid = light.id;
+  const own = shadows.filter((s) => (default_id === null || s.receiver === default_id) && s.light === lid);
+  const block: ConstructionStageB = {
     light_point: light.light_point.point,
     light_point_at_infinity: light.light_point.at_infinity,
     shadow_vp: light.shadow_vp.point,
     shadow_vp_at_infinity: light.shadow_vp.at_infinity,
-    rays: shadows.flatMap((s) => s.rays),
-    checks: shadows.flatMap((s) => s.checks),
-    segments: shadows.flatMap((s) => s.segments),
+    rays: own.flatMap((s) => s.rays),
+    checks: own.flatMap((s) => s.checks),
+    segments: own.flatMap((s) => s.segments),
+    per_receiver: new Map(),
+  };
+  for (const [rid, recs] of receiver_lights) {
+    const lt_r = recs.find((r) => r.id === lid);
+    if (lt_r === undefined) continue;
+    const own_r = shadows.filter((s) => s.receiver === rid && s.light === lid);
+    block.per_receiver.set(rid, {
+      shadow_vp: lt_r.shadow_vp.point,
+      shadow_vp_at_infinity: lt_r.shadow_vp.at_infinity,
+      rays: own_r.flatMap((s) => s.rays),
+      checks: own_r.flatMap((s) => s.checks),
+      segments: own_r.flatMap((s) => s.segments),
+    });
+  }
+  return block;
+}
+
+/** `project_light` of a light record of a receiver other than `receivers[0]` (contract §5.1.5): `F'_r = P·F_r`;
+ * `SHADOW_VP_AT_INFINITY` carries the ids `[light, receiver]`. */
+function project_receiver_light(lt: LightRecord, rcv: ReceiverRecord, cam: CameraRecord, tol: number): [LightStageB, Warning[]] {
+  const [lrec, w0] = project_light(lt, cam, tol);
+  const w = w0.filter((x) => x.code !== "SHADOW_VP_AT_INFINITY");
+  if (lrec.shadow_vp.at_infinity !== null) w.push(make_warning("SHADOW_VP_AT_INFINITY", [lt.id, rcv.id]));
+  lrec.receiver = rcv.id;
+  lrec.suffix = rcv.suffix;
+  return [lrec, w];
+}
+
+/** The camera-free §5.1.7 `receivers[]` entry `{id, plane, bounds, lit, casts}`. */
+function receiver_doc_entry(rcv: ReceiverRecord): ReceiverDocEntry {
+  const lit: Record<string, boolean> = {}, casts: Record<string, boolean> = {};
+  for (const [lid, v] of rcv.lit) lit[lid] = v;
+  for (const [lid, v] of rcv.casts) casts[lid] = v;
+  return {
+    id: rcv.id,
+    plane: [rcv.pi[0] + 0, rcv.pi[1] + 0, rcv.pi[2] + 0, rcv.pi[3] + 0],
+    bounds: rcv.bounded ? (rcv.bounds as Vec3[]).map(canonical3) : null,
+    lit,
+    casts,
   };
 }
 
+/** Stage B of a bounded receiver drawn as an opaque plate (contract §5.1.7 / §5.1.8): bounds points `<r>.b<k>`, bounds
+ * edges through the §2.2 drawing pipeline, and its unlit camera-facing face as a `form_shadow` entry iff
+ * `sign(πᵀL) != sign(n·(C − b0))` with both strictly beyond the tolerance; `POINT_BEHIND_CAMERA [<r>]`. */
+function plate_record(rcv: ReceiverRecord, cam: CameraRecord, tol: number): [PlateStageB, Warning[]] {
+  const rid = rcv.id;
+  const B4 = rcv.bounds4 as Vec4[];
+  const k = B4.length;
+  const names = B4.map((_b, j) => `${rid}.b${j}`);
+  const x_h = B4.map((X) => project(cam, X));
+  const behind = B4.map((X) => nu(cam, X) < 0.0);
+  const silhouette = [...rcv.casts.values()].some((v) => v);
+  const edges: PlateEdge[] = [];
+  for (let j = 0; j < k; j++) {
+    const near = clip_segment_near(cam, B4[j] as Vec4, B4[(j + 1) % k] as Vec4);
+    const r = near === null ? null : clip_segment_rect_h(project(cam, near[0]), project(cam, near[1]), cam.rect);
+    edges.push({
+      object: rid, from: names[j] as string, to: names[(j + 1) % k] as string, silhouette, back: false, visibility: "visible", runs: [],
+      segment: segment_uv(r, r !== null),
+    });
+  }
+  let form: PlateStageB["form_shadow"] = null;
+  if (rcv.lights.length > 0) {
+    const lt = rcv.lights[0] as LightRecord;
+    const light_side = lt.pi_L;
+    const b0 = (rcv.bounds as Vec3[])[0] as Vec3;
+    const n = rcv.pi;
+    const cam_side = n[0] * (cam.C[0] - b0[0]) + n[1] * (cam.C[1] - b0[1]) + n[2] * (cam.C[2] - b0[2]);
+    if (Math.abs(light_side) > lt.tol_w && Math.abs(cam_side) > tol && (light_side > 0.0) !== (cam_side > 0.0)) {
+      const poly = project_polygon(cam, B4);
+      form = {
+        object: rid, faces: [[...names]], terminator: [],
+        polygons: poly.length >= 3 ? [poly.map((p) => [p[0] + 0, p[1] + 0] as Vec2)] : [],
+      };
+    }
+  }
+  const warnings = behind.some((b) => b) ? [make_warning("POINT_BEHIND_CAMERA", [rid])] : [];
+  return [{
+    id: rid, point_names: names, world: (rcv.bounds as Vec3[]).map(canonical3), image_h: x_h, behind, edges, form_shadow: form,
+  }, warnings];
+}
+
+/**
+ * Stage B: project stage-A geometry with the scene camera or an override (contract §3, §5.1.5). `B.A = A`;
+ * `lights` are the projections for the default receiver, `receiver_lights` those of every other receiver (`F'_r`),
+ * `plates` the projected bounded receivers, `construction.per_receiver[<r>]` the rays / checks / segments of the
+ * records on receiver `r`. `umbra` is the M6 switch (a later part of phase 2); it has no effect on a single-light
+ * scene. `A` is never mutated.
+ */
 export function project_scene(scene: Scene, A: StageA, camera?: unknown, umbra = true): StageB {
   void umbra;
   const cam_dict = resolve_camera(scene, camera);
@@ -663,24 +1117,45 @@ export function project_scene(scene: Scene, A: StageA, camera?: unknown, umbra =
     warnings.push(...w);
     lights.push(lrec);
   }
-  const by_id = new Map(lights.map((lt) => [lt.id, lt] as const));
+  const receivers = A.receivers;
+  const default_id = receivers.length > 0 ? (receivers[0] as ReceiverRecord).id : A.receiver.id;
+  const key = (lid: string, rid: string): string => JSON.stringify([lid, rid]);
+  const by_id = new Map(lights.map((lt) => [key(lt.id, default_id), lt] as const));
+  const receiver_lights = new Map<string, LightStageB[]>();
+  for (const rcv of receivers.slice(1)) {
+    const recs: LightStageB[] = [];
+    for (const lt of rcv.lights) {
+      const [lrec, w] = project_receiver_light(lt, rcv, cam, tol);
+      warnings.push(...w);
+      recs.push(lrec);
+      by_id.set(key(lt.id, rcv.id), lrec);
+    }
+    receiver_lights.set(rcv.id, recs);
+  }
   const shadows: ShadowStageB[] = [];
   for (const rec of A.shadows) {
-    const [s, w] = project_shadow(rec, cam, tol, by_id.get(rec.light) as LightStageB);
+    const [s, w] = project_shadow(rec, cam, tol, by_id.get(key(rec.light, rec.receiver)) as LightStageB);
     warnings.push(...w);
     shadows.push(s);
   }
-  let construction: ConstructionStageB | null = null;
-  if (lights.length > 0) {
-    const lt = lights[0] as LightStageB;
-    construction = construction_block(lt, shadows.filter((s) => s.light === lt.id));
+  const plates: PlateStageB[] = [];
+  for (const rcv of receivers) {
+    if (!rcv.bounded) continue;
+    const [prec, w] = plate_record(rcv, cam, tol);
+    warnings.push(...w);
+    plates.push(prec);
   }
+  let construction: ConstructionStageB | null = null;
+  if (lights.length > 0) construction = construction_block(lights[0] as LightStageB, shadows, receiver_lights, default_id);
   return {
     camera: cam,
     scene_scale: scale,
     tol,
     objects,
     lights,
+    receiver_lights,
+    receivers: receivers.map(receiver_doc_entry),
+    plates,
     horizon: camera_horizon(cam, TOL_DIR),
     shadows,
     construction,
@@ -765,7 +1240,9 @@ function conic_doc_entry(a: ArcRecord, with_back = false): Record<string, unknow
     visible: a.visible.map(([lo, hi]) => [lo + 0, hi + 0]),
   };
   if (with_back) entry["back"] = a.back;
-  return { ...entry, ...arc_drawables(a) };
+  // M4 (contract §5.1.7): hidden-line fields with their switch-off values (the hidden-line classification of stage C
+  // replaces them, always with fresh lists, when hidden lines are on)
+  return { ...entry, ...arc_drawables(a), visibility: "visible", runs: [], hidden_polylines: [] };
 }
 
 function segment_uv(seg_h: readonly (readonly number[])[] | null, keep: boolean): [Vec2, Vec2] | null {
@@ -774,60 +1251,88 @@ function segment_uv(seg_h: readonly (readonly number[])[] | null, keep: boolean)
   return [[a[0] + 0, a[1] + 0], [b[0] + 0, b[1] + 0]];
 }
 
+/** `F.<light>.<r>` of a receiver other than `receivers[0]` (contract §5.0.4): the light foot on that receiver, a
+ * direction point for a directional light, absent when undefined. */
+function receiver_light_points(points: Record<string, PointEntry>, lt: LightStageB, rid: string): void {
+  if (!lt.F_defined) return;
+  const X = lt.F, img = lt.shadow_vp;
+  const name = `F.${lt.id}.${rid}`;
+  if (lt.type === "point") {
+    points[name] = { world: [X[0] / X[3] + 0, X[1] / X[3] + 0, X[2] / X[3] + 0], image: img.point, depth: (lt.F_depth as number) + 0 };
+  } else {
+    points[name] = { direction: [X[0] + 0, X[1] + 0, X[2] + 0], at_infinity: true, image: img.point };
+  }
+}
+
 /**
- * Stage C: the spec §6.2 geometry document (contract §3.1). `hidden_lines` is the M4 switch (phase 2, §5.4.14); it has
- * no effect on the v1 document.
+ * Stage C: the spec §6.2 geometry document (contract §3.1, full key listing §5.0.3), canonical floats.
+ * `hidden_lines` (§5.1.6.5 / §5.0.7): `null` / `undefined` = `scene.output.hidden_lines`; the effective switch is the
+ * document's top-level `hidden_lines`. With it off every `visibility` is `"visible"` and every `runs` /
+ * `hidden_polylines` / `polygon_edges` is `[]`. The sampled hidden-line classification (src/hidden.ts) is a later part
+ * of phase 2.
  */
 export function compose(scene: Scene, B: StageB, hidden_lines?: boolean | null): GeometryDocument {
-  void scene;
-  void hidden_lines;
   const cam = B.camera;
   const points: Record<string, PointEntry> = {};
   const edges: Record<string, unknown>[] = [];
   const outlines: Record<string, unknown>[] = [];
-  const form_shadow: Record<string, unknown>[] = [];
+  const form_entries: [number, Record<string, unknown>][] = []; // (object index, entry): the block keeps object order
   const conics_by = new Map<string, Record<string, unknown>[]>();
-  const curved_recs: CurvedStageB[] = [];
-  const poly_recs: PolyStageB[] = [];
-  for (const rec of B.objects) {
-    if (rec.analytic) curved_recs.push(rec);
-    else poly_recs.push(rec);
-  }
+  const conic_key = (oid: string, lid: string, rid: string): string => JSON.stringify([oid, lid, rid]);
   // curved objects first (their points), then the polyhedral ones, as in the Python compose
-  for (const rec of curved_recs) {
+  B.objects.forEach((rec, k) => {
+    if (!rec.analytic) return;
     finite_points(points, rec.point_names, rec.world, rec.image_h, rec.behind);
-    for (const [lid, arcs] of rec.shadow_arcs) conics_by.set(JSON.stringify([rec.id, lid]), arcs.map((a) => conic_doc_entry(a)));
-  }
-  for (const rec of poly_recs) finite_points(points, rec.point_names, rec.world_lists, rec.image_h, rec.behind);
-  for (const rec of B.objects) {
-    if (rec.analytic) {
-      const generators = rec.gen_edges.map((e) => ({ from: e.from, to: e.to, back: false, segment: segment_uv(e.segment_h, e.keep) }));
-      outlines.push({ object: rec.id, generators, conics: rec.outline_arcs.map((a) => conic_doc_entry(a, true)) });
-      const term: Record<string, unknown>[] = [];
-      for (const items of rec.terminator.values()) {
-        for (const it of items) {
-          if ("segment" in it) {
-            const seg = segment_uv(it.segment_h, it.keep);
-            term.push({ segment: [...it.segment], polylines: seg !== null ? [seg] : [] });
-          } else {
-            term.push(conic_doc_entry(it));
-          }
+    const generators = rec.gen_edges.map((e) => ({
+      from: e.from, to: e.to, back: false, segment: segment_uv(e.segment_h, e.keep), visibility: "visible", runs: [],
+    }));
+    outlines.push({ object: rec.id, generators, conics: rec.outline_arcs.map((a) => conic_doc_entry(a, true)) });
+    const term: Record<string, unknown>[] = [];
+    for (const items of rec.terminator.values()) {
+      for (const it of items) {
+        if ("segment" in it) {
+          const seg = segment_uv(it.segment_h, it.keep);
+          term.push({ segment: [...it.segment], polylines: seg !== null ? [seg] : [], visibility: "visible", runs: [] });
+        } else {
+          term.push(conic_doc_entry(it));
         }
       }
-      if (term.length > 0) form_shadow.push({ object: rec.id, faces: [], terminator: term, polygons: [] });
-    } else {
-      rec.edge_templates.forEach((t, e) => {
-        edges.push({ ...t, silhouette: rec.silhouette[e], back: rec.back[e], segment: segment_uv(rec.segments_h[e] ?? null, rec.segment_keep[e] as boolean) });
-      });
-      if (rec.form_faces.length > 0) {
-        form_shadow.push({
-          object: rec.id, faces: rec.form_faces, terminator: [],
-          polygons: rec.form_polygons.map((poly) => poly.map((p) => [p[0] + 0, p[1] + 0])),
-        });
-      }
     }
-  }
+    if (term.length > 0) form_entries.push([k, { object: rec.id, faces: [], terminator: term, polygons: [] }]);
+    for (const [akey, arcs] of rec.shadow_arcs) {
+      const [lid, rid] = JSON.parse(akey) as [string, string];
+      conics_by.set(conic_key(rec.id, lid, rid), arcs.map((a) => conic_doc_entry(a)));
+    }
+  });
+  B.objects.forEach((rec) => {
+    if (!rec.analytic) finite_points(points, rec.point_names, rec.world_lists, rec.image_h, rec.behind);
+  });
+  B.objects.forEach((rec, k) => {
+    if (rec.analytic) return;
+    rec.edge_templates.forEach((t, e) => {
+      edges.push({
+        ...t, silhouette: rec.silhouette[e], back: rec.back[e],
+        segment: segment_uv(rec.segments_h[e] ?? null, rec.segment_keep[e] as boolean), runs: [],
+      });
+    });
+    if (rec.form_faces.length > 0) {
+      form_entries.push([k, {
+        object: rec.id, faces: rec.form_faces, terminator: [],
+        polygons: rec.form_polygons.map((poly) => poly.map((p) => [p[0] + 0, p[1] + 0])),
+      }]);
+    }
+  });
+  // M4 (contract §5.1.7 / §5.1.8): bounded receivers as plates, after the objects (document order)
+  const n_obj = B.objects.length;
+  B.plates.forEach((prec, j) => {
+    finite_points(points, prec.point_names, prec.world, prec.image_h, prec.behind);
+    edges.push(...prec.edges.map((e) => ({ ...e })));
+    if (prec.form_shadow !== null) form_entries.push([n_obj + j, prec.form_shadow as unknown as Record<string, unknown>]);
+  });
+  form_entries.sort((a, b) => a[0] - b[0]);
+  const form_shadow = form_entries.map(([, e]) => e);
   for (const lt of B.lights) light_points(points, lt);
+  for (const [rid, lts] of B.receiver_lights) for (const lt of lts) receiver_light_points(points, lt, rid);
   for (const s of B.shadows) {
     finite_points(points, s.shadow_names.filter((_n, i) => s.keep[i]), s.S_lists, s.S_h.filter((_x, i) => s.keep[i]),
       s.S_behind.filter((_b, i) => s.keep[i]));
@@ -843,14 +1348,21 @@ export function compose(scene: Scene, B: StageB, hidden_lines?: boolean | null):
     object: s.object,
     outline: s.loops.length > 0 ? s.loops[0] : [],
     loops: [...s.loops],
-    conics: conics_by.get(JSON.stringify([s.object, s.light])) ?? [],
+    conics: conics_by.get(conic_key(s.object, s.light, s.receiver)) ?? [],
     unbounded: s.unbounded,
     polygons: s.polygons.map((poly) => poly.map((p) => [p[0] + 0, p[1] + 0])),
+    polygon_edges: [],
   }));
   const hz = B.horizon;
-  const construction = B.construction ?? {
+  const construction: ConstructionStageB = B.construction ?? {
     light_point: null, light_point_at_infinity: null, shadow_vp: null, shadow_vp_at_infinity: null, rays: [], checks: [], segments: [],
+    per_receiver: new Map(),
   };
+  const per_head: Record<string, unknown> = {};
+  for (const [rid, blk] of construction.per_receiver) {
+    per_head[rid] = { shadow_vp: blk.shadow_vp, shadow_vp_at_infinity: blk.shadow_vp_at_infinity };
+  }
+  const effective = hidden_lines === undefined || hidden_lines === null ? scene.output.hidden_lines === true : Boolean(hidden_lines);
   const head = canonical({
     canvas_mm: [cam.canvas_mm[0], cam.canvas_mm[1]],
     camera: {
@@ -865,6 +1377,9 @@ export function compose(scene: Scene, B: StageB, hidden_lines?: boolean | null):
       shadow_vp: construction.shadow_vp,
       shadow_vp_at_infinity: construction.shadow_vp_at_infinity,
     },
+    per_receiver: per_head,
+    hidden_lines: effective,
+    receivers: B.receivers.map((r) => ({ ...r })),
     horizon: {
       v_mm: hz.v_mm,
       line: [...hz.line],
@@ -873,13 +1388,24 @@ export function compose(scene: Scene, B: StageB, hidden_lines?: boolean | null):
     },
     warnings: B.warnings.map((w) => ({ code: w.code, ids: [...w.ids], message: w.message })),
   });
+  const per_receiver: Record<string, unknown> = {};
+  for (const [rid, blk] of construction.per_receiver) {
+    per_receiver[rid] = {
+      ...(head.per_receiver as Record<string, Record<string, unknown>>)[rid],
+      rays: [...blk.rays],
+      checks: [...blk.checks],
+      segments: [...blk.segments],
+    };
+  }
+  const { per_receiver: _per, ...rest } = head;
   return {
-    ...head,
+    ...rest,
     construction: {
       ...head.construction,
       rays: [...construction.rays],
       checks: [...construction.checks],
       segments: [...construction.segments],
+      per_receiver,
     },
     points,
     edges,
@@ -889,13 +1415,14 @@ export function compose(scene: Scene, B: StageB, hidden_lines?: boolean | null):
   } as unknown as GeometryDocument;
 }
 
-/** Run stages A, B, C and write the SVG with the scene's layer subset (contract §3). `hidden_lines`,
- * `hidden_style` and `umbra` are the phase-2 switches (§5.4.14) and have no effect on the v1 document. */
+/** Run stages A, B, C and write the SVG with the scene's layer subset (contract §3, §5.0.7): `hidden_lines` /
+ * `hidden_style` override `scene.output` (`null` / `undefined` = the scene's values); `umbra` (M6) is passed to
+ * `project_scene`. */
 export function render(scene: Scene, camera?: unknown, hidden_lines?: boolean | null, hidden_style?: string | null,
   umbra = true): { geometry: GeometryDocument; svg: string } {
-  void hidden_style;
   const A = shadow_geometry(scene);
   const B = project_scene(scene, A, camera, umbra);
   const doc = compose(scene, B, hidden_lines);
-  return { geometry: doc, svg: write_svg(doc, scene.output.layers) };
+  const style = hidden_style ?? scene.output.hidden_style ?? "dashed";
+  return { geometry: doc, svg: write_svg(doc, scene.output.layers, style) };
 }

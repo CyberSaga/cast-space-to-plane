@@ -20,8 +20,10 @@ import type { Warning } from "./errors.js";
 import { TOL_DIR } from "./homogeneous.js";
 import { lit } from "./light.js";
 import type { Analytic, ObjectRecord } from "./primitives.js";
+import { curved_stem_name } from "./multilight.js";
 import { py_round, pyimod, pymod } from "./pyfloat.js";
-import { ARC_STEP_DEG, foot, mat4_vec, shadow_w } from "./shadow.js";
+import { ARC_STEP_DEG, clip_polygon_bounds, foot, mat4_vec, shadow_w } from "./shadow.js";
+import type { BoundsAnchor, BoundsCrossing } from "./shadow.js";
 import { radians } from "./transform.js";
 import type { Mat4, Mat43, Vec2, Vec3, Vec4 } from "./types.js";
 
@@ -124,11 +126,13 @@ export interface Outline {
   warnings: Warning[];
 }
 
-export type PolySource =
+export type PolySourceBase =
   | { kind: "segment"; i: number; end: number }
   | { kind: "arc"; i: number; k: number }
   | { kind: "dir"; i: number; role: string }
   | { kind: "inf"; i: number; s: number };
+/** A source of the curved shadow polygon; the bounds-clip rows (contract §5.1.4) exist on a bounded receiver only. */
+export type PolySource = PolySourceBase | BoundsCrossing<PolySource> | BoundsAnchor;
 
 export interface ShadowPolygon {
   vertices: Vec4[];
@@ -141,7 +145,26 @@ export interface CurvedData {
   terminator: TerminatorItem[];
   points: Map<string, Vec4>;
   outline: Outline | null;
+  /** Bounds-clipped on a bounded receiver. */
   polygon: ShadowPolygon | null;
+  /** The outline's conic arcs, bounds-clipped on a bounded receiver (contract §5.1.4); `null` before stage A sets it. */
+  conic_pieces: { conic_arc: ConicArcPiece }[] | OutlinePiece[] | null;
+  /** The scene has at least two lights (M6, §5.3.2). */
+  multi: boolean;
+}
+
+/** `obj.curved`: per receiver id, per light id (contract §5.1.4). */
+export type CurvedStore = Map<string, Map<string, CurvedData>>;
+
+/** The stage-A receiver record fields a curved object needs (`{id, pi, bounded, frame, bounds, psi, suffix}`). */
+export interface ReceiverRecordLike {
+  id: string;
+  pi: Vec4;
+  bounded: boolean;
+  frame: [Vec3, Vec3] | null;
+  bounds: Vec3[] | null;
+  psi: Vec4[] | null;
+  suffix: string;
 }
 
 export type LoopEntry = string | { direction: Vec3 };
@@ -163,6 +186,10 @@ export interface ShadowRecord {
   loops: { vertices: Vec4[]; sources: unknown[]; entries: LoopEntry[]; unbounded: boolean }[];
   unbounded: boolean;
   pieces?: OutlinePiece[];
+  /** Bounded receivers (contract §5.1.3.3): rows whose shadow point lies inside the bounds (rays / checks only there). */
+  ray_keep?: boolean[];
+  /** M5 (§5.2.4): rows that may get construction rays (mesh records); absent = every row. */
+  ray_vertices?: boolean[];
 }
 
 export interface LightRecordLike {
@@ -613,7 +640,8 @@ function is_gap(it: Item): it is { gap: [number[], number[]] } {
   return (it as { gap?: unknown }).gap !== undefined;
 }
 
-function direction_from(S: readonly number[], fallback_from: readonly number[] | null, finite_hint: readonly number[] | null): Vec4 {
+function direction_from(S: readonly number[], fallback_from: readonly number[] | null, finite_hint: readonly number[] | null,
+  frame: readonly [Vec3, Vec3] | null = null): Vec4 {
   const D: Vec4 = [S[0] as number, S[1] as number, S[2] as number, 0.0];
   let norm = norm3(D);
   if (norm > 1e-300 && Number.isFinite(norm)) return [D[0] / norm, D[1] / norm, D[2] / norm, D[3] / norm];
@@ -624,7 +652,18 @@ function direction_from(S: readonly number[], fallback_from: readonly number[] |
     norm = norm3(d);
     if (norm > 1e-300 && Number.isFinite(norm)) return [d[0] / norm, d[1] / norm, d[2] / norm, 0.0 / norm];
   }
+  if (frame !== null) { // contract §5.1.2: the last resort is (e1, 0) of the receiver frame
+    const e1 = frame[0];
+    return [e1[0], e1[1], e1[2], 0.0];
+  }
   return [1.0, 0.0, 0.0, 0.0];
+}
+
+/** In-plane coordinates of a receiver point: `p[:2]` on the ground (`frame === null`, the literal v2 expression),
+ * `(p·e1, p·e2)` in the receiver frame otherwise (contract §5.1.2). */
+function plane_uv(p: readonly number[], frame: readonly [Vec3, Vec3] | null): Vec2 {
+  if (frame === null) return [p[0] as number, p[1] as number];
+  return [dot3(p, frame[0]), dot3(p, frame[1])];
 }
 
 // ---------------------------------------------------------------------------
@@ -666,7 +705,7 @@ interface Section {
 }
 
 function ground_section(analytic: Analytic, sil: Silhouette, L: Vec4, pi: readonly number[], tol_lit: number, tol: number,
-  samples_per_circle = 64): Section | null {
+  samples_per_circle = 64, frame: readonly [Vec3, Vec3] | null = null): Section | null {
   const kind = analytic.kind;
   const r = analytic.radius;
   const n = v3(pi);
@@ -687,7 +726,7 @@ function ground_section(analytic: Analytic, sil: Silhouette, L: Vec4, pi: readon
       pts.push(p);
       lits.push(lit([(p[0] - c[0]) / r, (p[1] - c[1]) / r, (p[2] - c[2]) / r], p, L, tol_lit));
     }
-    return { points: pts, lit: lits, centre: [centre[0], centre[1]] };
+    return { points: pts, lit: lits, centre: frame === null ? [centre[0], centre[1]] : plane_uv(centre, frame) };
   }
   const a = analytic.axis, b = analytic.base;
   const h = analytic.height as number;
@@ -756,24 +795,34 @@ function ground_section(analytic: Analytic, sil: Silhouette, L: Vec4, pi: readon
     }
   }
   if (pts.length < 3) return null;
+  const uv = pts.map((p) => plane_uv(p, frame));
   let sx = 0, sy = 0;
-  for (const p of pts) {
-    sx += p[0];
-    sy += p[1];
+  for (const q of uv) {
+    sx += q[0];
+    sy += q[1];
   }
-  const centre: Vec2 = [sx / pts.length, sy / pts.length];
+  const centre: Vec2 = [sx / uv.length, sy / uv.length];
   let size = -Infinity;
-  for (const p of pts) size = Math.max(size, Math.hypot(p[0] - centre[0], p[1] - centre[1]));
+  for (const q of uv) size = Math.max(size, Math.hypot(q[0] - centre[0], q[1] - centre[1]));
   if (!(size > tol)) return null;
   return { points: pts, lit: lit_list, centre };
 }
 
-function ground_chain(section: Section | null, X_exit: readonly number[], X_entry: readonly number[], single_gap: boolean): Vec4[] {
+function ground_chain(section: Section | null, X_exit: readonly number[], X_entry: readonly number[], single_gap: boolean,
+  frame: readonly [Vec3, Vec3] | null = null): Vec4[] {
   if (section === null) return [];
   const { points: P, lit: lit_mask, centre: I } = section;
-  const e: Vec2 = [(X_exit[0] as number) / (X_exit[3] as number), (X_exit[1] as number) / (X_exit[3] as number)];
-  const n_: Vec2 = [(X_entry[0] as number) / (X_entry[3] as number), (X_entry[1] as number) / (X_entry[3] as number)];
-  const rel = P.map((p) => [p[0] - I[0], p[1] - I[1]] as Vec2);
+  let e: Vec2, n_: Vec2;
+  if (frame === null) {
+    e = [(X_exit[0] as number) / (X_exit[3] as number), (X_exit[1] as number) / (X_exit[3] as number)];
+    n_ = [(X_entry[0] as number) / (X_entry[3] as number), (X_entry[1] as number) / (X_entry[3] as number)];
+  } else { // contract §5.1.2: counter-clockwise about n in the receiver frame
+    const eu = plane_uv(X_exit, frame), nu_ = plane_uv(X_entry, frame);
+    e = [eu[0] / (X_exit[3] as number), eu[1] / (X_exit[3] as number)];
+    n_ = [nu_[0] / (X_entry[3] as number), nu_[1] / (X_entry[3] as number)];
+  }
+  const uv = P.map((p) => plane_uv(p, frame));
+  const rel = uv.map((p) => [p[0] - I[0], p[1] - I[1]] as Vec2);
   let size = -Infinity;
   for (const q of rel) size = Math.max(size, Math.hypot(q[0], q[1]));
   const delta = CHAIN_MARGIN * size;
@@ -789,7 +838,7 @@ function ground_chain(section: Section | null, X_exit: readonly number[], X_entr
   }
   const keys = rel.map((q) => pymod(Math.atan2(q[1], q[0]) - phi_e, TWO_PI));
   const sel: number[] = [];
-  P.forEach((p, i) => {
+  uv.forEach((p, i) => {
     const k = keys[i] as number;
     const d_e = Math.hypot(p[0] - e[0], p[1] - e[1]);
     const d_n = Math.hypot(p[0] - n_[0], p[1] - n_[1]);
@@ -799,7 +848,7 @@ function ground_chain(section: Section | null, X_exit: readonly number[], X_entr
   if (!degenerate) {
     let left = -Infinity;
     for (const i of sel) {
-      const p = P[i] as Vec3;
+      const p = uv[i] as Vec2;
       left = Math.max(left, chord[0] * (p[1] - e[1]) - chord[1] * (p[0] - e[0]));
     }
     if (left > delta * chord_len) return [];
@@ -808,7 +857,7 @@ function ground_chain(section: Section | null, X_exit: readonly number[], X_entr
   return order.map((idx) => point4(P[sel[idx] as number] as Vec3));
 }
 
-function ground_ring(section: Section | null): Vec4[] {
+function ground_ring(section: Section | null, frame: readonly [Vec3, Vec3] | null = null): Vec4[] {
   if (section === null) return [];
   const { points: P, lit: lit_mask, centre: I } = section;
   const lit_idx: number[] = [];
@@ -816,7 +865,10 @@ function ground_ring(section: Section | null): Vec4[] {
     if (l) lit_idx.push(i);
   });
   if (lit_idx.length < 3) return [];
-  const keys = lit_idx.map((i) => Math.atan2((P[i] as Vec3)[1] - I[1], (P[i] as Vec3)[0] - I[0]));
+  const keys = lit_idx.map((i) => {
+    const q = plane_uv(P[i] as Vec3, frame);
+    return Math.atan2(q[1] - I[1], q[0] - I[0]);
+  });
   const order = lit_idx.map((_i, idx) => idx).sort((x, y) => (keys[x] as number) - (keys[y] as number) || x - y);
   return order.map((idx) => point4(P[lit_idx[idx] as number] as Vec3));
 }
@@ -827,7 +879,7 @@ function ground_ring(section: Section | null): Vec4[] {
 
 /** Oriented ground shadow outline of the light silhouette loop (spec §5.6, contract §2.3 / §2.5 / §2.6). */
 export function shadow_outline(analytic: Analytic, Lin: readonly number[], Min: Mat4, piIn: readonly number[], tol = 0.0,
-  tol_dir = 1e-9): Outline {
+  tol_dir = 1e-9, frame: readonly [Vec3, Vec3] | null = null): Outline {
   const factor = canonical_factor(Lin);
   const L = Lin.map((x) => x / factor) as Vec4;
   const M = Min.map((row) => row.map((x) => x / factor)) as Mat4;
@@ -846,11 +898,11 @@ export function shadow_outline(analytic: Analytic, Lin: readonly number[], Min: 
   }
   pieces = [];
   const n_gaps = items.filter(is_gap).length;
-  const section = cut ? ground_section(analytic, sil, L, pi, tol_w, tol) : null;
+  const section = cut ? ground_section(analytic, sil, L, pi, tol_w, tol, 64, frame) : null;
   for (const it of items) {
     if (is_gap(it)) {
       const [X_exit, X_entry] = it.gap;
-      const chain: number[][] = [X_exit, ...ground_chain(section, X_exit, X_entry, n_gaps === 1), X_entry];
+      const chain: number[][] = [X_exit, ...ground_chain(section, X_exit, X_entry, n_gaps === 1, frame), X_entry];
       for (let k = 0; k + 1 < chain.length; k++) {
         pieces.push({ segment: [chain[k] as number[], chain[k + 1] as number[]], which: "ground", theta: null });
       }
@@ -859,7 +911,7 @@ export function shadow_outline(analytic: Analytic, Lin: readonly number[], Min: 
     }
   }
   if (items.length === 0 && cut) {
-    const ring = ground_ring(section);
+    const ring = ground_ring(section, frame);
     for (let k = 0; k < ring.length; k++) {
       pieces.push({ segment: [ring[k] as Vec4, ring[(k + 1) % ring.length] as Vec4], which: "ground", theta: null });
     }
@@ -880,8 +932,8 @@ export function shadow_outline(analytic: Analytic, Lin: readonly number[], Min: 
       const next_piece = items[(idx + 1) % items.length] as Item;
       const hint_prev = !is_gap(prev_piece) ? mat4_vec(M, piece_start(prev_piece)) : null;
       const hint_next = !is_gap(next_piece) ? mat4_vec(M, piece_end(next_piece)) : null;
-      out.push({ direction: direction_from(mat4_vec(M, X_exit), F, hint_prev), role: "out" });
-      out.push({ direction: direction_from(mat4_vec(M, X_entry), F, hint_next), role: "in" });
+      out.push({ direction: direction_from(mat4_vec(M, X_exit), F, hint_prev, frame), role: "out" });
+      out.push({ direction: direction_from(mat4_vec(M, X_entry), F, hint_next, frame), role: "in" });
     } else if (it.segment !== undefined) {
       const [A, B] = it.segment;
       out.push({
@@ -904,7 +956,8 @@ export function shadow_outline(analytic: Analytic, Lin: readonly number[], Min: 
 }
 
 /** Oriented homogeneous ground polygon of a `shadow_outline` (contract §2.5 / §2.6). */
-export function shadow_polygon_h(outline: Outline | readonly OutlinePiece[], samples_per_circle = 64): ShadowPolygon {
+export function shadow_polygon_h(outline: Outline | readonly OutlinePiece[], samples_per_circle = 64,
+  frame: readonly [Vec3, Vec3] | null = null): ShadowPolygon {
   const pieces: readonly OutlinePiece[] = Array.isArray(outline) ? outline : (outline as Outline).pieces;
   const n = pieces.length;
   const verts: Vec4[] = [];
@@ -949,14 +1002,25 @@ export function shadow_polygon_h(outline: Outline | readonly OutlinePiece[], sam
         const nxt = pieces[(i + 1) % n] as OutlinePiece;
         if (!("direction" in nxt) || nxt.role !== "in") throw new Error("an outgoing direction must be followed by an incoming one");
         const d_in = nxt.direction;
-        const th0 = Math.atan2(D[1], D[0]);
-        const th1 = Math.atan2(d_in[1], d_in[0]);
+        let th0: number, th1: number;
+        if (frame === null) { // the ground: literal v2 expressions (contract §5.1.2 [decision])
+          th0 = Math.atan2(D[1], D[0]);
+          th1 = Math.atan2(d_in[1], d_in[0]);
+        } else { // counter-clockwise about n in the receiver frame
+          th0 = Math.atan2(dot3(D, frame[1]), dot3(D, frame[0]));
+          th1 = Math.atan2(dot3(d_in, frame[1]), dot3(d_in, frame[0]));
+        }
         let delta = pymod(th1 - th0, TWO_PI);
         if (!Number.isFinite(delta) || delta <= 1e-12) delta = TWO_PI;
         const steps = Math.max(1, Math.ceil(delta / radians(ARC_STEP_DEG) - 1e-12));
         for (let s = 1; s < steps; s++) {
           const t = th0 + delta * s / steps;
-          verts.push([Math.cos(t), Math.sin(t), 0.0, 0.0]);
+          if (frame === null) {
+            verts.push([Math.cos(t), Math.sin(t), 0.0, 0.0]);
+          } else {
+            const c = Math.cos(t), sn = Math.sin(t), e1 = frame[0], e2 = frame[1];
+            verts.push([c * e1[0] + sn * e2[0], c * e1[1] + sn * e2[1], c * e1[2] + sn * e2[2], 0.0]);
+          }
           sources.push({ kind: "inf", i, s: s - 1 });
         }
       }
@@ -970,9 +1034,12 @@ export function shadow_polygon_h(outline: Outline | readonly OutlinePiece[], sam
 // ---------------------------------------------------------------------------
 
 /** Named homogeneous 4-vectors of the silhouette vertices that get construction rays (insertion order). */
-export function construction_points(analytic: Analytic, L: readonly number[], tol = 0.0, obj_id = "obj"): Map<string, Vec4> {
+export function construction_points(analytic: Analytic, L: readonly number[], tol = 0.0, obj_id = "obj",
+  light_id: string | null = null): Map<string, Vec4> {
   const sil = silhouette(analytic, L, tol);
   const pts = new Map<string, Vec4>();
+  // M6 (contract §5.3.2): the light-dependent stems carry `.<light>` in a multi-light scene
+  const sfx = light_id === null ? "" : `.${light_id}`;
   if (sil.kind === "sphere") {
     if (sil.light_inside) return pts;
     pts.set(`${obj_id}.c`, point4(analytic.centre));
@@ -980,7 +1047,7 @@ export function construction_points(analytic: Analytic, L: readonly number[], to
     if (circ !== null) {
       const c = circ.centre, rs = circ.radius;
       [circ.e1, neg3(circ.e1), circ.e2, neg3(circ.e2)].forEach((v, k) => {
-        pts.set(`${obj_id}.sil.${k}`, point4(add3(c, scale3(rs, v))));
+        pts.set(`${obj_id}.sil.${k}${sfx}`, point4(add3(c, scale3(rs, v))));
       });
     }
     return pts;
@@ -989,11 +1056,11 @@ export function construction_points(analytic: Analytic, L: readonly number[], to
   if (gens.length === 0) return pts;
   if (sil.kind === "cylinder") {
     gens.forEach((g, k) => {
-      pts.set(`${obj_id}.g${k}.base`, point4(g.base));
-      pts.set(`${obj_id}.g${k}.top`, point4(g.top));
+      pts.set(`${obj_id}.g${k}.base${sfx}`, point4(g.base));
+      pts.set(`${obj_id}.g${k}.top${sfx}`, point4(g.top));
     });
   } else {
-    gens.forEach((g, k) => pts.set(`${obj_id}.g${k}.base`, point4(g.base)));
+    gens.forEach((g, k) => pts.set(`${obj_id}.g${k}.base${sfx}`, point4(g.base)));
     pts.set(`${obj_id}.apex`, point4(sil.apex as Vec3));
   }
   return pts;
@@ -1087,14 +1154,14 @@ function empty_shadow_record(oid: string, lid: string, receiver_id: string): Sha
 const SIL_INDEX = [0, 2, 1, 3];
 
 function curved_loop_entries(poly: ShadowPolygon, pieces: readonly OutlinePiece[], oid: string, lid: string, keep_names: ReadonlySet<string>,
-  samples_per_circle: number): [LoopEntry[], [string, Vec3][]] {
+  samples_per_circle: number, suffix = "", multi = false): [LoopEntry[], [string, Vec3][]] {
   const V = poly.vertices;
   const n = pieces.length;
   const ground: [string, Vec3][] = [];
   const entries: LoopEntry[] = [];
   const ground_name = (row: number): string => {
     const X = V[row] as Vec4;
-    const name = `${oid}.s${ground.length}.${lid}`;
+    const name = `${oid}.s${ground.length}.${lid}${suffix}`;
     ground.push([name, [X[0] / X[3], X[1] / X[3], X[2] / X[3]]]);
     return name;
   };
@@ -1102,10 +1169,14 @@ function curved_loop_entries(poly: ShadowPolygon, pieces: readonly OutlinePiece[
     if (!("segment" in piece) || piece.which !== "generator" || piece.ends === null) return null;
     if (piece.cut[end]) return null;
     const e = piece.ends[end] as string;
-    const pname = e === "apex" ? `${oid}.apex` : `${oid}.g${piece.gen}.${e}`;
-    return keep_names.has(pname) ? `${pname}.shadow.${lid}` : null;
+    const pname = e === "apex" ? `${oid}.apex` : curved_stem_name(oid, `g${piece.gen}.${e}`, lid, multi);
+    return keep_names.has(pname) ? `${pname}.shadow.${lid}${suffix}` : null;
   };
   poly.sources.forEach((src, row) => {
+    if (src.kind === "bounds") { // a bounds-clip crossing or anchor: a point of the receiver
+      entries.push(ground_name(row));
+      return;
+    }
     if (src.kind === "dir" || src.kind === "inf") {
       const D = V[row] as Vec4;
       entries.push({ direction: [D[0] + 0, D[1] + 0, D[2] + 0] });
@@ -1125,8 +1196,8 @@ function curved_loop_entries(poly: ShadowPolygon, pieces: readonly OutlinePiece[
         const q = theta / (0.5 * Math.PI);
         const qi = py_round(q);
         if (Math.abs(q - qi) <= 1e-12) {
-          const pname = `${oid}.sil.${SIL_INDEX[pyimod(qi, 4)]}`;
-          if (keep_names.has(pname)) name = `${pname}.shadow.${lid}`;
+          const pname = curved_stem_name(oid, `sil.${SIL_INDEX[pyimod(qi, 4)]}`, lid, multi);
+          if (keep_names.has(pname)) name = `${pname}.shadow.${lid}${suffix}`;
         }
       }
     }
@@ -1135,45 +1206,86 @@ function curved_loop_entries(poly: ShadowPolygon, pieces: readonly OutlinePiece[
   return [entries, ground];
 }
 
-/** Stage A of one curved object (spec §5.6, contract §2.6 / §2.7 / §3): stores `obj.curved` and returns one shadow
- * record per light; warnings are appended with `ids == [obj id]`. */
-export function stage_a_object(obj: ObjectRecord & { curved?: Map<string, CurvedData> }, lights: readonly LightRecordLike[],
-  piIn: readonly number[], tol: number, receiver_id: string, warnings: Warning[]): ShadowRecord[] {
+/** Contract §5.1.4: the `conic_arc` pieces of a shadow outline restricted, in closed form, to the bounds of a receiver:
+ * each row `ψ_k` gives `ψ_k · X(θ) = A cos θ + B sin θ + C` and the surviving sub-arcs are those where every row is
+ * non-negative; a piece may split into several pieces, each with its own arc. Only the arc pieces are returned. */
+function bounds_clip_pieces(pieces: readonly OutlinePiece[], psi: readonly Vec4[], tol: number): { conic_arc: ConicArcPiece }[] {
+  const out: { conic_arc: ConicArcPiece }[] = [];
+  for (const piece of pieces) {
+    if (!("conic_arc" in piece)) continue;
+    const ca = piece.conic_arc;
+    const TE = matmul(ca.T, ca.E);
+    let intervals: [number, number][] = [ccw_range(ca.theta0, ca.theta1)];
+    for (const row of psi) {
+      const [A, B, C] = functional_coeffs(row, TE, ca.rho);
+      intervals = intersect_arcs(intervals, A, B, C, tol);
+      if (intervals.length === 0) break;
+    }
+    for (const [a, b] of intervals) out.push({ conic_arc: { ...ca, theta0: a, theta1: b } });
+  }
+  return out;
+}
+
+/** Stage A of one curved object on one receiver (spec §5.6, contract §2.6 / §2.7 / §3 / §5.1.4): stores
+ * `obj.curved.get(<receiver id>).get(<light id>)` and returns one shadow record per light; warnings are appended with
+ * `ids == [obj id]` (on a bounded receiver the two ground codes are dropped). Called once per receiver, in receiver
+ * order. `multi` (M6): the scene has at least two lights (light-dependent base names carry the light id). */
+export function stage_a_object(obj: ObjectRecord & { curved?: CurvedStore }, lights: readonly LightRecordLike[],
+  receiver: ReceiverRecordLike, tol: number, warnings: Warning[], multi = false): ShadowRecord[] {
   const an = obj.analytic as Analytic;
   const oid = obj.id;
-  const pi = [...piIn];
-  const curved = new Map<string, CurvedData>();
-  obj.curved = curved;
+  const rid = receiver.id;
+  const pi = [...receiver.pi];
+  const frame = receiver.frame;
+  const bounded = receiver.bounded;
+  const sfx = receiver.suffix;
+  if (obj.curved === undefined) obj.curved = new Map();
+  let per = obj.curved.get(rid);
+  if (per === undefined) {
+    per = new Map<string, CurvedData>();
+    obj.curved.set(rid, per);
+  }
   const records: ShadowRecord[] = [];
-  if (plane_min(an, pi) < -tol) warnings.push(make_warning("OBJECT_BELOW_RECEIVER", [oid]));
+  if (!bounded && plane_min(an, pi) < -tol) warnings.push(make_warning("OBJECT_BELOW_RECEIVER", [oid]));
   for (const lt of lights) {
     const lid = lt.id;
     const L = lt.L;
     const tol_L = lt.tol_lit;
     const sil = silhouette(an, L, tol_L);
-    const pts = construction_points(an, L, tol_L, oid);
+    const pts = construction_points(an, L, tol_L, oid, multi ? lid : null);
     const term = terminator(an, L, tol_L);
     if (cap_parallel(an, L, tol_L)) warnings.push(make_warning("FACE_PARALLEL_TO_LIGHT", [oid]));
     for (const w of sil.warnings) warnings.push(make_warning(w.code, [oid], w.message));
-    const cd: CurvedData = { silhouette: sil, terminator: term, points: pts, outline: null, polygon: null };
-    curved.set(lid, cd);
-    const rec = empty_shadow_record(oid, lid, receiver_id);
+    const cd: CurvedData = { silhouette: sil, terminator: term, points: pts, outline: null, polygon: null, conic_pieces: null, multi };
+    per.set(lid, cd);
+    const rec = empty_shadow_record(oid, lid, rid);
     records.push(rec);
     if (!lt.active) continue;
-    const out = shadow_outline(an, L, lt.M, pi, tol, TOL_DIR);
-    for (const w of out.warnings) warnings.push(make_warning(w.code, [oid], w.message));
-    const poly = shadow_polygon_h(out);
+    const out = shadow_outline(an, L, lt.M, pi, tol, TOL_DIR, frame);
+    for (const w of out.warnings) {
+      if (bounded && (w.code === "OBJECT_BELOW_RECEIVER" || w.code === "VERTEX_NOT_BELOW_LIGHT")) continue;
+      warnings.push(make_warning(w.code, [oid], w.message));
+    }
+    let poly = shadow_polygon_h(out, 64, frame);
+    let conic_pieces: { conic_arc: ConicArcPiece }[] | OutlinePiece[] = out.pieces;
+    if (bounded) {
+      const [V, src] = clip_polygon_bounds(poly.vertices, poly.sources, receiver.psi as Vec4[], receiver.bounds as Vec3[], tol);
+      poly = { vertices: V, unbounded: false, sources: src };
+      conic_pieces = bounds_clip_pieces(out.pieces, receiver.psi as Vec4[], tol);
+    }
     cd.outline = out;
     cd.polygon = poly;
+    cd.conic_pieces = conic_pieces;
     const names = [...pts.keys()];
     const P4 = names.map((nm) => pts.get(nm) as Vec4);
     const w_S = P4.map((P) => shadow_w(pi, L, P));
     const finite = w_S.map((w) => w > lt.tol_w);
     const keep = P4.map((P, i) => (finite[i] as boolean) && dot4(P, pi) >= -tol);
-    if (names.length > 0 && !finite.every((f) => f)) warnings.push(make_warning("VERTEX_NOT_BELOW_LIGHT", [oid]));
-    const S_world = P4.map((P, i): Vec3 => {
+    if (!bounded && names.length > 0 && !finite.every((f) => f)) warnings.push(make_warning("VERTEX_NOT_BELOW_LIGHT", [oid]));
+    const S4 = P4.map((P) => mat4_vec(lt.M, P));
+    const S_world = P4.map((_P, i): Vec3 => {
       if (!keep[i]) return [0.0, 0.0, 0.0];
-      const S = mat4_vec(lt.M, P);
+      const S = S4[i] as Vec4;
       const w = w_S[i] as number;
       return [S[0] / w, S[1] / w, S[2] / w];
     });
@@ -1186,7 +1298,7 @@ export function stage_a_object(obj: ObjectRecord & { curved?: Map<string, Curved
     let ground: [string, Vec3][] = [];
     if (poly.vertices.length >= 3) {
       let entries: LoopEntry[];
-      [entries, ground] = curved_loop_entries(poly, out.pieces, oid, lid, keep_names, 64);
+      [entries, ground] = curved_loop_entries(poly, out.pieces, oid, lid, keep_names, 64, sfx, multi);
       loops.push({ vertices: poly.vertices, sources: poly.sources, entries, unbounded: poly.unbounded });
     }
     Object.assign(rec, {
@@ -1195,14 +1307,18 @@ export function stage_a_object(obj: ObjectRecord & { curved?: Map<string, Curved
       S_world,
       Q_world,
       w_S,
-      shadow_names: names.map((nm) => `${nm}.shadow.${lid}`),
-      foot_names: names.map((nm) => `${nm}.foot`),
+      shadow_names: names.map((nm) => `${nm}.shadow.${lid}${sfx}`),
+      foot_names: names.map((nm) => `${nm}.foot${sfx}`),
       vertex_names: names,
       ground_points: ground,
       loops,
       unbounded: loops.length > 0 ? poly.unbounded : false,
       pieces: out.pieces,
     });
+    if (bounded) { // rays / checks only for shadow points inside the bounds (contract §5.1.3.3)
+      const psi = receiver.psi as Vec4[];
+      rec.ray_keep = S4.map((S, i) => (keep[i] as boolean) && psi.every((row) => dot4(S, row) >= -tol * Math.abs(S[3])));
+    }
   }
   return records;
 }
@@ -1218,6 +1334,8 @@ export interface ArcRecord extends ConicEntry {
   back: boolean;
   H: number[][];
   rho: number;
+  /** M4 (contract §5.1.6.4): the 4-D map `X(θ) = T E (ρ cos θ, ρ sin θ, 1)` for stage C. */
+  TE: number[][];
   whole_circle: boolean;
   near_cut: boolean;
   visible: [number, number][];
@@ -1250,7 +1368,7 @@ export function arc_record(circle: Circle, theta0: number, theta1: number, full:
   }
   delete entry.cond;
   return {
-    ...entry, which, back, H, rho, whole_circle: is_full, near_cut,
+    ...entry, which, back, H, rho, TE, whole_circle: is_full, near_cut,
     visible: visible.map(([a, b]) => [a, b]), front: front.map(([a, b]) => [a, b]),
   };
 }
@@ -1267,6 +1385,8 @@ export interface GenEdge extends CurvedSegmentSlot {
 
 export interface TerminatorSegment extends CurvedSegmentSlot {
   segment: [string, string];
+  /** M4 (contract §5.1.6.4): the stage-A world endpoints for stage C. */
+  X4: [Vec4, Vec4];
 }
 
 export type StageBTerminatorItem = TerminatorSegment | ArcRecord;
@@ -1283,26 +1403,34 @@ export interface CurvedStageB {
   gen_edges: GenEdge[];
   outline_arcs: ArcRecord[];
   terminator: Map<string, StageBTerminatorItem[]>;
+  /** Keyed by `shadow_arc_key(light id, receiver id)` (contract §5.1.4: per (light, receiver)). */
   shadow_arcs: Map<string, ArcRecord[]>;
   camera_inside: boolean;
   form_faces: string[][];
   form_polygons: number[][][];
 }
 
-function terminator_segment_names(oid: string, t: { segment: [Vec4, Vec4]; theta: number | null }, sil: Silhouette): [string, string] {
+/** The key of `CurvedStageB.shadow_arcs` for one (light, receiver). */
+export function shadow_arc_key(light_id: string, receiver_id: string): string {
+  return JSON.stringify([light_id, receiver_id]);
+}
+
+function terminator_segment_names(oid: string, t: { segment: [Vec4, Vec4]; theta: number | null }, sil: Silhouette,
+  light_id: string | null = null, multi = false): [string, string] {
+  const gname = (stem: string): string => curved_stem_name(oid, stem, light_id, multi);
   const theta = t.theta;
   let gen = -1;
   sil.generators.forEach((g, k) => {
     if (gen < 0 && theta !== null && g.theta === theta) gen = k;
   });
   const [A4, B4] = t.segment;
-  if (gen < 0) return [`${oid}.g0.base`, `${oid}.g0.top`];
+  if (gen < 0) return [gname("g0.base"), gname("g0.top")];
   const end_of = (X: Vec4): string => {
     const g = sil.generators[gen] as Generator;
     let close = true;
     for (let k = 0; k < 3; k++) if (!(Math.abs(X[k]! - g.base[k]!) <= 1e-8 + 1e-5 * Math.abs(g.base[k]!))) close = false;
-    if (close) return `${oid}.g${gen}.base`;
-    return sil.kind === "cone" ? `${oid}.apex` : `${oid}.g${gen}.top`;
+    if (close) return gname(`g${gen}.base`);
+    return sil.kind === "cone" ? `${oid}.apex` : gname(`g${gen}.top`);
   };
   return [end_of(A4), end_of(B4)];
 }
@@ -1322,7 +1450,7 @@ function project_segment(cam: CameraRecord, A4: Vec4, B4: Vec4): [[number[], num
  * light + the camera outline generator endpoints), outline generators and arcs, terminator drawables and the
  * cast-shadow conic arcs, all near- and rectangle-clipped; warnings `POINT_BEHIND_CAMERA` / `CONIC_SAMPLED`.
  */
-export function stage_b_object(obj: ObjectRecord & { curved?: Map<string, CurvedData> }, rec: Partial<CurvedStageB>, cam: CameraRecord,
+export function stage_b_object(obj: ObjectRecord & { curved?: CurvedStore }, rec: Partial<CurvedStageB>, cam: CameraRecord,
   tol: number, warnings: Warning[]): void {
   const an = obj.analytic as Analytic;
   const oid = obj.id;
@@ -1368,15 +1496,22 @@ export function stage_b_object(obj: ObjectRecord & { curved?: Map<string, Curved
     if (a === null) behind_any = true;
     else outline_arcs.push(a);
   }
-  // per light: construction points, terminator, cast-shadow conics
+  // per light: construction points, terminator (receiver independent: taken from the first receiver's records);
+  // per (light, receiver): cast-shadow conics (contract §5.1.4)
   const terminator_out = new Map<string, StageBTerminatorItem[]>();
   const shadow_arcs = new Map<string, ArcRecord[]>();
-  for (const [lid, cd] of obj.curved ?? new Map<string, CurvedData>()) {
+  const curved: CurvedStore = obj.curved ?? new Map();
+  const rids = [...curved.keys()];
+  const first: Map<string, CurvedData> = rids.length > 0 ? (curved.get(rids[0] as string) as Map<string, CurvedData>) : new Map();
+  for (const [lid, cd] of first) {
     for (const [nm, X] of cd.points) add_point(nm, X);
     const items: StageBTerminatorItem[] = [];
     for (const t of cd.terminator) {
       if (t.segment !== undefined) {
-        const it: TerminatorSegment = { segment: terminator_segment_names(oid, t, cd.silhouette), segment_h: null, keep: false };
+        const it: TerminatorSegment = {
+          segment: terminator_segment_names(oid, t, cd.silhouette, lid, cd.multi), segment_h: null, keep: false,
+          X4: [t.segment[0], t.segment[1]],
+        };
         items.push(it);
         fill(it, t.segment[0], t.segment[1]);
       } else {
@@ -1387,18 +1522,23 @@ export function stage_b_object(obj: ObjectRecord & { curved?: Map<string, Curved
       }
     }
     terminator_out.set(lid, items);
-    const arcs: ArcRecord[] = [];
-    if (cd.outline !== null) {
-      for (const piece of cd.outline.pieces) {
-        if (!("conic_arc" in piece)) continue;
-        const ca = piece.conic_arc;
-        const [lo, hi] = ccw_range(ca.theta0, ca.theta1);
-        const a = arc_record(ca.circle, lo, hi, hi - lo >= TWO_PI - 1e-12, ca.T, cam, f_nu, rect_rows, "shadow", ca.which);
-        if (a === null) behind_any = true;
-        else arcs.push(a);
+  }
+  for (const rid of rids) {
+    for (const [lid, cd] of curved.get(rid) as Map<string, CurvedData>) {
+      const arcs: ArcRecord[] = [];
+      if (cd.outline !== null) {
+        const pieces: readonly OutlinePiece[] = cd.conic_pieces ?? cd.outline.pieces;
+        for (const piece of pieces) {
+          if (!("conic_arc" in piece)) continue;
+          const ca = piece.conic_arc;
+          const [lo, hi] = ccw_range(ca.theta0, ca.theta1);
+          const a = arc_record(ca.circle, lo, hi, hi - lo >= TWO_PI - 1e-12, ca.T, cam, f_nu, rect_rows, "shadow", ca.which);
+          if (a === null) behind_any = true;
+          else arcs.push(a);
+        }
       }
+      shadow_arcs.set(shadow_arc_key(lid, rid), arcs);
     }
-    shadow_arcs.set(lid, arcs);
   }
   const groups: StageBTerminatorItem[][] = [outline_arcs, ...terminator_out.values(), ...shadow_arcs.values()];
   for (const group of groups) {
@@ -1431,7 +1571,7 @@ export function stage_b_object(obj: ObjectRecord & { curved?: Map<string, Curved
 
 /** Stage B of several curved objects: `stage_b_object` for each (the Python batch is a performance device whose
  * equality with this loop is a tested precondition, contract §5.4.4 (6)). */
-export function stage_b_objects(objs: readonly (ObjectRecord & { curved?: Map<string, CurvedData> })[], recs: Partial<CurvedStageB>[],
+export function stage_b_objects(objs: readonly (ObjectRecord & { curved?: CurvedStore })[], recs: Partial<CurvedStageB>[],
   cam: CameraRecord, tol: number, warnings: Warning[]): void {
   objs.forEach((obj, i) => stage_b_object(obj, recs[i] as Partial<CurvedStageB>, cam, tol, warnings));
 }
