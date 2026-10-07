@@ -474,7 +474,6 @@ def _g_tags(svg: str) -> dict:
 
 
 def test_m6_opacity_strings():
-    from castplane.output.svg import _f
     assert [_f(0.3 / n) for n in (1, 2, 3, 4)] == ["0.3", "0.15", "0.1", "0.075"]
     assert [_f(0.18 / n) for n in (1, 2, 3, 4)] == ["0.18", "0.09", "0.06", "0.045"]
 

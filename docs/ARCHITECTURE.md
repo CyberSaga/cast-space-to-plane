@@ -2329,6 +2329,21 @@ dependency (shapely, pyclipper); `float32` or GPU paths.
   that need the pipeline (equivariance of the acceptance pieces, three-light union area) live in
   `tests/test_multilight.py::test_rigid_equivariance_of_the_umbra`. `castplane info` prints `lights: N` and one line per
   light `<id> (<type>): position|direction (x, y, z); active: <r>=yes|no, …` in place of the v1 `light:` line.
+- **[decision, implementation] (M6 review fixes) §5.3.7 build stability and piece-vertex equivariance hold for the
+  region, not for the partition, when edges of different lights coincide.** The three-light concave scene of §5.3.10
+  (casters standing on the receiver) has cross-light vertex pairs with `0 < |Δ| < 1e-9 mm` (the shadows of the
+  ground-contact vertices under different `M_k`) and collinear overlapping ground-contact edges, so the step-4 order
+  `(x(y_m), edge index)` and the crossing predicates are within rounding of their thresholds although snapping is
+  applied; `u` is never snapped (snapping it within `tol_mm` does not help: measured 21 → 15 / 21 / 23 / 19). Under the
+  rigid motions (37°, (2.5, −1.25)), (−120°, (−4, 3)), (180°, 0), (90°, (1, 1)) the per-light drawables move by
+  ≤ 1.8e-13 mm but the piece count goes 19 → 16 / 20 / 24 / 20, while the union area agrees within 1e-15 (relative)
+  and the corner set of the union (18 corners) within 9e-14 mm. The tests therefore check the three-light rigid row as
+  union area + union corner set at the §4 (i) scaled tolerance (`test_rigid_equivariance_of_the_umbra`); the
+  acceptance scene keeps the index-wise piece comparison at 1e-6 mm. The kernel is unchanged. Consequence for the
+  conformance case `multilight_three_lights_concave_prism` (M6 part 3): an index-wise comparison of its
+  `umbra[].polygons` at 1e-6 mm is fragile across libm / BLAS builds and in the TS runner, so either its `umbra`
+  polygons are compared as a region (a `case_overrides` entry) or the case uses casters that do not stand on the
+  receiver.
 
 ### 5.4 M7 — TypeScript port of the core and the three.js web UI (spec §9 row "TypeScript 移植", spec §10 M7)
 

@@ -799,7 +799,7 @@ def test_two_identical_lights():
     twin = dict(WEST, id="twin")
     scene = scene_of([{"id": "cube", "type": "box", "size": [1, 1, 1]}], [WEST, twin], ACCEPTANCE_CAMERA)
     doc = doc_of(scene)
-    assert not [w for w in doc["warnings"] if w["code"] not in ()]
+    assert doc["warnings"] == []
     shadow_area = total(ML._umbra.record_pieces(doc["shadows"][0]["polygons"], *tolerances(doc["canvas_mm"]))[0])
     assert total(doc["umbra"][0]["polygons"]) == pytest.approx(shadow_area, rel=1e-9)
 
@@ -981,6 +981,14 @@ def test_rigid_equivariance_of_the_umbra(angle, shift):
     a3 = doc_of(three_light_scene())["umbra"][0]["polygons"]
     b3 = doc_of(rigid(three_light_scene(), angle, shift))["umbra"][0]["polygons"]
     assert total(b3) == pytest.approx(total(a3), rel=1e-9)
+    # The region, not the partition (implementation note of §5.3.7): the three-light scene has collinear
+    # ground-contact edges and cross-light vertex pairs within rounding of each other, so the piece count
+    # changes under a rigid motion (19 -> 16 / 20 / 24); the corner set of the union is equivariant with
+    # the §4 (i) scaled tolerance.
+    scale = max(1.0, max(abs(float(x)) for piece in a3 for v in piece for x in v))
+    assert_same_corners(a3, b3, 1e-6 * scale)
+    for piece in b3:
+        assert_convex_ccw(piece)
 
 
 def test_curved_two_lights_with_hidden_lines_bit_identical():
@@ -994,3 +1002,51 @@ def test_curved_two_lights_with_hidden_lines_bit_identical():
     assert vis and set(vis) != {"visible"}             # some terminator segment is (partly) hidden
     svg = render(scene)["svg"]
     assert g_ids(svg).index("form_shadow.hidden") < g_ids(svg).index("form_shadow.lamp")
+
+
+# --- named witnesses of the contract (§5.3.2, §5.3.10) ----------------------------------------------
+
+@pytest.mark.parametrize("make", [acceptance_scene, curved_scene, wall_two_lights])
+def test_per_light_records_bit_identical(make):
+    """The §5.3.2 witness (BLAS row stability of ``camera.project`` / ``camera.nu`` with ``N >= 2`` lights):
+    every light's records, construction block, form-shadow entries and points equal its single-light
+    document after the name map, bit for bit."""
+    assert_per_light_bit_identical(make())
+
+
+# --- a bounded receiver under two lights: plate form shadow and core (§5.3.3) -----------------------
+
+def plate_two_lights(lamp2_position) -> dict:
+    """``wall_and_ground`` seen from behind the wall (``+y`` side), hidden lines off, with a second lamp."""
+    scene = json.loads((EXAMPLES / "wall_and_ground.json").read_text())
+    scene["camera"]["position"], scene["camera"]["target"] = [2.0, 12.0, 4.0], [0.0, 6.0, 1.0]
+    scene["output"]["hidden_lines"] = False
+    scene["lights"].append({"id": "lamp2", "type": "point", "position": list(lamp2_position)})
+    return scene
+
+
+def test_plate_per_light_entries_and_core():
+    wall_edges = lambda doc: [e for e in doc["edges"] if e["object"] == "wall"]   # noqa: E731
+    # lamp2 behind the wall (on the camera side): the wall is unlit for lamp only, no core.
+    scene = plate_two_lights([1.0, 9.0, 3.0])
+    doc = assert_per_light_bit_identical(scene)
+    assert ("RECEIVER_UNLIT", ["lamp2", "wall"]) in [(w["code"], w["ids"]) for w in doc["warnings"]]
+    assert [e["light"] for e in doc["form_shadow"] if e["object"] == "wall"] == ["lamp"]
+    assert "wall" not in [c["object"] for c in doc["form_shadow_core"]]
+    assert {tuple(e["silhouette_lights"]) for e in wall_edges(doc)} == {("lamp", "lamp2")}
+    ids = g_ids(render(scene)["svg"])
+    assert "form_shadow.lamp.wall" in ids and "form_shadow.core.wall" not in ids
+    # lamp2 in front of the wall too: the face the camera sees is unlit by both lamps -> per-light entries
+    # for both and the plate in form_shadow_core, drawn in form_shadow.core only.
+    scene = plate_two_lights([-1.5, 2.5, 3.0])
+    doc = assert_per_light_bit_identical(scene)
+    entries = [e for e in doc["form_shadow"] if e["object"] == "wall"]
+    assert [e["light"] for e in entries] == ["lamp", "lamp2"]
+    assert all(e["faces"] == [["wall.b0", "wall.b1", "wall.b2", "wall.b3"]] and e["terminator"] == []
+               for e in entries)
+    core = {c["object"]: c for c in doc["form_shadow_core"]}
+    assert core["wall"]["faces"] == [["wall.b0", "wall.b1", "wall.b2", "wall.b3"]]
+    assert js(core["wall"]["polygons"]) == js(entries[0]["polygons"]) == js(entries[1]["polygons"])
+    ids = g_ids(render(scene)["svg"])
+    assert "form_shadow.core.wall" in ids
+    assert "form_shadow.lamp.wall" not in ids and "form_shadow.lamp2.wall" not in ids
