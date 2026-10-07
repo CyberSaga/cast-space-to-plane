@@ -30,6 +30,7 @@ import urllib.parse
 import numpy as np
 
 from ..errors import SceneError
+from ..scene import validate_object
 
 __all__ = ["read_gltf", "load_gltf", "gltf_raw", "node_world_matrices", "traversal_order", "euler_zyx",
            "import_gltf_parts", "import_gltf_scene"]
@@ -530,6 +531,8 @@ def _primitive_object(doc: dict, k: int, world: np.ndarray, params: dict) -> dic
     if not (norms.max() - norms.min() <= 1e-9 * norms.max()):
         raise SceneError(f"nodes[{k}].scale", f"non-uniform node scale {norms.tolist()} cannot carry a primitive")
     obj = {key: value for key, value in params.items() if key not in ("id", "transform")}
+    # the parameters are checked as written (before the scale), so that an error names the file's field
+    validate_object(dict(obj, id="x"), f"nodes[{k}].extras.castplane")
     if s != 1.0:
         for key in ("radius", "height"):
             if isinstance(obj.get(key), (int, float)) and not isinstance(obj.get(key), bool):
@@ -612,6 +615,8 @@ def import_gltf_parts(path, *, ref=None, inline=False, node=None, camera=None, l
             taken.add(obj["id"])
             objects.append(obj)
             emitted.add(k)
+    if not objects:                           # only points / lines, or no mesh node at all
+        raise SceneError("meshes", "the file holds no triangle")
 
     cam_nodes = [k for k in order if "camera" in nodes[k]]
     cam_block = canvas = None

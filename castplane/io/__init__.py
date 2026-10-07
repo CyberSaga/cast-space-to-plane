@@ -72,8 +72,9 @@ def _parse_file(path: str):
     elif ext in GLTF_EXTENSIONS:
         parsed = ("gltf", gltf.read_gltf(path))
     else:
-        parsed = ("trimesh", None)
-    if cache is not None and parsed[0] != "trimesh":
+        # trimesh files take no node selection, so the parsed form is the raw mesh itself
+        parsed = ("trimesh", trimesh_adapter.load_trimesh(path, None))
+    if cache is not None:
         cache[key] = parsed
     return parsed
 
@@ -85,12 +86,15 @@ def load_mesh_file(path, node=None) -> dict:
     ``.obj``, ``.gltf`` / ``.glb``, anything else through trimesh.  ``node`` selects a glTF node /
     mesh or an OBJ ``o`` / ``g`` name (string, or integer index)."""
     path = os.fspath(path)
+    ext = os.path.splitext(path)[1].lower()
+    if node is not None and ext != ".obj" and ext not in GLTF_EXTENSIONS:
+        raise SceneError("node", "node selection needs an OBJ or glTF file")
     kind, parsed = _parse_file(path)
     if kind == "obj":
-        return obj.select_obj(parsed, node)
+        return obj.load_obj(path, node, parsed=parsed)
     if kind == "gltf":
-        return gltf.gltf_raw(parsed[0], parsed[1], node)
-    return trimesh_adapter.load_trimesh(path, node)
+        return gltf.load_gltf(path, node, parsed=parsed)
+    return copy.deepcopy(parsed)
 
 
 def expand_mesh_object(o: dict, field: str, base_dir) -> tuple:

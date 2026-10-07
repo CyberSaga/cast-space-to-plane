@@ -11,7 +11,7 @@ Public API (contract §3)::
     out   = castplane.render(scene, camera=None)   # {"geometry": doc, "svg": str}
 """
 
-from . import construction, curved, output  # noqa: F401
+from . import construction, curved, io, output  # noqa: F401  (io: castplane.io, §5.0.7; not in __all__)
 from .errors import SceneError, make_warning, merge_warnings
 from .pipeline import compose, project_scene, render, shadow_geometry
 from .scene import load_scene, validate_scene

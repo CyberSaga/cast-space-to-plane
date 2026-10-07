@@ -11,7 +11,10 @@ indent=1, ensure_ascii=False)``, importer-generated floats canonical): mesh obje
 by a POSIX path relative to the output file's directory (the current directory for stdout) or
 embed ``data`` with ``--inline``.  ``--into SCENE`` appends the imported objects to the raw
 ``objects`` of SCENE and copies its other blocks verbatim (the file's camera and lights are then
-not used).  ``validate_scene`` checks the assembled scene before anything is written.  Importer
+not used); a relative ``path`` of SCENE's own mesh objects is rewritten relative to the output's
+directory when that is not SCENE's directory, so the written scene always re-loads.  Imported ids
+are de-duplicated (``_2``, ``_3``, ...) against ``ground`` and SCENE's object / receiver ids; an
+explicit ``--id`` that collides is a ``SceneError("--id")``.  ``validate_scene`` checks the assembled scene before anything is written.  Importer
 notes go to stderr as ``note: CODE [ids]: message`` (suppressed by ``-q``) and into
 ``meta.import_notes``.  Exit codes as ``castplane.cli``: 0, 1 (unreadable input / unwritable
 output), 2 (``SceneError`` incl. the glTF JSON path, usage), 3 (trimesh missing for STL / PLY).
@@ -27,7 +30,7 @@ import sys
 
 from ..errors import SceneError, merge_warnings
 from ..scene import read_json, validate_scene
-from . import GLTF_EXTENSIONS, _assemble_scene, expand_scene, gltf, load_mesh_file
+from . import EXPANDERS, GLTF_EXTENSIONS, _assemble_scene, expand_scene, gltf, load_mesh_file
 
 __all__ = ["add_import_parser", "cmd_import"]
 
@@ -145,20 +148,52 @@ def _dedupe(objects: list, raw: dict, taken: set) -> None:
         taken.add(oid)
 
 
+def _ids(blocks) -> set:
+    return {b["id"] for b in blocks if isinstance(b, dict) and isinstance(b.get("id"), str)} \
+        if isinstance(blocks, list) else set()
+
+
+def _rebase_paths(objects: list, scene_dir: str, output) -> list:
+    """SCENE's raw objects with every relative loader ``path`` (an object whose type has an
+    expander) rewritten relative to the output file's directory (cwd for stdout), so that the
+    written scene re-loads from where it is written; every other key stays verbatim."""
+    base = os.path.dirname(os.path.abspath(output)) if output else os.getcwd()
+    if os.path.normcase(os.path.abspath(base)) == os.path.normcase(os.path.abspath(scene_dir)):
+        return copy.deepcopy(objects)          # written next to SCENE: the paths stay verbatim
+    out = []
+    for o in objects:
+        o = copy.deepcopy(o)
+        path = o.get("path") if isinstance(o, dict) else None
+        if isinstance(o, dict) and o.get("type") in EXPANDERS and isinstance(path, str) and path \
+                and not os.path.isabs(path):
+            full = os.path.normpath(os.path.join(scene_dir, path))
+            try:
+                o["path"] = os.path.relpath(full, base).replace(os.sep, "/")
+            except ValueError:                 # another drive (Windows): no relative path exists
+                o["path"] = full.replace(os.sep, "/")
+        out.append(o)
+    return out
+
+
 def cmd_import(args) -> int:
     """``castplane import``: assemble, check and write the scene (contract §5.0.2, §5.2.8)."""
     parts, notes = _import_parts(args)
     raw = parts["raw"]
+    base_scene = None
+    taken = {"ground"}                         # the receiver id (kept free with --into too, §5.0.1)
     if args.into:
         base_scene = read_json(args.into)
         if not isinstance(base_scene, dict):
             raise SceneError("--into", "the scene must be a JSON object")
-        expanded, into_notes = expand_scene(base_scene, os.path.dirname(os.path.abspath(args.into)))
-        existing = [o.get("id") for o in base_scene.get("objects", []) if isinstance(o, dict)] \
-            if isinstance(base_scene.get("objects"), list) else []
-        _dedupe(parts["objects"], raw, set(existing))
+        taken |= _ids(base_scene.get("objects")) | _ids(base_scene.get("receivers"))
+    if args.id is not None and args.id in taken:
+        raise SceneError("--id", f"{args.id!r} is already an object or receiver id of the scene")
+    _dedupe(parts["objects"], raw, set(taken))
+    if base_scene is not None:
+        scene_dir = os.path.dirname(os.path.abspath(args.into))
+        expanded, into_notes = expand_scene(base_scene, scene_dir)
         scene = copy.deepcopy(base_scene)
-        scene["objects"] = list(scene.get("objects", [])) + parts["objects"]
+        scene["objects"] = _rebase_paths(list(scene.get("objects", [])), scene_dir, args.output) + parts["objects"]
         check = copy.deepcopy(expanded)
         check["objects"] = list(check.get("objects", [])) + [_check_object(o, raw) for o in parts["objects"]]
         notes = merge_warnings(notes, into_notes)

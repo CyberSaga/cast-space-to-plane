@@ -66,8 +66,8 @@ castplane import FILE [-o OUT.json] [--into SCENE] [--id ID] [-q]
 | 選項 | 說明 |
 | --- | --- |
 | `-o, --output OUT.json` | 寫到這個檔（預設 stdout）；成功時印出路徑 |
-| `--into SCENE` | 把匯入的物件**附加**到 SCENE 原本的 `objects` 之後，SCENE 的 `version` / `units` / `up` / `lights` / `receivers` / `camera` / `output` 與未知鍵逐字照抄（檔案裡的相機、光源此時不用）；id 與既有物件重複時加 `_2`、`_3`… |
-| `--id ID` | 物件 id，預設為檔名主幹（`[A-Za-z0-9_-]` 以外的字元換成 `_`）；glTF 只在匯入結果恰好一個物件時可用（用 `--node` 選一個） |
+| `--into SCENE` | 把匯入的物件**附加**到 SCENE 原本的 `objects` 之後，SCENE 的 `version` / `units` / `up` / `lights` / `receivers` / `camera` / `output` 與未知鍵逐字照抄（檔案裡的相機、光源此時不用）；SCENE 自己的網格物件若用相對 `path`，而 OUT 不在 SCENE 所在目錄，路徑改寫成相對於 OUT 所在目錄（stdout 時為目前目錄），寫出的場景因此一定能重新載入；匯入物件的 id 與 `ground` 或 SCENE 既有的物件／接收面 id 重複時加 `_2`、`_3`… |
+| `--id ID` | 物件 id，預設為檔名主幹（`[A-Za-z0-9_-]` 以外的字元換成 `_`）；glTF 只在匯入結果恰好一個物件時可用（用 `--node` 選一個）；與 `ground` 或 SCENE 既有的 id 重複時是錯誤（結束碼 2），不會自動改名 |
 | `--inline` | 把幾何以 `data` 內嵌進場景，而不是寫 `path` |
 | `--node NAME\|INDEX` | 只匯入一個 glTF 節點（及其子樹）或一個 OBJ 的 `o` / `g` 名稱；全為數字時視為索引 |
 | `--camera NAME` / `--light NAME` | glTF：用這個節點的相機／只保留這盞光 |

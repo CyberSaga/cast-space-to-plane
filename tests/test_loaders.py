@@ -415,6 +415,42 @@ def test_expand_scene_parses_each_file_once_per_call(monkeypatch):
     assert len(calls) == 2                                                           # no cache across calls
 
 
+def test_expand_scene_reads_each_trimesh_file_once_per_call(monkeypatch):
+    calls = []
+    real = cio.trimesh_adapter.load_trimesh
+    monkeypatch.setattr(cio.trimesh_adapter, "load_trimesh", lambda p, n=None: calls.append(p) or real(p, n))
+    pytest.importorskip("trimesh")
+    scene = {"objects": [{"id": f"m{i}", "type": "mesh", "path": "box.stl"} for i in range(3)]}
+    out, _ = expand_scene(scene, FIX)
+    assert len(calls) == 1 and out["objects"][0]["data"] == out["objects"][2]["data"]
+    out["objects"][0]["data"]["faces"].clear()                                       # copies, not one shared dict
+    assert out["objects"][1]["data"]["faces"]
+    expand_scene(scene, FIX)
+    assert len(calls) == 2
+
+
+def test_obj_with_a_utf8_bom_keeps_its_first_vertex(tmp_path):
+    p = tmp_path / "bom.obj"
+    p.write_bytes(b"\xef\xbb\xbfv 0 0 0\nv 1 0 0\nv 0 1 0\nf 1 2 3\n")
+    assert load_mesh_file(p) == {"vertices": [[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0]],
+                                 "faces": [[0, 1, 2]], "smooth_groups": [0]}
+
+
+def test_load_obj_and_load_gltf_match_load_mesh_file():
+    assert O.load_obj(FIX / "features.obj", "crate") == load_mesh_file(FIX / "features.obj", "crate")
+    parsed = O.read_obj(FIX / "box_split.obj")
+    assert O.load_obj("unused.obj", parsed=parsed) == load_mesh_file(FIX / "box_split.obj")
+    assert G.load_gltf(FIX / "box.glb") == load_mesh_file(FIX / "box.glb")
+    parsed = G.read_gltf(FIX / "box.gltf")
+    assert G.load_gltf("unused.gltf", parsed=parsed) == load_mesh_file(FIX / "box.gltf")
+
+
+def test_castplane_io_is_reachable_after_a_plain_import():
+    code = "import castplane; print(castplane.io.load_expanded_scene is not None)"
+    out = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, cwd=ROOT, check=True)
+    assert out.stdout.strip() == "True"
+
+
 def test_up_y_obj_expands_to_the_z_up_box():
     a, _ = load_expanded_scene(mesh_scene(FIX / "box_split.obj"))
     b, _ = load_expanded_scene(mesh_scene(FIX / "box_split_y.obj", up="y"))
@@ -591,6 +627,21 @@ def test_import_extras_primitive_scale_and_errors(tmp_path):
     with pytest.raises(SceneError) as info:
         G.import_gltf_scene(write_gltf(tmp_path, gltf_doc([TRI], nodes)))
     assert info.value.field == "nodes[0].matrix"
+    # invalid extras parameters are reported at their glTF JSON path, with and without a camera in the file
+    for scale in (None, [2.0, 2.0, 2.0]):
+        bad = [{"name": "b", "extras": {"castplane": {"type": "box", "size": [1.0, -1.0, 1.0]}}}, {"mesh": 0}]
+        if scale:
+            bad[0]["scale"] = scale
+        for cam in (False, True):
+            extra = {"cameras": [{"type": "perspective", "perspective": {"yfov": 0.6}}]} if cam else None
+            nodes_b = bad + ([{"camera": 0, "translation": [0.0, 1.0, 8.0]}] if cam else [])
+            with pytest.raises(SceneError) as info:
+                G.import_gltf_scene(write_gltf(tmp_path, gltf_doc([TRI], nodes_b, extra=extra), "bad.gltf"))
+            assert info.value.field == "nodes[0].extras.castplane.size[1]"
+    bad = [{"name": "b", "scale": [2.5, 2.5, 2.5], "extras": {"castplane": {"type": "box", "size": ["a", 1, 1]}}}]
+    with pytest.raises(SceneError) as info:
+        G.import_gltf_scene(write_gltf(tmp_path, gltf_doc([TRI], bad + [{"mesh": 0}]), "bad.gltf"))
+    assert info.value.field == "nodes[0].extras.castplane.size[0]"
     # a tilted cylinder: Z up = node local +Y, rotation via euler_zyx(A·R·A^T)
     s, c = math.sin(math.radians(10.0)), math.cos(math.radians(10.0))
     nodes = [{"name": "p", "rotation": [s, 0.0, 0.0, c], "extras": {"castplane": {"type": "cylinder", "radius": 0.2,
@@ -671,9 +722,13 @@ def test_cli_import_mesh_options(tmp_path):
     assert code == EXIT_OK and scene["objects"][0]["node"] == "walls"
 
 
-def test_cli_import_into_appends_and_copies_blocks_verbatim(tmp_path):
+def test_cli_import_into_appends_and_copies_blocks_verbatim(tmp_path, capsys):
     into = EXAMPLES / "basic.json"
+    # an explicit --id that is already an object id of SCENE is refused (never silently renamed)
     code, scene = run_import(tmp_path, FIX / "box_split.obj", "--into", into, "--id", "crate")
+    assert code == EXIT_INPUT and scene is None and "error: --id:" in capsys.readouterr().err
+    (tmp_path / "crate.obj").write_bytes((FIX / "box_split.obj").read_bytes())
+    code, scene = run_import(tmp_path, tmp_path / "crate.obj", "--into", into)
     assert code == EXIT_OK
     raw = json.loads(into.read_text(encoding="utf-8"))
     for key in ("version", "units", "up", "lights", "receivers", "camera", "output"):
@@ -683,6 +738,41 @@ def test_cli_import_into_appends_and_copies_blocks_verbatim(tmp_path):
     assert scene["objects"][2]["id"] == "crate_2"                     # deduplicated against the existing ids
     assert scene["meta"] == {"import_notes": []}
     assert main(["validate", str(tmp_path / "scene.json"), "-q"]) == EXIT_OK
+
+
+def test_cli_import_into_elsewhere_rebases_scene_mesh_paths(tmp_path):
+    into = EXAMPLES / "mesh_demo.json"
+    raw = json.loads(into.read_text(encoding="utf-8"))
+    (tmp_path / "sub").mkdir()
+    code, scene = run_import(tmp_path, FIX / "box.glb", "--into", into, "-q", out="sub/x.json")
+    assert code == EXIT_OK
+    for mine, theirs in zip(scene["objects"], raw["objects"]):
+        if theirs.get("type") == "mesh" and "path" in theirs:
+            assert mine["path"] == os.path.relpath(EXAMPLES / theirs["path"], tmp_path / "sub").replace(os.sep, "/")
+            assert {k: v for k, v in mine.items() if k != "path"} == {k: v for k, v in theirs.items() if k != "path"}
+        else:
+            assert mine == theirs
+    assert main(["validate", str(tmp_path / "sub" / "x.json"), "-q"]) == EXIT_OK
+    # written next to SCENE, the paths stay verbatim
+    out = tmp_path / "copy"
+    out.mkdir()
+    (out / "scene.json").write_text(into.read_text(encoding="utf-8"), encoding="utf-8")
+    (out / "meshes").mkdir()
+    (out / "meshes" / "house.obj").write_bytes((EXAMPLES / "meshes" / "house.obj").read_bytes())
+    assert main(["import", str(FIX / "box.glb"), "--into", str(out / "scene.json"), "-o", str(out / "y.json"),
+                 "-q"]) == EXIT_OK
+    written = json.loads((out / "y.json").read_text(encoding="utf-8"))
+    assert written["objects"][:len(raw["objects"])] == raw["objects"]
+    assert main(["validate", str(out / "y.json"), "-q"]) == EXIT_OK
+
+
+def test_cli_import_ids_avoid_the_ground_receiver(tmp_path, capsys):
+    (tmp_path / "ground.obj").write_bytes((FIX / "box_split.obj").read_bytes())
+    code, scene = run_import(tmp_path, tmp_path / "ground.obj", "-q")
+    assert code == EXIT_OK and [o["id"] for o in scene["objects"]] == ["ground_2"]
+    assert [r["id"] for r in scene["receivers"]] == ["ground"]
+    code, scene = run_import(tmp_path, FIX / "box_split.obj", "--id", "ground", out="g.json")
+    assert code == EXIT_INPUT and scene is None and "error: --id:" in capsys.readouterr().err
 
 
 def test_cli_import_stdout_without_output(tmp_path, capsys, monkeypatch):
@@ -704,6 +794,14 @@ def test_cli_import_exit_codes(tmp_path, capsys):
     assert "error: nodes[0].skin:" in capsys.readouterr().err
     (tmp_path / "part.step").write_text("ISO-10303-21;\n")
     assert main(["import", str(tmp_path / "part.step"), "-o", str(tmp_path / "s.json")]) == EXIT_INPUT
+    # a glTF without any triangle (points / lines only; no camera) is a SceneError, not a traceback
+    lines = write_gltf(tmp_path, gltf_doc([TRI], [{"mesh": 0, "name": "m"}], mode=1), "lines.gltf")
+    capsys.readouterr()
+    assert main(["import", lines, "-o", str(tmp_path / "s.json")]) == EXIT_INPUT
+    assert "error: meshes: the file holds no triangle" in capsys.readouterr().err
+    with pytest.raises(SceneError) as info:
+        G.import_gltf_scene(lines)
+    assert info.value.field == "meshes"
     with pytest.raises(SystemExit) as info:
         main(["import", str(FIX / "box_split.obj"), "--up", "x"])
     assert info.value.code == 2

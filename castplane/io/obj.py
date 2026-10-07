@@ -154,7 +154,8 @@ def load_obj(path, node=None, parsed=None) -> dict:
 
 
 def read_obj(path) -> dict:
-    """:func:`parse_obj` of a file (UTF-8; undecodable bytes are replaced, they only occur in names)."""
-    with open(path, "r", encoding="utf-8", errors="replace") as fh:
+    """:func:`parse_obj` of a file (UTF-8, a leading byte-order mark skipped; undecodable bytes are
+    replaced, they only occur in names)."""
+    with open(path, "r", encoding="utf-8-sig", errors="replace") as fh:
         return parse_obj(fh.read())
 

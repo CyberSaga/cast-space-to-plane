@@ -1897,7 +1897,9 @@ unordered world pairs with equal `silhouette` / `back` flags and `segment` endpo
   emits one mesh object for that selection (the given value; all digits = index); `--id` renames the object only when
   the import yields exactly one object (else a usage `SceneError("--id")`). (4) Ids: empty names → `node<k>` /
   `light<k>` with `k` the **node** index; `sun` is the id of the default light; object ids are de-duplicated against
-  the receiver id `ground` (and, with `--into`, against the scene's object ids); the reserved ids of §5.0.1 are applied
+  the receiver id `ground` (and, with `--into`, against the scene's object and receiver ids; `castplane import`
+  applies this to every format, OBJ / STL / PLY included, and an explicit `--id` that collides is a usage
+  `SceneError("--id")` instead of being renamed); the reserved ids of §5.0.1 are applied
   to objects as well (`hidden` → `hidden_object`, `core` → `core_object` when the output has ≥ 2 lights). (5) The
   uniform scale `s` of an `extras.castplane` node is the mean column norm of its world matrix, taken as exactly 1 when
   `|s − 1| ≤ 1e-12`, so an unscaled node keeps its parameters verbatim (a rotation's column norms are 1 ± 1 ulp).
@@ -1910,8 +1912,17 @@ unordered world pairs with equal `silhouette` / `back` flags and `segment` endpo
   to `import_gltf_scene`.
 - **[decision, implementation] (M5 part 2) `castplane import` details.** The validation check runs on the assembled
   scene with the imported meshes' `data` filled in and, with `--into`, the SCENE's own objects expanded relative to the
-  SCENE's directory; the written raw scene copies the SCENE's objects verbatim (their relative paths stay relative to
-  the SCENE's directory, so the output should be written next to it). An OBJ selection (`node`) drops the unused
+  SCENE's directory; the written raw scene copies the SCENE's objects verbatim except that, when the output's
+  directory (the current directory for stdout) is not the SCENE's directory, a relative `path` of a SCENE object whose
+  type has an expander (`mesh`; M8: `step`) is rewritten as the POSIX path of the same file relative to the output's
+  directory, so that the written scene re-loads from where it is written (the check above resolves exactly these
+  files). A glTF that yields no object (only points / lines, or no mesh node) is `SceneError("meshes", "the file holds
+  no triangle")`, the message of the loader. `extras.castplane` parameters are validated as written, before the node
+  scale, with the field prefix `nodes[k].extras.castplane` (so a bad size reads `nodes[0].extras.castplane.size[1]`).
+  OBJ files are read as `utf-8-sig` (a leading byte-order mark is skipped). Within one `expand_scene` call a
+  trimesh-read file (STL / PLY) is read once like OBJ / glTF files (it takes no `node`, so its raw mesh is cached and
+  deep-copied per object). `castplane/__init__.py` imports `io` so that `castplane.io` is reachable after a plain
+  `import castplane` (§5.0.7); `io` is not in `castplane.__all__` (a star import would shadow the stdlib `io`). An OBJ selection (`node`) drops the unused
   vertices (file order kept); a `.step` / `.stp` FILE is a usage `SceneError` until M8 registers its loader. Conformance:
   the three mesh cases were generated on this pre-M4 branch with `--case`, so their CHANGELOG entry is numbered v4
   here and carries a note that it becomes the M5 v5 entry at the merge (§5.0.8 rule 1).
