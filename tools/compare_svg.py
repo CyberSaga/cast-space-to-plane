@@ -17,7 +17,9 @@ genuine 1e-4 drift included -- is a mismatch.
 This is not a CI gate (the CI gates are the JSON conformance set and the structural SVG tests of
 ``ts/test/svg.test.ts``).  A scene the port cannot render (``render.mjs`` writes ``<name>.error``: a SceneError, or
 a phase-2 part of the port that has not landed yet) is reported as a ``TS render failed`` row and counted
-separately; the other scenes are still compared.  Exit status: 0 when the outputs are identical or differ only at
+separately; the other scenes are still compared.  A scene that references a mesh file (``objects[i].path``) is
+expanded by ``castplane.io.expand_scene`` first and the port renders the expanded scene (the core has no loader,
+contract §5.4.0 / §5.2.9).  Exit status: 0 when the outputs are identical or differ only at
 rounding boundaries, 1 on any other difference or a failed TS render, 2 when node or the built port is unavailable.
 """
 
@@ -25,6 +27,8 @@ from __future__ import annotations
 
 import argparse
 import decimal
+import json
+import os
 import pathlib
 import re
 import shutil
@@ -39,7 +43,8 @@ sys.path.insert(0, str(ROOT))
 
 import castplane  # noqa: E402
 import castplane.output.svg as _svg  # noqa: E402
-from castplane.scene import load_scene  # noqa: E402
+from castplane.io import expand_scene, load_expanded_scene  # noqa: E402
+from castplane.scene import read_json  # noqa: E402
 
 RENDER = ROOT / "ts" / "scripts" / "render.mjs"
 NUMBER = re.compile(r"-?\d+(?:\.\d+)?")
@@ -132,10 +137,22 @@ def main(argv: list[str] | None = None) -> int:
             batches.append([i])
     with tempfile.TemporaryDirectory() as tmp:
         outdir: list[pathlib.Path] = [pathlib.Path(tmp)] * len(scenes)
+        # the port reads expanded scenes only: a scene with a mesh `path` is expanded here (same stem, own directory)
+        inputs: list[pathlib.Path] = []
+        for i, path in enumerate(scenes):
+            raw = read_json(path)
+            if isinstance(raw, dict) and any(isinstance(o, dict) and "path" in o for o in raw.get("objects") or []):
+                expanded, _notes = expand_scene(raw, os.path.dirname(os.path.abspath(path)))
+                src = pathlib.Path(tmp) / "expanded" / str(i) / path.name
+                src.parent.mkdir(parents=True)
+                src.write_text(json.dumps(expanded, ensure_ascii=False), encoding="utf-8")
+                inputs.append(src)
+            else:
+                inputs.append(path)
         stderr = []
         for k, batch in enumerate(batches):
             out = pathlib.Path(tmp) / str(k)
-            run = subprocess.run([node, str(RENDER), *(str(scenes[j]) for j in batch), str(out)], capture_output=True, text=True, check=False)
+            run = subprocess.run([node, str(RENDER), *(str(inputs[j]) for j in batch), str(out)], capture_output=True, text=True, check=False)
             if run.returncode not in (0, 1):
                 print(run.stderr, file=sys.stderr)
                 return 2
@@ -152,7 +169,7 @@ def main(argv: list[str] | None = None) -> int:
             if not svg_file.exists():
                 print("".join(stderr), file=sys.stderr)
                 return 2
-            scene = load_scene(path)
+            scene, _notes = load_expanded_scene(path)
             py = castplane.render(scene)["svg"]
             ts = svg_file.read_text(encoding="utf-8")
             b, m = compare(path.stem, py, ts, unrounded_svg(scene) if py != ts else None)

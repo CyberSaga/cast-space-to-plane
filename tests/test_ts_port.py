@@ -199,24 +199,55 @@ def test_ts_suite_passes(built_port):
 @needs_node
 def test_ts_render_equals_the_reference_on_the_examples(built_port, tmp_path):
     """``node ts/scripts/render.mjs``: the port's SVG of every example is the Python writer's text byte for byte
-    (§5.4.6) and its JSON document passes the conformance comparator against the Python document (§5.4.8)."""
+    (§5.4.6) and its JSON document passes the conformance comparator against the Python document (§5.4.8).  An
+    example that references a mesh file is rendered by the port from its Python expansion
+    (``ts/test/fixtures/<stem>.expanded.json``, :func:`test_expanded_example_fixtures_are_current`): the core has no
+    loader (§5.4.0, §5.2.9)."""
+    from castplane.io import load_expanded_scene
     from castplane.output import geometry_json
 
     examples = sorted((ROOT / "examples").glob("*.json"))
     # M7 phase 2 (contract §5.4.0): the examples whose geometry belongs to a phase-2 part that has not landed yet
     # (hidden lines, meshes, N >= 2); each part shrinks this list, the final part leaves it empty
-    todo = {"mesh_demo.json", "two_lights.json"}
+    todo = {"two_lights.json"}
     assert todo <= {p.name for p in examples}
     examples = [p for p in examples if p.name not in todo]
-    assert len(examples) == 6
-    proc = subprocess.run([NODE, str(TS / "scripts" / "render.mjs"), *map(str, examples), str(tmp_path)],
+    assert len(examples) == 7
+    inputs = [EXPANDED.get(p.name, p) for p in examples]
+    proc = subprocess.run([NODE, str(TS / "scripts" / "render.mjs"), *map(str, inputs), str(tmp_path)],
                           capture_output=True, text=True, timeout=300)
     assert proc.returncode == 0, proc.stderr[-2000:]
-    for path in examples:
-        ref = castplane.render(castplane.load_scene(path))
-        assert (tmp_path / f"{path.stem}.svg").read_text(encoding="utf-8") == ref["svg"], path.name
-        port_doc = json.loads((tmp_path / f"{path.stem}.json").read_text(encoding="utf-8"))
+    for path, src in zip(examples, inputs):
+        stem = src.name[:-len(".json")]
+        ref = castplane.render(load_expanded_scene(path)[0])
+        assert (tmp_path / f"{stem}.svg").read_text(encoding="utf-8") == ref["svg"], path.name
+        port_doc = json.loads((tmp_path / f"{stem}.json").read_text(encoding="utf-8"))
         assert tc.compare_documents(json.loads(geometry_json.dumps(ref["geometry"])), port_doc) == [], path.name
+
+
+#: Examples that reference a mesh file, and the Python expansion the port's tests read instead (§5.4.0: no loader in
+#: the core; ``ts/test/helpers.ts::read_example``).
+EXPANDED = {"mesh_demo.json": TS / "test" / "fixtures" / "mesh_demo.expanded.json"}
+
+
+@needs_ts
+def test_expanded_example_fixtures_are_current():
+    """Every example with a loader-level object (a mesh ``path``) has its committed expansion, equal to
+    ``castplane.io.expand_scene`` of the example now (regenerate with ``json.dumps(scene, indent=1,
+    sort_keys=True, ensure_ascii=False)`` and a newline), and nothing else has one."""
+    from castplane.io import expand_scene
+    from castplane.scene import read_json
+
+    with_paths = {p.name for p in (ROOT / "examples").glob("*.json")
+                  if any(isinstance(o, dict) and "path" in o for o in read_json(p).get("objects", []))}
+    assert with_paths == set(EXPANDED)
+    assert {p.name for p in (TS / "test" / "fixtures").glob("*.expanded.json")} == {p.name for p in EXPANDED.values()}
+    for name, fixture in EXPANDED.items():
+        example = ROOT / "examples" / name
+        expanded, notes = expand_scene(read_json(example), str(example.parent))
+        assert notes == []
+        assert fixture.read_text(encoding="utf-8") == json.dumps(expanded, indent=1, sort_keys=True,
+                                                                 ensure_ascii=False) + "\n", name
 
 
 @needs_node

@@ -44,10 +44,11 @@ export {
 } from "./shadow.js";
 export {
   CURVED_SEGMENTS, SPHERE_RINGS, box_mesh, cone_mesh, cylinder_mesh, euler_characteristic, face_normals_newell, mesh_bbox,
-  mesh_from_faces, prism_mesh, sphere_mesh, transform_mesh,
+  mesh_from_faces, prism_mesh, sphere_mesh, transform_mesh, triangulate_faces,
 } from "./mesh.js";
 export type { Mesh } from "./mesh.js";
-export { CURVED_TYPES, analytic_record, build_object, face_tables, local_mesh, point_inside_solid } from "./primitives.js";
+export { CURVED_TYPES, analytic_record, build_object, face_tables, local_mesh, point_inside_solid, prepared_mesh } from "./primitives.js";
+export type { ObjectRecord, PreparedMesh } from "./primitives.js";
 export {
   LINE_PARALLEL_REL, LINE_ZERO_REL, RAY_EXTENSION, clip_segments_uv, coincidence_check, covering_segments, extended_segments,
   self_check, special_point_image,
@@ -56,4 +57,5 @@ export * as conics from "./conics.js";
 export * as curved from "./curved.js";
 export * as multilight from "./multilight.js";
 export * as hidden from "./hidden.js";
+export * as meshprep from "./meshprep.js";
 export { TOL_DIR, ZERO_REL, cross3, join, meet, normalize_max, row_max_abs, scene_scale, to_homogeneous, tolerance } from "./homogeneous.js";

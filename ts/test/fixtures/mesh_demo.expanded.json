@@ -1,0 +1,208 @@
+{
+ "camera": {
+  "focal_length_mm": 35,
+  "frame_mm": [
+   36,
+   24
+  ],
+  "near_m": 0.05,
+  "position": [
+   2.6,
+   -5.4,
+   2.3
+  ],
+  "roll_deg": 0,
+  "shift_mm": [
+   0.0,
+   0.0
+  ],
+  "target": [
+   0.3,
+   0.2,
+   0.55
+  ]
+ },
+ "description": "M5 mesh import: a house read from meshes/house.obj (box body + gable roof, 7 faces incl. two pentagons) next to a cylinder, under a point lamp; render with 'castplane render examples/mesh_demo.json -o out' (the path is relative to this file)",
+ "lights": [
+  {
+   "id": "lamp",
+   "position": [
+    -1.6,
+    -1.2,
+    3.2
+   ],
+   "type": "point"
+  }
+ ],
+ "objects": [
+  {
+   "data": {
+    "faces": [
+     [
+      0,
+      3,
+      2,
+      1
+     ],
+     [
+      0,
+      1,
+      5,
+      4
+     ],
+     [
+      2,
+      3,
+      7,
+      6
+     ],
+     [
+      1,
+      2,
+      6,
+      9,
+      5
+     ],
+     [
+      3,
+      0,
+      4,
+      8,
+      7
+     ],
+     [
+      4,
+      5,
+      9,
+      8
+     ],
+     [
+      6,
+      7,
+      8,
+      9
+     ]
+    ],
+    "smooth_groups": [
+     0,
+     0,
+     0,
+     0,
+     0,
+     0,
+     0
+    ],
+    "vertices": [
+     [
+      -0.6,
+      -0.45,
+      0.0
+     ],
+     [
+      0.6,
+      -0.45,
+      0.0
+     ],
+     [
+      0.6,
+      0.45,
+      0.0
+     ],
+     [
+      -0.6,
+      0.45,
+      0.0
+     ],
+     [
+      -0.6,
+      -0.45,
+      0.8
+     ],
+     [
+      0.6,
+      -0.45,
+      0.8
+     ],
+     [
+      0.6,
+      0.45,
+      0.8
+     ],
+     [
+      -0.6,
+      0.45,
+      0.8
+     ],
+     [
+      -0.6,
+      0.0,
+      1.3
+     ],
+     [
+      0.6,
+      0.0,
+      1.3
+     ]
+    ]
+   },
+   "id": "house",
+   "path": "meshes/house.obj",
+   "transform": {
+    "position": [
+     0.0,
+     0.0,
+     0.0
+    ],
+    "rotation_deg": [
+     0,
+     0,
+     -25
+    ]
+   },
+   "type": "mesh"
+  },
+  {
+   "height": 0.9,
+   "id": "tank",
+   "radius": 0.25,
+   "transform": {
+    "position": [
+     1.4,
+     0.6,
+     0.0
+    ]
+   },
+   "type": "cylinder"
+  }
+ ],
+ "output": {
+  "canvas_mm": [
+   273,
+   182
+  ],
+  "layers": [
+   "horizon",
+   "objects",
+   "form_shadow",
+   "cast_shadow",
+   "construction",
+   "labels"
+  ],
+  "png_dpi": 150
+ },
+ "receivers": [
+  {
+   "id": "ground",
+   "normal": [
+    0,
+    0,
+    1
+   ],
+   "offset": 0.0,
+   "type": "plane"
+  }
+ ],
+ "units": "m",
+ "up": "z",
+ "version": "0.1"
+}

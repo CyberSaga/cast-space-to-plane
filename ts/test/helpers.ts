@@ -1,7 +1,7 @@
 /** Node-only test helpers (contract §5.4.1): repository paths, JSON reading, the geometry file writer and the
  * explicit camera override of §5.4.7. */
 
-import { readFileSync, readdirSync, writeFileSync } from "node:fs";
+import { existsSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -22,6 +22,17 @@ export function read_text(path: string): string {
 
 export function read_json(path: string): any {
   return JSON.parse(readFileSync(path, "utf-8"));
+}
+
+/**
+ * An example scene as the port reads it: `examples/<file>`, or — for an example that references a mesh file (the
+ * core has no loader, contract §5.4.0 / §5.2.9) — its expansion by the Python reference
+ * (`castplane.io.expand_scene`), committed as `ts/test/fixtures/<stem>.expanded.json` and kept equal to the current
+ * expansion by `tests/test_ts_port.py`.
+ */
+export function read_example(file: string): any {
+  const fixture = repo_path("ts", "test", "fixtures", `${file.replace(/\.json$/, "")}.expanded.json`);
+  return read_json(existsSync(fixture) ? fixture : repo_path("examples", file));
 }
 
 /** Sorted `*.json` stems of a directory. */
