@@ -168,8 +168,7 @@ def cmd_info(args) -> int:
     hz, con = doc["horizon"], doc["construction"]
     print(f"scene: {args.scene}")
     print(f"objects: {len(scene['objects'])} ({', '.join(o['id'] + ':' + o['type'] for o in scene['objects'])})")
-    lt = scene["lights"][0]
-    print(f"light: {lt['id']} ({lt['type']})")
+    _print_lights(scene, doc)
     print(f"canvas_mm: {doc['canvas_mm']}")
     print(f"principal point: {_fmt_point(doc['camera']['principal_point'])}")
     v_mm = hz["v_mm"]
@@ -196,6 +195,19 @@ def cmd_info(args) -> int:
     _print_receivers(doc)
     print(warning_table(doc["warnings"]))
     return EXIT_OK
+
+
+def _print_lights(scene: dict, doc: dict) -> None:
+    """``info``: every light (contract §5.3.9, §5.0.7): id, type, position / direction and whether it is
+    active on each receiver (``receivers[r].lit``), scene order (M6)."""
+    lights = scene["lights"]
+    print(f"lights: {len(lights)}")
+    for lt in lights:
+        vec = lt["position"] if lt["type"] == "point" else lt["direction"]
+        where = ("position (" if lt["type"] == "point" else "direction (") + ", ".join(f"{float(c):g}" for c in vec) + ")"
+        active = ", ".join(f"{r['id']}={'yes' if r['lit'].get(lt['id'], False) else 'no'}"
+                           for r in doc.get("receivers", [])) or "-"
+        print(f"  {lt['id']} ({lt['type']}): {where}; active: {active}")
 
 
 def _print_receivers(doc: dict) -> None:
