@@ -818,3 +818,40 @@ def test_step_import_is_not_slow():
                 pass
             times.append(time.perf_counter() - t0)
         assert min(times) < 0.5, name
+
+
+def test_fixture_generator_is_in_sync():
+    """``tools/make_step_fixtures.py --check`` regenerates the set byte-identically (needs OCP; the
+    committed bytes are those of cadquery-ocp 8.0.1.1.0, so another OCC build may legitimately differ)."""
+    pytest.importorskip("OCP")
+    import importlib.metadata
+    import subprocess
+    import sys
+
+    try:
+        version = importlib.metadata.version("cadquery-ocp")
+    except importlib.metadata.PackageNotFoundError:
+        version = None
+    if version != "8.0.1.1.0":
+        pytest.skip(f"fixtures were written by cadquery-ocp 8.0.1.1.0, found {version}")
+
+    proc = subprocess.run([sys.executable, str(ROOT / "tools" / "make_step_fixtures.py"), "--check"],
+                          cwd=ROOT, capture_output=True, text=True, timeout=300)
+    assert proc.returncode == 0, proc.stderr[-2000:]
+
+
+def test_axis_aligned_occ_box_is_exact(tmp_path):
+    """Contract §5.5.5: an axis-aligned OCC box expands to ``rotation_deg [0, 0, 0]`` and the exact size."""
+    pytest.importorskip("OCP")
+    import importlib.util
+
+    spec = importlib.util.spec_from_file_location("make_step_fixtures", ROOT / "tools" / "make_step_fixtures.py")
+    gen = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(gen)
+    from OCP.BRepPrimAPI import BRepPrimAPI_MakeBox
+    from OCP.gp import gp_Pnt
+
+    gen.write_step(BRepPrimAPI_MakeBox(gp_Pnt(-500, -400, 0), 1000, 800, 600).Shape(), tmp_path / "b.step")
+    (obj,) = import_step(tmp_path / "b.step")["objects"]
+    assert obj == {"id": "b", "type": "box", "size": [1.0, 0.8, 0.6],
+                   "transform": {"position": [0.0, 0.0, 0.0], "rotation_deg": [0.0, 0.0, 0.0]}}
