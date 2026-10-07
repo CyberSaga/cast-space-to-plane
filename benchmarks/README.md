@@ -192,3 +192,43 @@ over the repetitions, the median in brackets.
 The deltas (full render +1 to +4 %, the other rows −2 to +1 %) are inside the container's run-to-run
 drift; the full-render gate passes 6/6. The `--scene mesh10k` rows (stage A including the weld, and
 the full render) come with PLAN-v2 M5 step 8 (part 2), which adds the scene to `bench.py`.
+
+## M5 part 2 (2026-10-07): `--scene mesh10k` and the features-off re-check
+
+`python3 benchmarks/bench.py --scene mesh10k -n 5 --gate none` measures one `mesh` object of
+10 000 triangles given as **unwelded** triangles (30 000 vertices, `bench.mesh10k_scene()`: a torus
+with a wavy tube lying on the ground, one point light), so stage A includes the weld and the rest of
+the mesh preprocessing of contract §5.2.3 (weld → degenerate faces → adjacency / manifold /
+orientation → coplanar merge → edge classification). The weld joins the corners back to 5000
+vertices; the document has 14 510 edges (5480 named points), SVG 603 kB, JSON 5.6 MB, `warnings []`.
+No target is attached to this scene (contract §5.2.7: no gate in M5). Three consecutive runs on the
+container (minimum over the repetitions, the median in brackets):
+
+| path | run 1 | run 2 | run 3 |
+| --- | --- | --- | --- |
+| full render (A+B+C+SVG+JSON) | 222 ms (251) | 249 ms (255) | 231 ms (279) |
+| stage A only (incl. the weld and the preprocessing) | 133 ms (149) | 122 ms (125) | 118 ms (145) |
+| mesh preprocessing only (`preprocess_mesh`) | 114 ms (123) | 103 ms (110) | 94 ms (139) |
+| camera-only re-render (B+C+SVG, informational) | 36 ms (40) | 36 ms (41) | 43 ms (49) |
+| SVG writer only | 12 ms | 11 ms | 10 ms |
+| JSON dumps only | 54 ms | 51 ms | 43 ms |
+
+The weld itself (`meshprep.weld_vertices` on the 30 000 corners, the O(27·n) cell rule of §5.2.3
+step 2 with its result-identical fast path) takes 11–12 ms of that; most of the preprocessing is
+the adjacency / orientation pass and the coplanar merge, which are per-face Python loops. The
+importers (`castplane/io/`, part 2) run before validation and are not on any benchmark path.
+
+Features-off re-check after part 2 (`python3 benchmarks/bench.py -n 5 --gate full`, the committed
+`scenes/benchmark_100.json`, three consecutive runs): part 2 changes no core module (the loaders,
+`castplane import` and the CLI's `load_expanded_scene` are outside `bench.py`'s timed paths), and the
+document is unchanged (100 primitives, 10 726 mesh edges, 9030 drawn edges, 15 171 named points,
+`warnings []`). This container ran faster today than in the part 1 table above, so only the
+interleaved part 1 runs are a before / after comparison; these rows are the current reading:
+
+| path | run 1 | run 2 | run 3 | target | status |
+| --- | --- | --- | --- | --- | --- |
+| full render | 329 ms (372) | 328 ms (391) | 383 ms (420) | < 1 s | **PASS** (3/3, the CI gate) |
+| camera-only re-render | 100 ms (122) | 100 ms (102) | 94 ms (123) | < 100 ms | informational (D17; the median stays above the target) |
+| stage A only | 85 ms | 86 ms | 80 ms | – | – |
+| SVG writer only | 32 ms | 33 ms | 34 ms | – | – |
+| JSON dumps only | 127 ms | 125 ms | 137 ms | – | – |

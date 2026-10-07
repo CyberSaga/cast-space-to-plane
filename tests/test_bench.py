@@ -349,3 +349,25 @@ def test_bench_readme_records_the_m4_rows():
     assert "--hidden-lines" in section and "full render, hidden lines on" in section
     assert "before M4" in section and "after M4" in section and "JSON bytes" in section
     assert "--gate full" in section
+
+
+# M5: the --scene mesh10k benchmark (contract §5.2.7, §5.0.9)
+# ---------------------------------------------------------------------------
+
+def test_mesh10k_scene_is_10000_unwelded_triangles_that_weld_to_a_closed_torus():
+    from castplane.primitives import prepared_mesh
+
+    raw = bench.mesh10k_scene()
+    (obj,) = raw["objects"]
+    assert len(obj["data"]["faces"]) == 10000 and len(obj["data"]["vertices"]) == 30000
+    assert bench.mesh10k_scene() == raw                                   # deterministic
+    prep = prepared_mesh(load_scene(raw)["objects"][0])
+    assert prep["fallback"] is False and prep["warnings"] == []
+    assert prep["mesh"]["vertices"].shape[0] == 5000                     # the weld joins the 30 000 corners
+
+
+def test_bench_mesh10k_reports_the_mesh_preprocessing_row(capsys):
+    status = bench.main(["--scene", "mesh10k", "-n", "1", "--json", "--gate", "none"])
+    out = json.loads(capsys.readouterr().out)
+    assert status == 0 and out["scene"] == "mesh10k" and out["objects"] == 1 and out["warnings"] == []
+    assert out["mesh_preprocessing_s"]["min"] > 0.0 and out["stage_a_s"]["min"] > 0.0
