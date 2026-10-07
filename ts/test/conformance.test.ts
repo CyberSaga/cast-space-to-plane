@@ -9,7 +9,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
-import { cmp_code_points, dumps } from "../src/output/geometry_json.js";
+import { INT_KEYS, cmp_code_points, dumps } from "../src/output/geometry_json.js";
 import { render } from "../src/pipeline.js";
 import { load_scene } from "../src/scene.js";
 import { json_stems, read_json, repo_path } from "./helpers.js";
@@ -28,7 +28,7 @@ export interface Rules {
   int_keys: string[];
   max_reported: number;
   case_overrides: Record<string, { paths: string[][]; abs_tol: number; reason: string }[]>;
-  runs_rule?: unknown;
+  runs_rule: { mm_abs: number; param_abs: number; param_keys: string[]; exact_keys: string[] };
 }
 
 export const RULES: Rules = read_json(`${CONFORMANCE}/rules.json`);
@@ -60,6 +60,22 @@ export function case_overrides(case_name: string | null, rules: Rules = RULES): 
 
 function override_tol(path: readonly Key[], overrides: readonly Override[]): number | null {
   for (const [paths, abs_tol] of overrides) if (paths.some((p) => path_has_prefix(path, p))) return abs_tol;
+  return null;
+}
+
+/** The absolute tolerance of the number at `path` when it lies inside a `runs` list entry (`rules.json["runs_rule"]`,
+ * contract §5.0.8): `mm_abs` below `mm`, `param_abs` below a `param_keys` key, `0` (exact) below an `exact_keys` key;
+ * `null` outside runs (default rules). Literal port of `tests/test_conformance.py::runs_tol`. */
+export function runs_tol(path: readonly Key[], rules: Rules = RULES): number | null {
+  for (let i = path.length - 3; i >= 0; i--) {
+    if (path[i] === "runs" && typeof path[i + 1] === "number") {
+      const key = path[i + 2];
+      if (key === "mm") return rules.runs_rule.mm_abs;
+      if (typeof key === "string" && rules.runs_rule.param_keys.includes(key)) return rules.runs_rule.param_abs;
+      if (typeof key === "string" && rules.runs_rule.exact_keys.includes(key)) return 0.0;
+      return null;
+    }
+  }
   return null;
 }
 
@@ -97,9 +113,14 @@ function walk(exp: unknown, act: unknown, path: Key[], out: string[], overrides:
   if (out.length > rules.max_reported) return;
   if (typeof exp === "number" && typeof act === "number") {
     const image = is_image_path(path, rules);
-    const abs_tol = overrides.length > 0 ? override_tol(path, overrides) : null;
+    let abs_tol = overrides.length > 0 ? override_tol(path, overrides) : null;
+    let source = "case override";
+    if (abs_tol === null) {
+      abs_tol = runs_tol(path, rules);
+      source = "runs rule";
+    }
     if (!numbers_match(exp, act, image, abs_tol, rules)) {
-      const tol = abs_tol !== null ? `${g(abs_tol)} absolute, case override` : image ? `${g(rules.image_tol_mm)} mm` : `${g(rules.rel_tol)} relative`;
+      const tol = abs_tol !== null ? `${g(abs_tol)} absolute, ${source}` : image ? `${g(rules.image_tol_mm)} mm` : `${g(rules.rel_tol)} relative`;
       out.push(`${fmt_path(path)}: expected ${exp}, got ${act} (tolerance ${tol})`);
     }
     return;
@@ -189,8 +210,34 @@ test("cases/ and expected/ correspond one to one, are non-empty, and every case 
   }
 });
 
+/**
+ * Phase 2 of contract §5.4.0 lands in parts; until the last part, the cases whose geometry is not yet ported are run
+ * as node:test `todo` (reported, not failing). Each part shrinks this list; the final part leaves it EMPTY.
+ * Part 1 (receivers generalisation) ports every case without hidden lines, mesh objects or a second light.
+ */
+export const TODO_CASES: ReadonlySet<string> = new Set([
+  // hidden lines (src/hidden.ts, §5.1.6)
+  "hidden_lines_curved_unbounded",
+  "hidden_lines_vp_in_canvas",
+  "wall_and_ground_hidden",
+  // mesh objects (src/meshprep.ts, §5.2)
+  "mesh_box_welded_triangulated",
+  "mesh_open_bottom_box_fallback",
+  "mesh_smooth_prism16",
+  // two or more lights (src/umbra.ts, src/multilight.ts, §5.3)
+  "multilight_point_and_directional_curved",
+  "multilight_second_light_inactive",
+  "multilight_three_lights_concave_prism",
+  "multilight_two_point_symmetric_box",
+]);
+
+test("TODO_CASES names existing cases only", () => {
+  const names = new Set(case_names());
+  for (const name of TODO_CASES) assert.ok(names.has(name), name);
+});
+
 for (const name of case_names()) {
-  test(`conformance: ${name}`, () => {
+  test(`conformance: ${name}`, { todo: TODO_CASES.has(name) ? "phase 2 part not yet landed" : false }, () => {
     const mismatches = compare_documents(load_expected(name), render_case(name), name);
     if (mismatches.length > 0) {
       const shown = mismatches.slice(0, RULES.max_reported);
@@ -296,13 +343,50 @@ test("case_overrides apply only to the named case and the named paths (contract 
   assert.ok(checked, "no other case with a direction vertex");
 });
 
-test("rules.json carries the v3 comparator constants", () => {
+test("rules.json carries the v6 comparator constants (contract §5.0.8)", () => {
+  assert.deepEqual(Object.keys(RULES).sort(cmp_code_points), [
+    "arc_non_mm", "case_overrides", "drawable_containers", "image_tol_mm", "int_keys", "max_reported", "mm_key_paths",
+    "mm_keys", "rel_tol", "runs_rule",
+  ]);
   assert.equal(RULES.image_tol_mm, 1e-6);
   assert.equal(RULES.rel_tol, 1e-9);
   assert.deepEqual(RULES.drawable_containers, ["arcs", "ellipses"]);
-  assert.deepEqual(RULES.int_keys, ["large_arc", "sweep"]);
+  assert.deepEqual(RULES.int_keys, ["large_arc", "sweep", "interval"]);
+  assert.deepEqual(RULES.int_keys, [...INT_KEYS]);
+  assert.ok(RULES.mm_keys.includes("hidden_polylines"));
+  assert.deepEqual(RULES.mm_key_paths, [
+    ["construction", "segments", "*", "points"], ["construction", "per_receiver", "*", "segments", "*", "points"],
+    ["constructions", "*", "segments", "*", "points"], ["constructions", "*", "per_receiver", "*", "segments", "*", "points"],
+  ]);
+  assert.deepEqual(RULES.runs_rule, { mm_abs: 0.05, param_abs: 1e-3, param_keys: ["s", "t", "theta"], exact_keys: ["visible", "interval"] });
+  assert.ok(is_image_path(["construction", "per_receiver", "wall", "segments", 3, "points", 0, 1]));
+  assert.ok(is_image_path(["constructions", "lamp", "per_receiver", "wall", "segments", 3, "points", 0, 1]));
+  assert.ok(is_image_path(["shadows", 0, "conics", 0, "hidden_polylines", 0, 0, 1]));
+  assert.ok(!is_image_path(["receivers", 1, "bounds", 0, 0]));
   assert.ok(path_has_prefix(["construction", "segments", 4, "points", 0, 1], ["construction", "segments", "*", "points"]));
   assert.ok(!path_has_prefix(["construction", "segments", 4], ["construction", "segments", "*", "points"]));
   assert.deepEqual(case_overrides(null), []);
   assert.deepEqual(case_overrides("example_basic"), []);
+});
+
+test("runs_rule values and paths (ported from test_runs_rule_values_and_paths)", () => {
+  assert.equal(runs_tol(["edges", 12, "runs", 1, "mm", 0]), 0.05);
+  assert.equal(runs_tol(["edges", 12, "runs", 1, "s", 1]), 1e-3);
+  assert.equal(runs_tol(["edges", 0, "runs", 0, "t", 0]), 1e-3);
+  assert.equal(runs_tol(["outlines", 0, "conics", 1, "runs", 2, "theta", 0]), 1e-3);
+  assert.equal(runs_tol(["form_shadow", 0, "terminator", 0, "runs", 0, "interval"]), 0.0);
+  assert.equal(runs_tol(["shadows", 3, "polygon_edges", 0, 2, "runs", 1, "mm", 1]), 0.05);
+  assert.equal(runs_tol(["shadows", 3, "polygons", 0, 2, 1]), null);
+  assert.equal(runs_tol(["edges", 0, "segment", 0, 0]), null);
+  // the rule is applied by the comparator: an mm drift of 0.04 inside runs passes, 0.06 fails, theta overrides arc_non_mm
+  const doc = { warnings: [], edges: [{ runs: [{ mm: [0, 10], s: [0, 0.5], t: [0, 0.5], visible: true }] }] };
+  const ok = clone(doc);
+  ok.edges[0]!.runs[0]!.mm[1] += 0.04;
+  ok.edges[0]!.runs[0]!.s[1] += 9e-4;
+  assert.deepEqual(compare_documents(doc, ok), []);
+  const bad = clone(doc);
+  bad.edges[0]!.runs[0]!.mm[1] += 0.06;
+  const msgs = compare_documents(doc, bad);
+  assert.equal(msgs.length, 1);
+  assert.ok((msgs[0] as string).includes("runs rule"), msgs[0]);
 });

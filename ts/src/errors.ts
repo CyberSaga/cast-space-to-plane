@@ -22,7 +22,7 @@ export class SceneError extends Error {
   }
 }
 
-/** Closed list of warning codes (contract §2.9, phase 1: 13 codes) -> default message. */
+/** Closed list of warning codes (contract §2.9 extended by §5.0.5: 18 codes) -> default message. */
 export const WARNING_CODES: Readonly<Record<string, string>> = Object.freeze({
   CAMERA_LOOKING_ALONG_UP: "camera forward is parallel to world up; using (0,1,0) as up",
   LIGHT_BEHIND_CAMERA: "finite light is behind the camera; L' is the anti-light point",
@@ -37,6 +37,13 @@ export const WARNING_CODES: Readonly<Record<string, string>> = Object.freeze({
   LIGHT_INSIDE_OBJECT: "point light is inside the sphere; no shadow or terminator",
   CONIC_SAMPLED: "conic is degenerate or ill-conditioned; emitted as a sampled polyline",
   CONSTRUCTION_CHECK_SKIPPED: "construction self-check skipped for a degenerate point",
+  // M4 (contract §5.0.5 / §5.1.9): appended at the end; M5 appends its codes after this one
+  RECEIVER_UNLIT: "bounded receiver is not lit by this light (light behind or in its plane); it receives no shadow",
+  // M5 (contract §5.2.6 / §5.0.5): appended after M4's RECEIVER_UNLIT in the merged list
+  MESH_NON_MANIFOLD: "mesh is not a closed consistently oriented manifold; per-face shadow fallback",
+  MESH_WINDING_FIXED: "mesh faces were reoriented (winding propagation or signed volume)",
+  MESH_DEGENERATE_FACES: "degenerate mesh faces were dropped",
+  MESH_RAYS_CAPPED: "more than 64 feature silhouette vertices; construction rays for the first 64 only",
 });
 
 export interface Warning {

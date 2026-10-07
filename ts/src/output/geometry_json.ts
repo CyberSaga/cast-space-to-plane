@@ -14,7 +14,7 @@ import { cmp_code_points } from "../pyfloat.js";
 export { cmp_code_points };
 
 /** The only keys whose numbers are written as integers (contract §5.4.5; == rules.json `int_keys`). */
-export const INT_KEYS: ReadonlySet<string> = new Set(["large_arc", "sweep"]);
+export const INT_KEYS: ReadonlySet<string> = new Set(["large_arc", "sweep", "interval"]);
 
 /** Python `repr(float)` of a finite double (contract §5.4.5): shortest round-trip digits, exponential iff
  * `decpt <= -4 || decpt > 16`. */

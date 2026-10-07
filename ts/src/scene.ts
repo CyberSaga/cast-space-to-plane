@@ -9,16 +9,41 @@
 import { SceneError } from "./errors.js";
 import type { Vec2, Vec3 } from "./types.js";
 
-export const OBJECT_TYPES = ["box", "cylinder", "sphere", "cone", "prism"] as const;
+/** Object kinds of the core (contract §2.0; M5 adds `mesh`, §5.2.1 / §5.0.1). */
+export const OBJECT_TYPES = ["box", "cylinder", "sphere", "cone", "prism", "mesh"] as const;
+/** Loader-only object kinds (contract §5.0.1, M8): rejected by `validate_object` before the `OBJECT_TYPES` test. */
+export const LOADER_TYPES = ["step"] as const;
 export const LIGHT_TYPES = ["point", "directional"] as const;
 /** The six SVG layer ids in table order (contract §2.10). */
 export const LAYER_IDS = ["horizon", "objects", "form_shadow", "cast_shadow", "construction", "labels"] as const;
 
 const UNIT_TOL = 1e-9;
 
+/** Size guard of a mesh object after loading (contract §5.2.1). */
+export const MESH_MAX_FACES = 50000;
+export const MESH_MAX_VERTICES = 50000;
+/** Defaults of the optional mesh keys (contract §5.2.1). */
+export const MESH_WELD_TOLERANCE_DEFAULT = 1e-6;
+export const MESH_SMOOTH_ANGLE_DEFAULT = 30.0;
+/** Ids that no object, receiver or light may take (the `*.hidden` SVG sub-groups, contract §5.0.1). */
+export const RESERVED_IDS = ["hidden"] as const;
+/** `output.hidden_style` values (contract §5.1.8). */
+export const HIDDEN_STYLES = ["dashed", "omit"] as const;
+/** Light ids rejected in a multi-light scene (contract §5.3.0, §5.3.6). */
+export const RESERVED_LIGHT_IDS_MULTI = ["umbra", "core"] as const;
+/** Object ids rejected in a multi-light scene (contract §5.0.1). */
+export const RESERVED_OBJECT_IDS_MULTI = ["core"] as const;
+
 export interface Transform {
   position: Vec3;
   rotation_deg: Vec3;
+}
+
+/** The validated inline geometry of a mesh object (contract §5.2.1). */
+export interface MeshData {
+  vertices: Vec3[];
+  faces: number[][];
+  smooth_groups: number[];
 }
 
 export interface SceneObject {
@@ -28,6 +53,14 @@ export interface SceneObject {
   radius?: number;
   height?: number;
   polygon?: Vec2[];
+  // mesh (contract §5.2.1)
+  path?: string | null;
+  node?: string | number | null;
+  data?: MeshData;
+  up?: "z";
+  scale?: number;
+  weld_tolerance?: number;
+  smooth_angle_deg?: number;
   transform: Transform;
 }
 
@@ -41,6 +74,8 @@ export interface Light {
 export interface Receiver {
   id: string;
   type: "plane";
+  /** `null` = unbounded (only the ground at `receivers[0]`, contract §5.1.1). */
+  bounds: Vec3[] | null;
   normal: Vec3;
   offset: number;
 }
@@ -61,6 +96,8 @@ export interface Output {
   canvas_mm: Vec2;
   layers: string[];
   png_dpi: number;
+  hidden_lines: boolean;
+  hidden_style: "dashed" | "omit";
 }
 
 export interface Scene {
@@ -233,6 +270,10 @@ export function validate_object(value: unknown, field: string): SceneObject {
   const o = dict(value, field);
   const oid = id(require_key(o, "id", field), `${field}.id`, true);
   const typ = require_key(o, "type", field);
+  if (one_of(typ, LOADER_TYPES)) {
+    throw new SceneError(`${field}.type`,
+      `loader object type '${typ as string}' must be expanded first (castplane.io.expand_scene or 'castplane import')`);
+  }
   if (!one_of(typ, OBJECT_TYPES)) throw new SceneError(`${field}.type`, `must be one of ${OBJECT_TYPES.join(", ")}`);
   const out: SceneObject = { id: oid, type: typ as string, transform: { position: [0, 0, 0], rotation_deg: [0, 0, 0] } };
   if (typ === "box") {
@@ -245,6 +286,8 @@ export function validate_object(value: unknown, field: string): SceneObject {
   } else if (typ === "prism") {
     out.polygon = validate_polygon(require_key(o, "polygon", field), `${field}.polygon`);
     out.height = number(require_key(o, "height", field), `${field}.height`, true);
+  } else if (typ === "mesh") {
+    Object.assign(out, validate_mesh_object(o, field));
   }
   out.transform = validate_transform(o["transform"], `${field}.transform`);
   return out;
@@ -267,23 +310,24 @@ export function validate_light(value: unknown, field: string): Light {
   return out;
 }
 
-/** One `receivers[i]` entry: v1 ground plane only (contract §2.0). */
+/** One `receivers[i]` entry (contract §2.0 as amended by §5.1.1): any plane `n·x + d = 0` with `|n| = 1`, optional
+ * convex `bounds` (`validate_bounds`). The rules that need the receiver's index or the other blocks are checked by
+ * `validate_receivers_in_scene`. */
 export function validate_receiver(value: unknown, field: string): Receiver {
   const r = dict(value, field);
-  const rid = id(require_key(r, "id", field), `${field}.id`, false);
+  const rid = id(require_key(r, "id", field), `${field}.id`, true);
   const typ = require_key(r, "type", field);
   if (typ !== "plane") throw new SceneError(`${field}.type`, "must be 'plane'");
-  const n = vector(require_key(r, "normal", field), `${field}.normal`, 3);
+  let n = vector(require_key(r, "normal", field), `${field}.normal`, 3) as Vec3;
   if (Math.abs(norm(n) - 1.0) > UNIT_TOL) throw new SceneError(`${field}.normal`, "must be a unit vector (|n| = 1 within 1e-9)");
-  const ground = [0.0, 0.0, 1.0];
-  for (let i = 0; i < 3; i++) {
-    if (Math.abs((n[i] as number) - (ground[i] as number)) > UNIT_TOL) {
-      throw new SceneError(`${field}.normal`, "v1 supports only the ground plane: normal must be [0, 0, 1]");
-    }
+  let offset = number(get(r, "offset", 0.0), `${field}.offset`);
+  const raw_bounds = get(r, "bounds", null);
+  const bounds = raw_bounds === null ? null : validate_bounds(raw_bounds, n, offset, `${field}.bounds`);
+  if (bounds === null && is_ground(n, offset)) {
+    n = [0.0, 0.0, 1.0]; // the unbounded ground keeps the literal v1 plane
+    offset = 0.0;
   }
-  const offset = number(get(r, "offset", 0.0), `${field}.offset`);
-  if (Math.abs(offset) > UNIT_TOL) throw new SceneError(`${field}.offset`, "v1 supports only the ground plane: offset must be 0");
-  return { id: rid, type: "plane", normal: [0.0, 0.0, 1.0], offset: 0.0 };
+  return { id: rid, type: "plane", bounds, normal: n, offset };
 }
 
 /** `camera` block (contract §2.0): target form or yaw/pitch form, exactly one. */
@@ -338,6 +382,7 @@ export function validate_output(value: unknown, frame_mm: readonly number[], fie
     canvas_mm: canvas,
     layers: LAYER_IDS.filter((name) => layers.includes(name)),
     png_dpi: number(get(o, "png_dpi", 300), `${field}.png_dpi`, true),
+    ...validate_hidden_output(o, field),
   };
 }
 
@@ -361,7 +406,7 @@ export function validate_scene(scene: unknown): Scene {
   });
 
   const lights = require_key(s, "lights", "");
-  if (!Array.isArray(lights) || lights.length !== 1) throw new SceneError("lights", "must be a list of exactly one light (v1)");
+  if (!Array.isArray(lights) || lights.length === 0) throw new SceneError("lights", "must be a non-empty list");
   const out_lights: Light[] = [];
   seen = new Set<string>();
   lights.forEach((lt, i) => {
@@ -370,12 +415,12 @@ export function validate_scene(scene: unknown): Scene {
     seen.add(vl.id);
     out_lights.push(vl);
   });
+  validate_lights_in_scene(out_lights, out_objects);
 
   const receivers = require_key(s, "receivers", "");
-  if (!Array.isArray(receivers) || receivers.length !== 1) {
-    throw new SceneError("receivers", "must be a list of exactly one receiver (v1)");
-  }
+  if (!Array.isArray(receivers) || receivers.length === 0) throw new SceneError("receivers", "must be a non-empty list");
   const out_receivers = receivers.map((r, i) => validate_receiver(r, `receivers[${i}]`));
+  validate_receivers_in_scene(out_receivers, out_objects, out_lights);
 
   const camera = validate_camera(require_key(s, "camera", ""), "camera");
   const output = validate_output(require_key(s, "output", ""), camera.frame_mm, "output");
@@ -414,4 +459,229 @@ export function load_camera(data: unknown): Camera {
     d = (d as Dict)["camera"];
   }
   return validate_camera(d, "camera");
+}
+
+// ---------------------------------------------------------------------------
+// M4 (contract §5.1.1, §5.0.1): bounded receivers, hidden-line output switches, reserved ids
+// ---------------------------------------------------------------------------
+
+/** The plane is the ground `z = 0` (`normal == [0, 0, 1]` and `offset == 0` within 1e-9). */
+function is_ground(n: readonly number[], offset: number): boolean {
+  const g0 = [0.0, 0.0, 1.0];
+  for (let i = 0; i < 3; i++) if (!(Math.abs((n[i] as number) - (g0[i] as number)) <= UNIT_TOL)) return false;
+  return Math.abs(offset) <= UNIT_TOL;
+}
+
+/** `receivers[i].bounds` (contract §5.1.1): >= 3 world points on the plane `n·x + d = 0` forming a simple strictly
+ * convex polygon; a clockwise list (about `n`) is reversed silently, so the stored order is counter-clockwise about
+ * `n` seen from the positive side. */
+export function validate_bounds(value: unknown, normal: readonly number[], offset: number, field: string): Vec3[] {
+  if (!Array.isArray(value) || value.length < 3) throw new SceneError(field, "must be a list of at least 3 [x, y, z] vertices");
+  let pts = value.map((p, k) => vector(p, `${field}[${k}]`, 3) as Vec3);
+  const n0 = normal[0] as number, n1 = normal[1] as number, n2 = normal[2] as number;
+  const d = offset;
+  let ext = 0;
+  for (const p of pts) for (const c of p) ext = Math.max(ext, Math.abs(c));
+  ext = Math.max(1.0, ext);
+  const m = pts.length;
+  pts.forEach((p, k) => { // (1) coplanar
+    if (Math.abs(n0 * p[0] + n1 * p[1] + n2 * p[2] + d) > 1e-9 * ext) {
+      throw new SceneError(`${field}[${k}]`, "must lie in the receiver plane (|n·b + offset| <= 1e-9 · extent)");
+    }
+  });
+  const edges: Vec3[] = [];
+  for (let k = 0; k < m; k++) {
+    const a = pts[k] as Vec3, b = pts[(k + 1) % m] as Vec3;
+    edges.push([b[0] - a[0], b[1] - a[1], b[2] - a[2]]);
+  }
+  const lengths = edges.map((e) => norm(e));
+  for (let k = 0; k < m; k++) { // (2) consecutive vertices distinct
+    if (!((lengths[k] as number) > 1e-12 * ext)) throw new SceneError(`${field}[${k}]`, "consecutive vertices coincide");
+  }
+  const cross: number[] = [], dot: number[] = [];
+  for (let k = 0; k < m; k++) {
+    const a = edges[k] as Vec3, b = edges[(k + 1) % m] as Vec3;
+    const c = [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]] as Vec3;
+    cross.push(c[0] * n0 + c[1] * n1 + c[2] * n2);
+    dot.push(a[0] * b[0] + a[1] * b[1] + a[2] * b[2]);
+  }
+  const message = "must be a simple strictly convex polygon";
+  const sigma = (cross[0] as number) > 0.0 ? 1.0 : -1.0;
+  for (let k = 0; k < m; k++) { // (3) strictly convex
+    if (sigma * (cross[k] as number) <= 1e-9 * (lengths[k] as number) * (lengths[(k + 1) % m] as number)) {
+      throw new SceneError(field, message);
+    }
+  }
+  let turning = 0;
+  for (let k = 0; k < m; k++) turning += Math.atan2(sigma * (cross[k] as number), dot[k] as number);
+  if (Math.abs(turning - 2.0 * Math.PI) > 1e-9 * m) throw new SceneError(field, message); // (4) simple
+  if (sigma < 0.0) pts = pts.slice().reverse(); // (5) clockwise -> reversed silently
+  return pts;
+}
+
+/** `output.hidden_lines` (boolean, default false) and `output.hidden_style` (`"dashed"` default, or `"omit"`) of
+ * contract §5.1.1 / §5.0.1. */
+export function validate_hidden_output(o: Record<string, unknown>, field = "output"): { hidden_lines: boolean; hidden_style: "dashed" | "omit" } {
+  const hidden = get(o, "hidden_lines", false);
+  if (typeof hidden !== "boolean") throw new SceneError(`${field}.hidden_lines`, "must be a boolean");
+  const style = get(o, "hidden_style", "dashed");
+  if (!one_of(style, HIDDEN_STYLES)) throw new SceneError(`${field}.hidden_style`, `must be one of ${HIDDEN_STYLES.join(", ")}`);
+  return { hidden_lines: hidden, hidden_style: style as "dashed" | "omit" };
+}
+
+/** The scene-level receiver rules of contract §5.1.1 / §5.0.1: ids unique, not reserved and disjoint from object and
+ * light ids; a receiver without `bounds` only at index 0 and only for the ground plane; with an unbounded ground every
+ * bounds vertex is above it. Also the reserved-id rule for object and light ids (`hidden`). */
+export function validate_receivers_in_scene(receivers: readonly Receiver[], objects: readonly SceneObject[], lights: readonly Light[]): void {
+  const blocks: [string, readonly { id: string }[]][] = [["objects", objects], ["lights", lights], ["receivers", receivers]];
+  for (const [kind, items] of blocks) {
+    items.forEach((item, i) => {
+      if ((RESERVED_IDS as readonly string[]).includes(item.id)) throw new SceneError(`${kind}[${i}].id`, "reserved id");
+    });
+  }
+  const object_ids = new Set(objects.map((o) => o.id));
+  const light_ids = new Set(lights.map((lt) => lt.id));
+  const seen = new Set<string>();
+  receivers.forEach((r, i) => {
+    const rid = r.id;
+    if (seen.has(rid)) throw new SceneError(`receivers[${i}].id`, `duplicate receiver id '${rid}'`);
+    seen.add(rid);
+    if (object_ids.has(rid)) throw new SceneError(`receivers[${i}].id`, `receiver id '${rid}' is also an object id`);
+    if (light_ids.has(rid)) throw new SceneError(`receivers[${i}].id`, `receiver id '${rid}' is also a light id`);
+    if (r.bounds === null && !(i === 0 && is_ground(r.normal, r.offset))) {
+      throw new SceneError(`receivers[${i}].bounds`, "required unless the receiver is the ground plane at receivers[0]");
+    }
+  });
+  if ((receivers[0] as Receiver).bounds === null) {
+    receivers.forEach((r, i) => {
+      if (r.bounds === null) return;
+      let ext = 0;
+      for (const p of r.bounds) for (const c of p) ext = Math.max(ext, Math.abs(c));
+      ext = Math.max(1.0, ext);
+      r.bounds.forEach((p, k) => {
+        if (p[2] < -1e-9 * ext) throw new SceneError(`receivers[${i}].bounds[${k}]`, "below the ground receiver");
+      });
+    });
+  }
+}
+
+// ---------------------------------------------------------------------------
+// M5: mesh objects (contract §5.2.1, §5.0.1)
+// ---------------------------------------------------------------------------
+
+/** The exact axis map `(x, y, z) -> (x, -z, y)` by component swapping and sign change (contract §5.2.1, D31);
+ * `-z + 0` keeps the floats canonical. */
+export function to_z_up(vertices: readonly (readonly number[])[]): Vec3[] {
+  return vertices.map((v) => [v[0] as number, -(v[2] as number) + 0.0, v[1] as number] as Vec3);
+}
+
+/** A JSON integer (JavaScript has one number type: an integral JSON number such as `1.0` counts as an integer here,
+ * where Python's `json` would give a float and reject it; contract §5.4.4 / §5.4.5 single-number-type note). */
+function is_index(x: unknown): x is number {
+  return typeof x === "number" && Number.isInteger(x);
+}
+
+/** `objects[i].data` of a mesh object (contract §5.2.1): `vertices` (>= 3 finite `[x, y, z]`), `faces` (>= 1 integer
+ * lists of >= 3 indices in `[0, n_v)`), optional `smooth_groups` (non-negative integers, one per face, default all 0)
+ * and the size guard; `source_field` (`objects[i].path` for file sources) is the field of the size-guard error. */
+export function validate_mesh_data(value: unknown, field: string, source_field: string | null = null): MeshData {
+  const d = dict(value, field);
+  const verts = require_key(d, "vertices", field);
+  if (!Array.isArray(verts) || verts.length < 3) throw new SceneError(`${field}.vertices`, "must be a list of at least 3 [x, y, z] vertices");
+  if (verts.length > MESH_MAX_VERTICES) {
+    throw new SceneError(source_field ?? `${field}.vertices`, `${verts.length} vertices exceed the limit of ${MESH_MAX_VERTICES}`);
+  }
+  const vertices = verts.map((v, k) => vector(v, `${field}.vertices[${k}]`, 3) as Vec3);
+  const faces_in = require_key(d, "faces", field);
+  if (!Array.isArray(faces_in) || faces_in.length < 1) throw new SceneError(`${field}.faces`, "must be a non-empty list of faces");
+  if (faces_in.length > MESH_MAX_FACES) {
+    throw new SceneError(source_field ?? `${field}.faces`, `${faces_in.length} faces exceed the limit of ${MESH_MAX_FACES}`);
+  }
+  const n_v = vertices.length;
+  const faces: number[][] = [];
+  faces_in.forEach((f, k) => {
+    if (!Array.isArray(f) || f.length < 3) throw new SceneError(`${field}.faces[${k}]`, "must be a list of at least 3 vertex indices");
+    for (const v of f) {
+      if (!is_index(v) || !(0 <= v && v < n_v)) throw new SceneError(`${field}.faces[${k}]`, `vertex indices must be integers in [0, ${n_v})`);
+    }
+    faces.push((f as number[]).map((v) => v));
+  });
+  const groups = get(d, "smooth_groups", null);
+  let smooth_groups: number[];
+  if (groups === null) {
+    smooth_groups = faces.map(() => 0);
+  } else {
+    if (!Array.isArray(groups) || groups.length !== faces.length) {
+      throw new SceneError(`${field}.smooth_groups`, "must be a list with one entry per face");
+    }
+    groups.forEach((g0, k) => {
+      if (!is_index(g0) || g0 < 0) throw new SceneError(`${field}.smooth_groups[${k}]`, "must be a non-negative integer");
+    });
+    smooth_groups = (groups as number[]).map((g0) => g0);
+  }
+  return { vertices, faces, smooth_groups };
+}
+
+/** Usable-face guard of a mesh object (contract §5.2.1 [decision]: "validated => renders"). Installed by
+ * `src/meshprep.ts` (phase 2, the mesh part of §5.4.14) through `set_mesh_usable_face_guard`; until then every mesh
+ * that passes `validate_mesh_data` is accepted. */
+type UsableFaceGuard = (vertices: readonly Vec3[], faces: readonly number[][], scale: number, weld_tolerance: number) => boolean;
+let usable_face_guard: UsableFaceGuard | null = null;
+
+export function set_mesh_usable_face_guard(guard: UsableFaceGuard | null): void {
+  usable_face_guard = guard;
+}
+
+/** The `mesh` branch of `validate_object` (contract §5.2.1, §5.0.1): `data` is required ("expand first" for a
+ * `path`-only object); both together mean "already expanded"; `up: "y"` converts `data` with `to_z_up` and is
+ * rewritten to `"z"`. */
+export function validate_mesh_object(o: Record<string, unknown>, field: string): Partial<SceneObject> {
+  const path = get(o, "path", null);
+  if (path !== null && (typeof path !== "string" || path === "")) throw new SceneError(`${field}.path`, "must be a non-empty string");
+  if (!has(o, "data")) {
+    if (path === null) throw new SceneError(`${field}.data`, "required");
+    throw new SceneError(`${field}.path`, "mesh file must be expanded first (castplane.io.expand_scene or 'castplane import')");
+  }
+  const node = get(o, "node", null);
+  if (node !== null && !(typeof node === "string" || (is_index(node) && node >= 0))) {
+    throw new SceneError(`${field}.node`, "must be a string or a non-negative integer");
+  }
+  const up = get(o, "up", "z");
+  if (up !== "z" && up !== "y") throw new SceneError(`${field}.up`, "must be 'z' or 'y'");
+  const scale = number(get(o, "scale", 1.0), `${field}.scale`, true);
+  const weld = number(get(o, "weld_tolerance", MESH_WELD_TOLERANCE_DEFAULT), `${field}.weld_tolerance`);
+  if (weld < 0) throw new SceneError(`${field}.weld_tolerance`, "must be >= 0");
+  const smooth = number(get(o, "smooth_angle_deg", MESH_SMOOTH_ANGLE_DEFAULT), `${field}.smooth_angle_deg`);
+  if (!(0.0 <= smooth && smooth <= 180.0)) throw new SceneError(`${field}.smooth_angle_deg`, "must be in [0, 180]");
+  const source_field = path !== null ? `${field}.path` : null;
+  const data = validate_mesh_data(o["data"], `${field}.data`, source_field);
+  if (up === "y") data.vertices = to_z_up(data.vertices);
+  if (usable_face_guard !== null && !usable_face_guard(data.vertices, data.faces, scale, weld)) {
+    throw new SceneError(source_field ?? `${field}.data.faces`, "no usable face");
+  }
+  return {
+    path: path as string | null,
+    ["node"]: node as string | number | null,
+    data,
+    up: "z",
+    scale,
+    weld_tolerance: weld,
+    smooth_angle_deg: smooth,
+  };
+}
+
+// ---------------------------------------------------------------------------
+// M6 (contract §5.3.0, §5.0.1): any number of lights, multi-light reserved ids
+// ---------------------------------------------------------------------------
+
+/** The multi-light id rules of contract §5.3.0 / §5.0.1: with at least two lights the light ids `umbra` / `core` and
+ * the object id `core` are reserved (a single-light scene keeps them valid). */
+export function validate_lights_in_scene(lights: readonly Light[], objects: readonly SceneObject[]): void {
+  if (lights.length < 2) return;
+  lights.forEach((lt, i) => {
+    if ((RESERVED_LIGHT_IDS_MULTI as readonly string[]).includes(lt.id)) throw new SceneError(`lights[${i}].id`, "reserved id in a multi-light scene");
+  });
+  objects.forEach((o, i) => {
+    if ((RESERVED_OBJECT_IDS_MULTI as readonly string[]).includes(o.id)) throw new SceneError(`objects[${i}].id`, "reserved id");
+  });
 }

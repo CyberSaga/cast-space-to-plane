@@ -18,7 +18,7 @@ function python_warning_codes(): [string, string][] {
 
 test("WARNING_CODES equals the Python literal (codes, order and default messages)", () => {
   const py = python_warning_codes();
-  assert.ok(py.length >= 13);
+  assert.equal(py.length, 18);
   assert.deepEqual(Object.entries(WARNING_CODES), py);
 });
 

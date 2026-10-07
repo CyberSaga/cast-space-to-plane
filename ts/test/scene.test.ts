@@ -5,7 +5,9 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 
 import { SceneError } from "../src/errors.js";
-import { LAYER_IDS, load_camera, load_scene, load_scene_text, polygon_is_simple, validate_scene } from "../src/scene.js";
+import {
+  LAYER_IDS, LOADER_TYPES, OBJECT_TYPES, load_camera, load_scene, load_scene_text, polygon_is_simple, to_z_up, validate_scene,
+} from "../src/scene.js";
 import { read_json, repo_path } from "./helpers.js";
 
 function base_scene(): any {
@@ -127,11 +129,12 @@ test("transform rules", () => {
     [0, 0, 0]);
 });
 
-test("lights rows (phase 1: exactly one)", () => {
+test("lights rows (phase 2: a non-empty list of any length)", () => {
   expect_error(mutate(["lights"], []), "lights");
+  expect_error(mutate(["lights"], { id: "l2" }), "lights");
   const scene = base_scene();
   scene.lights.push({ id: "l2", type: "point", position: [0, 0, 1] });
-  expect_error(scene, "lights");
+  assert.deepEqual(validate_scene(scene).lights.map((lt) => lt.id), ["lamp", "l2"]);
   expect_error(mutate(["lights", 0, "type"], "spot"), "lights[0].type");
   expect_error(mutate(["lights", 0, "position"], null, true), "lights[0].position");
   expect_error(mutate(["lights", 0, "id"], null, true), "lights[0].id");
@@ -143,13 +146,202 @@ test("lights rows (phase 1: exactly one)", () => {
     .lights[0]?.direction, [0.6, 0.0, 0.8]);
 });
 
-test("receivers rows", () => {
+test("receivers rows (contract §5.1.1: any plane; unbounded only for the ground at index 0)", () => {
   expect_error(mutate(["receivers"], []), "receivers");
   expect_error(mutate(["receivers", 0, "type"], "sphere"), "receivers[0].type");
-  expect_error(mutate(["receivers", 0, "normal"], [0, 1, 0]), "receivers[0].normal");
+  expect_error(mutate(["receivers", 0, "normal"], [0, 1, 0]), "receivers[0].bounds");
   expect_error(mutate(["receivers", 0, "normal"], [0, 0, 2]), "receivers[0].normal");
-  expect_error(mutate(["receivers", 0, "offset"], 0.5), "receivers[0].offset");
+  expect_error(mutate(["receivers", 0, "offset"], 0.5), "receivers[0].bounds");
   assert.equal(validate_scene(mutate(["receivers", 0, "offset"], null, true)).receivers[0]?.offset, 0.0);
+});
+
+// --- M4: bounded receivers (contract §5.1.1, §5.0.1), ported from tests/test_scene.py -----------------------------
+const WALL = { id: "wall", type: "plane", normal: [0, -1, 0], offset: 6, bounds: [[-3, 6, 0], [3, 6, 0], [3, 6, 2.5], [-3, 6, 2.5]] };
+
+function with_receivers(extra: any[], first: any = null): any {
+  const scene = base_scene();
+  if (first !== null) scene.receivers = [first];
+  scene.receivers = [...scene.receivers, ...extra.map((r) => JSON.parse(JSON.stringify(r)))];
+  return scene;
+}
+
+function expect_detail(scene: unknown, field: string, fragment: string): void {
+  assert.ok(expect_error(scene, field).detail.includes(fragment));
+}
+
+test("M4: a wall receiver validates and keeps its plane; the ground gets bounds null", () => {
+  const out = validate_scene(with_receivers([WALL]));
+  const [ground, wall] = out.receivers;
+  assert.deepEqual(ground, { id: ground?.id, type: "plane", bounds: null, normal: [0.0, 0.0, 1.0], offset: 0.0 });
+  assert.deepEqual(wall?.normal, [0.0, -1.0, 0.0]);
+  assert.equal(wall?.offset, 6.0);
+  assert.deepEqual(wall?.bounds, [[-3.0, 6.0, 0.0], [3.0, 6.0, 0.0], [3.0, 6.0, 2.5], [-3.0, 6.0, 2.5]]);
+});
+
+test("M4: clockwise bounds are reversed silently", () => {
+  const cw = { ...WALL, bounds: [...WALL.bounds].reverse() };
+  const out = validate_scene(with_receivers([cw]));
+  assert.deepEqual(out.receivers[1]?.bounds, [[-3.0, 6.0, 0.0], [3.0, 6.0, 0.0], [3.0, 6.0, 2.5], [-3.0, 6.0, 2.5]]);
+});
+
+test("M4: receivers list and ids (unique, no '.', disjoint from objects and lights, not reserved)", () => {
+  expect_error(with_receivers([{ ...WALL, id: "a.b" }]), "receivers[1].id");
+  expect_error(with_receivers([{ ...WALL, id: "" }]), "receivers[1].id");
+  expect_error(with_receivers([{ ...WALL, id: "ground" }]), "receivers[1].id");
+  expect_error(with_receivers([{ ...WALL, id: "crate" }]), "receivers[1].id");
+  expect_error(with_receivers([{ ...WALL, id: "lamp" }]), "receivers[1].id");
+  expect_detail(with_receivers([{ ...WALL, id: "hidden" }]), "receivers[1].id", "reserved id");
+  expect_error(mutate(["objects", 0, "id"], "hidden"), "objects[0].id");
+  expect_error(mutate(["lights", 0, "id"], "hidden"), "lights[0].id");
+});
+
+test("M4: unbounded only for the ground at receivers[0]; a bounded receivers[0] is valid", () => {
+  const { bounds: _b, ...no_bounds } = WALL;
+  expect_error(with_receivers([no_bounds]), "receivers[1].bounds");
+  expect_error(with_receivers([{ id: "g2", type: "plane", normal: [0, 0, 1], offset: 0 }]), "receivers[1].bounds");
+  const out = validate_scene(with_receivers([], JSON.parse(JSON.stringify(WALL))));
+  assert.deepEqual(out.receivers.map((r) => r.id), ["wall"]);
+  assert.notEqual(out.receivers[0]?.bounds, null);
+});
+
+test("M4: bounds rules (coplanar, distinct, strictly convex, simple, above the ground)", () => {
+  const bad = (bounds: unknown, field: string): SceneError => expect_error(with_receivers([{ ...WALL, bounds }]), field);
+  bad([[-3, 6, 0], [3, 6, 0]], "receivers[1].bounds");
+  bad("square", "receivers[1].bounds");
+  bad([[-3, 6, 0], [3, 6, 0], [3, 6.01, 2.5], [-3, 6, 2.5]], "receivers[1].bounds[2]");
+  bad([[-3, 6, 0], [3, 6, 0], [3, 6, 0], [-3, 6, 2.5]], "receivers[1].bounds[1]");
+  bad([[-3, 6, 0], [0, 6, 1], [3, 6, 0], [3, 6, 2.5], [-3, 6, 2.5]], "receivers[1].bounds");
+  bad([[-3, 6, 0], [0, 6, 0], [3, 6, 0], [3, 6, 2.5], [-3, 6, 2.5]], "receivers[1].bounds");
+  bad([[-3, 6, 0], [3, 6, 0], [3, 6, 2.5], [-3, 6, 2.5], [-3, 6, 1, 2]], "receivers[1].bounds[4]");
+  const star = [0, 1, 2, 3, 4].map((k) => [3 * Math.cos((90 + 144 * k) * (Math.PI / 180)), 6,
+    3 + 3 * Math.sin((90 + 144 * k) * (Math.PI / 180))]);
+  assert.ok(bad(star, "receivers[1].bounds").detail.includes("strictly convex"));
+  const low = [[-3, 6, -0.5], [3, 6, -0.5], [3, 6, 2.5], [-3, 6, 2.5]];
+  assert.ok(bad(low, "receivers[1].bounds[0]").detail.includes("below the ground receiver"));
+  assert.deepEqual(validate_scene(with_receivers([], { ...WALL, bounds: low })).receivers[0]?.bounds?.[0], [-3.0, 6.0, -0.5]);
+});
+
+test("M4: any unit normal and offset", () => {
+  const tilted = { id: "ramp", type: "plane", normal: [0, -0.6, 0.8], offset: 0.0, bounds: [[-1, 0, 0], [1, 0, 0], [1, 4, 3], [-1, 4, 3]] };
+  assert.deepEqual(validate_scene(with_receivers([tilted])).receivers[1]?.normal, [0.0, -0.6, 0.8]);
+  expect_error(with_receivers([{ ...tilted, normal: [0, -0.6, 0.9] }]), "receivers[1].normal");
+  expect_error(with_receivers([{ ...tilted, offset: "x" }]), "receivers[1].offset");
+});
+
+test("M4: output.hidden_lines / hidden_style", () => {
+  const out = validate_scene(base_scene()).output;
+  assert.equal(out.hidden_lines, false);
+  assert.equal(out.hidden_style, "dashed");
+  assert.equal(validate_scene(mutate(["output", "hidden_lines"], true)).output.hidden_lines, true);
+  assert.equal(validate_scene(mutate(["output", "hidden_style"], "omit")).output.hidden_style, "omit");
+  expect_error(mutate(["output", "hidden_lines"], 1), "output.hidden_lines");
+  expect_error(mutate(["output", "hidden_lines"], "yes"), "output.hidden_lines");
+  expect_error(mutate(["output", "hidden_style"], "dotted"), "output.hidden_style");
+});
+
+// --- M5: the mesh object type (contract §5.2.1, §5.0.1) -----------------------------------------------------------
+const CUBE_V = [[-.5, -.5, 0], [.5, -.5, 0], [.5, .5, 0], [-.5, .5, 0], [-.5, -.5, 1], [.5, -.5, 1], [.5, .5, 1], [-.5, .5, 1]];
+const CUBE_F = [[0, 3, 2, 1], [4, 5, 6, 7], [0, 1, 5, 4], [1, 2, 6, 5], [2, 3, 7, 6], [3, 0, 4, 7]];
+
+function mesh_scene(keys: Record<string, unknown> = {}): any {
+  const obj = { id: "m", type: "mesh", data: { vertices: JSON.parse(JSON.stringify(CUBE_V)), faces: JSON.parse(JSON.stringify(CUBE_F)) }, ...keys };
+  return mutate(["objects"], [obj]);
+}
+
+test("M5: mesh object validated form and defaults; OBJECT_TYPES", () => {
+  assert.deepEqual([...OBJECT_TYPES], ["box", "cylinder", "sphere", "cone", "prism", "mesh"]);
+  const o = validate_scene(mesh_scene()).objects[0];
+  assert.deepEqual(o, {
+    id: "m", type: "mesh", path: null, node: null,
+    data: { vertices: CUBE_V, faces: CUBE_F, smooth_groups: [0, 0, 0, 0, 0, 0] },
+    up: "z", scale: 1.0, weld_tolerance: 1e-6, smooth_angle_deg: 30.0,
+    transform: { position: [0.0, 0.0, 0.0], rotation_deg: [0.0, 0.0, 0.0] },
+  });
+  const o2 = validate_scene(mesh_scene({ path: "box.obj", node: 2 })).objects[0];
+  assert.equal(o2?.path, "box.obj");
+  assert.equal(o2?.node, 2);
+});
+
+test("M5: a path-only mesh must be expanded first; data required; the loader type step (contract §5.0.1)", () => {
+  const scene = mesh_scene({ path: "box.obj" });
+  delete scene.objects[0].data;
+  assert.ok(expect_error(scene, "objects[0].path").detail.includes("expand_scene"));
+  const s2 = mesh_scene();
+  delete s2.objects[0].data;
+  expect_error(s2, "objects[0].data");
+  expect_error(mesh_scene({ path: "" }), "objects[0].path");
+  expect_error(mesh_scene({ data: [1, 2] }), "objects[0].data");
+  assert.deepEqual([...LOADER_TYPES], ["step"]);
+  assert.ok(expect_error(mutate(["objects", 0], { id: "s", type: "step", path: "a.step" }), "objects[0].type").detail.includes("expanded first"));
+});
+
+test("M5: mesh data rules", () => {
+  expect_error(mesh_scene({ data: { vertices: CUBE_V.slice(0, 2), faces: [[0, 1, 0]] } }), "objects[0].data.vertices");
+  expect_error(mesh_scene({ data: { vertices: [[0, 0, 0], [1, 0, 0], [0, NaN, 0]], faces: [[0, 1, 2]] } }), "objects[0].data.vertices[2][1]");
+  expect_error(mesh_scene({ data: { vertices: [[0, 0, 0], [1, 0, 0], [0, 0]], faces: [[0, 1, 2]] } }), "objects[0].data.vertices[2]");
+  expect_error(mesh_scene({ data: { vertices: CUBE_V, faces: [] } }), "objects[0].data.faces");
+  expect_error(mesh_scene({ data: { vertices: CUBE_V, faces: [[0, 1]] } }), "objects[0].data.faces[0]");
+  expect_error(mesh_scene({ data: { vertices: CUBE_V, faces: [[0, 1, 8]] } }), "objects[0].data.faces[0]");
+  expect_error(mesh_scene({ data: { vertices: CUBE_V, faces: [[0, 1, true]] } }), "objects[0].data.faces[0]");
+  expect_error(mesh_scene({ data: { vertices: CUBE_V, faces: [[0, 1, 2.5]] } }), "objects[0].data.faces[0]");
+  expect_error(mesh_scene({ data: { vertices: CUBE_V, faces: CUBE_F, smooth_groups: [0] } }), "objects[0].data.smooth_groups");
+  expect_error(mesh_scene({ data: { vertices: CUBE_V, faces: CUBE_F, smooth_groups: [0, 0, 0, 0, 0, -1] } }), "objects[0].data.smooth_groups[5]");
+  assert.deepEqual(validate_scene(mesh_scene({ data: { vertices: CUBE_V, faces: CUBE_F, smooth_groups: [1, 1, 2, 2, 0, 0] } }))
+    .objects[0]?.data?.smooth_groups, [1, 1, 2, 2, 0, 0]);
+});
+
+test("M5: mesh optional keys and the exact Y-up axis map", () => {
+  expect_error(mesh_scene({ up: "x" }), "objects[0].up");
+  expect_error(mesh_scene({ scale: 0 }), "objects[0].scale");
+  expect_error(mesh_scene({ weld_tolerance: -1e-9 }), "objects[0].weld_tolerance");
+  expect_error(mesh_scene({ smooth_angle_deg: 180.5 }), "objects[0].smooth_angle_deg");
+  expect_error(mesh_scene({ smooth_angle_deg: -1 }), "objects[0].smooth_angle_deg");
+  expect_error(mesh_scene({ node: -1 }), "objects[0].node");
+  expect_error(mesh_scene({ node: 1.5 }), "objects[0].node");
+  expect_error(mesh_scene({ transform: { scale: [1, 1, 1] } }), "objects[0].transform.scale");
+  const o = validate_scene(mesh_scene({ scale: 0.001, weld_tolerance: 0, smooth_angle_deg: 0, node: "Cube" })).objects[0];
+  assert.deepEqual([o?.scale, o?.weld_tolerance, o?.smooth_angle_deg, o?.node], [0.001, 0.0, 0.0, "Cube"]);
+  assert.deepEqual(to_z_up([[1, 0, 2]]), [[1.0, -2.0, 0.0]]);
+  assert.ok(Object.is(to_z_up([[0.0, 0.0, 0.0]])[0]?.[1], 0));
+  const y_up = CUBE_V.map(([x, y, z]) => [x, z, -(y as number)]);
+  const oy = validate_scene(mesh_scene({ up: "y", data: { vertices: y_up, faces: CUBE_F } })).objects[0];
+  assert.equal(oy?.up, "z");
+  assert.deepEqual(oy?.data?.vertices, CUBE_V);
+});
+
+// --- M6: multiple lights (contract §5.3.0, §5.0.1) -----------------------------------------------------------------
+function two_lights(second: Record<string, unknown> = {}): any {
+  const scene = base_scene();
+  scene.lights.push({ id: "l2", type: "point", position: [2, 0, 3], ...second });
+  return scene;
+}
+
+test("M6: lights of any length in scene order; duplicate ids", () => {
+  const scene = two_lights();
+  scene.lights.push({ id: "sun", type: "directional", direction: [0.6, 0.0, 0.8] });
+  assert.deepEqual(validate_scene(scene).lights.map((lt) => lt.id), ["lamp", "l2", "sun"]);
+  expect_error(two_lights({ type: "spot" }), "lights[1].type");
+  expect_error(two_lights({ id: "a.b" }), "lights[1].id");
+  expect_detail(two_lights({ id: "lamp" }), "lights[1].id", "lamp");
+});
+
+test("M6: reserved light ids umbra / core and object id core only in multi-light scenes", () => {
+  for (const rid of ["umbra", "core"]) {
+    assert.equal(expect_error(two_lights({ id: rid }), "lights[1].id").detail, "reserved id in a multi-light scene");
+    const scene = two_lights();
+    scene.lights[0].id = rid;
+    expect_error(scene, "lights[0].id");
+    assert.equal(validate_scene(mutate(["lights", 0, "id"], rid)).lights[0]?.id, rid);
+  }
+  expect_error(two_lights({ id: "hidden" }), "lights[1].id");
+  const scene = two_lights();
+  scene.objects[0].id = "core";
+  assert.equal(expect_error(scene, "objects[0].id").detail, "reserved id");
+  assert.equal(validate_scene(mutate(["objects", 0, "id"], "core")).objects[0]?.id, "core");
+  const s2 = two_lights();
+  s2.objects[0].id = "umbra";
+  assert.equal(validate_scene(s2).objects[0]?.id, "umbra");
+  expect_error(two_lights({ id: "ground" }), "receivers[0].id");
 });
 
 test("camera rows: both forms given -> SceneError('camera')", () => {
