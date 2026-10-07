@@ -33,7 +33,7 @@
 
 **逐案例放寬（`rules.json` 的 `case_overrides`，v3）。** 一筆放寬只對一個案例、只對路徑符合其 `paths`（`*` 代表任一個串列索引或鍵，比對路徑前綴）之下的**數值**改用絕對容差 `abs_tol`；非數值、串列長度、鍵集合與警告一律不放寬。目前只有一筆：`degenerate_cylinder_cap_at_light_height` 的 `shadows[*].loops[*][*].direction` 與 `shadows[*].outline[*].direction`（四個葉節點）以 1e-6 絕對容差比對——頂蓋恰在光源高度，`w_S = 0` 的交點是重根，方向頂點對 `M`、`L` 一個 ulp 的擾動以平方根放大（實測每 ulp 1.5e-9），這是案例的目的而非實作錯誤（合約 §5.4.4 (1)、D60）。`compare_documents(expected, actual, case_name)` 依案例名稱套用。
 
-## 來源（目前版本 v5，M6 工作樹中另有兩筆工作樹本地條目，合併時收成 v6，見 `CHANGELOG.md`；共 34 個 v2 案例，M4 的 9 個見下方 `### M4 受影面與隱藏線`，M5 的 3 個見 `### M5 網格`，M6 的 4 個見 `### M6 多光源`）
+## 來源（目前版本 v6，見 `CHANGELOG.md`；共 34 個 v2 案例，M4 的 9 個見下方 `### M4 受影面與隱藏線`，M5 的 3 個見 `### M5 網格`，M6 的 4 個見 `### M6 多光源`）
 
 | 類別 | 案例 | 依據 |
 | --- | --- | --- |
@@ -73,7 +73,7 @@
 
 ### M6 多光源
 
-合約 §5.3.10 的 4 個案例，在 M6 工作樹中（已合併 v5）以 `regen_conformance.py --case` 加入，既有的 expected 檔一個都沒變（加入前 `--dry-run`：46 個 v5 案例 0 個會變）。多光源的鍵是**有條件的**：只有 `len(lights) ≥ 2` 的文件才有 `constructions`、`umbra`、`form_shadow_core`、`form_shadow[].light`、`edges[].silhouette_lights`，所以單光源案例不受影響（`test_m6_cases_are_multi_light_documents` 檢查）。`rules.json` 加了 `constructions` 的兩條 mm 路徑（`--rules-only`）。
+合約 §5.3.10 的 4 個案例，在 M6 工作樹中（已合併 v5）以 `regen_conformance.py --case` 加入（合併時與 `--rules-only` 條目收成一筆 v6 條目），既有的 expected 檔一個都沒變（加入前 `--dry-run`：46 個 v5 案例 0 個會變）。多光源的鍵是**有條件的**：只有 `len(lights) ≥ 2` 的文件才有 `constructions`、`umbra`、`form_shadow_core`、`form_shadow[].light`、`edges[].silhouette_lights`，所以單光源案例不受影響（`test_m6_cases_are_multi_light_documents` 檢查）。`rules.json` 加了 `constructions` 的兩條 mm 路徑（`--rules-only`）。
 
 | 案例 | 內容 | 依據 |
 | --- | --- | --- |
