@@ -248,3 +248,160 @@ def test_dumps_rejects_non_finite_numbers():
     assert geometry_json._REFERENCE_KW["allow_nan"] is False
     assert dumps({"x": 1.0, "y": -0.0, "z": [1e300, 2]}) == json.dumps({"x": 1.0, "y": 0.0, "z": [1e300, 2]},
                                                                       sort_keys=True, indent=1)
+
+
+# --------------------------------------------------------------------------- the pre-3.13 fast path of dumps
+# Before CPython 3.13 the C encoder cannot indent, so ``dumps`` writes the compact text with it and re-indents
+# it with NumPy (``geometry_json._compact_dumps`` / ``_reindent``).  These tests call that path directly, so
+# they prove it on every interpreter, against the definition ``json.dumps(canonical(doc), indent=1, ...)``.
+
+ROOT = pathlib.Path(__file__).resolve().parents[1]
+
+# every character that matters to the re-indentation, escapes, control characters, non-ASCII text (2-, 3- and
+# 4-byte UTF-8, a line separator, a lone surrogate) and the token "-0.0" inside a string
+_FUZZ_CHARS = list('[]{},:"\\') + ["\\\\", '\\"', '"\\', "\n", "\t", "\x00", "\x1f", "\x7f", " ", "a", "Z", "0",
+                                    "-0.0,", "é", "中", "文", "😀", "\u2028", "\ud800", "/", "\\u0041"]
+
+
+def _fuzz_string(rng) -> str:
+    return "".join(rng.choice(_FUZZ_CHARS) for _ in range(rng.randrange(0, 7)))
+
+
+def _fuzz_value(rng, depth: int):
+    """A random JSON-native value, with numpy scalars and arrays mixed in (the ``default`` hook path)."""
+    kind = rng.randrange(14 if depth < 6 else 9)
+    if kind == 0:
+        return rng.choice([0.0, -0.0, 1.5, -2.25, 1e-300, -1e300, 5e-324, 0.1, -0.05, 1e16, 123456789.125])
+    if kind == 1:
+        return rng.uniform(-1e3, 1e3) * 10.0 ** rng.randrange(-20, 20)
+    if kind == 2:
+        return rng.choice([0, -1, 7, 2 ** 64, -(2 ** 70)])
+    if kind == 3:
+        return rng.choice([True, False, None])
+    if kind in (4, 5):
+        return _fuzz_string(rng)
+    if kind == 6:
+        return rng.choice([np.float64(-0.0), np.float64(2.5), np.float32(0.1), np.int64(-3), np.bool_(True)])
+    if kind == 7:
+        return rng.choice([[], {}, [[]], [{}], {"": {}}, {"a": []}])
+    if kind == 8:
+        return np.array([rng.uniform(-1, 1), -0.0, 3.0]) if rng.random() < 0.5 else np.arange(rng.randrange(4))
+    if kind in (9, 10, 11):
+        return [_fuzz_value(rng, depth + 1) for _ in range(rng.randrange(0, 5))]
+    return {_fuzz_string(rng): _fuzz_value(rng, depth + 1) for _ in range(rng.randrange(0, 5))}
+
+
+def _assert_fast_path_exact(doc, label) -> None:
+    from castplane.output import geometry_json
+
+    assert geometry_json._compact_dumps(doc) == geometry_json._reference_dumps(doc), label
+
+
+def _adversarial_documents() -> list:
+    deep = []
+    for i in range(300):
+        deep = [deep, i] if i % 2 else {"k": deep, "e": [], "f": {}}
+    return [
+        {}, [], [[]], [{}], {"a": {}}, {"a": [], "b": {}}, [[], {}, [[], [{}]]], {"": ""}, "", "x", 0, 1.5, -0.0,
+        True, False, None, [None], 2 ** 80, deep,
+        {"z": 1, "a": 2, "M": 3, "é": 4, "中": 5, "😀": 6, "": 7, "a ": 8, "\n": 9, "\\": 10, '"': 11},
+        {"[": "]", "{": "}", ",": ":", ":": ",", '"': '\\"', "\\": "\\\\", "k": "a\\", "k2": "\\\\\\"},
+        ["]", "[", "}", "{", ",", ":", '":', '\\":', "\\\\", '\\\\"', "a,b", "{]", "x\ny", "tab\t", "nul\x00"],
+        {"s": 'say "hi", [1, 2]: {ok}', "t": "\\n is not a newline",
+         "u": "\u2028\u2029", "v": "\ud800\udfff", "w": "\udfff\ud800"},
+        {"unicode": "中文 éàü ß Ω", "emoji": "😀👍🏽 🇹🇼", "mixed": ["😀", {"中": "文"}, "\x7f"]},
+        {"neg0": -0.0, "list": [-0.0, 0.0, -0.0], "nested": {"x": [[-0.0]]}, "np": np.float64(-0.0)},
+        {"np": np.array([[-0.0, 1.0], [2.5, -3.0]]), "i": np.int64(7), "b": np.bool_(False), "f32": np.float32(0.5)},
+        {"t": (1, 2, (3, [])), "ints": [0, -1, 2 ** 63, -(2 ** 63)], "bools": [True, False], "none": None},
+        {"floats": [1e-7, 1e16, 1.7976931348623157e308, 5e-324, -1e-300, 0.1, 1 / 3, -0.05, 100.0]},
+        {"empty": [[], [[]], [{}], {}, {"a": {}}, {"a": [[]]}], "s": "-0.0,", "t": "-0.0]"},
+    ]
+
+
+def test_compact_fast_path_is_exact_on_the_conformance_set_and_examples():
+    """``_compact_dumps`` == ``json.dumps(canonical(doc), indent=1, ...)`` on every conformance expected file,
+    every rendered example and the rendered spec §8 benchmark document (≈10 MB)."""
+    from castplane.io import expand_scene
+    from castplane.output import geometry_json
+
+    expected = sorted((ROOT / "tests" / "conformance" / "expected").glob("*.json"))
+    assert len(expected) >= 60
+    for path in expected:
+        text = path.read_text(encoding="utf-8")
+        doc = json.loads(text)
+        _assert_fast_path_exact(doc, path.name)
+        assert geometry_json._compact_dumps(doc) + "\n" == text, path.name
+    examples = sorted(EXAMPLES.glob("*.json"))
+    assert len(examples) >= 8
+    for path in examples:   # as ``castplane render`` does: mesh files are expanded first (mesh_demo.json)
+        scene, _notes = expand_scene(json.loads(path.read_text(encoding="utf-8")), base_dir=path.parent)
+        _assert_fast_path_exact(castplane.render(load_scene(scene))["geometry"], path.name)
+    bench = castplane.render(load_scene(ROOT / "benchmarks" / "scenes" / "benchmark_100.json"))["geometry"]
+    _assert_fast_path_exact(bench, "benchmark_100")
+
+
+def test_compact_fast_path_is_exact_on_adversarial_documents():
+    """Strings with brackets, commas, colons, escaped quotes and backslashes, non-ASCII text and emoji, empty
+    and deeply nested containers, top-level scalars, keys that need sorting, ``-0.0`` (also inside numpy values,
+    and as text that only looks like the token), integers, booleans and ``None``."""
+    from castplane.output import geometry_json
+
+    for i, doc in enumerate(_adversarial_documents()):
+        _assert_fast_path_exact(doc, i)
+        if isinstance(doc, (dict, list)):   # ``dumps`` takes documents (the 3.13 guard never sees a bare -0.0)
+            assert dumps(doc) == geometry_json._reference_dumps(doc), i
+
+
+def test_compact_fast_path_is_exact_on_random_documents():
+    """A seeded fuzz of 3000 random documents, through ``_compact_dumps`` and through ``_reindent`` alone."""
+    import random
+
+    from castplane.output import geometry_json
+
+    rng = random.Random(20261007)
+    for i in range(3000):
+        doc = _fuzz_value(rng, 0) if i % 3 else {_fuzz_string(rng): _fuzz_value(rng, 1) for _ in range(5)}
+        _assert_fast_path_exact(doc, i)
+        native = geometry_json.canonical(doc)
+        assert geometry_json._reindent(json.dumps(native, **geometry_json._COMPACT_KW)) == json.dumps(
+            native, indent=1, sort_keys=True, ensure_ascii=False, allow_nan=False), i
+
+
+def test_reindent_matches_indent_on_int_keys_and_the_cpython_313_encoder():
+    """``_reindent`` depends on the text only (it never sees keys), so it is exact also where the encoders sort
+    non-string keys their own way; and the fast path writes what the 3.13+ C encoder path writes."""
+    from castplane.output import geometry_json
+
+    for doc in ({2: "a", 10: [1, {3: []}]}, {1.5: True, -1: None}, {True: 1}, [{0: {}}]):
+        compact = json.dumps(doc, **geometry_json._COMPACT_KW)
+        assert geometry_json._reindent(compact) == json.dumps(doc, indent=1, sort_keys=True, ensure_ascii=False)
+        if geometry_json._C_ENCODER is not None:
+            assert geometry_json._compact_dumps(doc) == "".join(geometry_json._C_ENCODER(doc, 0))
+
+
+def test_compact_fast_path_rejects_non_finite_numbers_like_the_reference():
+    """Contract §5.4.5 on the pre-3.13 path: a NaN / infinity raises the reference encoder's own ``ValueError``."""
+    from castplane.output import geometry_json
+
+    for bad in (float("nan"), float("inf"), float("-inf"), np.float64("nan"), np.array([1.0, np.inf])):
+        for doc in ({"x": bad}, {"a": [1.0, {"b": [bad]}]}, [bad]):
+            with pytest.raises(ValueError) as ref:
+                geometry_json._reference_dumps(doc)
+            with pytest.raises(ValueError) as fast:
+                geometry_json._compact_dumps(doc)
+            assert str(fast.value) == str(ref.value)
+
+
+def test_dumps_takes_the_compact_fast_path_without_an_indenting_c_encoder(monkeypatch):
+    """With ``_C_ENCODER`` unset (as on CPython < 3.13) ``dumps`` goes through ``_compact_dumps``."""
+    from castplane.output import geometry_json
+
+    calls = []
+    real = geometry_json._compact_dumps
+    monkeypatch.setattr(geometry_json, "_C_ENCODER", None)
+    monkeypatch.setattr(geometry_json, "_compact_dumps", lambda doc: calls.append(1) or real(doc))
+    doc = {"b": [1.0, -0.0, {"y": "中 \"q\" [x]"}], "a": {}, "c": []}
+    assert geometry_json.dumps(doc) == geometry_json._reference_dumps(doc)
+    assert calls == [1]
+    with pytest.raises(ValueError):
+        geometry_json.dumps({"x": float("nan")})

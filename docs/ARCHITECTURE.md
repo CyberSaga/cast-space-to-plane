@@ -4132,6 +4132,26 @@ and the hidden-run SVG groups (§5.1.8). Nothing an M4–M6 case needs lies beyo
   a near-parallel cut-off in step 3 or a region rule for `umbra[].polygons` would each be a versioned amendment
   (§5.0.8) that both runners must carry, required before a multi-light conformance case with casters on the receiver
   is added.
+- **[decision, implementation] (CI, Python 3.10) The geometry JSON writer before CPython 3.13.** `dumps` must be
+  `json.dumps(canonical(doc), sort_keys=True, indent=1, ensure_ascii=False, allow_nan=False)` byte for byte, and the
+  stdlib C encoder implements `indent` only from CPython 3.13 (`_make_c_encoder` probes it); before that `json.dumps`
+  with an indent runs the pure-Python encoder, ≈ 790 ms of the 1.12 s full render of the spec §8 benchmark on 3.10, so
+  the CI job `test (3.10)` failed the < 1 s target (requires-python is >= 3.10). When `_C_ENCODER` is `None`, `dumps`
+  now calls `_compact_dumps`: the C encoder writes the compact text (separators `,` / `:`, configured like the 3.13
+  encoder otherwise: `canonical` as the `default` hook, sorted keys, `ensure_ascii=False`, `allow_nan=False`; a text
+  that may hold a `-0.0` token is re-encoded from `canonical(doc)`, and any `TypeError` / `ValueError` /
+  `OverflowError`, e.g. a NaN, goes to the reference encoder, so the exception is the reference's own) and
+  `_reindent` inserts the indentation with NumPy: it locates the quotes (a `"` preceded by an odd run of backslashes is
+  escaped) and the `[ ] { } , :` candidates, keeps those outside strings (an even number of real quotes before them),
+  takes the depth as a cumulative sum of openers minus closers, inserts a newline and `depth` spaces after a non-empty
+  opener and after each `,`, before a non-empty closer, and one space after each `:`, leaves `[]` / `{}` and all string
+  contents alone, and builds the output with one `np.repeat` of a keep / insert mask (≈ 110 ms on the 7 MB compact text
+  of the benchmark document). Evidence: `tests/test_pipeline.py` checks `_compact_dumps` against the reference on the 60
+  conformance expected files, the 8 rendered examples, the rendered benchmark document, adversarial documents (string
+  contents with brackets, commas, colons, escaped quotes and backslashes, control characters, non-ASCII text, emoji and
+  lone surrogates; empty and 300-level nested containers; top-level scalars; `-0.0`, numpy values) and a seeded fuzz
+  of 3000 random documents, on 3.10 and 3.13; "JSON dumps only" on 3.10 went from 787 to 269 ms (full render 1124 →
+  653 ms). CPython >= 3.13 is unchanged: `_C_ENCODER` still writes the indented text and the new path is never taken.
 
 ### 5.5 M8 — STEP import (spec §9 row "STEP", spec §10 M8) — a loader, outside the core
 
