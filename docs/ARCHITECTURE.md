@@ -219,7 +219,7 @@ Curved objects carry `analytic = {kind, base (b), axis (a), e1, e2, radius, heig
 where `(e1, e2, a)` is the rotated local frame.
 
 ### 2.5 Shadow outlines of polyhedra (spec §5.1, §5.7)
-*Amended by §5.1.2 ("counter-clockwise in ground `(x, y)`" reads "counter-clockwise about `n`" in the receiver frame; the ground keeps the literal v2 code) and §5.1.3.3 (bounds clip, anchor rule).*
+*Amended by §5.1.2 ("counter-clockwise in ground `(x, y)`" reads "counter-clockwise about `n`" in the receiver frame; the ground keeps the literal v2 code) and §5.1.3.3 (bounds clip, anchor rule); and, for a loop that crosses the plane through the light four or more times, by the §5.1 implementation note "Arc pairing for a loop with several excursions to infinity" (D70): "the next incoming direction" is then the one matched by the angular order of the loop's crossings, not the loop-order next one, and the polygon splits into one loop per cycle.*
 - Silhouette edges: edges whose two adjacent faces have different `lit`. `silhouette_loops` walks
   them into closed loops oriented with the **lit face on the left** when seen from the light; under `M` such a
   loop maps to a polygon that is **counter-clockwise in ground `(x,y)`** (verified), and the shadow region is
@@ -1449,6 +1449,47 @@ worktree and the merge rule are in `docs/PLAN-v2.md`.
   on` (`hidden_lines_full_render_s: {min, median, target: 5.0, soft_pass}`, `hidden_lines_svg_bytes`,
   `hidden_lines_json_bytes` in `--json`); every other row, `pass` and the exit status stay the switch-off measurement,
   so `--gate full` is unchanged with or without the option.
+- **[decision, implementation] (review fix, D70) Arc pairing for a loop with several excursions to infinity.** §2.5 /
+  D7 pair each outgoing direction `D_out` with "the next incoming direction" in **loop order** and sweep counter-clockwise
+  by `Δθ ∈ (0, 2π]`. That is exact only when the plane through the light parallel to the receiver cuts the loop twice
+  (every convex caster, every vertical prism on the unbounded ground, the light-in-notch cases with the plate beyond the
+  closed arm: loop order and angular order coincide). When the plane cuts the loop `2p ≥ 4` times — a concave caster
+  with the light between its arms: an arch standing on the ground with the lamp below the lintel, a U-prism on its side
+  with the lamp in the notch, a U on the ground with a wall beyond its **opening**, a U straddling the plane through the
+  lamp parallel to a wall — the crossings of the pairs interleave in angle, the loop-order arcs sweep e.g. 289° + 242°
+  and cover the whole circle, and the nonzero fill blackens the entire ground / plate (review findings m4-geometry#0,
+  determinism-perf#0; on a bounded receiver the §5.1.3.3 anchor rule then faithfully fills the plate, with no warning).
+  Mathematics: the loop is a closed curve on the sphere of directions from the light with the shadow on its left and the
+  light plane as equator; walking the equator counter-clockwise about `n`, the number of solid hits rises by one at every
+  outgoing crossing and falls by one at every incoming one, so the shadowed directions at infinity — the arcs — are fixed
+  by the loop's own crossings and by nothing else (no origin, no reference point). `shadow.shadow_loop` therefore:
+  (1) keeps the literal v1/v2 code for `p ≤ 1` (byte identity; the 50 conformance cases contain no loop with `p ≥ 2`,
+  dry run 0 changes); (2) for `p ≥ 2` sorts the `2p` crossings by angle about `n` (`atan2` in ground `(x, y)`, or in
+  `(e1, e2)` for a receiver with a frame, reduced to `[0, 2π)`; an incoming crossing sorts before an outgoing one at equal
+  angles), starts at the first crossing of minimal running level and matches outgoing (`(`) with incoming (`)`) crossings
+  like parentheses — for a loop that is simple on the sphere this pairs every `D_out` with the **angularly next** `D_in`;
+  (3) sweeps each arc counter-clockwise from `D_out` to its matched `D_in` by the unwrapped sorted difference (`2π` only
+  for coincident crossings, as before), subdivided with the unchanged `ceil(Δθ / 60°)` rule and `("arc", k)` sources;
+  (4) re-links the finite chains `in → … → out` through the matched arcs and emits **one loop per cycle** of chains (the
+  cycle holding the loop's start vertex first, in the loop's own vertex order; then the others, each starting at its
+  lowest chain in loop order), every one `{"vertices", "sources", "unbounded": true}` under the new result key `"loops"`
+  (for `p ≤ 1` a one-element list aliasing the top-level arrays, also when the result is empty; the top-level arrays are
+  always the first component). `_shadow_record`, `_fallback_shadow_record` and `_caster_record` draw every component as a
+  loop of the record (its own `clip_polygon_bounds` on a bounded receiver, its own `entries`; crossing names `s<k>` keep
+  first-appearance order over the components; `shadows[].loops` / `polygons` / `polygon_edges` stay parallel). The
+  reviewer's proposal — a signed sum of the dropped vertices' `S[:3]` azimuths — is **not** used: that azimuth is measured
+  from the receiver-frame origin, and the identical arch translated by `(0, 6, 0)` came out as the complement of its
+  shadow; the matching above uses directions only, so the result is translation and rotation invariant
+  (`tests/test_arc_pairing.py`). Only the total sweep of a loop's arcs enters the winding number of a finite point, so the
+  fill is exact for every loop whose region leaves some equator direction free (the minimal level is the outside); a loop
+  that surrounds the light within the light plane itself would need an external base level and is not reachable with
+  the primitives. `curved.shadow_polygon_h` is unchanged: a convex solid's silhouette meets the equator at most twice.
+  §2.5 and D7 are amended by reference; the TypeScript port (`src/shadow.ts`) must mirror steps (1)–(4) literally (same
+  sort key, tie rule, minimum-level start, cycle order). Acceptance (ray cast, `tests/test_arc_pairing.py`,
+  `tests/test_raycast.py::test_multi_crossing_loops_match_raycast_reference`): `arch_ground` IoU 1.000 (was 0.075, the
+  whole plane), `u_on_side` 1.000 (was 0.458), `u_notch_wall` 0.994 (was 0.456, the whole plate), `u_wall` wall shadow
+  empty (was the whole 15 m² plate), a concave star with a wall 1.000 (was 0.299); the four scenes are v7 candidates
+  (`tests/fixtures/v7_candidates/`).
 
 ### 5.2 M5 — mesh import (spec §9 rows 網格匯入 / 匯入格式, spec §10 M5, spec §11.3)
 

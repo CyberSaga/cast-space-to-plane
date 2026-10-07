@@ -785,3 +785,42 @@ def make_mesh_scene(seed: int, n_objects: int | None = None, light_type: str | N
     camera = random_camera(rng, objects)
     meshes = [to_mesh_object(rng, o, open_bottom=bool(rng.uniform() < open_bottom_rate)) for o in objects]
     return assemble_scene(meshes, light, camera)
+
+
+# --------------------------------------------------------------------------- arc pairing (review fix, D70)
+def arch_polygon(half_width: float, leg: float, height: float, opening: float) -> list[list[float]]:
+    """A concave "arch" outline in local ``(x, y)``: two legs of width ``leg`` at ``|x| in [half_width - leg,
+    half_width]``, an opening of height ``opening`` between them (mouth at ``y = 0``), lintel up to ``height``.
+    Counter-clockwise."""
+    w, t = half_width, leg
+    return [[-w, 0.0], [-w + t, 0.0], [-w + t, opening], [w - t, opening], [w - t, 0.0], [w, 0.0],
+            [w, height], [-w, height]]
+
+
+def make_multi_crossing_scene(seed: int = 0) -> dict:
+    """A seeded scene whose single silhouette loop crosses the plane through the light parallel to the
+    ground **four times** (contract §2.5 arc pairing, D70): an arch-shaped prism standing upright
+    (``rotation_deg = [90, 0, rz]``, mouth at the bottom) either on the ground or floating above it, and
+    a point light inside the opening in front of it -- lower than the lintel, between the legs -- so that
+    the horizontal rays through the opening miss the solid while both legs cut the light plane.  Every
+    direction at infinity between the two legs' sweeps is lit; the shadow has two unbounded components."""
+    rng = np.random.default_rng(seed)
+    w = round(float(rng.uniform(1.2, 2.0)), 4)
+    t = round(float(rng.uniform(0.3, 0.6)), 4)
+    H = round(float(rng.uniform(1.5, 2.5)), 4)
+    h_open = round(float(rng.uniform(0.5, 0.8)) * H, 4)
+    depth = round(float(rng.uniform(0.3, 0.8)), 4)
+    rz = round(float(rng.uniform(0.0, 360.0)), 4)
+    pz = 0.0 if seed % 2 == 0 else round(float(rng.uniform(0.5, 2.0)), 4)
+    position = [round(float(rng.uniform(-3.0, 3.0)), 4), round(float(rng.uniform(-3.0, 3.0)), 4), pz]
+    arch = {"id": "arch", "type": "prism", "polygon": arch_polygon(w, t, H, h_open), "height": depth,
+            "transform": {"position": position, "rotation_deg": [90.0, 0.0, rz]}}
+    # the light in local coordinates: inside the opening's width, within its height, in front (local -z,
+    # which the rotation [90, 0, 0] sends to world -y before the turn about z)
+    local = np.array([float(rng.uniform(-(w - t) + 0.15, (w - t) - 0.15)),
+                      float(rng.uniform(0.15, 0.9) * h_open),
+                      -float(rng.uniform(1.0, 3.5))])
+    world = rotation_matrix([90.0, 0.0, rz]) @ local + np.asarray(position, dtype=np.float64)
+    light = {"id": "lamp", "type": "point", "position": [round(float(v), 4) for v in world]}
+    camera = random_camera(rng, [arch])
+    return assemble_scene([arch], light, camera)

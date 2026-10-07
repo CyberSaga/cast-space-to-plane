@@ -1,0 +1,5 @@
+# Changelog
+
+## Unreleased — review fixes
+
+- **m4-geometry#0 / determinism-perf#0 (group arc)** — `shadow.shadow_loop` pairs the arcs at infinity of a silhouette loop that crosses the plane through the light four or more times by angular parenthesis matching of the loop's own crossings and emits one loop per cycle (new result key `loops`; `_shadow_record`, `_fallback_shadow_record`, `_caster_record` draw every component). The loop-order pairing of §2.5 blackened the whole ground / plate for concave casters with the light between their arms (an arch with the lamp below the lintel, a U on its side, a U with a wall beyond its opening or straddling the light plane). Translation and rotation invariant; loops with at most one pair are byte-identical (conformance dry run: 0 of 50 changes). Contract: §5.1 implementation note "Arc pairing", §2.5 amendment line, D7 pointer, D70. Scenes: `tests/fixtures/v7_candidates/` (`arch_ground`, `u_wall`, `u_notch_wall`, `u_on_side`). Tests: `tests/test_arc_pairing.py`, `tests/test_raycast.py::test_multi_crossing_loops_match_raycast_reference`, `tests/reference/random_scenes.make_multi_crossing_scene`.
