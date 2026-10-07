@@ -46,6 +46,8 @@ castplane render examples/curved_demo.json -o out --formats svg,png --dpi 200
 castplane render examples/basic.json -o out --camera examples/three_point.json --layers objects,cast_shadow
 castplane info examples/directional.json
 castplane stages examples/basic.json | python3 -c "import json,sys; d=json.load(sys.stdin); print(d['B']['camera']['P'])"
+castplane render examples/wall_and_ground.json -o out --hidden-lines              # M4：地面 + 牆面，隱藏線畫成虛線
+castplane render examples/wall_and_ground.json -o out --hidden-lines --hidden-style omit
 ```
 
 ## 2. Python API
@@ -342,3 +344,6 @@ C 段在 `hidden_lines` 開啟時呼叫；純 numpy、確定性（取樣位置�
 | `LIGHT_INSIDE_OBJECT` | 點光源在球內、圓柱／圓錐完全無受光面，或嚴格在方塊／稜柱實體內 | `[物件]` | 該物件無影子、無明暗交界線、無作圖點（多面體的每個面都算背光，仍列在 `form_shadow`）；訊息指出種類 |
 | `CONIC_SAMPLED` | 某圓錐曲線退化或條件數 > 1e8 | `[物件]` | 以取樣折線取代橢圓／弧 |
 | `CONSTRUCTION_CHECK_SKIPPED` | 自我驗證的兩線其一為零向量、兩線平行或 S′ 在無窮遠 | `[點名]` | 該點不列入 `checks` |
+| `RECEIVER_UNLIT` | M4：有界受影面收不到某光源（點光源在板的背側或板面上、平行光平行板面或從背側照來，或光源在無界地面之下——地面不透光）；唯一刻意的「資訊性」代碼（合約 §5.1.9） | `[光源, 受影面]` | 該板對該光源的影子紀錄存在但為空，`receivers[].lit[光源]` 為 false；板仍可對其他受影面投影 |
+
+M4 改變的適用範圍（合約 §5.1.9）：`LIGHT_BELOW_RECEIVER`、`DIRECTIONAL_HORIZONTAL`、`VERTEX_NOT_BELOW_LIGHT`、`OBJECT_BELOW_RECEIVER` 只用於無界受影面（有界板的背後裁切是靜默的，裁切點命名為 `<物件>.s<k>.<光源>.<受影面>`）；`POINT_BEHIND_CAMERA` 的 ids 可以是受影面 id（其 `b<k>` 頂點或影子點）；`SHADOW_VP_AT_INFINITY` 對 `receivers[0]` 為 `[光源]`、其他受影面為 `[光源, 受影面]`；`CONSTRUCTION_CHECK_SKIPPED` 的點名帶受影面後綴。影子沒落在板上、物件在板後、板側對光源或相機、共平面施影體、以及任何消隱情況都**不**發警告。

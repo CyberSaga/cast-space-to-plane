@@ -36,6 +36,7 @@ castplane render examples/basic.json -o out         # out/basic.svg 與 out/basi
 castplane render examples/basic.json -o out --formats svg,json,png --layers objects,cast_shadow,construction
 castplane render examples/basic.json -o out --camera my_camera.json   # 只換相機（相機 JSON 或另一個場景檔）
 castplane stages examples/basic.json -o stages.json # A 段 / B 段中間結果（除錯與移植用）
+castplane render examples/wall_and_ground.json -o out --hidden-lines   # M4：地面 + 有界牆面（轉折影），隱藏線畫成虛線
 ```
 
 `render` 預設只寫 SVG 與 JSON；PNG 要明確以 `--formats` 要求，沒有 cairosvg / resvg 時以結束碼 3 回報，而且**什麼檔案都不寫**（同一次要求的 SVG / JSON 也不寫，避免半成品；先不加 `png` 再跑一次即可）。結束碼：0 成功、1 檔案錯誤、2 輸入無效（訊息含欄位路徑，例如 `error: objects[1].radius: must be > 0`）、3 缺少選用相依套件。完整選項見 [`docs/USAGE.md`](docs/USAGE.md)。
@@ -63,6 +64,9 @@ doc2 = castplane.compose(scene, castplane.project_scene(scene, A, camera=camera)
 
 # 一次做完：render() = A + B + C + SVG
 result = castplane.render(scene)        # {"geometry": doc, "svg": "<svg …>"}
+
+# M4：取樣式消隱（預設關閉；None = 用場景的 output.hidden_lines / hidden_style）
+result = castplane.render(scene, hidden_lines=True, hidden_style="dashed")   # 或 "omit"
 ```
 
 ## 作圖線是什麼
@@ -102,6 +106,8 @@ result = castplane.render(scene)        # {"geometry": doc, "svg": "<svg …>"}
 
 `output.layers` 或 `--layers` 選擇子集，順序固定。v1 不消隱，所有邊都畫。
 
+**M4 隱藏線（合約 §5.1.8）。** `output.hidden_lines`（或 `--hidden-lines`、`render(..., hidden_lines=True)`）開啟時，每條邊、母線、明暗交界線、圓錐曲線與影子輪廓邊依取樣結果切成可見段與隱藏段：可見段留在原本的群組，隱藏段放進各層**第一個**子群組 `objects.hidden` / `form_shadow.hidden` / `cast_shadow.hidden`，畫成 0.15 mm 虛線（`hidden_style: "dashed"`，預設）或留空（`"omit"`，真正的消隱）；影子的填色不受影響，輪廓改畫在 `cast_shadow.<light>.<object>.outline`。關閉時 SVG 與 v2 位元相同。有界受影面的邊畫在 `objects.<受影面 id>`，板子的影子跟物件的影子一樣在 `cast_shadow.<light>`。
+
 ### JSON 幾何（規格 §6.2）
 
 每個 2D 點都記錄來源 3D 點：`points[name] = {world, image, depth}`（`image` 為 `[u, v]`，在相機後方時為 `null`）；方向點（平行光的 L、F）為 `{direction, at_infinity: true, image}`。點名規則：
@@ -115,8 +121,10 @@ result = castplane.render(scene)        # {"geometry": doc, "svg": "<svg …>"}
 | `<物件>.s<k>.<光源>` | 地面交點：物件被地面切開時插入的點，以及曲面影子多邊形的取樣點（本身就是自己的影子與垂足，無作圖線） |
 | `<物件>.c`、`<物件>.sil.<k>`、`<物件>.g<k>.base/.top`、`<物件>.apex` | 曲面基元的作圖點（球心、輪廓圓象限點、切線母線端點、圓錐頂點），同樣可加 `.shadow.<光源>` / `.foot` |
 | `<物件>.og<k>.base/.top` | 相機輪廓母線端點（隨相機改變，不在 `edges[]` 中，無作圖線） |
+| `<受影面>.b<k>` | M4：有界受影面的 bounds 頂點 k（板子當施影體時同樣有 `.shadow.<光源>[.<受影面>]` / `.foot[.<受影面>]`） |
+| `….shadow.<光源>.<受影面>`、`….foot.<受影面>`、`<物件>.s<k>.<光源>.<受影面>`、`F.<光源>.<受影面>` | M4：`receivers[0]` 以外的受影面在名稱末尾加 `.<受影面 id>`（`receivers[0]` 保留上面的短名稱） |
 
-其他區塊：`edges[]`（`from`、`to`、`silhouette`、`back`、`segment` 畫面線段）、`shadows[]`（`outline` / `loops` 點名或 `{"direction": …}` 方向頂點、`polygons` 裁切後的可畫多邊形、`conics` 圓錐曲線、`unbounded`）、`form_shadow[]`、`outlines[]`（曲面物件的相機輪廓）、`construction`（`light_point`、`shadow_vp`、`rays`、`segments`、`checks`）、`horizon`（`v_mm`、`line`、`vanishing_points`）、`warnings[]`（`{code, ids, message}`）。浮點數以最短往返表示寫出、鍵排序，相同輸入產生位元相同的檔案。完整鍵表在 [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) §3.1。
+其他區塊：`edges[]`（`from`、`to`、`silhouette`、`back`、`segment` 畫面線段）、`shadows[]`（`outline` / `loops` 點名或 `{"direction": …}` 方向頂點、`polygons` 裁切後的可畫多邊形、`conics` 圓錐曲線、`unbounded`）、`form_shadow[]`、`outlines[]`（曲面物件的相機輪廓）、`construction`（`light_point`、`shadow_vp`、`rays`、`segments`、`checks`）、`horizon`（`v_mm`、`line`、`vanishing_points`）、`warnings[]`（`{code, ids, message}`）。M4 另有頂層 `hidden_lines`（實際生效的開關）、`receivers[]`（`plane`、`bounds`、各光源的 `lit` / `casts`）、`construction.per_receiver`、每個 `shadows[]` 的 `receiver` 與 `polygon_edges`，以及每個可消隱圖形的 `visibility`（`visible` / `hidden` / `partial`）與 `runs`（直線 `{s, t, mm, visible}`、圓錐曲線 `{interval, theta, mm, visible}` 與 `hidden_polylines`）；開關關閉時這些鍵都是「全部可見」的值。浮點數以最短往返表示寫出、鍵排序，相同輸入產生位元相同的檔案。完整鍵表在 [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) §3.1。
 
 ### PNG
 
@@ -135,12 +143,14 @@ result = castplane.render(scene)        # {"geometry": doc, "svg": "<svg …>"}
 | | `transform` | 選填；`position` 預設 `[0, 0, 0]`，`rotation_deg` 預設 `[0, 0, 0]`（Z-Y-X 順序的歐拉角，`R = Rz·Ry·Rx`）；`scale` 不允許（用 size 參數） |
 | `lights[]` | | v1 恰好一個；`id` 唯一、非空、不含 `.` |
 | | `type` | `point`（`position`）或 `directional`（`direction` 指向光源，長度必須為 1，容差 1e-9） |
-| `receivers[]` | | v1 恰好一個；`type: "plane"`、`normal` 必須是 `[0, 0, 1]`、`offset` 必須是 0（預設 0） |
+| `receivers[]` | | v1 恰好一個；`type: "plane"`、`normal` 必須是 `[0, 0, 1]`、`offset` 必須是 0（預設 0）。**M4 起**：非空串列；`id` 唯一、不含 `.`、不得與物件／光源 id 相同、不得是 `hidden`；`normal` 任意單位向量（法線指向的一側是受光面，不會自動翻轉）、`offset` 任意 |
+| | `bounds` | M4：選填，≥ 3 個世界座標點組成的**嚴格凸**簡單多邊形，必須在平面上（順時針輸入自動反向）；省略表示無界，只允許 `receivers[0]` 且必須是地面 z = 0；有地面時 bounds 不得低於地面。凹的受影面請拆成幾個凸板 |
 | `camera` | 姿態 | `position` + `target`（≠ position）**或** `position` + `yaw_deg` + `pitch_deg`，二擇一；`roll_deg` 預設 0 |
 | | 鏡頭 | `focal_length_mm` > 0；`frame_mm` 兩個正數；`shift_mm` 主點偏移，預設 `[0, 0]`；`near_m` > 0，預設 0.05 |
 | `output` | `canvas_mm` | 兩個正數，長寬比必須等於 `frame_mm` 的長寬比（容差 1e-9）。**注意**：規格 §4 自己的範例（257×182 配 36×24）違反這條、會被拒絕（錯誤訊息列出兩個比值與可用的替代值），見下方「差異」第 1 點 |
 | | `layers` | 六個圖層 id 的**非空**子集，省略時為全部（空串列會被拒絕，與 `--layers` 一致）；輸出順序固定 |
 | | `png_dpi` | 正數，預設 300 |
+| | `hidden_lines`、`hidden_style` | M4：布林，預設 `false`；`"dashed"`（預設）或 `"omit"`（見上方「M4 隱藏線」） |
 
 違反任一規則時 `load_scene` 拋出 `SceneError`，`field` 屬性是 JSON 路徑（例如 `camera.target`、`objects[2].polygon`、`output.canvas_mm`），命令列以結束碼 2 回報。幾何退化（光源在地面下、頂點高於點光源……）**不是**錯誤，只產生警告。
 
@@ -171,7 +181,8 @@ result = castplane.render(scene)        # {"geometry": doc, "svg": "<svg …>"}
 | 退化情況（§5.7） | 每列至少一個測試，檢查警告代碼與輸出有限 | `python3 -m pytest tests/test_degenerate.py -q` |
 | 光線投射對照組（§7.3） | 亂數場景（1–10 個基元，含凹稜柱與光源垂足在凹口內的案例），地面取樣網格逐點射線測試，影子多邊形柵格化後 IoU ≥ 0.99（另逐物件比對）；與幾何法零程式碼共用 | `python3 -m pytest tests/test_raycast.py -q`（較慢） |
 | 屬性測試（§7.4） | hypothesis 生成隨機場景與相機，驗證全部不變量，並針對退化情況生成專門分佈 | `python3 -m pytest tests/test_property.py -q`（較慢） |
-| 一致性測試集（§7.5） | 34 個案例的輸入與 §6.2 輸出，畫面座標容差 1e-6 mm、警告代碼集合相同；TypeScript 移植的合約。比對常數的單一來源是 `tests/conformance/rules.json`（Python 與 TypeScript 執行器共用，含逐案例的 `case_overrides`） | `python3 -m pytest tests/test_conformance.py -q`；重新產生：`python3 tools/regen_conformance.py --reason "…"`；比對規則變更：`python3 tools/regen_conformance.py --rules-only --reason "…"` |
+| 一致性測試集（§7.5） | 43 個案例（v2 的 34 個 + M4 的 9 個）的輸入與 §6.2 輸出，畫面座標容差 1e-6 mm、警告代碼集合相同；TypeScript 移植的合約。比對常數的單一來源是 `tests/conformance/rules.json`（Python 與 TypeScript 執行器共用，含逐案例的 `case_overrides`） | `python3 -m pytest tests/test_conformance.py -q`；重新產生：`python3 tools/regen_conformance.py --reason "…"`；比對規則變更：`python3 tools/regen_conformance.py --rules-only --reason "…"` |
+| 消隱參考（M4） | `tests/reference/zbuffer.py` 逐像素光線投射深度緩衝（0.1 mm/px，三值判定加輪廓防護），與 castplane 零程式碼共用；29 個場景的每段 run 每 0.5 mm 取樣與其比對（≥ 99%，方塊／稜柱邊 100%），run 邊界與逐點光線投射在 ±0.15 mm 內一致 | `python3 -m pytest tests/test_hidden.py tests/test_receivers.py -q` |
 | 效能基準（§8） | 100 個基元、約 1 萬條邊：完整渲染 < 1 s、只換相機 < 100 ms；預設讀取提交的場景檔 `benchmarks/scenes/benchmark_100.json`（`benchmarks/export_scene.py` 產生，TypeScript 基準讀同一個檔） | `python3 benchmarks/bench.py`（不在預設測試內；目前量測狀態見 `benchmarks/README.md`） |
 
 ## 里程碑（規格 §10）
@@ -182,7 +193,7 @@ result = castplane.render(scene)        # {"geometry": doc, "svg": "<svg …>"}
 | M1 多面體投射陰影與作圖線 | 平面投影矩陣、受光判定、光輪廓邊、影子多邊形、L′ F′ 與作圖線、六個 SVG 圖層、JSON 輸出 | 完成 |
 | M2 曲面基元與形體陰影 | 圓柱、球、圓錐的圓錐曲線影子、明暗交界線、SVG ellipse 輸出 | 完成 |
 | M3 核心穩定（閘門） | 光線投射對照組、屬性測試、一致性測試集 v1、效能基準 | **通過（D17 豁免）**：光線投射對照（IoU ≥ 0.99）、屬性測試、一致性測試集（目前 v3）與效能基準皆已交付並通過；§8 的「完整渲染 < 1 s」已達標（約 0.35–0.45 s），「只換相機 < 100 ms」**尚未達標**（約 110–130 ms，關閉循環 GC 約 90 ms；量測結果見 `benchmarks/README.md`）。規格 §8 將數字定為目標值，閘門審查依合約 §4 / D17 豁免這一項：CI 以 `python3 benchmarks/bench.py --gate full` 為閘門（`.github/workflows/ci.yml`），只換相機列為已知未達標、留待 M7 互動介面時收斂 |
-| M4 多受影面與隱藏線 | 有界受影面、逐面裁切、轉折影、取樣式隱藏線、visibility 欄位 | 未排程／預留（`receivers` 為陣列、`edges[].visibility` 已存在） |
+| M4 多受影面與隱藏線 | 有界受影面、逐面裁切、轉折影、取樣式隱藏線、visibility 欄位 | 完成（M4 工作樹）：任意平面的有界凸受影面、bounds 裁切與錨點規則、轉折影、`RECEIVER_UNLIT`、逐受影面作圖線、取樣式消隱（`hidden_lines` 預設關閉，`--hidden-lines`）、9 個一致性案例；34 個既有案例的鍵新增重產（一致性 v4）在合併到主分支時執行一次（合約 §5.0.8） |
 | M5 網格匯入 | OBJ、glTF/GLB 載入、前處理管線 | 未排程／預留（內部網格表示即 M5 格式） |
 | M6 多光源 | 多光源影子分組、疊影規則、SVG 子圖層 | 未排程／預留（`lights` 為陣列、影子帶 light id、`cast_shadow.<light>` 子圖層） |
 | M7 TypeScript 移植與網頁 UI | 核心移植、three.js 場景顯示、相機拖曳 | 進行中：第 1 步完成（`tests/conformance/rules.json` 與一致性測試集 v3、`regen_conformance.py --rules-only`、提交的基準場景檔 `benchmarks/scenes/benchmark_100.json`、`tests/test_ts_port.py`）；移植本身見合約 §5.4 與 `docs/PLAN-v2.md` |

@@ -9,7 +9,7 @@
 | `cases/<案例>.json` | 輸入：一個 spec §4 格式的場景檔，外加一個說明用的 `description` 欄位（驗證時會被忽略，contract §2.0「未知鍵忽略」） |
 | `expected/<案例>.json` | 輸出：`castplane.render(scene)["geometry"]` 經 `castplane.output.geometry_json.dumps` 寫出的 spec §6.2 幾何文件（contract §3.1 鍵、排序鍵、最短往返浮點數、結尾換行） |
 | `CHANGELOG.md` | 版本紀錄：每次重新產生 expected 的日期、版本號、案例清單與原因 |
-| `rules.json` | 比對規則常數的單一來源（v3 起，合約 §5.4.8 / §5.0.8）：`image_tol_mm`、`rel_tol`、`mm_keys`、`drawable_containers`、`arc_non_mm`、`mm_key_paths`、`int_keys`、`max_reported` 與逐案例的 `case_overrides`；Python 執行器保留自己的常數並以測試斷言兩者相等，TypeScript 執行器直接讀這個檔 |
+| `rules.json` | 比對規則常數的單一來源（v3 起，合約 §5.4.8 / §5.0.8）：`image_tol_mm`、`rel_tol`、`mm_keys`、`drawable_containers`、`arc_non_mm`、`mm_key_paths`、`int_keys`、`max_reported` 與逐案例的 `case_overrides`（M4 加 `runs_rule`）；Python 執行器保留自己的常數並以測試斷言兩者相等，TypeScript 執行器直接讀這個檔 |
 | `../test_conformance.py` | 比對程式（pytest） |
 | `../../tools/regen_conformance.py` | 重新產生 expected 檔的工具 |
 
@@ -25,12 +25,14 @@
 | 其他數值（世界座標、深度、方向、圓錐曲線矩陣、相機矩陣、角度） | 相對容差 **1e-9**，下限 1e-9：`|a − b| ≤ 1e-9 · max(1, |a|, |b|)` |
 | 非數值（字串、布林、null、串列長度、物件鍵） | 完全相等。整數與浮點數都視為數值（移植版可把 `1.0` 寫成 `1`），布林不是數值 |
 | `warnings` | **代碼集合**必須相同（spec §7.5）；`(code, ids)` 的集合也必須相同（contract §2.9 規定 ids）；`message` 不比對 |
+| `runs` 項目內的數值（M4，`rules.json` 的 `runs_rule`，合約 §5.0.8 / §5.1.11） | 任何 `runs` 串列項目（邊、母線、明暗交界線段、圓錐曲線項目、`polygon_edges`）內：`mm` 絕對容差 **0.05 mm**，`s` / `t` / `theta` 絕對 **1e-3**（`theta` 在 runs 內不套 `arc_non_mm`），`visible`、`interval` 與段數完全相等。取樣式消隱的邊界本身只準到 `HLR_TOL_MM`，不能用 1e-6 mm 比對 |
+| M4 其他新鍵 | `hidden_polylines` 是畫面座標（1e-6 mm）；`construction.per_receiver.*.segments.*.points` 也是（`mm_key_paths`）；`interval` 是整數鍵（`int_keys`）；`receivers[].plane` / `bounds` 等其餘新數值照上面的 1e-9 相對容差 |
 
 失敗訊息會列出案例名稱與不符的路徑（例如 `points.crate.v0.image[0]: expected …, got …`），最多列 25 條。
 
 **逐案例放寬（`rules.json` 的 `case_overrides`，v3）。** 一筆放寬只對一個案例、只對路徑符合其 `paths`（`*` 代表任一個串列索引或鍵，比對路徑前綴）之下的**數值**改用絕對容差 `abs_tol`；非數值、串列長度、鍵集合與警告一律不放寬。目前只有一筆：`degenerate_cylinder_cap_at_light_height` 的 `shadows[*].loops[*][*].direction` 與 `shadows[*].outline[*].direction`（四個葉節點）以 1e-6 絕對容差比對——頂蓋恰在光源高度，`w_S = 0` 的交點是重根，方向頂點對 `M`、`L` 一個 ulp 的擾動以平方根放大（實測每 ulp 1.5e-9），這是案例的目的而非實作錯誤（合約 §5.4.4 (1)、D60）。`compare_documents(expected, actual, case_name)` 依案例名稱套用。
 
-## 來源（目前版本 v3，見 `CHANGELOG.md`；共 34 個案例）
+## 來源（目前版本 v3，見 `CHANGELOG.md`；共 34 個 v2 案例，M4 的 9 個見下方 `### M4 受影面與隱藏線`）
 
 | 類別 | 案例 | 依據 |
 | --- | --- | --- |
@@ -41,6 +43,22 @@
 | 部分埋入地面 | `buried_box_tilted`、`buried_cylinder_tilted`（曲面物件的地面截面鏈） | contract §2.3 / §2.6 |
 | 相機 | `camera_roll_and_shift`、`camera_yaw_pitch_form` | contract §2.1 / §2.2 |
 | 亂數場景 | `random_seed{0,3,9,14,23,38}_*objects`：`tests.reference.random_scenes.make_scene(seed, n_objects)` 產生、通過 §7.3 光線投射對照（IoU ≥ 0.99，含逐物件比對）後凍結；五種基元與兩種光源都有涵蓋 | spec §7.3 |
+
+### M4 受影面與隱藏線
+
+合約 §5.1.11 的 9 個案例，在 M4 工作樹中以 `regen_conformance.py --case` 加入（場景取自 `tests/test_receivers.py` / `tests/test_hidden.py` 的場景產生函式）。34 個既有案例的 expected 檔在工作樹中**不動**：M4 給每份文件加上無條件的新鍵（`hidden_lines`、`receivers`、`construction.per_receiver`、`runs`、`visibility`、`hidden_polylines`、`polygon_edges`），整組的鍵新增重產（v4）在合併後的主分支上只做一次（合約 §5.0.8 第 2 條）；在那之前，`test_render_matches_expected` 對沒有 `hidden_lines` 鍵的 expected 先以 `strip_new_keys` 刪掉這些鍵（並檢查它們都是關閉時的值）再比對。`python3 tools/regen_conformance.py --strip-new-keys --reason "…"` 是同一個檢查的命令列版本（不寫檔；已帶 M4 鍵的 expected 直接比對），v4 那一筆 CHANGELOG 要記錄它零不符。
+
+| 案例 | 內容 | 依據 |
+| --- | --- | --- |
+| `wall_and_ground` | 手算驗收案例：無界地面 + 有界牆面 y = 6（法線 −y）、點光源下的木箱；影子從地面折到牆上，轉折點 (±3/4, 6, 0)；消隱關閉、無警告 | 合約 §5.1.11、spec §10 M4 |
+| `wall_and_ground_hidden` | 同上、`hidden_lines` 開啟：牆底邊 `partial`（s = 23/60、37/60）、地面影子邊在 y = 6 之後被牆遮住（s = 0.713073）、木箱 5 條隱藏邊 / 7 條可見邊 | 合約 §5.1.11 |
+| `receiver_unlit_wall` | 光源在牆後（0, 8, 3）：`RECEIVER_UNLIT [lamp, wall]`，牆收不到影子（紀錄為空）但仍對地面投影；牆頂的地面影子落到相機後方，`POINT_BEHIND_CAMERA` 的 ids 是受影面 id `wall` | 合約 §5.1.2 / §5.1.9 |
+| `receiver_directional_wall` | 平行光、水平視線：`F.sun.wall` 是方向點且其影像在無窮遠，`SHADOW_VP_AT_INFINITY [sun, wall]`，`construction.per_receiver.wall.shadow_vp_at_infinity` | 合約 §5.1.5 |
+| `fold_curved_cylinder` | 圓柱影子從地面折到牆上：圓錐曲線影子在有界受影面上的閉式 bounds 裁切 | 合約 §5.1.4 |
+| `bounded_default_receiver` | 沒有地面，`receivers[0]` 是有界地板：它擁有短點名與平的 `construction` 鍵；木箱影子在 y = 5.5 被 bounds 截斷 | 合約 §5.1.2 |
+| `hidden_lines_curved_unbounded` | 比光源高的球與圓柱（無界地面影子：雙曲線分支、開口的圓柱影子），消隱開啟：圓錐曲線 runs、`hidden_polylines`、母線 runs | 合約 §5.1.6 / §5.1.11 |
+| `hidden_lines_vp_in_canvas` | `degenerate_vertex_above_point_light` 開啟消隱：影子多邊形有一個頂點在擴大畫布內的地平線上，畫出的邊有 `w = 0` 端點 | 合約 §5.1.6.4 / §5.1.11 |
+| `concave_prism_on_plate` | U 形稜柱、光源在凹口內且低於臂頂、地板 [−3, 3] × [−4.5, −2] 在封閉臂之後：未裁切影子的無窮遠弧超過 180°，錨點規則讓結果是整塊板（面積 15） | 合約 §5.1.3.3（錨點規則） |
 
 每個案例刻意只放少量物件，讓 expected 檔可以人工審閱；整組 expected 的大小必須 < 3 MB（測試會檢查）。
 

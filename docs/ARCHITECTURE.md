@@ -1417,6 +1417,38 @@ worktree and the merge rule are in `docs/PLAN-v2.md`.
   docstring usage block, one import line (`HIDDEN_STYLES`) and `cmd_stages` (`_stage_b_without_a`, B written without
   its `A` reference). The merge of M4 after M5 resolves the `_run` hunk by keeping both changes
   (`load_expanded_scene` and the `hidden_lines` parameter).
+- **[decision, implementation] (M4 step 10) The nine cases: choices the contract leaves open.** The scenes are the
+  test-suite builders (`tests/test_receivers.py::wall_and_ground_scene` / `fold_curved_cylinder_scene`,
+  `tests/test_hidden.py::m4_hidden_scenes` / `curved_unbounded_scene` / `vp_in_canvas_scene`), so the conformance
+  files and the unit / depth-buffer tests check the same geometry. The switch is on exactly where §5.1.11 says so
+  (`wall_and_ground_hidden`, `hidden_lines_curved_unbounded`, `hidden_lines_vp_in_canvas`) and off in the other six
+  (`fold_curved_cylinder` included: its conic bounds clip is the subject; conic runs are covered by
+  `hidden_lines_curved_unbounded`). `receiver_unlit_wall` puts the lamp at `(0, 8, 3)`; besides `RECEIVER_UNLIT
+  [lamp, wall]` it carries `POINT_BEHIND_CAMERA [wall]` (the wall's top corners shadow onto the ground at
+  `(±18, −4, 0)`, behind the camera at `y = −1`) — kept on purpose: it is the §5.1.9 case "ids may be a receiver id".
+  `receiver_directional_wall` uses the sun `(0.3, −0.5, 0.8)/√0.98` and a level camera (`target z = 1.6`), so the
+  in-wall direction `F.sun.wall ∝ (0.3, 0, 0.8)` is perpendicular to the view direction and its image is at infinity.
+  `concave_prism_on_plate` is the "beyond the closed arm" geometry of the note above.
+- **[decision, implementation] (M4 step 10) Worktree changelog entries and the rules record at the merge.** In the
+  worktree `rules.json` was changed through `--rules-only` (§5.0.8 rule 3; local entry `v4`) and the nine cases were
+  added with one `--case` call (local entry `v5`); both entries say they are worktree-local. At the merge they are
+  collapsed into the one v4 milestone entry together with the full key-additive regeneration (rule 1), **and that
+  collapsed entry must keep the `- rules (tests/conformance/rules.json at v4):` snapshot block** (or the merge runs
+  `--rules-only` on `main` before the regeneration): `tests/test_conformance.py::test_rules_json_is_versioned_in_the_changelog`
+  reads the last rules snapshot of the changelog and requires it to equal `rules.json`. `--strip-new-keys` compares a
+  case whose expected file already carries the M4 keys (`"hidden_lines":` present — the nine M4 cases, and every file
+  after v4) unstripped, so the pre-v4 check runs on the whole set (`43 of 43 case(s) with zero mismatches`) instead of
+  failing on the nine new files; the 34 v2 files are stripped as §5.1.11 says (34 of 34 byte-identical after
+  stripping on the recorded build).
+- **[decision, implementation] (M4 step 10) `bench.py --hidden-lines` adds one row and keeps the committed scene.**
+  §5.0.9 / C18 / §5.4.9 list `--hidden-lines` among the variants that "generate"; §5.1.6.6 says the option "times the
+  spec §8 scene with the switch on" and that the table also records the switch-off rows. `--hidden-lines` therefore
+  loads the same scene as the default run (the committed `benchmark_100.json`, with `output.hidden_lines` set to true
+  in memory — on the recorded NumPy build this is byte-identical to the generated scene, and on any other build it is
+  still the one spec §8 scene the other rows measure) and **adds** the informational row `full render, hidden lines
+  on` (`hidden_lines_full_render_s: {min, median, target: 5.0, soft_pass}`, `hidden_lines_svg_bytes`,
+  `hidden_lines_json_bytes` in `--json`); every other row, `pass` and the exit status stay the switch-off measurement,
+  so `--gate full` is unchanged with or without the option.
 
 ### 5.2 M5 — mesh import (spec §9 rows 網格匯入 / 匯入格式, spec §10 M5, spec §11.3)
 
