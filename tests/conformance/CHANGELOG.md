@@ -56,3 +56,12 @@ One entry per regeneration (newest last); see README.md.
 {"arc_non_mm": ["rotation_deg", "theta", "large_arc", "sweep"], "case_overrides": {"degenerate_cylinder_cap_at_light_height": [{"abs_tol": 1e-06, "paths": [["shadows", "*", "loops", "*", "*", "direction"], ["shadows", "*", "outline", "*", "direction"]], "reason": "direction vertices at a tangent w_S = 0 crossing (curved._zero_shift, acos near |c| = 1): sqrt-type amplification, measured 1.5e-9 absolute per ulp of M or L"}]}, "drawable_containers": ["arcs", "ellipses"], "image_tol_mm": 1e-06, "int_keys": ["large_arc", "sweep", "interval"], "max_reported": 25, "mm_key_paths": [["construction", "segments", "*", "points"], ["construction", "per_receiver", "*", "segments", "*", "points"]], "mm_keys": ["image", "segment", "polygons", "polylines", "hidden_polylines", "light_point", "shadow_vp", "v_mm", "vanishing_points", "principal_point", "canvas_mm", "max_error_mm"], "rel_tol": 1e-09, "runs_rule": {"exact_keys": ["visible", "interval"], "mm_abs": 0.05, "param_abs": 0.001, "param_keys": ["s", "t", "theta"]}}
 ```
 
+## v5 — 2026-10-07
+
+- reason: v5: M5 mesh cases on top of v4
+- build: Python 3.13.16, numpy 2.5.3
+- regenerated (selected cases, 3 changed): mesh_box_welded_triangulated, mesh_open_bottom_box_fallback, mesh_smooth_prism16
+- milestone entry (contract §5.0.8 rule 1): the one v5 entry of the M5 merge, collapsing the worktree-local `--case` entry of the M5 branch (numbered v4 there, before the M4 merge) after rebasing M5 onto v4; the three cases were re-rendered on the merged branch and now carry the M4 keys (`hidden_lines`, `receivers`, `construction.per_receiver`, `runs`, `visibility`, `hidden_polylines`, `polygon_edges`) with their switch-off values
+- cases added (3, contract §5.2.11 / §5.2.12; post-expansion scenes with inline mesh `data`): mesh_box_welded_triangulated, mesh_open_bottom_box_fallback, mesh_smooth_prism16
+- expected files: 0 of the 43 v4 cases changed (`tools/regen_conformance.py --dry-run` on the merged branch before this run: would change 3 of 46, the three new cases only); no comparator change (rules.json as recorded in v4)
+

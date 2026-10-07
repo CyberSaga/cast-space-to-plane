@@ -111,6 +111,7 @@
    87.93525754212652
   ],
   "light_point_at_infinity": null,
+  "per_receiver": {},
   "rays": [
    [
     "L",
@@ -927,6 +928,7 @@
    "camera_silhouette": true,
    "from": "cube.v0",
    "object": "cube",
+   "runs": [],
    "segment": [
     [
      15.59405892941958,
@@ -947,6 +949,7 @@
    "camera_silhouette": true,
    "from": "cube.v0",
    "object": "cube",
+   "runs": [],
    "segment": [
     [
      15.59405892941958,
@@ -967,6 +970,7 @@
    "camera_silhouette": false,
    "from": "cube.v0",
    "object": "cube",
+   "runs": [],
    "segment": null,
    "silhouette": false,
    "smooth": true,
@@ -978,6 +982,7 @@
    "camera_silhouette": false,
    "from": "cube.v1",
    "object": "cube",
+   "runs": [],
    "segment": [
     [
      17.104395383111274,
@@ -998,6 +1003,7 @@
    "camera_silhouette": true,
    "from": "cube.v1",
    "object": "cube",
+   "runs": [],
    "segment": [
     [
      17.104395383111274,
@@ -1018,6 +1024,7 @@
    "camera_silhouette": false,
    "from": "cube.v2",
    "object": "cube",
+   "runs": [],
    "segment": [
     [
      15.99655777499523,
@@ -1038,6 +1045,7 @@
    "camera_silhouette": false,
    "from": "cube.v2",
    "object": "cube",
+   "runs": [],
    "segment": null,
    "silhouette": false,
    "smooth": true,
@@ -1049,6 +1057,7 @@
    "camera_silhouette": false,
    "from": "cube.v3",
    "object": "cube",
+   "runs": [],
    "segment": [
     [
      12.55519345580563,
@@ -1069,6 +1078,7 @@
    "camera_silhouette": false,
    "from": "cube.v3",
    "object": "cube",
+   "runs": [],
    "segment": null,
    "silhouette": false,
    "smooth": true,
@@ -1080,6 +1090,7 @@
    "camera_silhouette": false,
    "from": "cube.v4",
    "object": "cube",
+   "runs": [],
    "segment": [
     [
      7.357760199092337,
@@ -1100,6 +1111,7 @@
    "camera_silhouette": false,
    "from": "cube.v4",
    "object": "cube",
+   "runs": [],
    "segment": null,
    "silhouette": false,
    "smooth": true,
@@ -1111,6 +1123,7 @@
    "camera_silhouette": false,
    "from": "cube.v5",
    "object": "cube",
+   "runs": [],
    "segment": [
     [
      1.1612727222533876,
@@ -1131,6 +1144,7 @@
    "camera_silhouette": false,
    "from": "cube.v5",
    "object": "cube",
+   "runs": [],
    "segment": null,
    "silhouette": false,
    "smooth": true,
@@ -1142,6 +1156,7 @@
    "camera_silhouette": false,
    "from": "cube.v6",
    "object": "cube",
+   "runs": [],
    "segment": [
     [
      -5.190895628942662,
@@ -1162,6 +1177,7 @@
    "camera_silhouette": false,
    "from": "cube.v6",
    "object": "cube",
+   "runs": [],
    "segment": null,
    "silhouette": false,
    "smooth": true,
@@ -1173,6 +1189,7 @@
    "camera_silhouette": false,
    "from": "cube.v7",
    "object": "cube",
+   "runs": [],
    "segment": [
     [
      -10.842951918027532,
@@ -1193,6 +1210,7 @@
    "camera_silhouette": false,
    "from": "cube.v7",
    "object": "cube",
+   "runs": [],
    "segment": null,
    "silhouette": false,
    "smooth": true,
@@ -1204,6 +1222,7 @@
    "camera_silhouette": false,
    "from": "cube.v8",
    "object": "cube",
+   "runs": [],
    "segment": [
     [
      -14.997157152216914,
@@ -1224,6 +1243,7 @@
    "camera_silhouette": false,
    "from": "cube.v8",
    "object": "cube",
+   "runs": [],
    "segment": null,
    "silhouette": false,
    "smooth": true,
@@ -1235,6 +1255,7 @@
    "camera_silhouette": true,
    "from": "cube.v9",
    "object": "cube",
+   "runs": [],
    "segment": [
     [
      -16.998916224027994,
@@ -1255,6 +1276,7 @@
    "camera_silhouette": true,
    "from": "cube.v9",
    "object": "cube",
+   "runs": [],
    "segment": [
     [
      -16.998916224027994,
@@ -1275,6 +1297,7 @@
    "camera_silhouette": true,
    "from": "cube.v10",
    "object": "cube",
+   "runs": [],
    "segment": [
     [
      -16.444148870715537,
@@ -1295,6 +1318,7 @@
    "camera_silhouette": false,
    "from": "cube.v10",
    "object": "cube",
+   "runs": [],
    "segment": null,
    "silhouette": false,
    "smooth": true,
@@ -1306,6 +1330,7 @@
    "camera_silhouette": true,
    "from": "cube.v11",
    "object": "cube",
+   "runs": [],
    "segment": [
     [
      -13.294144382382429,
@@ -1326,6 +1351,7 @@
    "camera_silhouette": false,
    "from": "cube.v11",
    "object": "cube",
+   "runs": [],
    "segment": null,
    "silhouette": false,
    "smooth": true,
@@ -1337,6 +1363,7 @@
    "camera_silhouette": true,
    "from": "cube.v12",
    "object": "cube",
+   "runs": [],
    "segment": [
     [
      -7.955344783790195,
@@ -1357,6 +1384,7 @@
    "camera_silhouette": false,
    "from": "cube.v12",
    "object": "cube",
+   "runs": [],
    "segment": null,
    "silhouette": false,
    "smooth": true,
@@ -1368,6 +1396,7 @@
    "camera_silhouette": true,
    "from": "cube.v13",
    "object": "cube",
+   "runs": [],
    "segment": [
     [
      -1.2669510336348337,
@@ -1388,6 +1417,7 @@
    "camera_silhouette": false,
    "from": "cube.v13",
    "object": "cube",
+   "runs": [],
    "segment": null,
    "silhouette": false,
    "smooth": true,
@@ -1399,6 +1429,7 @@
    "camera_silhouette": true,
    "from": "cube.v14",
    "object": "cube",
+   "runs": [],
    "segment": [
     [
      5.63916953233169,
@@ -1419,6 +1450,7 @@
    "camera_silhouette": false,
    "from": "cube.v14",
    "object": "cube",
+   "runs": [],
    "segment": null,
    "silhouette": false,
    "smooth": true,
@@ -1430,6 +1462,7 @@
    "camera_silhouette": false,
    "from": "cube.v15",
    "object": "cube",
+   "runs": [],
    "segment": null,
    "silhouette": false,
    "smooth": true,
@@ -1441,6 +1474,7 @@
    "camera_silhouette": false,
    "from": "cube.v16",
    "object": "cube",
+   "runs": [],
    "segment": [
     [
      16.32503044173612,
@@ -1461,6 +1495,7 @@
    "camera_silhouette": false,
    "from": "cube.v16",
    "object": "cube",
+   "runs": [],
    "segment": [
     [
      16.32503044173612,
@@ -1481,6 +1516,7 @@
    "camera_silhouette": true,
    "from": "cube.v17",
    "object": "cube",
+   "runs": [],
    "segment": [
     [
      17.892350290180893,
@@ -1501,6 +1537,7 @@
    "camera_silhouette": true,
    "from": "cube.v18",
    "object": "cube",
+   "runs": [],
    "segment": [
     [
      16.720644476564466,
@@ -1521,6 +1558,7 @@
    "camera_silhouette": true,
    "from": "cube.v19",
    "object": "cube",
+   "runs": [],
    "segment": [
     [
      13.114970389089008,
@@ -1541,6 +1579,7 @@
    "camera_silhouette": true,
    "from": "cube.v20",
    "object": "cube",
+   "runs": [],
    "segment": [
     [
      7.6823672666993525,
@@ -1561,6 +1600,7 @@
    "camera_silhouette": true,
    "from": "cube.v21",
    "object": "cube",
+   "runs": [],
    "segment": [
     [
      1.2122748900602214,
@@ -1581,6 +1621,7 @@
    "camera_silhouette": true,
    "from": "cube.v22",
    "object": "cube",
+   "runs": [],
    "segment": [
     [
      -5.4193622469139715,
@@ -1601,6 +1642,7 @@
    "camera_silhouette": true,
    "from": "cube.v23",
    "object": "cube",
+   "runs": [],
    "segment": [
     [
      -11.324250093667596,
@@ -1621,6 +1663,7 @@
    "camera_silhouette": true,
    "from": "cube.v24",
    "object": "cube",
+   "runs": [],
    "segment": [
     [
      -15.672029224066677,
@@ -1641,6 +1684,7 @@
    "camera_silhouette": false,
    "from": "cube.v25",
    "object": "cube",
+   "runs": [],
    "segment": [
     [
      -17.776961763414928,
@@ -1661,6 +1705,7 @@
    "camera_silhouette": false,
    "from": "cube.v26",
    "object": "cube",
+   "runs": [],
    "segment": [
     [
      -17.210293379628414,
@@ -1681,6 +1726,7 @@
    "camera_silhouette": false,
    "from": "cube.v27",
    "object": "cube",
+   "runs": [],
    "segment": [
     [
      -13.923404347733515,
@@ -1701,6 +1747,7 @@
    "camera_silhouette": false,
    "from": "cube.v28",
    "object": "cube",
+   "runs": [],
    "segment": [
     [
      -8.336185757482278,
@@ -1721,6 +1768,7 @@
    "camera_silhouette": false,
    "from": "cube.v29",
    "object": "cube",
+   "runs": [],
    "segment": [
     [
      -1.327901788311509,
@@ -1741,6 +1789,7 @@
    "camera_silhouette": false,
    "from": "cube.v30",
    "object": "cube",
+   "runs": [],
    "segment": [
     [
      5.909828423340007,
@@ -2235,6 +2284,7 @@
    "terminator": []
   }
  ],
+ "hidden_lines": false,
  "horizon": {
   "line": [
    0.0,
@@ -3062,6 +3112,24 @@
    ]
   }
  },
+ "receivers": [
+  {
+   "bounds": null,
+   "casts": {
+    "lamp": false
+   },
+   "id": "ground",
+   "lit": {
+    "lamp": true
+   },
+   "plane": [
+    0.0,
+    0.0,
+    1.0,
+    0.0
+   ]
+  }
+ ],
  "shadows": [
   {
    "conics": [],
@@ -3105,6 +3173,7 @@
     "cube.v30.shadow.lamp",
     "cube.v31.shadow.lamp"
    ],
+   "polygon_edges": [],
    "polygons": [
     [
      [

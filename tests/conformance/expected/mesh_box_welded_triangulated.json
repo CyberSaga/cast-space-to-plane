@@ -63,6 +63,7 @@
    87.93525754212652
   ],
   "light_point_at_infinity": null,
+  "per_receiver": {},
   "rays": [
    [
     "L",
@@ -279,6 +280,7 @@
    "camera_silhouette": true,
    "from": "cube.v0",
    "object": "cube",
+   "runs": [],
    "segment": [
     [
      -23.39108839412937,
@@ -299,6 +301,7 @@
    "camera_silhouette": false,
    "from": "cube.v0",
    "object": "cube",
+   "runs": [],
    "segment": [
     [
      -23.39108839412937,
@@ -319,6 +322,7 @@
    "camera_silhouette": true,
    "from": "cube.v0",
    "object": "cube",
+   "runs": [],
    "segment": [
     [
      -23.39108839412937,
@@ -339,6 +343,7 @@
    "camera_silhouette": true,
    "from": "cube.v1",
    "object": "cube",
+   "runs": [],
    "segment": [
     [
      8.120222395889469,
@@ -359,6 +364,7 @@
    "camera_silhouette": false,
    "from": "cube.v1",
    "object": "cube",
+   "runs": [],
    "segment": [
     [
      8.120222395889469,
@@ -379,6 +385,7 @@
    "camera_silhouette": false,
    "from": "cube.v2",
    "object": "cube",
+   "runs": [],
    "segment": [
     [
      22.49573572832537,
@@ -399,6 +406,7 @@
    "camera_silhouette": true,
    "from": "cube.v2",
    "object": "cube",
+   "runs": [],
    "segment": [
     [
      22.49573572832537,
@@ -419,6 +427,7 @@
    "camera_silhouette": false,
    "from": "cube.v3",
    "object": "cube",
+   "runs": [],
    "segment": [
     [
      -7.222133282980036,
@@ -439,6 +448,7 @@
    "camera_silhouette": false,
    "from": "cube.v4",
    "object": "cube",
+   "runs": [],
    "segment": [
     [
      -24.48754566260418,
@@ -459,6 +469,7 @@
    "camera_silhouette": true,
    "from": "cube.v4",
    "object": "cube",
+   "runs": [],
    "segment": [
     [
      -24.48754566260418,
@@ -479,6 +490,7 @@
    "camera_silhouette": false,
    "from": "cube.v5",
    "object": "cube",
+   "runs": [],
    "segment": [
     [
      8.517407186992758,
@@ -499,6 +511,7 @@
    "camera_silhouette": true,
    "from": "cube.v6",
    "object": "cube",
+   "runs": [],
    "segment": [
     [
      23.50804383610001,
@@ -645,6 +658,7 @@
    "terminator": []
   }
  ],
+ "hidden_lines": false,
  "horizon": {
   "line": [
    0.0,
@@ -896,6 +910,24 @@
    ]
   }
  },
+ "receivers": [
+  {
+   "bounds": null,
+   "casts": {
+    "lamp": false
+   },
+   "id": "ground",
+   "lit": {
+    "lamp": true
+   },
+   "plane": [
+    0.0,
+    0.0,
+    1.0,
+    0.0
+   ]
+  }
+ ],
  "shadows": [
   {
    "conics": [],
@@ -915,6 +947,7 @@
     "cube.v6.shadow.lamp",
     "cube.v7.shadow.lamp"
    ],
+   "polygon_edges": [],
    "polygons": [
     [
      [
