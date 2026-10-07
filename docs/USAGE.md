@@ -89,6 +89,8 @@ castplane render examples/wall_and_ground.json -o out --hidden-lines --hidden-st
 | `validate_hidden_output(o, field="output") -> dict` | M4：`output.hidden_lines`（布林，預設 false）與 `output.hidden_style`（`dashed` 預設 / `omit`） |
 | `validate_receivers_in_scene(receivers, objects, lights)` | M4：受影面的場景層規則：id 唯一、不得與物件／光源 id 重複、保留字 `hidden`、無 bounds 只限 `receivers[0]` 的地面、有地面時 bounds 不得在地面以下 |
 | `RESERVED_IDS`、`HIDDEN_STYLES` | M4：保留 id（`hidden`）與 `hidden_style` 的允許值 |
+| `validate_lights_in_scene(lights, objects)` | M6：多光源場景（`len(lights) ≥ 2`）的保留 id：光源 id 不得是 `umbra`、`core`，物件 id 不得是 `core`（訊息 `reserved id in a multi-light scene`；單光源場景仍可用，合約 §5.3.0、§5.0.1） |
+| `RESERVED_LIGHT_IDS_MULTI`、`RESERVED_OBJECT_IDS_MULTI` | M6：`("umbra", "core")` 與 `("core",)` |
 
 ### 2.3 `castplane.errors` — 錯誤與警告
 

@@ -319,8 +319,8 @@ def validate_scene(scene) -> dict:
         out_objects.append(vo)
 
     lights = _require(s, "lights", "")
-    if not isinstance(lights, list) or len(lights) != 1:
-        raise SceneError("lights", "must be a list of exactly one light (v1)")
+    if not isinstance(lights, list) or len(lights) == 0:
+        raise SceneError("lights", "must be a non-empty list")
     out_lights, seen = [], set()
     for i, lt in enumerate(lights):
         vl = validate_light(lt, f"lights[{i}]")
@@ -328,6 +328,7 @@ def validate_scene(scene) -> dict:
             raise SceneError(f"lights[{i}].id", f"duplicate light id {vl['id']!r}")
         seen.add(vl["id"])
         out_lights.append(vl)
+    validate_lights_in_scene(out_lights, out_objects)
 
     receivers = _require(s, "receivers", "")
     if not isinstance(receivers, list) or len(receivers) == 0:
@@ -475,3 +476,29 @@ def validate_receivers_in_scene(receivers: list, objects: list, lights: list) ->
             for k, p in enumerate(r["bounds"]):
                 if p[2] < -1e-9 * ext:
                     raise SceneError(f"receivers[{i}].bounds[{k}]", "below the ground receiver")
+
+
+# ---------------------------------------------------------------------------
+# M6 (contract §5.3.0, §5.0.1): any number of lights, multi-light reserved ids
+# ---------------------------------------------------------------------------
+
+#: Light ids rejected in a multi-light scene (``len(lights) >= 2``): the ids of the
+#: ``cast_shadow.umbra`` / ``form_shadow.core`` SVG sub-groups (contract §5.3.0, §5.3.6).
+RESERVED_LIGHT_IDS_MULTI = ("umbra", "core")
+#: Object ids rejected in a multi-light scene (``form_shadow.core`` names the core group alone, §5.0.1).
+RESERVED_OBJECT_IDS_MULTI = ("core",)
+
+
+def validate_lights_in_scene(lights: list, objects: list) -> None:
+    """The multi-light id rules of contract §5.3.0 / §5.0.1: with at least two lights the light ids
+    ``umbra`` / ``core`` and the object id ``core`` are reserved (a single-light scene keeps them
+    valid).  ``hidden`` (always reserved) and receiver ∩ light = ∅ are checked by
+    :func:`validate_receivers_in_scene`."""
+    if len(lights) < 2:
+        return
+    for i, lt in enumerate(lights):
+        if lt["id"] in RESERVED_LIGHT_IDS_MULTI:
+            raise SceneError(f"lights[{i}].id", "reserved id in a multi-light scene")
+    for i, o in enumerate(objects):
+        if o["id"] in RESERVED_OBJECT_IDS_MULTI:
+            raise SceneError(f"objects[{i}].id", "reserved id in a multi-light scene")

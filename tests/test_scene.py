@@ -167,11 +167,13 @@ def test_transform_rules():
 
 # --- lights ------------------------------------------------------------------
 
-def test_lights_exactly_one():
+def test_lights_non_empty_list():
+    # M6 (contract §5.3.0) lifts the v1 length-1 rule: a non-empty list of any length
     expect_error(mutate(["lights"], []), "lights")
+    expect_error(mutate(["lights"], {"id": "l2"}), "lights")
     scene = base_scene()
     scene["lights"].append({"id": "l2", "type": "point", "position": [0, 0, 1]})
-    expect_error(scene, "lights")
+    assert [lt["id"] for lt in validate_scene(scene)["lights"]] == ["lamp", "l2"]
 
 
 def test_light_type_and_params():
@@ -367,3 +369,62 @@ def test_m4_hidden_output_switches():
     expect_error(mutate(["output", "hidden_lines"], 1), "output.hidden_lines")
     expect_error(mutate(["output", "hidden_lines"], "yes"), "output.hidden_lines")
     expect_error(mutate(["output", "hidden_style"], "dotted"), "output.hidden_style")
+
+
+# --- M6: multiple lights (contract §5.3.0, §5.0.1) ------------------------------
+
+def _two_lights(**second):
+    scene = base_scene()
+    lt = {"id": "l2", "type": "point", "position": [2, 0, 3]}
+    lt.update(second)
+    scene["lights"].append(lt)
+    return scene
+
+
+def test_m6_lights_any_length_scene_order():
+    scene = _two_lights()
+    scene["lights"].append({"id": "sun", "type": "directional", "direction": [0.6, 0.0, 0.8]})
+    out = validate_scene(scene)
+    assert [lt["id"] for lt in out["lights"]] == ["lamp", "l2", "sun"]
+    assert out["lights"][2]["direction"] == [0.6, 0.0, 0.8]
+    expect_error(_two_lights(type="spot"), "lights[1].type")
+    expect_error(_two_lights(id="a.b"), "lights[1].id")
+    expect_error(_two_lights(id=""), "lights[1].id")
+
+
+def test_m6_duplicate_light_id():
+    expect_error(_two_lights(id="lamp"), "lights[1].id")
+    with pytest.raises(SceneError, match="lamp"):
+        validate_scene(_two_lights(id="lamp"))
+
+
+def test_m6_reserved_light_ids_only_in_multi_light_scenes():
+    from castplane.scene import RESERVED_LIGHT_IDS_MULTI
+    assert RESERVED_LIGHT_IDS_MULTI == ("umbra", "core")
+    for rid in RESERVED_LIGHT_IDS_MULTI:
+        expect_error(_two_lights(id=rid), "lights[1].id")
+        with pytest.raises(SceneError, match="reserved id"):
+            validate_scene(_two_lights(id=rid))
+        scene = _two_lights()
+        scene["lights"][0]["id"] = rid
+        expect_error(scene, "lights[0].id")
+        # a single-light scene keeps them valid
+        assert validate_scene(mutate(["lights", 0, "id"], rid))["lights"][0]["id"] == rid
+    expect_error(_two_lights(id="hidden"), "lights[1].id")          # always reserved (M4)
+
+
+def test_m6_core_object_id_only_in_multi_light_scenes():
+    scene = _two_lights()
+    scene["objects"][0]["id"] = "core"
+    expect_error(scene, "objects[0].id")
+    with pytest.raises(SceneError, match="reserved id"):
+        validate_scene(scene)
+    assert validate_scene(mutate(["objects", 0, "id"], "core"))["objects"][0]["id"] == "core"
+    scene = _two_lights()
+    scene["objects"][0]["id"] = "umbra"                              # only `core` is reserved for objects
+    assert validate_scene(scene)["objects"][0]["id"] == "umbra"
+
+
+def test_m6_light_ids_disjoint_from_receiver_ids():
+    scene = _two_lights(id="ground")
+    expect_error(scene, "receivers[0].id")
