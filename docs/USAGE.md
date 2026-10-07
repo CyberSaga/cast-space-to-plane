@@ -329,6 +329,18 @@ C 段在 `hidden_lines` 開啟時呼叫；純 numpy、確定性（取樣位置�
 | `runs_straight(result, a3, b3, length_mm)`、`runs_conic(interval, runs, cum, th)` | 文件的 run 紀錄：直線 `{s, t, mm, visible}`、圓錐曲線 `{interval, theta, mm, visible}` |
 | `HLR_SPACING_MM`、`HLR_MIN_SAMPLES`、`HLR_MAX_SAMPLES`、`HLR_BISECTIONS`、`HLR_RAY_EPS` | 1.0、8、4096、6、1e-5（合約固定） |
 
+### 2.18 `castplane.umbra` — 本影的掃描線核心（合約 §5.3.4、§5.3.7，M6）
+
+B 段在多光源場景呼叫；純 numpy、確定性；只讀畫出的 `shadows[].polygons`（畫布 mm）、`umbra[].lights` 與 `canvas_mm`，所以移植版可只憑 JSON 重算。
+
+| 函式 | 說明 |
+| --- | --- |
+| `tolerances(canvas_mm) -> (tol_mm, tol_area)` | `D = 1.5·max(寬, 高)`，`tol_mm = 1e-9·D`、`tol_area = 1e-9·D²`（360 × 240 畫布為 5.4e-7 mm） |
+| `scan_pieces(polygons, groups, lines, n_groups, tol_mm, tol_area) -> (pieces, sides)` | 唯一的核心：頂點事件吸附、交點事件、水平帶、每組一個 nonzero 繞數（所有組皆非零才算內部）、端點夾住、依線 id 縱向合併；輸出凸、逆時針、面積 > `tol_area` 的梯形／三角形（標準起點），`sides[p] = (左線 id, 右線 id)` |
+| `record_pieces(polygons, tol_mm, tol_area) -> (pieces, sides)` | 一筆影子紀錄的迴圈（單一組、線 id 為迴圈的流水邊號）：nonzero 分解，自交與孔洞正確 |
+| `umbra_pieces(per_light, canvas_mm) -> list` | 一個受影面：`per_light[k]` 是第 k 個有效光源（場景順序）各紀錄的 `polygons`；少於兩個有效光源回傳 `[]`；各紀錄的碎片一次相交掃描，回傳 `[[u, v], ...]` 碎片串列（`+ 0.0`） |
+| `umbra_from_document(doc) -> list` | 由文件的 `shadows[]`、`umbra[].lights`、`canvas_mm` 重算每筆 `umbra[]`（沒有 `umbra` 鍵時回傳 `[]`）；與 `doc["umbra"]` 逐位元相同 |
+
 ## 3. 警告代碼（合約 §2.9）
 
 | 代碼 | 條件 | ids | 效果 |
