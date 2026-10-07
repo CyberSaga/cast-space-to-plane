@@ -5,7 +5,8 @@ pipeline (stage A camera independent, stage B projection, stage C the spec §6.2
 JSON writer and the spec §6.1 SVG writer. Python (`castplane/`) is the reference implementation; the port is accepted
 against the conformance set `tests/conformance/` (phase 1: 34/34 cases at set v3; phase 2, in progress at set v6:
 40 of 50 cases, the hidden-line, mesh and multi-light cases are listed as `todo` in `test/conformance.test.ts` until
-their part lands, contract §5.4.0 / §5.4.14). Zero runtime dependencies; the core under
+their part lands, contract §5.4.0 / §5.4.14; until then `render` rejects `mesh` objects and `hidden_lines: true` with a
+`SceneError` instead of writing an incomplete document). Zero runtime dependencies; the core under
 `src/` compiles with `types: []` and `lib: ["ES2022"]`, so it runs unchanged in node and in the browser.
 
 ## Build and test

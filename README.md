@@ -41,6 +41,7 @@ castplane render examples/wall_and_ground.json -o out --hidden-lines   # M4：�
 castplane render examples/mesh_demo.json -o out     # 場景裡的 mesh 物件以 path 引用 OBJ 檔（M5）
 castplane import tests/fixtures/meshes/box_split.obj -o box.json   # 網格檔 → 場景檔（OBJ、glTF / GLB、STL、PLY）
 castplane render examples/two_lights.json -o out    # M6：兩盞點光源，每個光源一個子群組，本影疊在最上面
+castplane import tests/fixtures/step/cylinder.step -o pillar.json  # STEP 檔 → 場景檔（M8：圓柱、球、圓錐、方塊）
 ```
 
 `render` 預設只寫 SVG 與 JSON；PNG 要明確以 `--formats` 要求，沒有 cairosvg / resvg 時以結束碼 3 回報，而且**什麼檔案都不寫**（同一次要求的 SVG / JSON 也不寫，避免半成品；先不加 `png` 再跑一次即可）。結束碼：0 成功、1 檔案錯誤、2 輸入無效（訊息含欄位路徑，例如 `error: objects[1].radius: must be > 0`）、3 缺少選用相依套件。完整選項見 [`docs/USAGE.md`](docs/USAGE.md)。
@@ -214,6 +215,7 @@ npm test                         # TypeScript 與網頁的測試
 | 消隱參考（M4） | `tests/reference/zbuffer.py` 逐像素光線投射深度緩衝（0.1 mm/px，三值判定加輪廓防護），與 castplane 零程式碼共用；29 個場景的每段 run 每 0.5 mm 取樣與其比對（≥ 99%，方塊／稜柱邊 100%），run 邊界與逐點光線投射在 ±0.15 mm 內一致 | `python3 -m pytest tests/test_hidden.py tests/test_receivers.py -q` |
 | 網格（M5） | 前處理表（焊接、退化面、方向、共面合併、邊分類）、匯入方塊 = 參數化方塊（逐位元）、非流形逐面退路、載入器（OBJ、glTF `.gltf` + `.bin` / data URI、GLB、跨距存取器、鏡像節點、精確 Y-up → Z-up、STL / PLY）、`castplane import` | `python3 -m pytest tests/test_meshprep.py tests/test_mesh_pipeline.py tests/test_loaders.py -q`；夾具：`python3 tools/make_mesh_fixtures.py` |
 | 多光源（M6） | 手算驗收案例（兩盞對稱點光源下的單位方塊：本影 3 片、地面面積 7/6）、每個光源的紀錄與其單光源文件逐位元相同、本影掃描線核心（`record_pieces` 表、隨機輸入對柵格 AND）、三盞光的本影對柵格 AND（IoU ≥ 0.995）與光源順序不變、對光線投射「被所有光源遮住」的遮罩 IoU ≥ 0.99、`umbra_from_document` 逐位元重算 | `python3 -m pytest tests/test_umbra.py tests/test_multilight.py -q` |
+| STEP（M8） | Part 21 語法（註解、字串跳脫、複合實體、型別值、截斷與重複編號）、單位（mm / m，除法換算的逐位元保證、`DEGREE`）、四種辨識器與反例（截頭圓錐、鍵槽、傾斜端面、環面）、組件只接受恆等變換、`cylinder.step` → `examples/basic.json` 逐位元、手算點、`cylinder_tilted.step` 對 `expected/buried_cylinder_tilted.json`、場景展開與 `castplane import`；需要 OCP 的測試（網格化退路、夾具產生器同步）在沒有 cadquery-ocp 時略過 | `python3 -m pytest tests/test_step.py -q`；夾具：`python3 tools/make_step_fixtures.py`（需 `pip install 'castplane[step]'`） |
 | 效能基準（§8） | 100 個基元、約 1 萬條邊：完整渲染 < 1 s、只換相機 < 100 ms；預設讀取提交的場景檔 `benchmarks/scenes/benchmark_100.json`（`benchmarks/export_scene.py` 產生，TypeScript 基準讀同一個檔） | `python3 benchmarks/bench.py`（不在預設測試內；目前量測狀態見 `benchmarks/README.md`） |
 
 ## 里程碑（規格 §10）
@@ -223,12 +225,12 @@ npm test                         # TypeScript 與網頁的測試
 | M0 骨架與相機 | 場景 JSON 讀取與驗證、相機矩陣、近平面裁切、方塊線框 SVG、地平線與消失點 | 完成 |
 | M1 多面體投射陰影與作圖線 | 平面投影矩陣、受光判定、光輪廓邊、影子多邊形、L′ F′ 與作圖線、六個 SVG 圖層、JSON 輸出 | 完成 |
 | M2 曲面基元與形體陰影 | 圓柱、球、圓錐的圓錐曲線影子、明暗交界線、SVG ellipse 輸出 | 完成 |
-| M3 核心穩定（閘門） | 光線投射對照組、屬性測試、一致性測試集 v1、效能基準 | **通過（D17 豁免）**：光線投射對照（IoU ≥ 0.99）、屬性測試、一致性測試集（目前 v5）與效能基準皆已交付並通過；§8 的「完整渲染 < 1 s」已達標（約 0.35–0.45 s），「只換相機 < 100 ms」**尚未達標**（約 110–130 ms，關閉循環 GC 約 90 ms；量測結果見 `benchmarks/README.md`）。規格 §8 將數字定為目標值，閘門審查依合約 §4 / D17 豁免這一項：CI 以 `python3 benchmarks/bench.py --gate full` 為閘門（`.github/workflows/ci.yml`），只換相機列為已知未達標、留待 M7 互動介面時收斂 |
+| M3 核心穩定（閘門） | 光線投射對照組、屬性測試、一致性測試集 v1、效能基準 | **通過（D17 豁免）**：光線投射對照（IoU ≥ 0.99）、屬性測試、一致性測試集（目前 v6）與效能基準皆已交付並通過；§8 的「完整渲染 < 1 s」已達標（約 0.35–0.45 s），「只換相機 < 100 ms」**尚未達標**（約 110–130 ms，關閉循環 GC 約 90 ms；量測結果見 `benchmarks/README.md`）。規格 §8 將數字定為目標值，閘門審查依合約 §4 / D17 豁免這一項：CI 以 `python3 benchmarks/bench.py --gate full` 為閘門（`.github/workflows/ci.yml`），只換相機列為已知未達標、留待 M7 互動介面時收斂 |
 | M4 多受影面與隱藏線 | 有界受影面、逐面裁切、轉折影、取樣式隱藏線、visibility 欄位 | 完成（已合併到主分支，一致性測試集 v4）：任意平面的有界凸受影面、bounds 裁切與錨點規則、轉折影、`RECEIVER_UNLIT`、逐受影面作圖線、取樣式消隱（`hidden_lines` 預設關閉，`--hidden-lines`）、9 個一致性案例；34 個既有案例在合併時做了一次鍵新增重產（一致性 v4，合約 §5.0.8） |
 | M5 網格匯入 | OBJ、glTF/GLB 載入、前處理管線 | 完成（已合併到主分支，一致性測試集 v5）：`mesh` 物件（`path` / 內嵌 `data`）、`castplane.meshprep` 前處理（焊接 → 退化面 → 流形與方向 → 共面合併 → 平滑／特徵邊）、非流形逐面退路、`castplane.io` 載入器（OBJ、glTF / GLB、STL / PLY 經選用的 trimesh）與 `castplane import`；3 個網格一致性案例；`benchmarks/bench.py --scene mesh10k` |
 | M6 多光源 | 多光源影子分組、疊影規則、SVG 子圖層 | 完成（已合併到主分支，一致性測試集 v6）：任意數量的光源、每個光源單獨以 v1 / M4 公式計算（與單光源文件逐位元相同）、本影（`castplane.umbra` 純 numpy 掃描線核心，只讀畫出的影子多邊形）、半影由各光源子群組的較淡填色呈現、`form_shadow_core`、`constructions`、曲面作圖點帶光源 id、SVG 每光源子群組與 `cast_shadow.umbra` / `form_shadow.core`、`castplane info` 列出每個光源；4 個多光源一致性案例；`benchmarks/bench.py --lights 2\|3`、`--no-umbra`；單光源文件與 SVG 完全不變 |
 | M7 TypeScript 移植與網頁 UI | 核心移植、three.js 場景顯示、相機拖曳 | 第一階段完成（合約 §5.4 第 1–10 步）：TypeScript 核心（一致性測試集 v3 34/34，SVG 與 Python 逐位元組相同）、TypeScript 基準（只換相機 55–63 ms，CI `--gate both`）、three.js 網頁 UI（`web/`）、CI 的 `ts` / `web` job。第二階段（M4–M6 格式的移植、v6）待 M4–M6 合併後進行（`docs/PLAN-v2.md`） |
-| M8 STEP 評估 | 可行性報告、原型解析器 | 未排程／預留 |
+| M8 STEP 評估 | 可行性報告、原型解析器 | 完成（已合併到主分支，一致性測試集仍為 v6，不新增案例）：原型完成（Part-21 解析器、四種基元、`castplane import`）；網格退路經 M5 內嵌網格型別：可行性報告 [`docs/STEP.md`](docs/STEP.md)；`castplane.io.part21`（純 stdlib）與 `castplane.io.step`（`cylinder` / `sphere` / `cone` / `box` 辨識、mm → m 以除法換算）、場景裡的 `{"type": "step", "path": …}` 物件在驗證前展開、`castplane import` 讀 `.step` / `.stp`（選項 `--solid K`、`--fallback error\|mesh`）；`cylinder.step` 展開後渲染與 `examples/basic.json` 逐位元相同；網格化退路需選用的 `castplane[step]`（cadquery-ocp）；一致性測試集不變 |
 
 ## 與規格文件的差異
 

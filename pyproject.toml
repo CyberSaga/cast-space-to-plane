@@ -42,6 +42,7 @@ Specification = "https://github.com/CyberSaga/cast-space-to-plane/blob/main/docs
 [project.optional-dependencies]
 mesh = ["trimesh>=4"]
 png = ["cairosvg>=2.5"]
+step = ["cadquery-ocp>=7.7"]
 dev = ["pytest>=7", "hypothesis>=6", "pillow>=9", "cairosvg>=2.5"]
 
 [project.scripts]

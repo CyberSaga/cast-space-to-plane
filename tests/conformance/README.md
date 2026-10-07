@@ -82,6 +82,8 @@
 | `multilight_three_lights_concave_prism` | `N = 3`：`make_concavity_scene(1)` 的 U 形稜柱與方塊再加兩盞點光源；`light_b`、`light_c` 的影子迴圈自交，三盞光的區域重疊，本影 = 三個 nonzero 區域的交集（每盞光一個計數器）。兩個投影物**離地 0.2 m**：站在地上的物件在各光源的迴圈共用接地頂點與接地邊，會讓本影的**分片**（不是區域）隨建置的捨入而變（合約 §5.3 實作筆記），離地後每個判定都離門檻夠遠，可以逐片比對（`test_three_light_case_pieces_are_stable_under_rigid_motions` 檢查） | 合約 §5.3.4、§5.3.7、§5.3.10 |
 | `multilight_second_light_inactive` | 驗收立方體、`west` 有效、第二盞點光源 `under` 在地面以下：`LIGHT_BELOW_RECEIVER [under]`、它的紀錄為空、`receivers[0].lit = {west: true, under: false}`、`umbra[0].lights = [west]`、`polygons = []`（有效光源少於兩盞）；SVG 中唯一有效的光源群組 `fill-opacity="0.3"`，本影群組為空 | 合約 §5.3.8、§5.3.10 |
 
+**M8（STEP 匯入）不新增、不改動任何案例或 expected 檔**（合約 §5.0.8、§5.5.10）：案例永遠不含只存在於載入器層的物件（`type: "step"`、帶 `path` 的 `mesh`），它們都是展開後的場景；STEP 的驗收（`cylinder.step` 展開後渲染與 `expected/example_basic.json` 逐位元相同、`cylinder_tilted.step` 通過 `expected/buried_cylinder_tilted.json` 的比對）在 `tests/test_step.py` 裡以既有的 expected 檔做。
+
 每個案例刻意只放少量物件，讓 expected 檔可以人工審閱；整組 expected 的大小必須 < 3 MB（測試會檢查）。
 
 ## 規則

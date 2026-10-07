@@ -19,7 +19,7 @@ const EXAMPLES = repo_path("examples");
 const examples = readdirSync(EXAMPLES).filter((f) => f.endsWith(".json")).sort();
 /** Examples whose geometry belongs to a phase-2 part that has not landed yet (contract §5.4.0): run as node:test
  * `todo`; each part shrinks this list and the final part leaves it empty. */
-const TODO_EXAMPLES: ReadonlySet<string> = new Set(["mesh_demo.json"]);
+const TODO_EXAMPLES: ReadonlySet<string> = new Set(["mesh_demo.json", "wall_and_ground.json"]); // the latter: hidden_lines on
 const todo = (file: string): { todo: string | false } => ({ todo: TODO_EXAMPLES.has(file) ? "phase 2 part not yet landed" : false });
 
 const CAMERA_CODES = new Set([
@@ -37,7 +37,7 @@ function pick(o: any, keys: string[]): any {
 /** The camera-free blocks of a document (contract §5.4.7 / §5.0.3, see the implementation notes of §5.4 for
  * the shadow conic entries: `conic` is the image of the ground conic under `P M E` and is left out; `kind` and `arc`
  * are camera dependent only in principle and are equal for the five examples and the test camera). */
-function camera_free(doc: any): string {
+function camera_free(doc: any, rays = true): string {
   const points: any = {};
   for (const name of Object.keys(doc.points)) {
     if (OG.test(name)) continue;
@@ -57,11 +57,27 @@ function camera_free(doc: any): string {
       terminator: f.terminator.filter((t: any) => "segment" in t).map((t: any) => t.segment),
     })),
     outlines: doc.outlines.map((o: any) => o.object),
-    rays: doc.construction.rays,
-    per_receiver_rays: Object.keys(doc.construction.per_receiver).sort().map((r) => [r, doc.construction.per_receiver[r].rays]),
+    // rays are camera-free only without POINT_BEHIND_CAMERA: the nu >= 0 row filter of §2.7 / §5.1.5 is a camera
+    // predicate (§5.4 implementation notes, qualifying the §5.0.3 list)
+    rays: rays ? doc.construction.rays : null,
+    per_receiver_rays: rays
+      ? Object.keys(doc.construction.per_receiver).sort().map((r) => [r, doc.construction.per_receiver[r].rays]) : null,
     warnings: doc.warnings.filter((w: any) => !CAMERA_CODES.has(w.code)).map((w: any) => [w.code, w.ids]),
   });
 }
+
+const rays_camera_free = (...docs: any[]): boolean =>
+  !docs.some((d) => d.warnings.some((w: any) => w.code === "POINT_BEHIND_CAMERA"));
+
+test("rays are camera-dependent when a point is behind the camera (§5.1.5 nu >= 0 rule; part 1 review)", () => {
+  const scene = load_scene(read_json(repo_path("tests", "conformance", "cases", "receiver_unlit_wall.json")));
+  const d1 = render(scene).geometry as any;
+  const d2 = render(scene, camera_override(scene.camera, [6, -28, 12], [0, 0, 0.5], 3)).geometry as any;
+  assert.ok(!rays_camera_free(d1, d2));
+  assert.equal(d1.construction.rays.length, 16); // the Python reference gives 16 / 20 as well
+  assert.equal(d2.construction.rays.length, 20);
+  assert.equal(camera_free(d1, false), camera_free(d2, false));
+});
 
 for (const file of examples) {
   test(`deterministic render: ${file}`, todo(file), () => {
@@ -80,7 +96,7 @@ for (const file of examples) {
     const k1 = Object.keys(d1.points).filter((n) => !OG.test(n)).sort();
     const k2 = Object.keys(d2.points).filter((n) => !OG.test(n)).sort();
     assert.deepEqual(k1, k2);
-    assert.equal(camera_free(d1), camera_free(d2));
+    assert.equal(camera_free(d1, rays_camera_free(d1, d2)), camera_free(d2, rays_camera_free(d1, d2)));
     assert.notEqual(dumps(d1.camera), dumps(d2.camera));
   });
 

@@ -2,7 +2,8 @@
 
     castplane import FILE [-o OUT.json] [--into SCENE] [--id ID] [-q]
                           [--inline] [--node NAME|INDEX] [--camera NAME] [--light NAME]
-                          [--scale S] [--weld TOL] [--smooth-angle DEG] [--up y|z]
+                          [--scale S] [--weld TOL] [--smooth-angle DEG] [--up y|z]     (mesh files)
+                          [--solid K] [--fallback error|mesh]                          (STEP files, M8)
 
 The mesh options apply to ``.obj`` / ``.gltf`` / ``.glb`` / ``.stl`` / ``.ply`` (and every other
 format trimesh reads); ``--camera`` / ``--light`` need a glTF file, ``--up`` a non-glTF file
@@ -18,6 +19,12 @@ explicit ``--id`` that collides is a ``SceneError("--id")``.  ``validate_scene``
 notes go to stderr as ``note: CODE [ids]: message`` (suppressed by ``-q``) and into
 ``meta.import_notes``.  Exit codes as ``castplane.cli``: 0, 1 (unreadable input / unwritable
 output), 2 (``SceneError`` incl. the glTF JSON path, usage), 3 (trimesh missing for STL / PLY).
+
+M8 (contract §5.5.8): a ``.step`` / ``.stp`` FILE is read with ``castplane.io.step.import_step``
+and its recognised solids are written as ordinary primitive objects (``--solid K`` selects one
+solid, ``--fallback mesh`` tessellates an unrecognised solid with OCP into an inline ``mesh``
+object, exit 3 without cadquery-ocp); a ``StepError`` is reported at field ``step`` (exit 2).  A
+STEP option on a mesh file, or a mesh option on a STEP file, is a usage error (exit 2).
 """
 
 from __future__ import annotations
@@ -31,6 +38,7 @@ import sys
 from ..errors import SceneError, merge_warnings
 from ..scene import read_json, validate_scene
 from . import EXPANDERS, GLTF_EXTENSIONS, _assemble_scene, expand_scene, gltf, load_mesh_file
+from .step import import_step
 
 __all__ = ["add_import_parser", "cmd_import"]
 
@@ -51,7 +59,7 @@ def _node_value(text):
 
 def add_import_parser(sub) -> None:
     """Register the ``import`` subcommand on an argparse sub-parser collection."""
-    p = sub.add_parser("import", help="import a mesh file (OBJ, glTF / GLB, STL, PLY) as a scene")
+    p = sub.add_parser("import", help="import a mesh file (OBJ, glTF / GLB, STL, PLY) or a STEP file as a scene")
     p.add_argument("file", metavar="FILE")
     p.add_argument("-o", "--output", metavar="OUT.json", help="write the scene here (default: stdout)")
     p.add_argument("--into", metavar="SCENE", help="append the imported objects to this scene")
@@ -65,6 +73,10 @@ def add_import_parser(sub) -> None:
     p.add_argument("--weld", type=float, metavar="TOL", help="weld tolerance in metres (default 1e-6)")
     p.add_argument("--smooth-angle", type=float, metavar="DEG", help="smoothing angle (default 30)")
     p.add_argument("--up", choices=("y", "z"), help="up axis of an OBJ / STL / PLY file (default z)")
+    # M8: the STEP options (contract §5.5.8)
+    p.add_argument("--solid", type=int, metavar="K", help="STEP: import only the K-th solid (0-based, entity order)")
+    p.add_argument("--fallback", choices=("error", "mesh"),
+                   help="STEP: an unrecognised solid is an error (default) or is tessellated (needs castplane[step])")
     p.set_defaults(func=cmd_import)
 
 
@@ -86,15 +98,43 @@ def _ref_path(file_path: str, output) -> str:
     return rel.replace(os.sep, "/")
 
 
+#: (option, argparse dest) of each option family (contract §5.0.2: the other family is a usage error).
+MESH_OPTIONS = (("--inline", "inline"), ("--node", "node"), ("--camera", "camera"), ("--light", "light"),
+                ("--scale", "scale"), ("--weld", "weld"), ("--smooth-angle", "smooth_angle"), ("--up", "up"))
+STEP_OPTIONS = (("--solid", "solid"), ("--fallback", "fallback"))
+
+
+def _given(args, options) -> list:
+    values = [(opt, getattr(args, dest, None)) for opt, dest in options]
+    return [opt for opt, v in values if v is not None and v is not False]      # --solid 0 counts as given
+
+
+def _import_step_parts(args):
+    """``(parts, notes)`` of a STEP FILE (contract §5.5.8): the recognised solids as primitive
+    objects (a tessellated solid as an inline ``mesh``), no camera, no lights."""
+    given = _given(args, MESH_OPTIONS)
+    if given:
+        raise SceneError(given[0], f"{given[0]} is a mesh option; FILE is a STEP file "
+                                   f"(STEP options: {', '.join(opt for opt, _ in STEP_OPTIONS)})")
+    path = args.file
+    oid = args.id if args.id is not None else sanitised_stem(path)
+    report = import_step(path, fallback=args.fallback or "error", solid=args.solid, obj_id=oid, field="step")
+    objects = report["objects"]
+    raw = {o["id"]: o["data"] for o in objects if o.get("type") == "mesh"}
+    return {"objects": objects, "lights": None, "camera": None, "canvas_mm": None, "raw": raw}, report["notes"]
+
+
 def _import_parts(args):
     """``(parts, notes)`` of FILE (contract §5.2.8)."""
     path = args.file
     ext = os.path.splitext(path)[1].lower()
-    if ext in STEP_EXTENSIONS:
-        raise SceneError("FILE", "STEP import is not available in this version (castplane import accepts "
-                                 "OBJ, glTF / GLB, STL and PLY files)")
     if not os.path.isfile(path):
         raise FileNotFoundError(2, f"cannot read {path}", path)
+    if ext in STEP_EXTENSIONS:                 # M8: the extension dispatch (contract §5.5.8)
+        return _import_step_parts(args)
+    given = _given(args, STEP_OPTIONS)
+    if given:
+        raise SceneError(given[0], f"{given[0]} is a STEP option; FILE is not a .step / .stp file")
     ref = _ref_path(path, args.output)
     keys = _mesh_keys(args)
     node = _node_value(args.node)
@@ -185,13 +225,21 @@ def cmd_import(args) -> int:
         base_scene = read_json(args.into)
         if not isinstance(base_scene, dict):
             raise SceneError("--into", "the scene must be a JSON object")
+        if "objects" in base_scene and not isinstance(base_scene["objects"], list):   # review fix: not objects[0]
+            raise SceneError("objects", "must be a non-empty list")
         taken |= _ids(base_scene.get("objects")) | _ids(base_scene.get("receivers"))
+        expanded, into_notes = expand_scene(base_scene, os.path.dirname(os.path.abspath(args.into)))
+        taken |= _ids(expanded.get("objects"))     # M8: ids a step object of SCENE expands to (part_0, ...)
     if args.id is not None and args.id in taken:
         raise SceneError("--id", f"{args.id!r} is already an object or receiver id of the scene")
+    if args.id is not None:                    # M8 review fix: the <id>_<k> ids of an explicit --id are never renamed
+        for oid in (o["id"] for o in parts["objects"]):
+            if oid in taken:
+                raise SceneError("--id", f"{oid!r} (derived from --id {args.id!r}) is already an object or "
+                                         "receiver id of the scene")
     _dedupe(parts["objects"], raw, set(taken))
     if base_scene is not None:
         scene_dir = os.path.dirname(os.path.abspath(args.into))
-        expanded, into_notes = expand_scene(base_scene, scene_dir)
         scene = copy.deepcopy(base_scene)
         scene["objects"] = _rebase_paths(list(scene.get("objects", [])), scene_dir, args.output) + parts["objects"]
         check = copy.deepcopy(expanded)

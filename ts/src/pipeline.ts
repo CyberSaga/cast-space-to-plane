@@ -467,6 +467,12 @@ function canonical3(v: readonly number[]): Vec3 {
  * ordered receiver (scene order) → light (scene order) → caster (objects in scene order, then the other bounded
  * receivers), contract §5.1.3.1. */
 export function shadow_geometry(scene: Scene): StageA {
+  // interim guard until src/meshprep.ts lands (M7 phase 2, mesh part): a typed SceneError, never a plain Error
+  scene.objects.forEach((o, i) => {
+    if (o.type === "mesh") {
+      throw new SceneError(`objects[${i}].type`, "mesh objects are not ported yet (M7 phase 2, mesh part of contract §5.4.14)");
+    }
+  });
   const objects = scene.objects.map((o) => build_object(o) as StageAObject);
   const receivers = scene.receivers.map((r, i) => receiver_record(r, i));
   // contract §5.1.2: bounds vertices are scene geometry (the ground has none: v2 scales unchanged)
@@ -1269,9 +1275,14 @@ function receiver_light_points(points: Record<string, PointEntry>, lt: LightStag
  * `hidden_lines` (§5.1.6.5 / §5.0.7): `null` / `undefined` = `scene.output.hidden_lines`; the effective switch is the
  * document's top-level `hidden_lines`. With it off every `visibility` is `"visible"` and every `runs` /
  * `hidden_polylines` / `polygon_edges` is `[]`. The sampled hidden-line classification (src/hidden.ts) is a later part
- * of phase 2.
+ * of phase 2; until it lands an effective switch `true` is rejected with a typed `SceneError("output.hidden_lines")`
+ * rather than written as a `hidden_lines: true` document carrying the switch-off geometry (§5.4 implementation notes).
  */
 export function compose(scene: Scene, B: StageB, hidden_lines?: boolean | null): GeometryDocument {
+  if (hidden_lines === undefined || hidden_lines === null ? scene.output.hidden_lines === true : Boolean(hidden_lines)) {
+    throw new SceneError("output.hidden_lines",
+      "hidden-line removal is not ported yet (M7 phase 2, hidden-line part of contract §5.4.14); render with the switch off");
+  }
   const cam = B.camera;
   const points: Record<string, PointEntry> = {};
   const edges: Record<string, unknown>[] = [];

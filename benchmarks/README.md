@@ -348,3 +348,55 @@ the browser's later layout and paint. `web/README.md` has the details and the ov
 
 At rest, the DOM overlay of `benchmark_100.json` took 98–151 ms of `innerHTML`, plus the browser's layout. The
 UI therefore switches that scene to the `<img>` mode while dragging (§5.4.10 DOM budget).
+
+## M8 (2026-10-07): STEP import (loader only, not on any benchmark path)
+
+M8 changes no core module: the STEP importer (`castplane/io/part21.py`, `castplane/io/step.py`) runs
+in the expansion step before `validate_scene` (contract §5.5, §5.0.2), so `benchmarks/bench.py
+--gate full` and its document are unchanged. The only bound is the test
+`tests/test_step.py::test_step_import_is_not_slow`: the **minimum of 3** timed `import_step` runs on
+each committed fixture must be < 500 ms (a flakiness-safe bound, not a target). Measured on the
+container (Python 3.13, `import_step` = read + Part 21 parse + units + assembly check +
+recognition; minimum of 5 runs, the median in brackets):
+
+| fixture | bytes | entities | `import_step` | of which `part21.parse` |
+| --- | --- | --- | --- | --- |
+| `cylinder.step` | 5 684 | 118 | 1.40 ms (1.45) | 1.18 ms |
+| `cylinder_down.step` | 5 715 | 118 | 1.39 ms (1.47) | 1.19 ms |
+| `cylinder_tilted.step` | 6 195 | 118 | 1.42 ms (1.50) | 1.21 ms |
+| `sphere.step` | 2 076 | 32 | 0.45 ms (0.47) | 0.39 ms |
+| `cone.step` | 4 415 | 87 | 1.06 ms (1.12) | 0.89 ms |
+| `box.step` | 16 430 | 350 | 4.13 ms (4.16) | 3.53 ms |
+| `frustum.step` (raises `StepError`) | 5 726 | 118 | 1.33 ms (1.38) | 1.21 ms |
+| `two_solids.step` | 9 304 | 176 | 2.12 ms (2.21) | 1.79 ms |
+
+Informational (not gated, not committed): a compound of 200 OCC cylinders (r 300 mm, h 2400 mm) on a
+20 × 10 grid with a 1000 mm pitch, written by
+`python tools/make_step_fixtures.py --bench-solids 200 --bench-out /tmp/bench200.step` (an identity
+assembly of 200 solids, 1 238 126 bytes, 24 220 entities), imports to 200 `cylinder` objects in
+**0.40 s / 0.31 s / 0.38 s** (`import_step`, minimum of 3 per run, three runs; the prototype quoted
+0.63 s for a 1.25 MB file). Parsing is about
+85 % of the time on every file. The OCP tessellation fallback (§5.5.7, cadquery-ocp 8.0.1.1.0,
+minimum of 3): cylinder 4.0 ms (170 nodes / 164 triangles), frustum 7.8 ms (400 / 598), box 5.1 ms
+(24 / 12), sphere 17.2 ms (1447 / 2836).
+
+## TypeScript port (M7 phase 2 part 1, 2026-10-07): `ts/bench/camera_only.ts` after the receiver generalisation
+
+Part 1 of M7 phase 2 rewrote stages A and B of the port for the M4 receivers (per-receiver light records, clipped
+meshes per receiver, plate records, bounds clipping, `per_receiver` construction) and moved the document to the
+§5.0.3 shape. Same command, scene, camera and container as the step-7 table above (node 22.22.0, V8
+12.4.254.21-node.33; minimum over 20 repetitions, the median in brackets; three consecutive runs). The document
+grows by the M4–M6 switch-off keys (JSON 10379 kB, was 10239 kB; SVG 1915 kB unchanged, byte-identical to the
+Python writer).
+
+| path | run 1 | run 2 | run 3 | target | status |
+| --- | --- | --- | --- | --- | --- |
+| full render (A+B+C+SVG+JSON) | 341 ms (437) | 357 ms (468) | 340 ms (426) | < 1 s | **PASS** (3/3) |
+| camera-only re-render (B+C+SVG) | 61 ms (81) | 61 ms (73) | 58 ms (65) | < 100 ms | **PASS** (3/3) |
+| stage A only | 18 ms (25) | 16 ms (25) | 17 ms (25) | – | – |
+| SVG writer only | 31 ms (37) | 32 ms (43) | 29 ms (36) | – | – |
+| JSON dumps only | 257 ms (287) | 245 ms (276) | 225 ms (261) | – | – |
+
+All three runs exit 0 with `--gate both`. **§5.4.9 gate decision restated:** the camera-only minimum stays below the
+70 ms margin line in every run (61 / 61 / 58 ms, against 55 / 60 / 63 ms in phase 1: inside run-to-run drift), so
+the `ts` CI job keeps `--gate both`. The closing part of phase 2 appends the final phase-2 row.

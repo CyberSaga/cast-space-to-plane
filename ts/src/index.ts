@@ -21,9 +21,12 @@ export type { Warning } from "./errors.js";
 export {
   LAYER_IDS, LIGHT_TYPES, OBJECT_TYPES, load_camera, load_scene, load_scene_text, polygon_is_simple, polygon_signed_area,
   validate_camera, validate_light, validate_object, validate_output, validate_receiver, validate_scene, validate_transform,
+  // phase 2 (§5.4.2): the §5.0.1 rows
+  LOADER_TYPES, to_z_up, validate_bounds, validate_hidden_output, validate_lights_in_scene, validate_mesh_data,
+  validate_mesh_object, validate_receivers_in_scene,
 } from "./scene.js";
 export type { Camera, Light, Output, Receiver, Scene, SceneObject, Transform } from "./scene.js";
-export { compose, project_scene, render, shadow_geometry } from "./pipeline.js";
+export { compose, construction_block, project_scene, render, shadow_geometry } from "./pipeline.js";
 export type { StageA, StageB } from "./pipeline.js";
 export { canonical, dumps, py_repr, INT_KEYS } from "./output/geometry_json.js";
 export { LAYER_ORDER, STYLE, fmt, write_svg } from "./output/svg.js";
@@ -35,7 +38,10 @@ export {
 } from "./camera.js";
 export type { CameraRecord } from "./camera.js";
 export { face_lit_flags, is_parallel, light_vector, lit, lit_state, silhouette_edges, silhouette_loops } from "./light.js";
-export { ARC_STEP_DEG, clip_loop_to_plane, clip_mesh_to_plane, foot, shadow_loop, shadow_matrix, shadow_w } from "./shadow.js";
+export {
+  ARC_STEP_DEG, bounds_functionals, clip_loop_to_plane, clip_mesh_to_plane, clip_polygon_bounds, foot, plate_loop, receiver_frame,
+  shadow_loop, shadow_matrix, shadow_w,
+} from "./shadow.js";
 export {
   CURVED_SEGMENTS, SPHERE_RINGS, box_mesh, cone_mesh, cylinder_mesh, euler_characteristic, face_normals_newell, mesh_bbox,
   mesh_from_faces, prism_mesh, sphere_mesh, transform_mesh,
@@ -48,4 +54,5 @@ export {
 } from "./construction.js";
 export * as conics from "./conics.js";
 export * as curved from "./curved.js";
+export * as multilight from "./multilight.js";
 export { TOL_DIR, ZERO_REL, cross3, join, meet, normalize_max, row_max_abs, scene_scale, to_homogeneous, tolerance } from "./homogeneous.js";

@@ -15,8 +15,10 @@ rounding half-way (exact decimal arithmetic).  Such lines are listed for review;
 genuine 1e-4 drift included -- is a mismatch.
 
 This is not a CI gate (the CI gates are the JSON conformance set and the structural SVG tests of
-``ts/test/svg.test.ts``).  Exit status: 0 when the outputs are identical or differ only at rounding
-boundaries, 1 on any other difference, 2 when node or the built port is unavailable.
+``ts/test/svg.test.ts``).  A scene the port cannot render (``render.mjs`` writes ``<name>.error``: a SceneError, or
+a phase-2 part of the port that has not landed yet) is reported as a ``TS render failed`` row and counted
+separately; the other scenes are still compared.  Exit status: 0 when the outputs are identical or differ only at
+rounding boundaries, 1 on any other difference or a failed TS render, 2 when node or the built port is unavailable.
 """
 
 from __future__ import annotations
@@ -119,14 +121,22 @@ def main(argv: list[str] | None = None) -> int:
         return 2
     with tempfile.TemporaryDirectory() as tmp:
         run = subprocess.run([node, str(RENDER), *map(str, scenes), tmp], capture_output=True, text=True, check=False)
-        if run.returncode != 0:
+        if run.returncode not in (0, 1):
             print(run.stderr, file=sys.stderr)
             return 2
-        boundary, mismatch = [], []
+        boundary, mismatch, failed = [], [], []
         for path in scenes:
+            error = pathlib.Path(tmp) / f"{path.stem}.error"
+            if error.exists():
+                failed.append(f"{path.stem}: {error.read_text(encoding='utf-8').strip()}")
+                continue
+            svg_file = pathlib.Path(tmp) / f"{path.stem}.svg"
+            if not svg_file.exists():
+                print(run.stderr, file=sys.stderr)
+                return 2
             scene = load_scene(path)
             py = castplane.render(scene)["svg"]
-            ts = (pathlib.Path(tmp) / f"{path.stem}.svg").read_text(encoding="utf-8")
+            ts = svg_file.read_text(encoding="utf-8")
             b, m = compare(path.stem, py, ts, unrounded_svg(scene) if py != ts else None)
             boundary += b
             mismatch += m
@@ -134,8 +144,11 @@ def main(argv: list[str] | None = None) -> int:
         print(f"boundary difference (tolerated) {line}")
     for line in mismatch:
         print(f"MISMATCH {line}")
-    print(f"{len(scenes)} scene(s): {len(boundary)} boundary difference(s), {len(mismatch)} mismatch(es)")
-    return 1 if mismatch else 0
+    for line in failed:
+        print(f"TS render failed {line}")
+    print(f"{len(scenes)} scene(s): {len(boundary)} boundary difference(s), {len(mismatch)} mismatch(es), "
+          f"{len(failed)} TS render failure(s)")
+    return 1 if mismatch or failed else 0
 
 
 if __name__ == "__main__":

@@ -1889,6 +1889,12 @@ unordered world pairs with equal `silhouette` / `back` flags and `segment` endpo
   every light as §5.2.8 says, but its validation check fails with `lights` (exit 2, nothing written) until M6 is merged;
   `--light NAME` imports one light. The re-load tests branch on `validate_scene` accepting two lights (they assert
   the `lights` failure before M6 and the two re-loaded lights after it), so they need no edit at the M6 merge.
+  **Obsolete since M6 (updated at the M8 merge):** M6 lifted the one-light row, so `castplane import` of the fixture
+  `import_scene.gltf` writes both lights (`Lamp`, `Spot` as a point light, note `IMPORT_SPOT_AS_POINT`, exit 0) and
+  `castplane render` of the result draws `cast_shadow.Lamp`, `cast_shadow.Spot` and `cast_shadow.umbra` (one umbra
+  entry on `ground` with lights `[Lamp, Spot]`, `warnings []`). The branch and its pre-M6 assertions were removed:
+  `test_import_fixture_reloads_with_both_lights_or_one_light` and `test_cli_import_gltf_with_two_lights` now assert
+  the two-light re-load and render unconditionally.
 - **[decision, implementation] (M5 part 2) glTF importer details.** (1) A node selection is a subtree (§5.2.1), so a
   mesh node whose ancestor is already emitted as a mesh object is not emitted again (only the topmost mesh node of a
   branch becomes an object; its object then holds the descendants' meshes) — otherwise the geometry would be imported
@@ -3357,7 +3363,8 @@ and the hidden-run SVG groups (§5.1.8). Nothing an M4–M6 case needs lies beyo
     tests, `vite build`), and `npm ci` was run from the committed lockfile. The node-20 camera-only time is
     ≈ 89 ms, so the benchmark is gated on node 22 only, as §5.4.12 specifies.
 - **[implementation] (M7 phase 2, part 1) Phase 2 lands in parts; the runner's explicit todo list.** Step 11 is
-  delivered in five parts on `wt/m7` after the rebase onto the v6 base: (1) document shape, warning codes,
+  delivered in five parts on `wt/m7` after the rebase onto the v6 base (the M8 merge that landed on the base during
+  part 1 was merged into the branch in the part-1 review, not rebased): (1) document shape, warning codes,
   `INT_KEYS`, rules v6, the phase-2 validation rows and the M4 receiver generalisation; then hidden lines, meshes,
   multiple lights and the closing part. `ts/test/conformance.test.ts` runs every v6 case and marks the cases whose
   geometry belongs to a later part as node:test `todo` through the explicit `TODO_CASES` list (hidden lines:
@@ -3366,12 +3373,18 @@ and the hidden-run SVG groups (§5.1.8). Nothing an M4–M6 case needs lies beyo
   examples (`mesh_demo.json`). Each part shrinks the lists; the last part leaves both empty. After part 1 the other
   40 cases pass `compare_documents` with the v6 rules, and `tools/compare_svg.py` reports 0 mismatches and 0 boundary
   differences on them and on the five v2 examples (`examples/wall_and_ground.json` has `hidden_lines: true` and waits
-  for the hidden-line part; its case `wall_and_ground` with the switch off matches byte for byte).
-- **[decision, implementation] (M7 phase 2, part 1) `LOADER_TYPES` in the port ahead of the reference.** §5.0.1 /
-  §5.4.2 list `LOADER_TYPES = ("step",)` and the "must be expanded first" row; the Python reference on the v6 base
-  does not carry them yet (M8's loader is not merged), so a `type: "step"` object fails there with the generic
-  `objects[i].type` "must be one of …" message. The port implements the contract row: the same field path
-  (`objects[i].type`), the §5.0.1 message. Messages are informative only (§5.4.3); no case uses `step` (§5.5.10).
+  for the hidden-line part; its case `wall_and_ground` with the switch off matches byte for byte). The explicit scene
+  list of that check is `python tools/compare_svg.py $(ls tests/conformance/cases/*.json | grep -v
+  'hidden_lines_\|wall_and_ground_hidden\|mesh_\|multilight_') examples/{basic,construction_demo,curved_demo,directional,three_point}.json`
+  (45 scenes); the default invocation (all 50 cases) lists the six hidden / mesh cases as `TS render failed` rows and
+  the four `multilight_*` cases as mismatches until their parts land (part-1 review: `render.mjs` writes
+  `<name>.error` per failed scene instead of aborting the run).
+- **[implementation] (M7 phase 2, part 1; corrected in the part-1 review) `LOADER_TYPES` is identical to the
+  reference since the M8 merge.** `wt/m7` carries the v6 tip including M8 (merged into the branch, not rebased:
+  history is never rewritten), so `castplane/scene.py` has `LOADER_TYPES = ("step",)` and the §5.0.1 row. The port
+  implements the same row before the `OBJECT_TYPES` test: same field path (`objects[i].type`), same message
+  (`ts/test/scene.test.ts` checks it). An earlier draft of this note called the port ahead of the reference; that was
+  written against the pre-M8 base and was wrong.
 - **[decision, implementation] (M7 phase 2, part 1) Integer predicates on a one-number-type language.** Python's
   `validate_mesh_data` accepts only JSON integers (`numbers.Integral`) as face indices and smooth groups, so a face
   index written `2.0` is rejected there; JSON.parse gives the same `number` for `2` and `2.0`, so the port accepts
@@ -3381,7 +3394,25 @@ and the hidden-run SVG groups (§5.1.8). Nothing an M4–M6 case needs lies beyo
 - **[implementation] (M7 phase 2, part 1) Usable-face guard of a mesh object.** `validate_mesh_object` runs the
   §5.2.1 guard (weld + degenerate-face removal on `scale · vertices`) through a hook,
   `scene.ts::set_mesh_usable_face_guard`, which the mesh part installs from `src/meshprep.ts`; until then every
-  mesh that passes `validate_mesh_data` is accepted (the mesh cases are on the todo list).
+  mesh that passes `validate_mesh_data` is accepted by `load_scene` (the mesh cases are on the todo list), and
+  `shadow_geometry` rejects every `mesh` object with `SceneError("objects[i].type", "mesh objects are not ported yet
+  …")` (part-1 review: before, `local_mesh` threw a plain `Error`, against the §5.4.0 rule that input errors are
+  `SceneError`s with a field path). The mesh part removes that guard and installs the hook in the same commit.
+- **[implementation] (M7 phase 2, part 1 review) `hidden_lines: true` is rejected until the hidden-line part.**
+  Without `src/hidden.ts` a document with the effective switch on would claim `hidden_lines: true` while carrying the
+  switch-off geometry (every `visibility` `"visible"`, empty `runs` / `polygon_edges`, no `*.hidden` SVG groups).
+  `compose` therefore throws `SceneError("output.hidden_lines", "hidden-line removal is not ported yet …")` when the
+  effective switch is on (from `scene.output` or the argument); the explicit override `false` still renders such a
+  scene. `examples/wall_and_ground.json` (switch on) joins `TODO_EXAMPLES` of `ts/test/determinism.test.ts`; the web UI
+  shows the error in its error panel for that example. The hidden-line part removes the guard.
+- **[decision, implementation] (M7 phase 2, part 1 review) Rays are camera-free only without `POINT_BEHIND_CAMERA`
+  (qualifies the §5.0.3 list).** §5.0.3 lists `construction.rays` / `per_receiver[*].rays` / `constructions[*].rays`
+  as camera-free, but §2.7 / §5.1.5 keep a ray row only when ν(P), ν(S_r), ν(Q_r) ≥ 0, a camera predicate: in the
+  reference and in the port, `receiver_unlit_wall` has 16 rays with its scene camera (which emits
+  `POINT_BEHIND_CAMERA`) and 20 with the test camera of §5.4.7. The mathematically correct reading, which both
+  implementations follow, is "camera-free except for the rows the ν ≥ 0 rule removes, i.e. whenever
+  `POINT_BEHIND_CAMERA` is emitted for either camera". `ts/test/determinism.test.ts` compares the rays only when
+  neither document carries that code, and checks the 16 / 20 case explicitly.
 - **[implementation] (M7 phase 2, part 1) Receiver generalisation: what the port carries.** `shadow.ts` gains
   `receiver_frame`, `bounds_functionals`, `clip_polygon_bounds` (band, own-crossing band of a direction
   `|ψ_k·D| <= 1e-9 max|D|` as in the M4 implementation note, zero-vector filter, anchor rule, merge, `w <= 0` drop,
@@ -3876,3 +3907,121 @@ LGPL-2.1；確定性只到 OCC 版本；頂點重建誤差 1.4e-9 mm；OCP 8 的
 列 M5 為 M8 前置：網格退路經 M5 的內嵌 `data` 網格物件；`type: step` 走解析辨識；`type: mesh` + `.step` 直接走網格退路；`EXPANDERS` /
 `EXTENSION_LOADERS` 登錄表；網格化實測數字 170/164、400/598）；8 驗收案例（§5.5.10 的圓柱位元相同、手算數字）；9 風險（exporter 精度、
 分割面、單位宣告缺失、OCC 版本漂移、PRODUCT 名稱的程序計數器）。
+
+### Implementation notes
+- **[decision, implementation] (M8 part 1) Re-measured on the committed fixtures (cadquery-ocp 8.0.1.1.0, OCC 8.0).**
+  Confirmed exactly as quoted above: cylinder fixture 118 entities / 5 684 bytes, its `CYLINDRICAL_SURFACE` axis is `#34`;
+  `two_solids` solids `#37` / `#154` and `#142 = ITEM_DEFINED_TRANSFORMATION('','',#11,#15)` (identity); box faces `#17` /
+  `#137` both `(0.866025403784, 0.5, 0.)`; box expansion `size = [1.00000000000002, 0.8000000000003888, 0.6]`,
+  `position = [2.0000000000000004, 4.0, 0.0]`, `rotation_deg = [0.0, 0.0, 30.000000000012566]`; cone semi-angle
+  `0.321750554397`, axis `(-0., -0., -1.)`; `cylinder_down` `ref_direction (-1., 0., -0.)` → `[0.0, 0.0, 180.0]`;
+  tessellation 170 / 164 (cylinder), 400 / 598 (frustum), 24 / 12 (box), 1447 / 2836 (sphere). Sizes 2–17 KB, set 56 KB.
+  **Corrected**: (a) §5.5.9's PRODUCT counters are `8.0 1` … `8.0 7` for the seven single-solid fixtures written before
+  `two_solids`, and `8.0 8`, `8.0 8.1`, `8.0 8.2` inside it (not `1 … 6`, `7`, `7.1`, `7.2`; the normalisation is a
+  regular expression over any counter, so the output is the same); (b) the "`2.775557561563E-17`" example is a
+  **direction** component (`cylinder_tilted`, 13 significant digits), not a coordinate; directions carry 12–13
+  significant digits, coordinates up to 14 (`743.46242505348`); (c) `cylinder_tilted` expands to `height
+  1.600000000000126`, `rotation_deg [30.000000000017515, 1.3772205761362216e-15, 20.000000000016044]` (within the 1e-9
+  of §5.5.10), `position [0.0, 5.0, -0.4]` exactly.
+- **[decision, implementation] (M8 part 1) §5.5.10 metre-tolerance case.** For a 2 m part `extent_mm = 2000`, so
+  `tol = 1e-6 · 2000 / 1000 = 2e-6 m` (= 2e-3 mm in the mm file), not "2e-9 m". A tilted cap plane is judged by the
+  unit-free direction predicate (`|n × a| ≤ tol_dir_step = 1e-7`), so a 2e-9 rad tilt is accepted and 2e-6 rad rejected in
+  both the metre and the millimetre file; the test additionally exercises `tol` itself with a second cylindrical face
+  whose radius differs by 1e-6 m (accepted) / 1e-5 m (rejected), in both units.
+- **[decision, implementation] (M8 part 1) Which unit entities count (§5.5.3).** The length / plane-angle units read are
+  those listed by a `GLOBAL_UNIT_ASSIGNED_CONTEXT` (every entity when no context lists any). Needed because a `DEGREE`
+  file necessarily also holds the radian `SI_UNIT` referenced by its `PLANE_ANGLE_MEASURE_WITH_UNIT`; scanning every
+  entity would see two plane-angle units with different factors. The conversion measure must reference a radian unit,
+  else `StepError("unsupported: plane angle unit …")`.
+- **[decision, implementation] (M8 part 1) Messages.** A rule-specific reason is appended to the §5.5.5 message after
+  `; ` (`#15: unsupported solid: faces {CONICAL_SURFACE: 1, PLANE: 2} (supported: cylinder, sphere, cone, box); cone:
+  2 planar faces (a frustum is not a cone)`), so the contract text stays a prefix. Degenerate placements read
+  `unsupported: degenerate placement #32 (ref_direction parallel to axis)` with `entity = "#32"`; a dangling or
+  mistyped reference is `#n: expected DIRECTION, found …`. An `ITEM_DEFINED_TRANSFORMATION` is the identity when the
+  locations agree within `tol` and both the normalised axes and the projected `ref_direction`s within `tol_dir_step`.
+  In a standalone `import_step(field=F)` a bad `solid` / `fallback` / `transform` is reported at `F` with a trailing
+  `.path` replaced by `.solid` / `.fallback` / `.transform` (`objects[i].solid` when expanding; `step.solid` for the
+  default `field="step"`). A `POLY_LOOP` or a nested `ORIENTED_EDGE` makes the solid unrecognised (so `fallback="mesh"`
+  still applies) instead of raising.
+- **[decision, implementation] (M8 part 1, review fix) Cone semi-angle check.** When the conical surface's placement lies
+  in the base plane (OCC always writes it so), `(b − o)·a_s = 0` and the §5.5.5 consistency test reduces to
+  `r = radius_s`, so it cannot see a wrong semi-angle, and (because of its inner `| … |`) not a surface axis pointing at
+  the apex either. **Added** after it: the surface radius must vanish at the apex vertex,
+  `| radius_s + ((V − o)·a_s)·tan(semi) | ≤ tol`, else unsupported ("inconsistent cone (the surface radius does not
+  vanish at the apex vertex)"). ISO 10303-42 puts the apex at `o − (radius_s / tan(semi))·a_s`, so this holds for every
+  valid file whatever the placement (OCC's 12-digit semi-angle leaves a residual of ≈ 4.8e-10 mm on `cone.step`, whose `tol` is 5e-3 mm).
+  A degree value read as radians (`18.43…` rad) is still rejected earlier by the range check
+  (`0 < |semi| < π/2 − tol_dir_step`).
+- **[decision, implementation] (M8 part 1) Mesh fallback in multi-solid files.** `fallback="mesh"` on an unrecognised
+  solid `k` of a file with several solids tessellates only the `k`-th `TopAbs_SOLID` of the shape (explorer order;
+  verified equal to the entity order on `two_solids`: 170 / 164 and 1447 / 2836, identical to the single fixtures), with
+  the deflection rule applied to that solid's bounding box; a single-solid file is tessellated whole, exactly as
+  `tessellate_step`. Recognised solids never import OCP.
+- **[decision, implementation] (M8 part 1) Gimbal-lock branch.** §5.5.5 says the M5 `gltf.euler_zyx` is "the same
+  decomposition"; it is, except at gimbal lock, where `gltf.euler_zyx` sets `rx = 0` (and `rz = atan2(−R01, R11)`) while
+  `euler_zyx_deg` sets `rz = 0` (and `rx = atan2(sy·R01, R11)`). Both reproduce `R`; `gltf.py` (M5's file) is unchanged.
+  The product is canonicalised too, `atan2(sy·R01 + 0.0, R11)`: with `sy = −1` and `R01 = +0.0` the product is `−0.0`
+  and `atan2(−0.0, −1) = −π` would give `−180.0` (review fix; e.g. a cylinder along world `+x` with `ref_direction
+  (0, 0, 1)` is `[180.0, -90.0, 0.0]`).
+- **[decision, implementation] (M8 part 1, review fix) Mesh fallback `transform` (§5.5.7).** `import_step` passes the
+  caller's **raw** `transform` block (deep-copied; validated but not normalised, so `{"position": [1, 0, 0]}` stays
+  integer and gains no `rotation_deg`), as §5.5.8 requires for the written scene; the key is **omitted** when
+  `transform` is `None` (`validate_scene` would reject `"transform": null`).
+- **[decision, implementation] (M8 part 1, review fix) `cylinder_down` render leaves (§5.5.10).** Measured with every
+  numeric leaf compared at 1e-9: exactly 64 leaves differ (the count PLAN-v2 quotes), all in conic dicts of `outlines[]`,
+  `shadows[]` **and `form_shadow[].terminator[]`**: `circle.e1`, `circle.e2` (negated), `arc.theta0/theta1`,
+  `arcs[].theta` **and `visible[][]`** (each shifted by π mod 2π, the same intervals in the flipped parameterisation).
+  The allowed list of §5.5.10 is read with `visible` added and as applying to every conic dict, not only those under a
+  `conics` key; every point, polygon, segment and edge agrees within 1e-9.
+- **[decision, implementation] (M8 part 1) Vector arithmetic.** `step.py` does its 3-vector arithmetic in plain Python
+  floats in a fixed order (`_dot`, `_cross`, …; numpy only for `to_metres` of arrays, `euler_zyx_deg` input and the
+  user-transform composition), so recognition and the emitted numbers do not depend on a BLAS build.
+- **[decision, implementation] (M8 part 2) Registry and the `.step` mesh path (§5.0.2, §5.5.0, §5.5.7).**
+  `EXPANDERS["step"]`, `EXTENSION_LOADERS` and `IMPORT_NOTE_CODES.update(step.STEP_WARNING_CODES)` are appended
+  hunks of `castplane/io/__init__.py`; `EXTENSION_LOADERS` is consulted by M5's `load_mesh_file` (its per-call
+  parse cache) **before** the trimesh fallback, so `expand_mesh_object` needs no change and
+  `load_mesh_file("part.step")` returns the same raw form `{vertices (m), faces, smooth_groups: [0]*n}` as
+  `mesh_object_from_triangles(...)["data"]`. A `mesh` object with a `.step` path gets **no** importer note
+  (`STEP_SOLID_TESSELLATED` belongs to the `type: "step"` fallback, whose ids are entity ids); a `StepError` of
+  `tessellate_step` is re-raised by `_parse_file` without its standalone `step` field, so M5's re-raise gives
+  `SceneError(objects[i].path, "unsupported: …")`, the bare loader message of §5.0.2 (review fix);
+  `node` on a `.step` mesh is M5's `objects[i].node` error. `scene.LOADER_TYPES` sits directly above
+  `validate_object` (its test is the first statement after the `type` lookup, before the `OBJECT_TYPES` test).
+- **[decision, implementation] (M8 part 2) `castplane import` of a STEP file (§5.5.8).** The written objects are
+  the expanded primitives (an unrecognised solid with `--fallback mesh`: the inline `mesh`), never a `step`
+  reference; the importer notes go into `meta.import_notes` like every import (§5.0.2; §5.5.8 does not repeat it).
+  A missing FILE is checked (exit 1) before the extension dispatch. The mixed-family usage error is a
+  `SceneError` at the option (`error: --weld: --weld is a mesh option; FILE is a STEP file …`, exit 2), the same
+  mechanism M5 uses for `--up` on glTF; `--solid` is `type=int` (a non-integer is an argparse usage error, exit 2;
+  a negative or too large K is `SceneError("step.solid", …)`). **Added**: with `--into SCENE`, the ids that
+  SCENE's own `step` objects expand to (`part_0`, …) are reserved like SCENE's raw ids, so an imported object is
+  de-duplicated against them (`part_0_2`) instead of failing validation at `objects[j].id`; an explicit `--id`
+  equal to one of them is the usual `SceneError("--id")`. To get those ids before `_dedupe`, M5's line
+  `expanded, into_notes = expand_scene(base_scene, scene_dir)` was **moved** from the `if base_scene is not None:`
+  block into the `if args.into:` block of `cmd_import` (same call, same arguments; the one relocation of existing
+  M5 code in M8).
+- **[decision, implementation] (M8 part 2) "every face contributes ≥ 1 triangle" (§5.5.10).** Tested without a
+  per-face API: the node blocks are unwelded, so each face's triangulation is its own connected component; the
+  frustum's triangles form exactly 3 components and OCP's face explorer finds 3 faces. `tessellate_step` keeps the
+  contract's return keys.
+- **[decision, implementation] (M8 part 2) Extras order and the test environments.** `step` is placed after `png`
+  in `pyproject.toml`; the existing `dev` line stays last (PLAN rule: no moving of existing lines), so the extras
+  read `mesh`, `png`, `step`, `dev`. The container's system Python has cadquery-ocp 8.0.1.1.0, so the OCP tests
+  run in the full suite; the absent path was run with a `ModuleNotFoundError` stub for `OCP` first on
+  `PYTHONPATH` (`tests/test_step.py`, `test_cli.py`, `test_loaders.py`: 186 passed, the 6 OCP tests skipped; CLI
+  `--fallback mesh` exit 3). The scratch OCP venv has no pytest, so it was not used.
+- **[decision, implementation] (M8 part 2) Measurements.** Fixture `import_step` 0.45–4.1 ms (min of 5; table in
+  `benchmarks/README.md`); a 200-cylinder OCC assembly (`tools/make_step_fixtures.py --bench-solids 200`, 1 238 126 bytes, 24 220 entities) 0.31–0.40 s (min of 3,
+  three runs), not the prototype's 0.63 s; Part 21 parsing is ≈ 85 % of the time. `part21.py` is 202 lines and
+  `step.py` 842 (the §5.5.12 "≈ 700 lines" estimate is exceeded by the error paths and the fallback).
+- **[decision, implementation] (M8 part 2, review fixes) Tessellation guards and `--id` collisions (§5.5.7,
+  §5.2.8 (4)).** OCC's `ReadFile` returns `IFSelect_RetDone` for a file it cannot transfer (a syntactically broken
+  file, an empty `DATA` section); `TransferRoots()` then returns 0 and `OneShape()` is null, and `CornerMin()` of the
+  void box would raise OCP's `Standard_ConstructionError`. `_tessellate` therefore also raises `StepError("unsupported:
+  OCP cannot read … (no transferable shape)")` when no root transfers or the shape is null, and `StepError("unsupported:
+  OCP finds no geometry in …")` for a void bounding box (exit 2 at `objects[i].path` / `step`, never a traceback).
+  OCC's console printer is left as is (it writes `**** ERR StepFile …` to stdout only for such broken files).
+  `castplane import --id ID` on a multi-solid STEP file checks every derived `<ID>_<k>` against the taken ids and
+  raises `SceneError("--id")` on a clash instead of renaming it (§5.2.8 (4): an explicit `--id` is never renamed).
+  With `--into SCENE`, a present non-list `objects` is `SceneError("objects", "must be a non-empty list")` (the
+  `validate_scene` message) before the import is assembled, not `objects[0]`.

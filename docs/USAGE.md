@@ -15,8 +15,10 @@ castplane [--version] <command> ...
 | `castplane info SCENE [--camera JSON]` | 印出物件清單、畫布、主點、地平線 v_mm、三個消失點（軸平行畫面時印 `at infinity (axis parallel to the picture plane)`，表示該方向的線在畫面上仍平行）、L′、F′（在無窮遠時印 `at infinity, direction (…)`）、點／邊／影子／作圖線數量、自我驗證最大誤差、受影面清單（M4：有界／無界、平面、各光源的 `lit` / `casts`）與警告表；M6：列出每個光源（id、種類、位置／方向、在各受影面上是否有效） |
 | `castplane stages SCENE [--camera JSON] [-o FILE] [-q]` | 把 A 段與 B 段的中間結果以標準 JSON（`{"A": …, "B": …}`）寫到 FILE 或 stdout，除錯與移植對照用 |
 | `castplane import FILE [-o OUT.json] [--into SCENE] [--id ID] [-q] [網格選項]` | 把網格檔（OBJ、glTF / GLB、STL、PLY）匯入成場景檔（M5，見下方「`castplane import`」） |
+| `castplane import FILE [-o OUT.json] [--into SCENE] [--id ID] [--solid K] [--fallback error\|mesh] [-q]` | FILE 為 STEP 檔（`.step` / `.stp`）時：把實體辨識成圓柱、球、圓錐、方塊物件，寫成場景檔（M8，見下方「`castplane import` 的 STEP 檔」） |
 
 `render` / `validate` / `stages` / `info` 都以 `castplane.io.load_expanded_scene` 讀場景：帶 `path` 的 `mesh` 物件先依場景檔所在目錄讀檔、展開成內嵌的 `data`，再做驗證（合約 §5.0.2）。展開時的匯入備註以 `note: <CODE> ['id', …]: message` 印到 stderr（`-q` 不印），**不會**寫進輸出文件的 `warnings`。
+M8：場景裡的 `{"type": "step", "path": "parts/pillar.step"}` 物件也在這一步展開（相對路徑同樣以場景檔所在目錄為準），換成辨識出的基元物件；`validate` 印的物件數是展開後的數量，`info` 列出展開後的型別。
 
 ### `render` 選項
 
@@ -115,6 +117,49 @@ castplane import tests/fixtures/meshes/import_scene.gltf -o scene.json --light L
 castplane import tests/fixtures/meshes/box.glb --inline --into examples/basic.json -o with_box.json
 castplane import tests/fixtures/meshes/features.obj --node walls --scale 0.5 -o walls.json
 ```
+
+### `castplane import` 的 STEP 檔（M8，合約 §5.5.8）
+
+```
+castplane import FILE [-o OUT.json] [--into SCENE] [--id ID] [--solid K] [--fallback error|mesh] [-q]
+```
+
+副檔名 `.step` / `.stp`（不分大小寫）的 FILE 由 `castplane.io.step.import_step` 讀取：內建、只靠標準函式庫的 Part 21 解析器，把每個 `MANIFOLD_SOLID_BREP` 依面型簽章辨識成 `cylinder`、`sphere`、`cone` 或 `box` 物件（長度一律以 `x / 1000.0` 從 mm 換成公尺，旋轉以 `rotation_deg` 表示），**不需要** OpenCascade。寫出的場景直接帶這些基元物件（不是 `step` 參照）；其他規則（`-o`、`--into`、`--id`、`-q`、預設相機與光源、`meta.import_notes`、寫出前的 `validate_scene` 檢查）與網格檔相同。可行性報告與完整規則見 [`STEP.md`](STEP.md)。
+
+| 選項 | 說明 |
+| --- | --- |
+| `--id ID` | 物件 id，預設為檔名主幹（`[A-Za-z0-9_-]` 以外的字元換成 `_`）；檔案有 n > 1 個實體且沒給 `--solid` 時，id 依實體編號順序為 `<id>_0` … `<id>_{n−1}`。STEP 的產品名稱從不當 id |
+| `--solid K` | 只匯入第 K 個實體（0 起算，實體編號順序）；K ≥ 實體數 → `error: step.solid: file has N solid(s)`（結束碼 2） |
+| `--fallback error\|mesh` | 不是支援的基元（例如截頭圓錐、B-spline 面）時：`error`（預設）報 `error: step: #15: unsupported solid: faces {CONICAL_SURFACE: 1, PLANE: 2} (supported: cylinder, sphere, cone, box)…`；`mesh` 以選用的 OCP（`pip install 'castplane[step]'`）網格化成內嵌 `data` 的 `mesh` 物件，並記備註 `STEP_SOLID_TESSELLATED`；沒有 OCP 時結束碼 3（例：`tests/fixtures/step/frustum.step` 加 `--fallback mesh`） |
+
+網格選項（`--inline`、`--node`、`--camera`、`--light`、`--scale`、`--weld`、`--smooth-angle`、`--up`）用在 STEP 檔、或 `--solid` / `--fallback` 用在網格檔，都是用法錯誤（結束碼 2）。結束碼：0 成功；1 讀不到 FILE / SCENE 或寫不了輸出；2 `StepError`（語法錯誤 `error: step: syntax: … at offset N`、不支援的單位、組件變換或實體）、`SceneError`、用法錯誤；3 `--fallback mesh` 但沒有 cadquery-ocp。
+
+匯入備註（`castplane.io.IMPORT_NOTE_CODES` 的 STEP 子清單 `castplane.io.step.STEP_WARNING_CODES`）：
+
+| 代碼 | 時機 |
+| --- | --- |
+| `STEP_UNIT_ASSUMED_MM` | 檔案沒有宣告長度單位，假設 mm（STEP 的慣例預設） |
+| `STEP_ANGLE_UNIT_ASSUMED_RAD` | 檔案沒有宣告平面角單位，假設弧度 |
+| `STEP_SOLID_TESSELLATED` | `--fallback mesh` 把某個實體網格化（ids：實體編號，例如 `["#15"]`） |
+
+```sh
+castplane import tests/fixtures/step/cylinder.step -o pillar.json
+castplane import tests/fixtures/step/cylinder.step --into examples/basic.json --id post -o with_post.json
+castplane import tests/fixtures/step/two_solids.step --solid 1 -o sphere.json
+```
+
+場景 JSON 的 `step` 物件（只在載入器層存在，合約 §5.5.1；`render` / `validate` / `stages` / `info` 與 `castplane.io.load_expanded_scene` 會先展開它，`castplane.load_scene` 則回報 `objects[i].type`「loader object type 'step' must be expanded first」）：
+
+| 鍵 | 規則 |
+| --- | --- |
+| `type` | `"step"` |
+| `id` | 同其他物件（非空、不含 `.`）；展開後的 id 由它而來（單一實體為 `id`，多個為 `<id>_<k>`） |
+| `path` | 必填、非空字串；相對路徑以場景檔所在目錄為準（給 dict 時以目前工作目錄為準）；讀不到檔 → `OSError`（結束碼 1）；檔案的錯誤 → `StepError(objects[i].path, …)` |
+| `solid` | 選用：整數 ≥ 0（布林與浮點數不接受），且 < 實體數，否則 `objects[i].solid` |
+| `fallback` | 選用：`"error"`（預設）或 `"mesh"`，否則 `objects[i].fallback` |
+| `transform` | 選用：同其他物件（`scale` 不接受）；與檔案中的放置組合：`R = R_user · R_step`、`position = R_user · p_step + p_user` |
+
+未知鍵忽略。展開後的物件位置就是 `step` 物件原本在 `objects` 裡的位置；展開出來的 id 與其他物件重複時，`validate_scene` 在較後面的 `objects[j].id` 報錯。
 
 ### 場景 JSON 的 `mesh` 物件（合約 §5.2.1）
 
@@ -523,6 +568,37 @@ B 段在多光源場景呼叫；純 numpy、確定性；只讀畫出的 `shadows
 | `construction_doc(block) -> dict` | 作圖區塊的文件形式（小鍵經 `canonical`，串列沿用） |
 | `active_lights(receiver, light_ids) -> list` | 受影面上有效的光源（`receivers[r].lit[k]`），即 `umbra[].lights` |
 | `umbra_entries(receivers, shadows, light_ids, canvas_mm, compute=True) -> list` | `umbra[]`：每個受影面一筆 `{receiver, lights, polygons}`；`compute=False` 時 `polygons` 為 `null` |
+
+### 2.22 STEP 匯入（`castplane.io.part21` / `castplane.io.step`，M8，合約 §5.5）
+
+`castplane.io.part21`（M8，純 stdlib；合約 §5.5.2）：ISO 10303-21 語法子集，不做語意檢查。
+
+| 名稱 | 說明 |
+| --- | --- |
+| `tokenize(text) -> [(kind, text), …]` | 以單一正規表示式切詞（`skip` 空白與 `/* … */` 註解丟棄；`ref`、`str`、`enum`、`real`、`name`、`punct`），字串裡的 `/*` 不會被當成註解 |
+| `parse(text) -> {"header", "entities"}` | `header` 為 `{NAME: args}`；`entities` 為 `{"#15": (NAME, args)}`，複合實體為 `("COMPLEX", [(NAME, args), …])`；`$` / `*` → `None`、`'it''s'` → `it's`、型別值 `LENGTH_MEASURE(1.E-07)` → `("LENGTH_MEASURE", 1e-07)`、列舉保留點號（`".T."`）；多個 `DATA` 區段串接 |
+| `Part21SyntaxError(offset, message)` | `ValueError`：重複的實體編號、截斷的檔案（位移為輸入結尾）、未知字元（如 `!USER_ENTITY`、二進位 `"…"`）、未結束的字串；訊息以 `at offset N` 結尾 |
+
+`castplane.io.step`（M8，stdlib + numpy；合約 §5.5.3–§5.5.7）：把 STEP 檔的 `MANIFOLD_SOLID_BREP` 依面型簽章辨識為 `cylinder` / `sphere` / `cone` / `box` 物件。
+
+| 名稱 | 說明 |
+| --- | --- |
+| `import_step(path, *, fallback="error", solid=None, obj_id=None, transform=None, field="step") -> report` | 報告 `{"path", "schema", "unit", "unit_divisor", "angle_factor", "tol", "solids", "objects", "notes"}`；單一實體（或以 `solid` 選一個）時物件 id 為 `obj_id`（預設：檔名主幹，`[^A-Za-z0-9_-]` 換成 `_`），多個時為 `<id>_<k>`；`transform` 與檔案中的放置組合（`R = R_user·R_step`、`position = R_user·p_step + p_user`） |
+| `expand_step_object(obj, field, base_dir) -> (objects, notes)` | `type: "step"` 物件的展開器：檢查 `id`、`path`、`solid`（整數 ≥ 0）、`fallback`（`"error"` / `"mesh"`）、`transform`（不可有 `scale`），相對路徑以 `base_dir`（`None` 時為目前工作目錄）為準 |
+| `recognise_solid(entities, solid_ref, unit_divisor, angle_factor, tol) -> dict \| None` | 合約 §5.5.5 的四條規則（不讀檔案中的任何方向正負號）；不是支援的基元時回傳 `None` |
+| `to_metres(x, unit_divisor)` | 唯一的單位換算 `float(x) / unit_divisor + 0.0`（除法，絕不乘 0.001：整數或二進位分數的 mm 值得到與公尺字面值完全相同的 double）；串列與陣列逐項換算 |
+| `euler_zyx_deg(R) -> [rx, ry, rz]` | `R = Rz·Ry·Rx` 的分解（度；先把九個元素 `+ 0.0`；萬向鎖時 `rz = 0`；角度在 `(−180, 180]`，`[[-1,-0.,0],[-0.,-1,0],[0,0,1]]` → `[0.0, 0.0, 180.0]`） |
+| `tessellate_step(path, *, deflection_mm=None) -> {"vertices", "faces", "cascade_unit"}`、`mesh_object_from_triangles(obj_id, tri, transform)` | 選用的 OCP（`pip install 'castplane[step]'`）網格化退路與轉成內嵌 `mesh` 物件的轉接；沒有 OCP 時拋 `ImportError`（CLI 結束碼 3） |
+| `StepError(field, message, entity=None)`、`STEP_WARNING_CODES`、`make_step_warning(code, ids=(), message=None)`、`DEFAULT_SCENE_TEMPLATE` | `SceneError` 子類別（`entity` 為 `"#15"` 或 `None`；訊息以實體編號、`syntax:` 或 `unsupported:` 開頭）；匯入備註代碼 `STEP_UNIT_ASSUMED_MM`、`STEP_ANGLE_UNIT_ASSUMED_RAD`、`STEP_SOLID_TESSELLATED`；`examples/basic.json` 的 `version` / `units` / `up` / `lights` / `receivers` / `camera` / `output` 區塊 |
+
+`castplane.io` 的 M8 登錄（合約 §5.5.0、§5.0.2）：
+
+| 名稱 | 說明 |
+| --- | --- |
+| `EXPANDERS["step"]` | `= step.expand_step_object`：`expand_scene` / `load_expanded_scene` 把場景裡的 `{"type": "step", "path": …}` 換成辨識出的基元物件（多個實體時依實體編號順序換成 `<id>_0`、`<id>_1` …，位置不變）；備註併入 `notes`，不進文件的 `warnings` |
+| `EXTENSION_LOADERS` | `{".step": tessellate_step, ".stp": tessellate_step}`：`load_mesh_file` 先查這張表，所以 `{"type": "mesh", "path": "part.step"}` 直接以 OCP 網格化（**不**做解析辨識；要辨識請用 `type: "step"`），頂點為公尺、未焊接，`smooth_groups` 全為 0 |
+| `IMPORT_NOTE_CODES` | M8 接上 `STEP_UNIT_ASSUMED_MM`、`STEP_ANGLE_UNIT_ASSUMED_RAD`、`STEP_SOLID_TESSELLATED`（即 `step.STEP_WARNING_CODES`） |
+| `scene.LOADER_TYPES` | `("step",)`：`validate_scene` 遇到未展開的 `step` 物件時報 `SceneError(objects[i].type, "loader object type 'step' must be expanded first (castplane.io.expand_scene or 'castplane import')")` |
 
 ## 3. 警告代碼（合約 §2.9）
 

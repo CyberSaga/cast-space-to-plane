@@ -272,7 +272,9 @@ test("M5: a path-only mesh must be expanded first; data required; the loader typ
   expect_error(mesh_scene({ path: "" }), "objects[0].path");
   expect_error(mesh_scene({ data: [1, 2] }), "objects[0].data");
   assert.deepEqual([...LOADER_TYPES], ["step"]);
-  assert.ok(expect_error(mutate(["objects", 0], { id: "s", type: "step", path: "a.step" }), "objects[0].type").detail.includes("expanded first"));
+  // the exact message of castplane/scene.py::validate_object since the M8 merge (identical to the reference)
+  assert.equal(expect_error(mutate(["objects", 0], { id: "s", type: "step", path: "a.step" }), "objects[0].type").detail,
+    "loader object type 'step' must be expanded first (castplane.io.expand_scene or 'castplane import')");
 });
 
 test("M5: mesh data rules", () => {
@@ -409,4 +411,15 @@ test("load_scene_text: invalid JSON and a non-object root", () => {
     assert.equal(e.detail, "must be an object");
   }
   assert.equal(load_scene_text(JSON.stringify(base_scene())).objects.length, base_scene().objects.length);
+});
+
+test("the phase-2 names of the §5.4.2 table are re-exported from the package entry point (part 1 review)", async () => {
+  const pkg: Record<string, unknown> = await import("../src/index.js");
+  for (const name of ["LOADER_TYPES", "validate_bounds", "validate_hidden_output", "validate_mesh_data", "validate_mesh_object",
+    "validate_receivers_in_scene", "validate_lights_in_scene", "to_z_up", "receiver_frame", "bounds_functionals",
+    "clip_polygon_bounds", "plate_loop", "construction_block", "multilight"]) {
+    assert.ok(name in pkg && pkg[name] !== undefined, name);
+  }
+  const ml = pkg.multilight as Record<string, unknown>;
+  for (const name of ["is_multi", "is_light_dependent_stem", "curved_stem_name"]) assert.equal(typeof ml[name], "function", name);
 });
