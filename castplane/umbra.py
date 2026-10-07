@@ -235,12 +235,23 @@ def _raw_pieces(T: dict, ev: np.ndarray, n_groups: int, tol_mm: float):
                 valid = np.zeros(m, dtype=bool)
                 valid[:-1] = es[1:] == es[:-1]
                 ins = inside & valid
-                prev_ins = np.zeros(m, dtype=bool)
-                prev_ins[1:] = ins[:-1]
-                next_ins = np.zeros(m, dtype=bool)
-                next_ins[:-1] = ins[1:]
-                k0 = np.flatnonzero(ins & ~prev_ins)
-                k1 = np.flatnonzero(ins & ~next_ins)
+                # step 5, zero-width bridging (M6 review note): an interval of width <= tol_mm at y_m
+                # (coincident edges, e.g. an edge shared by two loops of one record) does not end a
+                # run; a run is a maximal sequence of inside-or-zero-width intervals holding at least
+                # one inside interval, trimmed to its first and last inside interval.
+                xs = xm[o]
+                memb = ins.copy()
+                memb[:-1] |= valid[:-1] & (xs[1:] - xs[:-1] <= tol_mm)
+                run_start = memb.copy()
+                run_start[1:] &= ~memb[:-1]
+                rid = np.cumsum(run_start) - 1
+                n_runs = int(run_start.sum())
+                at = np.flatnonzero(ins)
+                k0 = np.full(n_runs, m, dtype=np.int64)
+                k1 = np.full(n_runs, -1, dtype=np.int64)
+                np.minimum.at(k0, rid[at], at)
+                np.maximum.at(k1, rid[at], at)
+                k0, k1 = k0[k1 >= 0], k1[k1 >= 0]
                 if k0.shape[0]:
                     el, er = ee[k0], ee[k1 + 1]
                     sl = es[k0]

@@ -2142,7 +2142,11 @@ shadow loops of concave prisms), the pairwise convex clip and the per-light unio
    (`np.lexsort`); for every group `g`, `w_g(k)` = Σ `dir` over the first `k + 1` ordered edges of group `g`; interval `k`
    (between ordered edges `k` and `k + 1`) is **inside** iff `w_g(k) ≠ 0` for every group.
 5. **Runs and clamp**: a maximal run of consecutive inside intervals `[k0, k1]` gives one raw piece bounded by edge `k0`
-   on the left and edge `k1 + 1` on the right (intermediate edges are interior to the filled region); with `x^l`, `x^r`
+   on the left and edge `k1 + 1` on the right (intermediate edges are interior to the filled region). **Zero-width
+   bridging** (M6 review, implementation note below): a valid interval `k` with `x_{k+1}(y_m) − x_k(y_m) ≤ tol_mm`
+   (coincident edges, e.g. an edge shared by two loops of one record) does not end a run — a run is a maximal sequence of
+   inside-or-zero-width intervals that holds at least one inside interval, trimmed to its first and last inside
+   interval (`k0`, `k1`); with `x^l`, `x^r`
    the two edges' abscissae: `x_a^lo = min(x^l(a), x^r(a))`, `x_a^hi = max(…)`, likewise at `b` (the per-end clamp absorbs
    a crossing that was merged into a slab boundary, which would otherwise give a bow-tie; the clamped lobe has height
    `≤ tol_mm` and area `≤ ½·tol_mm·D = tol_area/2`); the raw piece is dropped iff `x_a^hi − x_a^lo ≤ tol_mm` **and**
@@ -2369,7 +2373,9 @@ two active lights (`polygons == []`).
 #### 5.3.11 Compromises considered
 Accepted (exact up to `tol_mm`, deterministic, portable): snapping vertex `v` to merged events and the exact-endpoint rule
 (makes coincidences exact instead of ulp-dependent); the per-end clamp (bounded `tol_area/2` lobes); coalescing inside
-intervals and merging runs by line id (a partition with the complexity of the region, not of the slab grid); one
+intervals, bridging zero-width intervals and merging runs by line id (a partition whose size follows the region's runs
+per slab, not the slab grid and not the input edge set — the slab events of every input vertex still split it: an
+`n × n` grid of unit squares in one record gives `n` pieces); one
 intersection scan with a counter per light instead of a fold of pairwise clips (disjoint pieces, light-order independent
 set, no pair matrix); reusing the sampled curved drawables; not materialising penumbra polygons (derivable); `[]` for fewer
 than two active lights (the picture is the v1 one); projecting the union of unlit faces once; keeping the `construction`
@@ -2504,6 +2510,22 @@ dependency (shapely, pyclipper); `float32` or GPU paths.
   entries (`--rules-only` for the two `constructions` paths, then `--case` for the four cases) are numbered v6 / v7 in
   the worktree and collapse into the one v6 milestone entry at the M6 merge (§5.0.8 rule 1). The Python runner's
   `_MM_KEY_PATHS` literal gains the same two paths, so the `rules.json` equality test keeps cross-checking it.
+- **[decision, implementation] (final review, m6-umbra#0) Zero-width bridging in step 5 of §5.3.4.** Two loops of one
+  record that share an edge traverse it in opposite directions; ordered by `(x(y_m), edge index)` the winding passes
+  through 0 on the zero-width interval between the two coincident edges whenever the `−1` edge comes first, which ended
+  the run, and the run merge of step 6 (keyed on line ids) cannot rejoin the pieces. The partition then had the
+  complexity of the input edge set: an `n × n` grid of unit squares gave `n²` pieces, and an M5 per-face fallback mesh
+  (`MESH_NON_MANIFOLD`, all face loops in one record) under two lights gave 5 584 umbra pieces for 672 faces (one region
+  with 29 boundary vertices; 47 697 pieces and +36 MB of JSON at 2 752 faces). Step 5 now bridges such intervals (a valid
+  interval with `x_{k+1}(y_m) − x_k(y_m) ≤ tol_mm` belongs to a run when the run holds an inside interval; the run is
+  trimmed to its first and last inside interval). Measured: grid → `n` pieces (one per row), 672 faces → 27 umbra
+  pieces, 2 752 faces → 55. The filled set grows only by the bridged gaps: two non-crossing edges `≤ tol_mm` apart at
+  `y_m` are `≤ 2·tol_mm` apart on the whole slab, so each bridged sliver has area `≤ 2·tol_mm·D = 2·tol_area` (zero for
+  genuinely shared edges) — the same order as the step-5 clamp lobes. The four v6 conformance cases' `umbra[].polygons`
+  and the benchmark piece counts (3 637 / 3 652 record pieces, 3 514 umbra pieces with `--lights 2`) are bit-identical,
+  so no expected file changes. The TypeScript port of the kernel (M7 phase 2) must mirror the rule; it agrees with the
+  Python kernel on every conformance case either way. Tests: `tests/test_umbra.py::test_shared_edges_do_not_split_the_partition`,
+  `test_triangle_soup_square_is_one_piece`, `test_separate_regions_are_not_bridged`.
 
 ### 5.4 M7 — TypeScript port of the core and the three.js web UI (spec §9 row "TypeScript 移植", spec §10 M7)
 
