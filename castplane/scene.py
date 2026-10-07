@@ -185,11 +185,17 @@ def validate_transform(value, field: str) -> dict:
     return out
 
 
+# --- M8: loader-only object types (contract §5.5.1); expanded by castplane.io.expand_scene -----------
+LOADER_TYPES = ("step",)
+
+
 def validate_object(value, field: str) -> dict:
     """One ``objects[i]`` entry (contract §2.0)."""
     o = _dict(value, field)
     out = {"id": _id(_require(o, "id", field), f"{field}.id", no_dot=True)}
     typ = _require(o, "type", field)
+    if typ in LOADER_TYPES:
+        raise SceneError(f"{field}.type", f"loader object type '{typ}' must be expanded first (castplane.io.expand_scene or 'castplane import')")
     if typ not in OBJECT_TYPES:
         raise SceneError(f"{field}.type", f"must be one of {', '.join(OBJECT_TYPES)}")
     out["type"] = typ

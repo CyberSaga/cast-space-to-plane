@@ -25,10 +25,11 @@ import numpy as np
 
 from ..errors import SceneError, merge_warnings
 from ..scene import read_json, to_z_up, validate_scene
-from . import gltf, obj, trimesh_adapter
+from . import gltf, obj, step, trimesh_adapter
 
 __all__ = ["EXPANDERS", "IMPORT_NOTE_CODES", "SUPPORTED_EXTENSIONS", "load_mesh_file", "expand_mesh_object",
            "expand_scene", "load_expanded_scene"]
+__all__ += ["EXTENSION_LOADERS"]                # M8 (contract §5.5.0)
 
 #: The documented mesh file extensions (contract §5.2.8): ``.obj`` -> :mod:`castplane.io.obj`,
 #: ``.gltf`` / ``.glb`` -> :mod:`castplane.io.gltf`, ``.stl`` / ``.ply`` -> trimesh (optional extra
@@ -44,6 +45,8 @@ IMPORT_NOTE_CODES = {
     "IMPORT_NO_CAMERA_DEFAULT": "the file holds no camera; the bounding-box default camera is used",
     "IMPORT_NO_LIGHT_DEFAULT": "the file holds no light; the default directional light is used",
 }
+# --- M8: the STEP importer notes (contract §5.5.6; ``step.STEP_WARNING_CODES`` is this sub-list) ---
+IMPORT_NOTE_CODES.update(step.STEP_WARNING_CODES)
 
 #: The default directional light of an import without a light (contract §5.2.8).
 DEFAULT_LIGHT_DIRECTION = [-0.5, -0.5, 0.7071067811865476]
@@ -71,6 +74,8 @@ def _parse_file(path: str):
         parsed = ("obj", obj.read_obj(path))
     elif ext in GLTF_EXTENSIONS:
         parsed = ("gltf", gltf.read_gltf(path))
+    elif ext in EXTENSION_LOADERS:             # M8: .step / .stp -> tessellate_step (§5.5.7), no recognition
+        parsed = ("tessellated", _raw_from_triangles(EXTENSION_LOADERS[ext](path)))
     else:
         # trimesh files take no node selection, so the parsed form is the raw mesh itself
         parsed = ("trimesh", trimesh_adapter.load_trimesh(path, None))
@@ -83,7 +88,8 @@ def load_mesh_file(path, node=None) -> dict:
     """Load a mesh file into the common raw form ``{"vertices": [[x, y, z]...], "faces": [[int...]...],
     "smooth_groups": [int...]}`` (contract §5.2.8): glTF / GLB already Z-up (axis map applied, node
     transforms baked), OBJ / STL / PLY in file axes; file units.  Dispatch by lower-cased extension:
-    ``.obj``, ``.gltf`` / ``.glb``, anything else through trimesh.  ``node`` selects a glTF node /
+    ``.obj``, ``.gltf`` / ``.glb``, :data:`EXTENSION_LOADERS` (``.step`` / ``.stp``: OCP tessellation in
+    metres, M8), anything else through trimesh.  ``node`` selects a glTF node /
     mesh or an OBJ ``o`` / ``g`` name (string, or integer index)."""
     path = os.fspath(path)
     ext = os.path.splitext(path)[1].lower()
@@ -127,6 +133,21 @@ def expand_mesh_object(o: dict, field: str, base_dir) -> tuple:
 
 #: Object type -> expander ``(obj, field, base_dir) -> (objects, notes)`` (contract §5.0.2; M8 adds ``step``).
 EXPANDERS = {"mesh": expand_mesh_object}
+
+# --- M8: STEP (contract §5.5.0, §5.5.7) -----------------------------------------------------------
+EXPANDERS["step"] = step.expand_step_object
+
+#: Lower-cased file extension -> loader ``(path) -> {"vertices" (m), "faces", ...}`` used by
+#: :func:`load_mesh_file` (hence by a ``mesh`` object with ``path``) before the M5 dispatch:
+#: a ``.step`` / ``.stp`` mesh file is tessellated directly with OCP (optional extra ``step``),
+#: with **no** analytic recognition (``type: "step"`` is the only analytic path).
+EXTENSION_LOADERS = {".step": step.tessellate_step, ".stp": step.tessellate_step}
+
+
+def _raw_from_triangles(tri: dict) -> dict:
+    """The raw mesh form ``{vertices, faces, smooth_groups}`` of a tessellation (the ``data`` of
+    ``step.mesh_object_from_triangles``)."""
+    return step.mesh_object_from_triangles("mesh", tri, None)["data"]
 
 
 def expand_scene(scene, base_dir=None) -> tuple:

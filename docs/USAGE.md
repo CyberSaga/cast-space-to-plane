@@ -546,6 +546,15 @@ B 段在多光源場景呼叫；純 numpy、確定性；只讀畫出的 `shadows
 | `tessellate_step(path, *, deflection_mm=None) -> {"vertices", "faces", "cascade_unit"}`、`mesh_object_from_triangles(obj_id, tri, transform)` | 選用的 OCP（`pip install 'castplane[step]'`）網格化退路與轉成內嵌 `mesh` 物件的轉接；沒有 OCP 時拋 `ImportError`（CLI 結束碼 3） |
 | `StepError(field, message, entity=None)`、`STEP_WARNING_CODES`、`make_step_warning(code, ids=(), message=None)`、`DEFAULT_SCENE_TEMPLATE` | `SceneError` 子類別（`entity` 為 `"#15"` 或 `None`；訊息以實體編號、`syntax:` 或 `unsupported:` 開頭）；匯入備註代碼 `STEP_UNIT_ASSUMED_MM`、`STEP_ANGLE_UNIT_ASSUMED_RAD`、`STEP_SOLID_TESSELLATED`；`examples/basic.json` 的 `version` / `units` / `up` / `lights` / `receivers` / `camera` / `output` 區塊 |
 
+`castplane.io` 的 M8 登錄（合約 §5.5.0、§5.0.2）：
+
+| 名稱 | 說明 |
+| --- | --- |
+| `EXPANDERS["step"]` | `= step.expand_step_object`：`expand_scene` / `load_expanded_scene` 把場景裡的 `{"type": "step", "path": …}` 換成辨識出的基元物件（多個實體時依實體編號順序換成 `<id>_0`、`<id>_1` …，位置不變）；備註併入 `notes`，不進文件的 `warnings` |
+| `EXTENSION_LOADERS` | `{".step": tessellate_step, ".stp": tessellate_step}`：`load_mesh_file` 先查這張表，所以 `{"type": "mesh", "path": "part.step"}` 直接以 OCP 網格化（**不**做解析辨識；要辨識請用 `type: "step"`），頂點為公尺、未焊接，`smooth_groups` 全為 0 |
+| `IMPORT_NOTE_CODES` | M8 接上 `STEP_UNIT_ASSUMED_MM`、`STEP_ANGLE_UNIT_ASSUMED_RAD`、`STEP_SOLID_TESSELLATED`（即 `step.STEP_WARNING_CODES`） |
+| `scene.LOADER_TYPES` | `("step",)`：`validate_scene` 遇到未展開的 `step` 物件時報 `SceneError(objects[i].type, "loader object type 'step' must be expanded first (castplane.io.expand_scene or 'castplane import')")` |
+
 ## 3. 警告代碼（合約 §2.9）
 
 | 代碼 | 條件 | ids | 效果 |

@@ -16,6 +16,7 @@ import numpy as np
 import pytest
 
 import castplane
+from castplane import io as cpio
 from castplane.errors import SceneError
 from castplane.io import part21
 from castplane.io import step as S
@@ -947,3 +948,238 @@ def test_axis_aligned_occ_box_is_exact(tmp_path):
     (obj,) = import_step(tmp_path / "b.step")["objects"]
     assert obj == {"id": "b", "type": "box", "size": [1.0, 0.8, 0.6],
                    "transform": {"position": [0.0, 0.0, 0.0], "rotation_deg": [0.0, 0.0, 0.0]}}
+
+
+# --------------------------------------------------------------------------- registry and expansion (§5.0.2, §5.5.0, §5.5.1)
+BASIC = ROOT / "examples" / "basic.json"
+STEP_PILLAR = {"id": "pillar", "type": "step", "path": "cylinder.step"}
+
+
+def _basic() -> dict:
+    return json.loads(BASIC.read_text(encoding="utf-8"))
+
+
+def test_io_registry_entries():
+    assert cpio.EXPANDERS["step"] is S.expand_step_object
+    assert cpio.EXPANDERS["mesh"] is cpio.expand_mesh_object
+    assert cpio.EXTENSION_LOADERS == {".step": S.tessellate_step, ".stp": S.tessellate_step}
+    for code, message in STEP_WARNING_CODES.items():
+        assert cpio.IMPORT_NOTE_CODES[code] == message
+    assert set(cpio.IMPORT_NOTE_CODES) == {"IMPORT_SPOT_AS_POINT", "IMPORT_CAMERA_DROPPED", "IMPORT_NO_CAMERA_DEFAULT",
+                                           "IMPORT_NO_LIGHT_DEFAULT", *STEP_WARNING_CODES}
+    assert {"EXPANDERS", "EXTENSION_LOADERS", "IMPORT_NOTE_CODES", "expand_scene", "load_expanded_scene",
+            "load_mesh_file", "SUPPORTED_EXTENSIONS"} <= set(cpio.__all__)
+    from castplane.io import cli as io_cli
+
+    assert io_cli.__all__ == ["add_import_parser", "cmd_import"]
+    assert castplane.scene.LOADER_TYPES == ("step",)
+
+
+def test_validate_scene_rejects_an_unexpanded_step_object():
+    scene = dict(copy.deepcopy(DEFAULT_SCENE_TEMPLATE), objects=[STEP_PILLAR])
+    with pytest.raises(SceneError) as exc:
+        castplane.validate_scene(scene)
+    assert exc.value.field == "objects[0].type"
+    assert exc.value.message == ("loader object type 'step' must be expanded first "
+                                 "(castplane.io.expand_scene or 'castplane import')")
+    with pytest.raises(SceneError) as exc:                  # unknown types keep the generic message
+        castplane.validate_scene(dict(scene, objects=[{"id": "p", "type": "torus"}]))
+    assert exc.value.field == "objects[0].type" and exc.value.message.startswith("must be one of ")
+
+
+def test_load_expanded_scene_acceptance_cylinder_is_the_basic_example():
+    """Spec §10 M8 acceptance through the loader layer: ``examples/basic.json`` with its pillar as a
+    ``step`` object renders byte-equal to the inline example and passes the conformance comparison."""
+    raw = _basic_with("pillar", STEP_PILLAR)
+    scene, notes = cpio.load_expanded_scene(raw, base_dir=FIX)
+    assert notes == []
+    assert scene == castplane.load_scene(str(BASIC))
+    doc = castplane.render(scene)["geometry"]
+    assert geometry_dumps(doc) == geometry_dumps(_geometry(_basic()))
+    expected = json.loads((EXPECTED / "example_basic.json").read_text(encoding="utf-8"))
+    assert compare_documents(expected, json.loads(geometry_dumps(doc)), "example_basic") == []
+    hand = {"pillar.g0.base": (-1.7552526894158411, 5.8423736552920795, 0.0),
+            "pillar.g1.base": (-1.220747310584159, 6.10962634470792, 0.0),
+            "pillar.g0.top.shadow.lamp": (-5.584894920868585, 12.043916175929343, 0.0),
+            "pillar.g1.top.shadow.lamp": (-3.884195988222324, 12.894265642252474, 0.0)}
+    for name, world in hand.items():
+        assert np.allclose(doc["points"][name]["world"], world, rtol=0, atol=1e-9), name
+    assert raw["objects"][1] == STEP_PILLAR                 # the input is not modified
+
+
+def test_load_expanded_scene_from_a_file_resolves_relative_paths(tmp_path, monkeypatch):
+    (tmp_path / "parts").mkdir()
+    (tmp_path / "parts" / "pillar.step").write_bytes((FIX / "cylinder.step").read_bytes())
+    scene_path = tmp_path / "scene.json"
+    scene_path.write_text(json.dumps(_basic_with("pillar", {"id": "pillar", "type": "step",
+                                                            "path": "parts/pillar.step"})), encoding="utf-8")
+    monkeypatch.chdir(ROOT)                                 # base_dir is the scene's directory, not the cwd
+    scene, notes = cpio.load_expanded_scene(str(scene_path))
+    assert notes == [] and scene == castplane.load_scene(str(BASIC))
+    scene2, _ = cpio.load_expanded_scene(scene_path)        # a PathLike works too
+    assert scene2 == scene
+    with pytest.raises(OSError, match=r"objects\[1\]\.path"):  # a dict resolves against the cwd
+        cpio.load_expanded_scene(json.loads(scene_path.read_text(encoding="utf-8")))
+    monkeypatch.chdir(tmp_path)
+    assert cpio.load_expanded_scene(json.loads(scene_path.read_text(encoding="utf-8")))[0] == scene
+
+
+def test_expand_scene_keeps_list_positions_and_passes_other_entries_through():
+    crate = {"id": "crate", "type": "box", "size": [1, 0.8, 0.6], "transform": {"position": [2, 4, 0]}}
+    scene = {"objects": [crate, {"id": "part", "type": "step", "path": "two_solids.step"}, 5,
+                         {"id": "ball", "type": "sphere", "radius": 0.2}], "extra": {"k": [1]}}
+    before = copy.deepcopy(scene)
+    out, notes = cpio.expand_scene(scene, FIX)
+    assert scene == before and notes == []
+    assert [o["id"] if isinstance(o, dict) else o for o in out["objects"]] == ["crate", "part_0", "part_1", 5, "ball"]
+    assert out["objects"][0] == crate and out["objects"][0] is not crate
+    assert out["extra"] == {"k": [1]} and out["extra"] is not scene["extra"]
+    assert strip_id(out["objects"][1]) == strip_id(PILLAR) and strip_id(out["objects"][2]) == SPHERE
+    again, again_notes = cpio.expand_scene(out, FIX)        # idempotent on an expanded scene
+    assert again == out and again_notes == []
+    assert json.dumps(cpio.expand_scene(scene, FIX), sort_keys=True) == json.dumps(cpio.expand_scene(scene, FIX),
+                                                                                   sort_keys=True)
+
+
+def test_expand_scene_passes_non_list_objects_through_to_validation():
+    scene = dict(copy.deepcopy(DEFAULT_SCENE_TEMPLATE), objects={"id": "pillar", "type": "step"})
+    out, notes = cpio.expand_scene(scene, FIX)
+    assert out == scene and notes == []
+    with pytest.raises(SceneError) as exc:
+        cpio.load_expanded_scene(scene, base_dir=FIX)
+    assert exc.value.field == "objects"
+    assert cpio.expand_scene([1, 2], FIX) == ([1, 2], [])
+    with pytest.raises(SceneError):
+        cpio.load_expanded_scene([1, 2])
+
+
+def test_expanded_id_clash_is_reported_at_the_later_object():
+    scene = dict(copy.deepcopy(DEFAULT_SCENE_TEMPLATE),
+                 objects=[{"id": "part", "type": "step", "path": "two_solids.step"},
+                          {"id": "part_1", "type": "sphere", "radius": 0.2}])
+    with pytest.raises(SceneError) as exc:
+        cpio.load_expanded_scene(scene, base_dir=FIX)
+    assert exc.value.field == "objects[2].id"
+
+
+def test_expand_scene_error_field_paths(tmp_path):
+    def scene(step_obj):
+        return dict(copy.deepcopy(DEFAULT_SCENE_TEMPLATE),
+                    objects=[{"id": "a", "type": "sphere", "radius": 0.1}, {"id": "b", "type": "sphere", "radius": 0.1},
+                             dict({"id": "s", "type": "step"}, **step_obj)])
+
+    with pytest.raises(StepError) as exc:
+        cpio.expand_scene(scene({"path": "frustum.step"}), FIX)
+    assert exc.value.field == "objects[2].path" and exc.value.entity == "#15"
+    assert "unsupported solid" in exc.value.message
+    for obj, field in (({"path": "two_solids.step", "solid": 2}, "objects[2].solid"),
+                       ({"path": "two_solids.step", "solid": True}, "objects[2].solid"),
+                       ({"path": "cylinder.step", "fallback": "x"}, "objects[2].fallback"),
+                       ({"path": "cylinder.step", "transform": {"scale": 2}}, "objects[2].transform.scale"),
+                       ({}, "objects[2].path")):
+        with pytest.raises(SceneError) as exc:
+            cpio.expand_scene(scene(obj), FIX)
+        assert exc.value.field == field, obj
+    with pytest.raises(OSError, match=r"objects\[2\]\.path"):
+        cpio.expand_scene(scene({"path": "missing.step"}), tmp_path)
+    with pytest.raises(StepError) as exc:                   # a syntax error names the field and the offset
+        (tmp_path / "bad.step").write_text("ISO-10303-21;\nHEADER;", encoding="utf-8")
+        cpio.expand_scene(scene({"path": "bad.step"}), tmp_path)
+    assert exc.value.field == "objects[2].path" and exc.value.message.startswith("syntax:")
+
+
+def test_expand_scene_merges_notes_and_keeps_them_out_of_the_document(tmp_path):
+    b = Builder()
+    b.cylinder(300.0, 2400.0, (-1500.0, 6000.0, 0.0))
+    write(tmp_path, b.text(), "nounits.step")
+    scene = _basic_with("pillar", {"id": "pillar", "type": "step", "path": "nounits.step"})
+    scene["objects"].append({"id": "post", "type": "step", "path": "nounits.step",
+                             "transform": {"position": [3, 0, 0]}})
+    expanded, notes = cpio.load_expanded_scene(scene, base_dir=tmp_path)
+    assert [n["code"] for n in notes] == ["STEP_ANGLE_UNIT_ASSUMED_RAD", "STEP_UNIT_ASSUMED_MM"]
+    assert all(n["ids"] == [] for n in notes)
+    assert expanded["objects"][1] == castplane.load_scene(str(BASIC))["objects"][1]
+    doc = castplane.render(expanded)["geometry"]
+    assert not any(w["code"].startswith(("STEP_", "IMPORT_")) for w in doc["warnings"])
+
+
+def _components(faces) -> int:
+    """Number of connected components of a triangle list (triangles sharing a vertex index)."""
+    parent = {}
+
+    def find(i):
+        while parent.setdefault(i, i) != i:
+            parent[i] = parent[parent[i]]
+            i = parent[i]
+        return i
+
+    for a, b, c in faces:
+        for u in (b, c):
+            ra, ru = find(a), find(u)
+            if ra != ru:
+                parent[ru] = ra
+    return len({find(i) for f in faces for i in f})
+
+
+def test_tessellation_every_face_contributes_triangles():
+    """§5.5.10: every B-rep face of the frustum contributes ≥ 1 triangle.  The node blocks are not
+    welded, so each face's triangulation is its own connected component: 3 components = 3 faces."""
+    pytest.importorskip("OCP")
+    from OCP.STEPControl import STEPControl_Reader
+    from OCP.TopAbs import TopAbs_FACE
+    from OCP.TopExp import TopExp_Explorer
+
+    reader = STEPControl_Reader()
+    reader.ReadFile(str(FIX / "frustum.step"))
+    reader.TransferRoots()
+    explorer, n_faces = TopExp_Explorer(reader.OneShape(), TopAbs_FACE), 0
+    while explorer.More():
+        n_faces, _ = n_faces + 1, explorer.Next()
+    tri = S.tessellate_step(FIX / "frustum.step")
+    assert n_faces == 3 and _components(tri["faces"]) == n_faces
+    assert all(len(set(f)) == 3 for f in tri["faces"])
+
+
+def test_mesh_object_with_a_step_path_is_tessellated_directly(tmp_path):
+    pytest.importorskip("OCP")
+    scene = dict(copy.deepcopy(DEFAULT_SCENE_TEMPLATE), objects=[{"id": "f", "type": "mesh", "path": "frustum.step"}])
+    out, notes = cpio.expand_scene(scene, FIX)
+    (obj,) = out["objects"]
+    tri = S.tessellate_step(FIX / "frustum.step")
+    assert notes == [] and obj["path"] == "frustum.step"
+    assert obj["data"] == S.mesh_object_from_triangles("f", tri, None)["data"]
+    assert cpio.load_mesh_file(FIX / "frustum.step") == obj["data"]
+    castplane.render(castplane.validate_scene(out))
+    # case-insensitive extension, and no analytic recognition: a cylinder stays a mesh
+    (tmp_path / "C.STP").write_bytes((FIX / "cylinder.step").read_bytes())
+    out, _ = cpio.expand_scene(dict(scene, objects=[{"id": "c", "type": "mesh", "path": "C.STP"}]), tmp_path)
+    assert out["objects"][0]["type"] == "mesh" and len(out["objects"][0]["data"]["faces"]) >= 100
+    with pytest.raises(SceneError) as exc:
+        cpio.expand_scene(dict(scene, objects=[{"id": "f", "type": "mesh", "path": "frustum.step", "node": 0}]), FIX)
+    assert exc.value.field == "objects[0].node"
+
+
+def _without_ocp(monkeypatch):
+    import builtins
+
+    real_import = builtins.__import__
+
+    def no_ocp(name, *args, **kwargs):
+        if name == "OCP" or name.startswith("OCP."):
+            raise ImportError("No module named 'OCP'")
+        return real_import(name, *args, **kwargs)
+
+    monkeypatch.setattr(builtins, "__import__", no_ocp)
+
+
+def test_mesh_object_with_a_step_path_without_ocp_is_an_import_error(monkeypatch):
+    _without_ocp(monkeypatch)
+    scene = dict(copy.deepcopy(DEFAULT_SCENE_TEMPLATE), objects=[{"id": "f", "type": "mesh", "path": "frustum.step"}])
+    with pytest.raises(ImportError, match=r"castplane\[step\]"):
+        cpio.expand_scene(scene, FIX)
+    with pytest.raises(ImportError, match=r"castplane\[step\]"):
+        cpio.expand_scene(dict(scene, objects=[{"id": "f", "type": "step", "path": "frustum.step",
+                                                "fallback": "mesh"}]), FIX)
+    # the analytic path never imports OCP
+    assert cpio.load_expanded_scene(_basic_with("pillar", STEP_PILLAR), base_dir=FIX)[0] == \
+        castplane.load_scene(str(BASIC))
