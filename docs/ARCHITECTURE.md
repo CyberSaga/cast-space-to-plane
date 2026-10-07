@@ -1965,6 +1965,54 @@ unordered world pairs with equal `silhouette` / `back` flags and `segment` endpo
   this is inside the conformance runs rule (1e-3 in `s`) and is not asserted byte-for-byte. (7) Conformance: the three
   mesh cases were regenerated on the merged branch (they now carry the M4 keys) and the CHANGELOG entry is the one M5
   milestone entry **v5** (0 existing files changed, 3 added; 43 v4 cases with zero drift), §5.0.8 rule 1.
+- **[decision, implementation] (review fixes, loaders) Typed glTF JSON values.** §5.2.8 says every import error is a
+  `SceneError` whose field is the glTF JSON path (exit 2); the loader now checks every JSON value it consumes before
+  numpy or `float()` sees it: `nodes[k].matrix` / `.translation` / `.rotation` / `.scale` must be lists of exactly 16 /
+  3 / 4 / 3 finite numbers (bools rejected; `null`, strings, nested lists, NaN and ±Infinity literals are errors at
+  that key); `nodes[k].children`, `scenes[s].nodes`, `meshes[m].primitives` and
+  `extensions.KHR_lights_punctual.lights` must be lists, `extensions`, its `KHR_lights_punctual` and each light
+  objects; `cameras[c].perspective.yfov` / `.aspectRatio` / `.znear` finite numbers; `primitives[p].mode`,
+  `accessors[k].componentType` integers and `accessors[k].type` a string; a buffer `uri` with a NUL byte is
+  `buffers[k].uri`. As a safety net `read_gltf`, `gltf_context`, `gltf_raw`, `load_gltf` and `import_gltf_parts`
+  turn any remaining `TypeError` / `ValueError` / `KeyError` / `IndexError` / `AttributeError` into
+  `SceneError("", "malformed glTF: <type>: <message>")` (a `mesh` + `path` object reports it at `objects[i].path`), so
+  a malformed file is never a traceback / exit 1. JSON that the parser itself rejects for depth (`RecursionError`)
+  or for the integer digit limit (`ValueError`) is `SceneError("", "invalid glTF JSON: ...")`, and
+  `scene.read_json` / `load_camera` treat every `ValueError` (incl. `UnicodeDecodeError` of a non-UTF-8 file) and
+  `RecursionError` like a `JSONDecodeError`: `SceneError("", "invalid JSON: ...")`.
+- **[decision, implementation] (review fixes, loaders) Accessor and bufferView integers.** `bufferViews[k].byteOffset`
+  / `.byteLength` / `.byteStride` and `accessors[k].byteOffset` must be non-negative integers (bools and floats
+  rejected), each reported at its own JSON path; a negative accessor offset that stayed inside the buffer used to read
+  the neighbouring view's bytes silently. `byteStride` keeps the existing "not smaller than the element size" rule
+  (no [4, 252] range check: an over-long stride is already caught by the "accessor exceeds its buffer view" bound).
+- **[decision, implementation] (review fixes, loaders) Zero accessors are capped.** Note (8) above keeps "an accessor
+  without `bufferView` is zeros", but its `count` is the only allocation not bounded by the file size (a one-integer
+  file asked for terabytes): such an accessor may hold at most `gltf.MAX_ZERO_ACCESSOR_COUNT = 3 · MESH_MAX_FACES`
+  elements (the largest index count a validated mesh can use), else `SceneError(accessors[k].count)`; the check runs
+  before any allocation. An all-zero accessor never yields a usable face, so no valid import is affected.
+- **[decision, implementation] (review fixes, loaders) External buffers are confined to the glTF's directory.**
+  §5.2.8's "external `.bin` relative to the file" is read literally (glTF 2.0 buffer URIs are relative references):
+  the `uri` is split as a URI and percent-decoded; a scheme (`file:`, `http:`), a network location, a query or
+  fragment, an empty path, an absolute path, or a normalised path that leaves the directory of the `.gltf` (`..`) is
+  `SceneError(buffers[k].uri, "... must be a relative path inside the file's directory")`; an existing path that is
+  not a regular file (a directory, `/dev/zero`) is the same field; a **missing** file is still the `OSError` of
+  §5.0.2 (exit 1). `byteLength` is validated first and at most `byteLength` bytes are read (a longer file is not
+  slurped; a shorter one is `buffers[k].byteLength`). §5.2.2's "absolute paths are used as given" concerns the
+  user-written `objects[i].path` of a scene and is unchanged. Before this, a third-party `.gltf` imported with
+  `--inline` could copy any readable file's bytes into the written scene as vertex coordinates.
+- **[decision, implementation] (review fixes, loaders) Linear glTF traversal.** `node_world_matrices` is iterative
+  (climb to the first resolved ancestor, then resolve downwards; same cycle error `nodes[k].children`), so a valid
+  chain deeper than Python's recursion limit loads. `gltf.gltf_context(doc) -> {order, world, first_named}` computes the
+  traversal order, the world matrices and the "first node in traversal order with that name" table once per file;
+  `gltf_raw(doc, buffers, node, *, ctx=None, selected=None)` / `load_gltf(..., ctx=None)` take it,
+  `import_gltf_parts` builds it once (and the parent map once; "an ancestor is already emitted" propagates in
+  traversal order, which visits parents first), and `expand_scene` caches it next to the parsed file, so importing a
+  file with `N` mesh nodes and expanding the importer's `N` `{path, node}` objects are `O(N)` instead of `O(N²)`
+  (2000 nodes: 34 s → well under a second). Results are unchanged (same selections, same ids, same bytes).
+- **[decision, implementation] (review fixes, loaders) trimesh face indices.** `trimesh_adapter.load_trimesh` range-checks
+  the stored face indices like the OBJ and glTF loaders (`face index K is out of range (the file has N vertices)`),
+  so a PLY face naming a missing or negative vertex is `SceneError(objects[i].path)` at expansion instead of
+  `objects[i].data.faces[k]` at validation.
 
 ### 5.3 M6 — multiple lights (amendment to §2.0, §2.3, §2.5–2.10, §3, §3.1, §4)
 

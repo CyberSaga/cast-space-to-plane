@@ -839,3 +839,273 @@ def test_notes_never_enter_document_warnings(tmp_path):
     assert cio._note("IMPORT_SPOT_AS_POINT", ["x"])["ids"] == ["x"]
     with pytest.raises(ValueError):
         cio._note("MESH_NON_MANIFOLD")
+
+
+# --------------------------------------------------------------------------- review fixes (loaders group)
+def _tri_doc(**extra):
+    """One float VEC3 triangle (+ uint16 indices) in a data-URI buffer: the base of the mutations."""
+    return gltf_doc([TRI], [{"mesh": 0, "name": "n0"}], indices=[[0, 1, 2]], extra=extra)
+
+
+def _cam_light_doc():
+    """``_tri_doc`` plus a perspective camera node and a point light node."""
+    d = _tri_doc()
+    d["nodes"] += [{"camera": 0, "translation": [0.0, 1.0, 5.0]},
+                   {"extensions": {"KHR_lights_punctual": {"light": 0}}, "translation": [0.0, 3.0, 0.0]}]
+    d["cameras"] = [{"type": "perspective", "perspective": {"yfov": 0.6, "aspectRatio": 1.5, "znear": 0.1}}]
+    d["extensions"] = {"KHR_lights_punctual": {"lights": [{"type": "point"}]}}
+    return d
+
+
+def _set(path, value):
+    """A mutation ``doc[path...] = value`` (a list of keys / indices)."""
+    def f(d):
+        target = d
+        for key in path[:-1]:
+            target = target[key]
+        target[path[-1]] = value
+    return f
+
+
+# m5-loaders#0: wrongly typed JSON values are SceneErrors at their glTF JSON path, never tracebacks
+@pytest.mark.parametrize("mutate, field", [
+    (_set(["nodes", 0, "children"], 1), "nodes[0].children"),
+    (_set(["nodes", 0, "children"], None), "nodes[0].children"),
+    (_set(["nodes", 0, "matrix"], ["a"] * 16), "nodes[0].matrix"),
+    (_set(["nodes", 0, "matrix"], [float("nan")] + [0.0] * 15), "nodes[0].matrix"),
+    (_set(["nodes", 0, "translation"], [1.0, 2.0]), "nodes[0].translation"),
+    (_set(["nodes", 0, "translation"], "abc"), "nodes[0].translation"),
+    (_set(["nodes", 0, "rotation"], [0.0, 0.0, 1.0]), "nodes[0].rotation"),
+    (_set(["nodes", 0, "rotation"], [0.0, 0.0, 0.0, 1.0, 0.0]), "nodes[0].rotation"),
+    (_set(["nodes", 0, "rotation"], [[0.0], 0.0, 0.0, 1.0]), "nodes[0].rotation"),
+    (_set(["nodes", 0, "rotation"], None), "nodes[0].rotation"),
+    (_set(["nodes", 0, "scale"], [1.0, 1.0]), "nodes[0].scale"),
+    (_set(["nodes", 0, "scale"], "s"), "nodes[0].scale"),
+    (_set(["scenes"], [{"nodes": 0}]), "scenes[0].nodes"),
+    (_set(["meshes", 0, "primitives"], 3), "meshes[0].primitives"),
+    (_set(["meshes", 0, "primitives"], None), "meshes[0].primitives"),
+    (_set(["meshes", 0, "primitives", 0, "mode"], 4.5), "meshes[0].primitives[0].mode"),
+    (_set(["accessors", 0, "componentType"], [5126]), "accessors[0].componentType"),
+    (_set(["buffers", 0, "uri"], "a\0b.bin"), "buffers[0].uri"),
+])
+def test_gltf_wrongly_typed_values_are_scene_errors(tmp_path, mutate, field):
+    d = _tri_doc()
+    mutate(d)
+    _bad(d, field, tmp_path)
+    _bad(d, field, tmp_path, G.import_gltf_scene)
+
+
+@pytest.mark.parametrize("mutate, field", [
+    (_set(["cameras", 0, "perspective", "yfov"], "x"), "cameras[0].perspective.yfov"),
+    (_set(["cameras", 0, "perspective", "yfov"], None), "cameras[0].perspective.yfov"),
+    (_set(["cameras", 0, "perspective", "yfov"], [0.6]), "cameras[0].perspective.yfov"),
+    (_set(["cameras", 0, "perspective", "aspectRatio"], "x"), "cameras[0].perspective.aspectRatio"),
+    (_set(["cameras", 0, "perspective", "aspectRatio"], None), "cameras[0].perspective.aspectRatio"),
+    (_set(["cameras", 0, "perspective", "znear"], "x"), "cameras[0].perspective.znear"),
+    (_set(["extensions"], []), "extensions"),
+    (_set(["extensions", "KHR_lights_punctual"], []), "extensions.KHR_lights_punctual"),
+    (_set(["extensions", "KHR_lights_punctual", "lights"], {"0": {"type": "point"}}),
+     "extensions.KHR_lights_punctual.lights"),
+    (_set(["extensions", "KHR_lights_punctual", "lights"], [3]), "extensions.KHR_lights_punctual.lights[0]"),
+    (_set(["nodes", 2, "extensions", "KHR_lights_punctual", "light"], True),
+     "nodes[2].extensions.KHR_lights_punctual.light"),
+])
+def test_gltf_wrongly_typed_camera_and_light_values_are_scene_errors(tmp_path, mutate, field):
+    d = _cam_light_doc()
+    G.import_gltf_scene(write_gltf(tmp_path, d))                  # the unmutated document imports
+    mutate(d)
+    _bad(d, field, tmp_path, G.import_gltf_scene)
+
+
+def test_gltf_read_accessor_rejects_unhashable_type_values():
+    d = _tri_doc()
+    for key, value in (("type", ["VEC3"]), ("componentType", [5126]), ("componentType", 5126.0)):
+        bad = copy.deepcopy(d)
+        bad["accessors"][0][key] = value
+        with pytest.raises(SceneError) as info:
+            G.read_accessor(bad, _buffers(bad), 0)
+        assert info.value.field == f"accessors[0].{key}"
+
+
+def test_gltf_malformed_values_exit_2_through_the_cli(tmp_path, capsys):
+    d = _tri_doc()
+    d["nodes"][0]["rotation"] = [0.0, 0.0, 1.0]
+    p = write_gltf(tmp_path, d, "rot.gltf")
+    assert main(["import", p, "-q", "-o", str(tmp_path / "s.json")]) == EXIT_INPUT
+    assert "error: nodes[0].rotation:" in capsys.readouterr().err
+    scene = mesh_scene(p)                                         # the same file behind a scene's mesh path
+    (tmp_path / "scene.json").write_text(json.dumps(scene), encoding="utf-8")
+    assert main(["validate", str(tmp_path / "scene.json")]) == EXIT_INPUT
+    assert "objects[0].path: nodes[0].rotation:" in capsys.readouterr().err
+
+
+def test_gltf_safety_net_turns_untyped_failures_into_scene_errors(monkeypatch):
+    """Any TypeError / ValueError / ... a per-field check misses still leaves as SceneError("")."""
+    doc = _tri_doc()
+    monkeypatch.setattr(G, "_local_matrix", lambda node, k: (_ for _ in ()).throw(TypeError("boom")))
+    with pytest.raises(SceneError) as info:
+        G.gltf_raw(doc, _buffers(doc))
+    assert info.value.field == "" and "malformed glTF: TypeError: boom" in info.value.message
+
+
+# m5-loaders#1: bufferView / accessor byteOffset, byteStride and byteLength are non-negative integers
+@pytest.mark.parametrize("mutate, field", [
+    (_set(["bufferViews", 1, "byteOffset"], -36), "bufferViews[1].byteOffset"),
+    (_set(["bufferViews", 0, "byteOffset"], "0"), "bufferViews[0].byteOffset"),
+    (_set(["bufferViews", 0, "byteOffset"], 0.5), "bufferViews[0].byteOffset"),
+    (_set(["bufferViews", 0, "byteLength"], -1), "bufferViews[0].byteLength"),
+    (_set(["bufferViews", 0, "byteStride"], "12"), "bufferViews[0].byteStride"),
+    (_set(["bufferViews", 0, "byteStride"], 12.5), "bufferViews[0].byteStride"),
+    (_set(["bufferViews", 0, "byteStride"], -12), "bufferViews[0].byteStride"),
+    (_set(["bufferViews", 0, "buffer"], True), "bufferViews[0].buffer"),
+    (_set(["accessors", 0, "byteOffset"], "0"), "accessors[0].byteOffset"),
+    (_set(["accessors", 0, "byteOffset"], -12), "accessors[0].byteOffset"),
+    # a negative accessor offset that stays inside the buffer used to read the neighbouring view
+    (_set(["accessors", 1, "byteOffset"], -36), "accessors[1].byteOffset"),
+])
+def test_gltf_accessor_offsets_and_strides_are_checked(tmp_path, mutate, field):
+    d = _tri_doc()
+    mutate(d)
+    _bad(d, field, tmp_path)
+
+
+# m5-loaders#2: an accessor without bufferView (all zeros) is capped before any allocation
+@pytest.mark.parametrize("acc, count", [(0, 10 ** 12), (0, 10 ** 30), (1, 10 ** 12), (0, G.MAX_ZERO_ACCESSOR_COUNT + 1)])
+def test_gltf_zero_accessor_count_is_capped(tmp_path, acc, count):
+    d = _tri_doc()
+    del d["accessors"][acc]["bufferView"]
+    d["accessors"][acc]["count"] = count
+    err = _bad(d, f"accessors[{acc}].count", tmp_path)
+    assert "without a bufferView" in err.message
+
+
+def test_gltf_small_zero_accessor_still_reads_as_zeros():
+    """contract §5.2.8 implementation note (8): an accessor without bufferView is zeros."""
+    d = _tri_doc()
+    del d["accessors"][0]["bufferView"]
+    a = G.read_accessor(d, _buffers(d), 0)
+    assert a.shape == (3, 3) and not a.any()
+    d["accessors"][0]["count"] = G.MAX_ZERO_ACCESSOR_COUNT
+    assert G.read_accessor(d, _buffers(d), 0).shape == (G.MAX_ZERO_ACCESSOR_COUNT, 3)
+
+
+# m5-loaders#3: external buffers stay inside the glTF's directory and are read up to byteLength only
+def _external(tmp_path, uri, length=36 + 6 + 2):
+    d = _tri_doc()
+    blob = _buffers(d)[0]
+    sub = tmp_path / "sub"
+    sub.mkdir(exist_ok=True)
+    (sub / "tri.bin").write_bytes(blob + b"\xff" * 1000)          # longer than byteLength
+    (tmp_path / "secret.bin").write_bytes(blob)
+    d["buffers"] = [{"byteLength": length, "uri": uri}]
+    return d, sub
+
+
+@pytest.mark.parametrize("uri", ["../secret.bin", "%2e%2e/secret.bin", "sub/../../secret.bin", "/etc/hostname",
+                                 "file:///etc/hostname", "http://example.com/x.bin", ".", "", "/dev/zero"])
+def test_gltf_external_buffer_must_stay_inside_the_directory(tmp_path, uri):
+    d, sub = _external(tmp_path, uri)
+    p = write_gltf(sub, d)
+    with pytest.raises(SceneError) as info:
+        load_mesh_file(p)
+    assert info.value.field == "buffers[0].uri", (info.value.field, info.value.message)
+
+
+def test_gltf_external_buffer_is_read_up_to_byte_length(tmp_path):
+    d, sub = _external(tmp_path, "tri.bin")
+    p = write_gltf(sub, d)
+    doc, buffers = G.read_gltf(p)
+    assert len(buffers[0]) == 44                                  # the declared byteLength, not the 1044 file bytes
+    assert load_mesh_file(p)["faces"] == [[0, 1, 2]]
+    d["buffers"][0]["uri"] = "./sub%20dir/tri.bin"                # percent-decoded, still inside
+    (sub / "sub dir").mkdir()
+    (sub / "sub dir" / "tri.bin").write_bytes(_buffers(_tri_doc())[0])
+    assert load_mesh_file(write_gltf(sub, d))["faces"] == [[0, 1, 2]]
+    d["buffers"][0]["byteLength"] = 2000                          # longer than the file
+    _bad(d, "buffers[0].byteLength", sub)
+
+
+# m5-loaders#4: deep node chains need no recursion
+def test_gltf_deep_node_chain_loads(tmp_path):
+    n = 3000                                                      # node k has child k - 1; mesh on node 0
+    nodes = [{"mesh": 0, "translation": [1.0, 0.0, 0.0]}] + \
+            [{"children": [k - 1], "translation": [1.0, 0.0, 0.0]} for k in range(1, n)]
+    d = gltf_doc([TRI], nodes, extra={"scenes": [{"nodes": [n - 1]}]})
+    raw = load_mesh_file(write_gltf(tmp_path, d))
+    assert raw["vertices"][0] == [float(n), 0.0, 0.0]
+    d["nodes"][0]["children"] = [n - 1]                           # close the chain into a cycle
+    del d["scenes"]
+    _bad(d, "nodes[0].children", tmp_path)
+
+
+# m5-loaders#5: importing / expanding N mesh nodes traverses the file once
+def test_gltf_import_and_expand_traverse_the_file_once(tmp_path, monkeypatch):
+    n = 40
+    nodes = [{"mesh": 0, "name": f"m{k}" if k % 2 else "", "translation": [2.0 * k, 0.0, 0.0]} for k in range(n)]
+    p = write_gltf(tmp_path, gltf_doc([TRI], nodes), "wide.gltf")
+    calls = []
+    real = G.node_world_matrices
+    monkeypatch.setattr(G, "node_world_matrices", lambda doc: calls.append(1) or real(doc))
+    parts, _ = G.import_gltf_parts(p, ref="wide.gltf")
+    assert len(calls) == 1 and len(parts["objects"]) == n
+    assert [o["node"] for o in parts["objects"][:3]] == [0, "m1", 2]
+    scene = mesh_scene(p)
+    scene["objects"] = parts["objects"]
+    calls.clear()
+    out, _ = expand_scene(scene, tmp_path)
+    assert len(calls) == 1
+    assert [o["data"] for o in out["objects"]] == [parts["raw"][o["id"]] for o in parts["objects"]]
+    assert out["objects"][5]["data"]["vertices"][0] == [10.0, 0.0, 0.0]
+
+
+def test_gltf_import_skips_meshes_below_an_emitted_mesh_through_any_node(tmp_path):
+    """A mesh node under an emitted mesh node is part of that object's subtree, also when an
+    ``extras.castplane`` primitive node or a plain node sits in between (imported once)."""
+    nodes = [{"mesh": 0, "name": "top", "children": [1]},
+             {"name": "prim", "extras": {"castplane": {"type": "box", "size": [1, 1, 1]}}, "children": [2]},
+             {"name": "mid", "children": [3]},
+             {"mesh": 0, "name": "deep"},
+             {"mesh": 0, "name": "other"}]
+    parts, _ = G.import_gltf_parts(write_gltf(tmp_path, gltf_doc([TRI], nodes)))
+    assert [o["id"] for o in parts["objects"]] == ["top", "prim", "other"]
+    assert len(parts["raw"]["top"]["faces"]) == 2                 # top + deep
+
+
+# m5-loaders#6: pathological JSON is a SceneError("") for glTF files and scene files alike
+@pytest.mark.parametrize("text", ['{"asset": {"version": "2.0"}, "x": ' + "[" * 200000 + "]" * 200000 + "}",
+                                  '{"asset": {"version": "2.0"}, "x": 1' + "0" * 5000 + "}"])
+def test_pathological_json_is_a_scene_error(tmp_path, capsys, text):
+    p = tmp_path / "x.gltf"
+    p.write_text(text, encoding="utf-8")
+    with pytest.raises(SceneError) as info:
+        load_mesh_file(p)
+    assert info.value.field == "" and "invalid glTF JSON" in info.value.message
+    s = tmp_path / "scene.json"
+    s.write_text(text, encoding="utf-8")
+    with pytest.raises(SceneError) as info:
+        load_expanded_scene(str(s))
+    assert info.value.field == "" and "invalid JSON" in info.value.message
+    assert main(["validate", str(s)]) == EXIT_INPUT
+    assert main(["import", str(p), "-q", "-o", str(tmp_path / "o.json")]) == EXIT_INPUT
+
+
+def test_scene_file_that_is_not_utf8_is_a_scene_error(tmp_path):
+    s = tmp_path / "scene.json"
+    s.write_bytes(b'{"version": "0.1", "x": "\xff"}')
+    with pytest.raises(SceneError, match="invalid JSON"):
+        load_scene(str(s))
+
+
+# m5-loaders#7: trimesh-read faces are range-checked by the loader (field objects[i].path)
+@pytest.mark.parametrize("bad", [99, -1])
+def test_trimesh_face_index_out_of_range_is_a_loader_error(tmp_path, bad):
+    pytest.importorskip("trimesh")
+    p = tmp_path / "bad.ply"
+    p.write_text("ply\nformat ascii 1.0\nelement vertex 3\nproperty float x\nproperty float y\nproperty float z\n"
+                 "element face 1\nproperty list uchar int vertex_indices\nend_header\n"
+                 f"0 0 0\n1 0 0\n0 1 0\n3 0 1 {bad}\n", encoding="utf-8")
+    with pytest.raises(SceneError, match=f"face index {bad} is out of range"):
+        load_mesh_file(p)
+    with pytest.raises(SceneError) as info:
+        expand_scene(mesh_scene(p))
+    assert info.value.field == "objects[0].path"

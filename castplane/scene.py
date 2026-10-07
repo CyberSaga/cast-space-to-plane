@@ -378,7 +378,7 @@ def read_json(path) -> dict:
     with open(path, "r", encoding="utf-8") as fh:
         try:
             return json.load(fh)
-        except json.JSONDecodeError as exc:
+        except (ValueError, RecursionError) as exc:   # JSONDecodeError, UnicodeDecodeError, deep nesting, digit limit
             raise SceneError("", f"invalid JSON: {exc}") from exc
 
 
@@ -397,7 +397,7 @@ def load_camera(path_or_dict) -> dict:
         with open(path_or_dict, "r", encoding="utf-8") as fh:
             try:
                 data = json.load(fh)
-            except json.JSONDecodeError as exc:
+            except (ValueError, RecursionError) as exc:   # as read_json
                 raise SceneError("", f"invalid JSON: {exc}") from exc
     else:
         data = path_or_dict

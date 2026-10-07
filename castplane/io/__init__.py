@@ -102,8 +102,21 @@ def load_mesh_file(path, node=None) -> dict:
     if kind == "obj":
         return obj.load_obj(path, node, parsed=parsed)
     if kind == "gltf":
-        return gltf.load_gltf(path, node, parsed=parsed)
+        return gltf.load_gltf(path, node, parsed=parsed, ctx=_gltf_context(path, parsed))
     return copy.deepcopy(parsed)
+
+
+def _gltf_context(path: str, parsed):
+    """``gltf.gltf_context`` of a parsed glTF file, cached next to it within one ``expand_scene``
+    call (so expanding ``N`` ``{path, node}`` objects of one file traverses it once); ``None``
+    outside ``expand_scene`` (``gltf_raw`` then computes it)."""
+    cache = _CACHE.get()
+    if cache is None:
+        return None
+    key = (os.path.abspath(path), "gltf-context")
+    if key not in cache:
+        cache[key] = gltf.gltf_context(parsed[0])
+    return cache[key]
 
 
 def expand_mesh_object(o: dict, field: str, base_dir) -> tuple:
