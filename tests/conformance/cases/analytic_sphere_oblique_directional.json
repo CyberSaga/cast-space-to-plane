@@ -1,0 +1,66 @@
+{
+ "description": "spec 7.2 bullet 3: sphere of radius 0.8 centred at (0, 0, r) under an oblique directional light (elevation 40 deg): shadow ellipse semi-axes r / sin(40 deg) and r",
+ "version": "0.1",
+ "units": "m",
+ "up": "z",
+ "objects": [
+  {
+   "id": "ball",
+   "type": "sphere",
+   "radius": 0.8
+  }
+ ],
+ "lights": [
+  {
+   "id": "sun",
+   "type": "directional",
+   "direction": [
+    0.6942720440148838,
+    0.3237443709670646,
+    0.6427876096865393
+   ]
+  }
+ ],
+ "receivers": [
+  {
+   "id": "ground",
+   "type": "plane",
+   "normal": [
+    0,
+    0,
+    1
+   ],
+   "offset": 0.0
+  }
+ ],
+ "camera": {
+  "roll_deg": 0,
+  "focal_length_mm": 35,
+  "frame_mm": [
+   36,
+   24
+  ],
+  "shift_mm": [
+   0.0,
+   0.0
+  ],
+  "near_m": 0.05,
+  "position": [
+   4.0,
+   -8.0,
+   5.0
+  ],
+  "target": [
+   0.0,
+   0.0,
+   0.5
+  ]
+ },
+ "output": {
+  "canvas_mm": [
+   360,
+   240
+  ],
+  "png_dpi": 150
+ }
+}

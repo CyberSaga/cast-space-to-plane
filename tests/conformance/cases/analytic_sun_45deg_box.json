@@ -1,0 +1,70 @@
+{
+ "description": "spec 7.2 bullet 2: sun at 45 deg elevation (azimuth 30 deg): shadow length = post height (2 m)",
+ "version": "0.1",
+ "units": "m",
+ "up": "z",
+ "objects": [
+  {
+   "id": "post",
+   "type": "box",
+   "size": [
+    0.2,
+    0.2,
+    2.0
+   ]
+  }
+ ],
+ "lights": [
+  {
+   "id": "sun",
+   "type": "directional",
+   "direction": [
+    0.6123724356957946,
+    0.35355339059327373,
+    0.7071067811865475
+   ]
+  }
+ ],
+ "receivers": [
+  {
+   "id": "ground",
+   "type": "plane",
+   "normal": [
+    0,
+    0,
+    1
+   ],
+   "offset": 0.0
+  }
+ ],
+ "camera": {
+  "roll_deg": 0,
+  "focal_length_mm": 35,
+  "frame_mm": [
+   36,
+   24
+  ],
+  "shift_mm": [
+   0.0,
+   0.0
+  ],
+  "near_m": 0.05,
+  "position": [
+   4.0,
+   -8.0,
+   5.0
+  ],
+  "target": [
+   0.0,
+   0.0,
+   0.5
+  ]
+ },
+ "output": {
+  "canvas_mm": [
+   360,
+   240
+  ],
+  "png_dpi": 150
+ }
+}

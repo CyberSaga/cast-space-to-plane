@@ -1,0 +1,107 @@
+{
+ "description": "examples/curved_demo.json",
+ "version": "0.1",
+ "units": "m",
+ "up": "z",
+ "objects": [
+  {
+   "id": "drum",
+   "type": "cylinder",
+   "radius": 0.45,
+   "height": 1.5,
+   "transform": {
+    "position": [
+     -1.7,
+     6.5,
+     0.0
+    ]
+   }
+  },
+  {
+   "id": "ball",
+   "type": "sphere",
+   "radius": 0.55,
+   "transform": {
+    "position": [
+     0.5,
+     5.0,
+     0.0
+    ]
+   }
+  },
+  {
+   "id": "cone",
+   "type": "cone",
+   "radius": 0.5,
+   "height": 1.4,
+   "transform": {
+    "position": [
+     2.2,
+     7.0,
+     0.0
+    ]
+   }
+  }
+ ],
+ "lights": [
+  {
+   "id": "lamp",
+   "type": "point",
+   "position": [
+    -2.8,
+    2.0,
+    3.2
+   ]
+  }
+ ],
+ "receivers": [
+  {
+   "id": "ground",
+   "type": "plane",
+   "normal": [
+    0,
+    0,
+    1
+   ],
+   "offset": 0.0
+  }
+ ],
+ "camera": {
+  "position": [
+   0.0,
+   0.0,
+   1.6
+  ],
+  "target": [
+   0.3,
+   6.0,
+   0.8
+  ],
+  "roll_deg": 0,
+  "focal_length_mm": 32,
+  "frame_mm": [
+   36,
+   24
+  ],
+  "shift_mm": [
+   0.0,
+   0.0
+  ],
+  "near_m": 0.05
+ },
+ "output": {
+  "canvas_mm": [
+   273,
+   182
+  ],
+  "layers": [
+   "horizon",
+   "objects",
+   "form_shadow",
+   "cast_shadow",
+   "construction",
+   "labels"
+  ],
+  "png_dpi": 200
+ }
+}

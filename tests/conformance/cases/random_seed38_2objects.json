@@ -1,0 +1,104 @@
+{
+ "description": "tests.reference.random_scenes.make_scene(38, n_objects=2): cylinder, sphere; point light (passes the spec 7.3 ray-cast gate)",
+ "version": "0.1",
+ "units": "m",
+ "up": "z",
+ "objects": [
+  {
+   "id": "obj0",
+   "type": "cylinder",
+   "radius": 0.3498,
+   "height": 1.5246,
+   "transform": {
+    "position": [
+     -3.6838,
+     2.6807,
+     1e-06
+    ],
+    "rotation_deg": [
+     0.0,
+     0.0,
+     228.461
+    ]
+   }
+  },
+  {
+   "id": "obj1",
+   "type": "sphere",
+   "radius": 0.5067,
+   "transform": {
+    "position": [
+     -3.4114,
+     1.8845,
+     1e-06
+    ],
+    "rotation_deg": [
+     0.0,
+     0.0,
+     174.4508
+    ]
+   }
+  }
+ ],
+ "lights": [
+  {
+   "id": "light",
+   "type": "point",
+   "position": [
+    0.3455,
+    -1.464,
+    4.4633
+   ]
+  }
+ ],
+ "receivers": [
+  {
+   "id": "ground",
+   "type": "plane",
+   "normal": [
+    0,
+    0,
+    1
+   ],
+   "offset": 0.0
+  }
+ ],
+ "camera": {
+  "position": [
+   -1.877,
+   10.0269,
+   7.0699
+  ],
+  "target": [
+   -3.3448,
+   2.3396,
+   0.4564
+  ],
+  "roll_deg": 0.0,
+  "focal_length_mm": 30.07,
+  "frame_mm": [
+   36.0,
+   24.0
+  ],
+  "shift_mm": [
+   0.0,
+   0.0
+  ],
+  "near_m": 0.05
+ },
+ "output": {
+  "canvas_mm": [
+   360.0,
+   240.0
+  ],
+  "layers": [
+   "horizon",
+   "objects",
+   "form_shadow",
+   "cast_shadow",
+   "construction",
+   "labels"
+  ],
+  "png_dpi": 150
+ }
+}

@@ -1,0 +1,89 @@
+{
+ "description": "contract 2.6: point light inside a sphere: no shadow / terminator for it (LIGHT_INSIDE_OBJECT); the box is still shadowed",
+ "version": "0.1",
+ "units": "m",
+ "up": "z",
+ "objects": [
+  {
+   "id": "ball",
+   "type": "sphere",
+   "radius": 0.8,
+   "transform": {
+    "position": [
+     0.0,
+     5.0,
+     0.0
+    ]
+   }
+  },
+  {
+   "id": "crate",
+   "type": "box",
+   "size": [
+    1.0,
+    1.0,
+    0.6
+   ],
+   "transform": {
+    "position": [
+     2.5,
+     5.0,
+     0.0
+    ]
+   }
+  }
+ ],
+ "lights": [
+  {
+   "id": "lamp",
+   "type": "point",
+   "position": [
+    0.2,
+    5.1,
+    0.9
+   ]
+  }
+ ],
+ "receivers": [
+  {
+   "id": "ground",
+   "type": "plane",
+   "normal": [
+    0,
+    0,
+    1
+   ],
+   "offset": 0.0
+  }
+ ],
+ "camera": {
+  "roll_deg": 0,
+  "focal_length_mm": 24,
+  "frame_mm": [
+   36,
+   24
+  ],
+  "shift_mm": [
+   0.0,
+   0.0
+  ],
+  "near_m": 0.05,
+  "position": [
+   3.0,
+   -2.0,
+   2.0
+  ],
+  "target": [
+   0.0,
+   5.0,
+   0.5
+  ]
+ },
+ "output": {
+  "canvas_mm": [
+   360,
+   240
+  ],
+  "png_dpi": 150
+ }
+}

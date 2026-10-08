@@ -1,0 +1,234 @@
+{
+ "accessors": [
+  {
+   "bufferView": 0,
+   "componentType": 5126,
+   "count": 24,
+   "max": [
+    0.5,
+    1.0,
+    0.5
+   ],
+   "min": [
+    -0.5,
+    0.0,
+    -0.5
+   ],
+   "type": "VEC3"
+  },
+  {
+   "bufferView": 1,
+   "componentType": 5123,
+   "count": 36,
+   "type": "SCALAR"
+  },
+  {
+   "bufferView": 2,
+   "componentType": 5126,
+   "count": 6,
+   "max": [
+    0.375,
+    0.625,
+    0.25
+   ],
+   "min": [
+    -0.375,
+    0.0,
+    -0.5
+   ],
+   "type": "VEC3"
+  },
+  {
+   "bufferView": 3,
+   "componentType": 5123,
+   "count": 24,
+   "type": "SCALAR"
+  }
+ ],
+ "asset": {
+  "generator": "castplane tools/make_mesh_fixtures.py",
+  "version": "2.0"
+ },
+ "bufferViews": [
+  {
+   "buffer": 0,
+   "byteLength": 288,
+   "byteOffset": 0
+  },
+  {
+   "buffer": 0,
+   "byteLength": 72,
+   "byteOffset": 288
+  },
+  {
+   "buffer": 0,
+   "byteLength": 72,
+   "byteOffset": 360
+  },
+  {
+   "buffer": 0,
+   "byteLength": 48,
+   "byteOffset": 432
+  }
+ ],
+ "buffers": [
+  {
+   "byteLength": 480,
+   "uri": "data:application/octet-stream;base64,AAAAvwAAAAAAAAA/AAAAPwAAAAAAAAA/AAAAPwAAAAAAAAC/AAAAvwAAAAAAAAC/AAAAvwAAgD8AAAA/AAAAPwAAgD8AAAA/AAAAPwAAgD8AAAC/AAAAvwAAgD8AAAC/AAAAvwAAAAAAAAA/AAAAPwAAAAAAAAA/AAAAPwAAAAAAAAC/AAAAvwAAAAAAAAC/AAAAvwAAgD8AAAA/AAAAPwAAgD8AAAA/AAAAPwAAgD8AAAC/AAAAvwAAgD8AAAC/AAAAvwAAAAAAAAA/AAAAPwAAAAAAAAA/AAAAPwAAAAAAAAC/AAAAvwAAAAAAAAC/AAAAvwAAgD8AAAA/AAAAPwAAgD8AAAA/AAAAPwAAgD8AAAC/AAAAvwAAgD8AAAC/CAALAAoACAAKAAkADAANAA4ADAAOAA8AEAARABUAEAAVABQAEQASABYAEQAWABUAEgATABcAEgAXABYAEwAQABQAEwAUABcAAADAvgAAAAAAAIA+AADAPgAAAAAAAIA+AAAAAAAAAAAAAAC/AADAvgAAID8AAIA+AADAPgAAID8AAIA+AAAAAAAAID8AAAC/AAACAAEAAwAEAAUAAAABAAQAAAAEAAMAAQACAAUAAQAFAAQAAgAAAAMAAgADAAUA"
+  }
+ ],
+ "cameras": [
+  {
+   "perspective": {
+    "aspectRatio": 1.5,
+    "yfov": 0.6,
+    "znear": 0.1
+   },
+   "type": "perspective"
+  }
+ ],
+ "extensions": {
+  "KHR_lights_punctual": {
+   "lights": [
+    {
+     "intensity": 30.0,
+     "type": "point"
+    },
+    {
+     "intensity": 30.0,
+     "spot": {
+      "outerConeAngle": 0.6
+     },
+     "type": "spot"
+    }
+   ]
+  }
+ },
+ "extensionsUsed": [
+  "KHR_lights_punctual"
+ ],
+ "meshes": [
+  {
+   "name": "cube",
+   "primitives": [
+    {
+     "attributes": {
+      "POSITION": 0
+     },
+     "indices": 1
+    }
+   ]
+  },
+  {
+   "name": "wedge",
+   "primitives": [
+    {
+     "attributes": {
+      "POSITION": 2
+     },
+     "indices": 3
+    }
+   ]
+  }
+ ],
+ "nodes": [
+  {
+   "camera": 0,
+   "name": "Camera",
+   "rotation": [
+    -0.09983341664682815,
+    0.0,
+    0.0,
+    0.9950041652780258
+   ],
+   "translation": [
+    0.0,
+    2.0,
+    8.0
+   ]
+  },
+  {
+   "extensions": {
+    "KHR_lights_punctual": {
+     "light": 0
+    }
+   },
+   "name": "Lamp",
+   "translation": [
+    2.0,
+    4.0,
+    1.0
+   ]
+  },
+  {
+   "extensions": {
+    "KHR_lights_punctual": {
+     "light": 1
+    }
+   },
+   "name": "Spot",
+   "rotation": [
+    -0.7071067811865476,
+    0.0,
+    0.0,
+    0.7071067811865476
+   ],
+   "translation": [
+    -2.0,
+    3.0,
+    0.0
+   ]
+  },
+  {
+   "mesh": 1,
+   "translation": [
+    -1.5,
+    0.0,
+    -1.0
+   ]
+  },
+  {
+   "mesh": 0,
+   "name": "Cube",
+   "translation": [
+    1.0,
+    0.0,
+    0.0
+   ]
+  },
+  {
+   "extras": {
+    "castplane": {
+     "height": 1.5,
+     "radius": 0.3,
+     "type": "cylinder"
+    }
+   },
+   "name": "Pillar",
+   "rotation": [
+    0.0,
+    0.25881904510252074,
+    0.0,
+    0.9659258262890683
+   ],
+   "translation": [
+    0.0,
+    0.0,
+    -3.0
+   ]
+  }
+ ],
+ "scene": 0,
+ "scenes": [
+  {
+   "nodes": [
+    0,
+    1,
+    2,
+    3,
+    4,
+    5
+   ]
+  }
+ ]
+}

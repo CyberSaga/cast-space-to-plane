@@ -1,0 +1,14 @@
+{"image_tol_mm": 1e-6, "rel_tol": 1e-9,
+ "mm_keys": ["image", "segment", "polygons", "polylines", "hidden_polylines", "light_point", "shadow_vp", "v_mm", "vanishing_points", "principal_point", "canvas_mm", "max_error_mm"],
+ "drawable_containers": ["arcs", "ellipses"],
+ "arc_non_mm": ["rotation_deg", "theta", "large_arc", "sweep"],
+ "mm_key_paths": [["construction", "segments", "*", "points"], ["construction", "per_receiver", "*", "segments", "*", "points"],
+                  ["constructions", "*", "segments", "*", "points"], ["constructions", "*", "per_receiver", "*", "segments", "*", "points"]],
+ "runs_rule": {"mm_abs": 0.05, "param_abs": 1e-3, "param_keys": ["s", "t", "theta"], "exact_keys": ["visible", "interval"]},
+ "int_keys": ["large_arc", "sweep", "interval"],
+ "max_reported": 25,
+ "case_overrides": {
+   "degenerate_cylinder_cap_at_light_height": [
+     {"paths": [["shadows", "*", "loops", "*", "*", "direction"], ["shadows", "*", "outline", "*", "direction"]],
+      "abs_tol": 1e-6,
+      "reason": "direction vertices at a tangent w_S = 0 crossing (curved._zero_shift, acos near |c| = 1): sqrt-type amplification, measured 1.5e-9 absolute per ulp of M or L"}]}}

@@ -1,0 +1,752 @@
+{
+ "camera": {
+  "C": [
+   0.0,
+   0.0,
+   0.3
+  ],
+  "P": [
+   [
+    240.0,
+    0.0,
+    0.0,
+    0.0
+   ],
+   [
+    0.0,
+    0.0,
+    240.0,
+    -72.0
+   ],
+   [
+    0.0,
+    1.0,
+    0.0,
+    0.0
+   ]
+  ],
+  "horizon_line": [
+   0.0,
+   -1.0,
+   0.0
+  ],
+  "principal_point": [
+   0.0,
+   0.0
+  ]
+ },
+ "canvas_mm": [
+  360.0,
+  240.0
+ ],
+ "construction": {
+  "checks": [
+   {
+    "max_error_mm": 5.684341886080802e-14,
+    "point": "crate.v2.shadow.lamp"
+   },
+   {
+    "max_error_mm": 5.684341886080802e-14,
+    "point": "crate.v3.shadow.lamp"
+   }
+  ],
+  "light_point": [
+   0.0,
+   68.0
+  ],
+  "light_point_at_infinity": null,
+  "per_receiver": {},
+  "rays": [
+   [
+    "L",
+    "crate.v2"
+   ],
+   [
+    "F",
+    "crate.v2.foot"
+   ],
+   [
+    "L",
+    "crate.v3"
+   ],
+   [
+    "F",
+    "crate.v3.foot"
+   ]
+  ],
+  "segments": [
+   {
+    "kind": "LP",
+    "point": "crate.v2",
+    "points": [
+     [
+      150.0,
+      -90.0
+     ],
+     [
+      2.842170943040401e-14,
+      68.0
+     ]
+    ]
+   },
+   {
+    "kind": "FQ",
+    "point": "crate.v2",
+    "points": [
+     [
+      150.0,
+      -90.0
+     ],
+     [
+      -2.842170943040401e-14,
+      -11.999999999999986
+     ]
+    ]
+   },
+   {
+    "kind": "LP",
+    "point": "crate.v3",
+    "points": [
+     [
+      -150.0,
+      -90.0
+     ],
+     [
+      -2.842170943040401e-14,
+      68.0
+     ]
+    ]
+   },
+   {
+    "kind": "FQ",
+    "point": "crate.v3",
+    "points": [
+     [
+      -150.0,
+      -90.0
+     ],
+     [
+      2.842170943040401e-14,
+      -11.999999999999986
+     ]
+    ]
+   }
+  ],
+  "shadow_vp": [
+   0.0,
+   -12.0
+  ],
+  "shadow_vp_at_infinity": null
+ },
+ "edges": [
+  {
+   "back": true,
+   "from": "crate.v0",
+   "object": "crate",
+   "runs": [],
+   "segment": null,
+   "silhouette": false,
+   "to": "crate.v1",
+   "visibility": "visible"
+  },
+  {
+   "back": true,
+   "from": "crate.v0",
+   "object": "crate",
+   "runs": [],
+   "segment": [
+    [
+     -270.0,
+     -162.0
+    ],
+    [
+     -150.0,
+     -90.0
+    ]
+   ],
+   "silhouette": false,
+   "to": "crate.v3",
+   "visibility": "visible"
+  },
+  {
+   "back": true,
+   "from": "crate.v0",
+   "object": "crate",
+   "runs": [],
+   "segment": null,
+   "silhouette": false,
+   "to": "crate.v4",
+   "visibility": "visible"
+  },
+  {
+   "back": true,
+   "from": "crate.v1",
+   "object": "crate",
+   "runs": [],
+   "segment": [
+    [
+     270.0,
+     -162.0
+    ],
+    [
+     150.0,
+     -90.0
+    ]
+   ],
+   "silhouette": false,
+   "to": "crate.v2",
+   "visibility": "visible"
+  },
+  {
+   "back": true,
+   "from": "crate.v1",
+   "object": "crate",
+   "runs": [],
+   "segment": null,
+   "silhouette": false,
+   "to": "crate.v5",
+   "visibility": "visible"
+  },
+  {
+   "back": true,
+   "from": "crate.v2",
+   "object": "crate",
+   "runs": [],
+   "segment": [
+    [
+     150.0,
+     -90.0
+    ],
+    [
+     -150.0,
+     -90.0
+    ]
+   ],
+   "silhouette": true,
+   "to": "crate.v3",
+   "visibility": "visible"
+  },
+  {
+   "back": true,
+   "from": "crate.v2",
+   "object": "crate",
+   "runs": [],
+   "segment": [
+    [
+     150.0,
+     -90.0
+    ],
+    [
+     150.0,
+     180.0
+    ]
+   ],
+   "silhouette": true,
+   "to": "crate.v6",
+   "visibility": "visible"
+  },
+  {
+   "back": true,
+   "from": "crate.v3",
+   "object": "crate",
+   "runs": [],
+   "segment": [
+    [
+     -150.0,
+     -90.0
+    ],
+    [
+     -150.0,
+     180.0
+    ]
+   ],
+   "silhouette": true,
+   "to": "crate.v7",
+   "visibility": "visible"
+  },
+  {
+   "back": true,
+   "from": "crate.v4",
+   "object": "crate",
+   "runs": [],
+   "segment": null,
+   "silhouette": true,
+   "to": "crate.v5",
+   "visibility": "visible"
+  },
+  {
+   "back": true,
+   "from": "crate.v4",
+   "object": "crate",
+   "runs": [],
+   "segment": null,
+   "silhouette": true,
+   "to": "crate.v7",
+   "visibility": "visible"
+  },
+  {
+   "back": true,
+   "from": "crate.v5",
+   "object": "crate",
+   "runs": [],
+   "segment": null,
+   "silhouette": true,
+   "to": "crate.v6",
+   "visibility": "visible"
+  },
+  {
+   "back": true,
+   "from": "crate.v6",
+   "object": "crate",
+   "runs": [],
+   "segment": null,
+   "silhouette": false,
+   "to": "crate.v7",
+   "visibility": "visible"
+  }
+ ],
+ "form_shadow": [
+  {
+   "faces": [
+    [
+     "crate.v0",
+     "crate.v3",
+     "crate.v2",
+     "crate.v1"
+    ],
+    [
+     "crate.v0",
+     "crate.v1",
+     "crate.v5",
+     "crate.v4"
+    ],
+    [
+     "crate.v1",
+     "crate.v2",
+     "crate.v6",
+     "crate.v5"
+    ],
+    [
+     "crate.v3",
+     "crate.v0",
+     "crate.v4",
+     "crate.v7"
+    ]
+   ],
+   "object": "crate",
+   "polygons": [
+    [
+     [
+      -270.0,
+      -162.0
+     ],
+     [
+      -150.0,
+      -90.0
+     ],
+     [
+      150.0,
+      -90.0
+     ],
+     [
+      270.0,
+      -162.0
+     ],
+     [
+      270.0,
+      -180.00000000000003
+     ],
+     [
+      -270.0,
+      -180.00000000000003
+     ]
+    ],
+    [],
+    [
+     [
+      270.0,
+      -162.0
+     ],
+     [
+      150.0,
+      -90.0
+     ],
+     [
+      150.0,
+      180.0
+     ],
+     [
+      270.0,
+      180.0
+     ]
+    ],
+    [
+     [
+      -150.0,
+      -90.0
+     ],
+     [
+      -270.0,
+      -162.0
+     ],
+     [
+      -270.0,
+      180.0
+     ],
+     [
+      -150.0,
+      180.0
+     ]
+    ]
+   ],
+   "terminator": []
+  }
+ ],
+ "hidden_lines": false,
+ "horizon": {
+  "line": [
+   0.0,
+   -1.0,
+   0.0
+  ],
+  "segment": [
+   [
+    -270.0,
+    0.0
+   ],
+   [
+    270.0,
+    0.0
+   ]
+  ],
+  "v_mm": 0.0,
+  "vanishing_points": {
+   "x": null,
+   "y": [
+    0.0,
+    0.0
+   ],
+   "z": null
+  }
+ },
+ "outlines": [],
+ "points": {
+  "F.lamp": {
+   "depth": 6.0,
+   "image": [
+    0.0,
+    -12.0
+   ],
+   "world": [
+    0.0,
+    6.0,
+    0.0
+   ]
+  },
+  "L.lamp": {
+   "depth": 6.0,
+   "image": [
+    0.0,
+    68.0
+   ],
+   "world": [
+    0.0,
+    6.0,
+    2.0
+   ]
+  },
+  "crate.v0": {
+   "depth": -0.2,
+   "image": null,
+   "world": [
+    -0.5,
+    -0.2,
+    0.0
+   ]
+  },
+  "crate.v1": {
+   "depth": -0.2,
+   "image": null,
+   "world": [
+    0.5,
+    -0.2,
+    0.0
+   ]
+  },
+  "crate.v2": {
+   "depth": 0.8,
+   "image": [
+    150.0,
+    -90.0
+   ],
+   "world": [
+    0.5,
+    0.8,
+    0.0
+   ]
+  },
+  "crate.v2.foot": {
+   "depth": 0.8,
+   "image": [
+    150.0,
+    -90.0
+   ],
+   "world": [
+    0.5,
+    0.8,
+    0.0
+   ]
+  },
+  "crate.v2.shadow.lamp": {
+   "depth": 0.8,
+   "image": [
+    150.0,
+    -90.0
+   ],
+   "world": [
+    0.5,
+    0.8,
+    0.0
+   ]
+  },
+  "crate.v3": {
+   "depth": 0.8,
+   "image": [
+    -150.0,
+    -90.0
+   ],
+   "world": [
+    -0.5,
+    0.8,
+    0.0
+   ]
+  },
+  "crate.v3.foot": {
+   "depth": 0.8,
+   "image": [
+    -150.0,
+    -90.0
+   ],
+   "world": [
+    -0.5,
+    0.8,
+    0.0
+   ]
+  },
+  "crate.v3.shadow.lamp": {
+   "depth": 0.8,
+   "image": [
+    -150.0,
+    -90.0
+   ],
+   "world": [
+    -0.5,
+    0.8,
+    0.0
+   ]
+  },
+  "crate.v4": {
+   "depth": -0.2,
+   "image": null,
+   "world": [
+    -0.5,
+    -0.2,
+    1.0
+   ]
+  },
+  "crate.v4.foot": {
+   "depth": -0.2,
+   "image": null,
+   "world": [
+    -0.5,
+    -0.2,
+    0.0
+   ]
+  },
+  "crate.v4.shadow.lamp": {
+   "depth": -6.4,
+   "image": null,
+   "world": [
+    -1.0,
+    -6.4,
+    0.0
+   ]
+  },
+  "crate.v5": {
+   "depth": -0.2,
+   "image": null,
+   "world": [
+    0.5,
+    -0.2,
+    1.0
+   ]
+  },
+  "crate.v5.foot": {
+   "depth": -0.2,
+   "image": null,
+   "world": [
+    0.5,
+    -0.2,
+    0.0
+   ]
+  },
+  "crate.v5.shadow.lamp": {
+   "depth": -6.4,
+   "image": null,
+   "world": [
+    1.0,
+    -6.4,
+    0.0
+   ]
+  },
+  "crate.v6": {
+   "depth": 0.8,
+   "image": [
+    150.0,
+    210.0
+   ],
+   "world": [
+    0.5,
+    0.8,
+    1.0
+   ]
+  },
+  "crate.v6.foot": {
+   "depth": 0.8,
+   "image": [
+    150.0,
+    -90.0
+   ],
+   "world": [
+    0.5,
+    0.8,
+    0.0
+   ]
+  },
+  "crate.v6.shadow.lamp": {
+   "depth": -4.4,
+   "image": null,
+   "world": [
+    1.0,
+    -4.4,
+    0.0
+   ]
+  },
+  "crate.v7": {
+   "depth": 0.8,
+   "image": [
+    -150.0,
+    210.0
+   ],
+   "world": [
+    -0.5,
+    0.8,
+    1.0
+   ]
+  },
+  "crate.v7.foot": {
+   "depth": 0.8,
+   "image": [
+    -150.0,
+    -90.0
+   ],
+   "world": [
+    -0.5,
+    0.8,
+    0.0
+   ]
+  },
+  "crate.v7.shadow.lamp": {
+   "depth": -4.4,
+   "image": null,
+   "world": [
+    -1.0,
+    -4.4,
+    0.0
+   ]
+  }
+ },
+ "receivers": [
+  {
+   "bounds": null,
+   "casts": {
+    "lamp": false
+   },
+   "id": "ground",
+   "lit": {
+    "lamp": true
+   },
+   "plane": [
+    0.0,
+    0.0,
+    1.0,
+    0.0
+   ]
+  }
+ ],
+ "shadows": [
+  {
+   "conics": [],
+   "light": "lamp",
+   "loops": [
+    [
+     "crate.v2.shadow.lamp",
+     "crate.v3.shadow.lamp",
+     "crate.v7.shadow.lamp",
+     "crate.v4.shadow.lamp",
+     "crate.v5.shadow.lamp",
+     "crate.v6.shadow.lamp"
+    ]
+   ],
+   "object": "crate",
+   "outline": [
+    "crate.v2.shadow.lamp",
+    "crate.v3.shadow.lamp",
+    "crate.v7.shadow.lamp",
+    "crate.v4.shadow.lamp",
+    "crate.v5.shadow.lamp",
+    "crate.v6.shadow.lamp"
+   ],
+   "polygon_edges": [],
+   "polygons": [
+    [
+     [
+      150.0,
+      -90.0
+     ],
+     [
+      -150.0,
+      -90.0
+     ],
+     [
+      -270.0,
+      -152.4
+     ],
+     [
+      -270.0,
+      -179.99999999999997
+     ],
+     [
+      269.99999999999994,
+      -179.99999999999997
+     ],
+     [
+      270.0,
+      -152.4
+     ]
+    ]
+   ],
+   "receiver": "ground",
+   "unbounded": false
+  }
+ ],
+ "warnings": [
+  {
+   "code": "POINT_BEHIND_CAMERA",
+   "ids": [
+    "crate"
+   ],
+   "message": "some drawn point is behind the near plane; image is null or clipped"
+  }
+ ]
+}

@@ -1,0 +1,16 @@
+{
+  "name": "castplane-workspace",
+  "private": true,
+  "workspaces": [
+    "ts",
+    "web"
+  ],
+  "engines": {
+    "node": "^20.19.0 || >=22.12.0"
+  },
+  "scripts": {
+    "build": "npm run build -w ts && npm run build -w web",
+    "test": "npm run test -w ts && npm run test -w web",
+    "bench": "npm run bench -w ts"
+  }
+}

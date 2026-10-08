@@ -1,0 +1,88 @@
+# CI gate of the M3 contract (docs/ARCHITECTURE.md §4, docs/DECISIONS.md D17): the test suite on the
+# oldest and newest supported Python, the spec §8 benchmark gated on the full-render target only
+# (`--gate full`; the camera-only row is informational until M7) and, on one interpreter, a dry run of
+# the conformance regeneration tool.
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.10", "3.13"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+      - name: Install cairo (optional PNG extra of the dev dependencies)
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends libcairo2
+      - name: Install the package with the dev extras
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e '.[dev]'
+      - name: Test suite
+        run: python -m pytest -q
+      - name: Spec §8 benchmark (full-render gate; camera-only row informational, D17)
+        run: python3 benchmarks/bench.py --gate full
+      - name: Conformance dry run (reports drift against the recorded NumPy build, never fails on it)
+        # `--reason` is mandatory even for a dry run (exit 2 without it); the dry run writes nothing and
+        # exits 0 whether or not expected files would change (exit 1 only for an unknown case or a render
+        # error).  Drift on another NumPy build is tolerated: tests/test_conformance.py already requires
+        # every drifted case to stay within the §7.5 tolerances.
+        if: matrix.python-version == '3.13'
+        run: python3 tools/regen_conformance.py --reason "CI dry run" --dry-run
+      - name: Python-side checks of the TypeScript port's shared files (contract §5.4.13; no node needed)
+        # Already part of the suite above; repeated with -rs so the skipped node-only checks are listed.
+        if: matrix.python-version == '3.13'
+        run: python -m pytest -q -rs tests/test_ts_port.py
+
+  # M7 (contract §5.4.12): the TypeScript port on node 20 and 22 — conformance runner, writer parity,
+  # determinism and unit suites — and, on node 22, the spec §8 benchmark.  Gate literal set at M7 step 7
+  # by the §5.4.9 margin rule (camera-only minimum 55 / 60 / 63 ms < 70 ms, benchmarks/README.md); it is
+  # changed only with a new recorded measurement, never loosened to absorb a regression (re-measured at the
+  # close of phase 2, benchmarks/README.md: kept).  Phase 2 (step 11): the port carries the M4-M6 format and the
+  # conformance runner is final -- one test per case of set v6, no todo list; the extra step below fails the job
+  # if a case is ever failed, skipped or marked todo.
+  ts:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        node: ["20", "22"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+          cache: npm
+      - run: npm ci
+      - run: npm run -w ts build                # tsc -p tsconfig.json && tsc -p tsconfig.test.json
+      - run: npm run -w ts test                 # node --test build/test/*.test.js (conformance, parity, determinism, unit)
+      - name: Conformance runner on the whole set (one test per case; none failed, skipped or todo; §5.4.8)
+        shell: bash
+        run: |
+          node --test --test-reporter=tap ts/build/test/conformance.test.js | tee conformance.tap
+          grep -qx '# fail 0' conformance.tap && grep -qx '# skipped 0' conformance.tap && grep -qx '# todo 0' conformance.tap
+      - name: Spec §8 benchmark on the TypeScript side (both targets gated, §5.4.9)
+        if: matrix.node == '22'
+        run: node ts/build/bench/camera_only.js --gate both --reps 20
+
+  # M7 (contract §5.4.12): the web UI — orbit / download tests, type check and the static vite build.
+  web:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+      - run: npm ci
+      - run: npm run -w ts build                # the workspace package "castplane" the UI imports
+      - run: npm run -w web test && npm run -w web build   # orbit tests, type check, vite build

@@ -1,0 +1,154 @@
+{
+ "description": "tests.reference.random_scenes.make_scene(0, n_objects=3): prism, box, box; point light (passes the spec 7.3 ray-cast gate)",
+ "version": "0.1",
+ "units": "m",
+ "up": "z",
+ "objects": [
+  {
+   "id": "obj0",
+   "type": "prism",
+   "polygon": [
+    [
+     -1.046434,
+     -0.294238
+    ],
+    [
+     -0.237941,
+     -0.286094
+    ],
+    [
+     0.517589,
+     -0.736945
+    ],
+    [
+     0.340036,
+     0.158159
+    ],
+    [
+     0.010637,
+     0.906655
+    ],
+    [
+     -0.343832,
+     0.125663
+    ]
+   ],
+   "height": 0.5986,
+   "transform": {
+    "position": [
+     -1.6023,
+     -0.6185,
+     1e-06
+    ],
+    "rotation_deg": [
+     0.0,
+     0.0,
+     310.7444
+    ]
+   }
+  },
+  {
+   "id": "obj1",
+   "type": "box",
+   "size": [
+    1.1718,
+    1.1413,
+    1.1
+   ],
+   "transform": {
+    "position": [
+     3.8467,
+     1.4843,
+     1e-06
+    ],
+    "rotation_deg": [
+     0.0,
+     0.0,
+     138.1239
+    ]
+   }
+  },
+  {
+   "id": "obj2",
+   "type": "box",
+   "size": [
+    1.195,
+    0.8056,
+    0.4756
+   ],
+   "transform": {
+    "position": [
+     -1.5181,
+     -0.1133,
+     0.280215
+    ],
+    "rotation_deg": [
+     0.0,
+     0.0,
+     259.7358
+    ]
+   }
+  }
+ ],
+ "lights": [
+  {
+   "id": "light",
+   "type": "point",
+   "position": [
+    1.0014,
+    -2.4938,
+    5.1658
+   ]
+  }
+ ],
+ "receivers": [
+  {
+   "id": "ground",
+   "type": "plane",
+   "normal": [
+    0,
+    0,
+    1
+   ],
+   "offset": 0.0
+  }
+ ],
+ "camera": {
+  "position": [
+   -5.3644,
+   10.8564,
+   5.1808
+  ],
+  "target": [
+   0.805,
+   0.5275,
+   0.134
+  ],
+  "roll_deg": 0.0,
+  "focal_length_mm": 62.3,
+  "frame_mm": [
+   36.0,
+   24.0
+  ],
+  "shift_mm": [
+   0.0,
+   0.0
+  ],
+  "near_m": 0.05
+ },
+ "output": {
+  "canvas_mm": [
+   360.0,
+   240.0
+  ],
+  "layers": [
+   "horizon",
+   "objects",
+   "form_shadow",
+   "cast_shadow",
+   "construction",
+   "labels"
+  ],
+  "png_dpi": 150
+ }
+}

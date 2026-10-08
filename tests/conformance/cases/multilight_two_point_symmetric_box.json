@@ -1,0 +1,87 @@
+{
+ "description": "contract 5.3.10 acceptance case (spec 10 M6): unit cube under two point lights west (-2,0,2) and east (2,0,2) mirrored in x; each light's shadow record is bit-identical to its single-light document; umbra = 3 pieces (triangle, quadrilateral, triangle) of image areas 132.85761502560047, 1315.4880281807557, 90.38709809014404 mm2, ground area 7/6 mapped back; form_shadow_core = the +-y faces and the base; silhouette_lights per edge; no warnings",
+ "version": "0.1",
+ "units": "m",
+ "up": "z",
+ "objects": [
+  {
+   "id": "cube",
+   "type": "box",
+   "size": [
+    1,
+    1,
+    1
+   ]
+  }
+ ],
+ "lights": [
+  {
+   "id": "west",
+   "type": "point",
+   "position": [
+    -2.0,
+    0.0,
+    2.0
+   ]
+  },
+  {
+   "id": "east",
+   "type": "point",
+   "position": [
+    2.0,
+    0.0,
+    2.0
+   ]
+  }
+ ],
+ "receivers": [
+  {
+   "id": "ground",
+   "type": "plane",
+   "normal": [
+    0,
+    0,
+    1
+   ],
+   "offset": 0.0
+  }
+ ],
+ "camera": {
+  "position": [
+   0,
+   -6,
+   4
+  ],
+  "target": [
+   0,
+   0,
+   0
+  ],
+  "roll_deg": 0,
+  "focal_length_mm": 35,
+  "frame_mm": [
+   36,
+   24
+  ],
+  "shift_mm": [
+   0,
+   0
+  ],
+  "near_m": 0.05
+ },
+ "output": {
+  "canvas_mm": [
+   360,
+   240
+  ],
+  "layers": [
+   "horizon",
+   "objects",
+   "form_shadow",
+   "cast_shadow",
+   "construction",
+   "labels"
+  ],
+  "png_dpi": 300
+ }
+}

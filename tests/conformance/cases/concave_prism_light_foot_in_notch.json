@@ -1,0 +1,141 @@
+{
+ "description": "spec 7.3 dedicated case: U-shaped prism whose point-light foot lies inside the notch (frozen from tests.reference.random_scenes.make_concavity_scene(1))",
+ "version": "0.1",
+ "units": "m",
+ "up": "z",
+ "objects": [
+  {
+   "id": "u",
+   "type": "prism",
+   "polygon": [
+    [
+     -2.0,
+     -2.0
+    ],
+    [
+     2.0,
+     -2.0
+    ],
+    [
+     2.0,
+     2.0
+    ],
+    [
+     0.5,
+     2.0
+    ],
+    [
+     0.5,
+     -1.0
+    ],
+    [
+     -0.5,
+     -1.0
+    ],
+    [
+     -0.5,
+     2.0
+    ],
+    [
+     -2.0,
+     2.0
+    ]
+   ],
+   "height": 1.0,
+   "transform": {
+    "position": [
+     0.0,
+     0.0,
+     0.0
+    ],
+    "rotation_deg": [
+     0.0,
+     0.0,
+     0.4729
+    ]
+   }
+  },
+  {
+   "id": "obj1",
+   "type": "box",
+   "size": [
+    1.5356,
+    0.4874,
+    1.5332
+   ],
+   "transform": {
+    "position": [
+     4.5,
+     0.2976,
+     1e-06
+    ],
+    "rotation_deg": [
+     0.0,
+     0.0,
+     112.2593
+    ]
+   }
+  }
+ ],
+ "lights": [
+  {
+   "id": "light",
+   "type": "point",
+   "position": [
+    -0.2918,
+    1.0047,
+    3.8454
+   ]
+  }
+ ],
+ "receivers": [
+  {
+   "id": "ground",
+   "type": "plane",
+   "normal": [
+    0,
+    0,
+    1
+   ],
+   "offset": 0.0
+  }
+ ],
+ "camera": {
+  "position": [
+   -1.7513,
+   5.9378,
+   5.7827
+  ],
+  "target": [
+   1.4535,
+   -0.366,
+   0.6697
+  ],
+  "roll_deg": 0.0,
+  "focal_length_mm": 33.36,
+  "frame_mm": [
+   36.0,
+   24.0
+  ],
+  "shift_mm": [
+   0.0,
+   0.0
+  ],
+  "near_m": 0.05
+ },
+ "output": {
+  "canvas_mm": [
+   360.0,
+   240.0
+  ],
+  "layers": [
+   "horizon",
+   "objects",
+   "form_shadow",
+   "cast_shadow",
+   "construction",
+   "labels"
+  ],
+  "png_dpi": 150
+ }
+}

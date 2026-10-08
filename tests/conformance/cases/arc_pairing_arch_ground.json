@@ -1,0 +1,111 @@
+{
+ "description": "v7 (final review m4-geometry#0, D70): arch-shaped prism standing on the ground (rotation_deg [90,0,0]), lamp below the lintel; one silhouette loop crosses the light plane four times, the angular arc pairing gives two unbounded ground loops (7.5 % of [-15,15]^2, ray cast agrees); the v1 loop-order pairing blackened the whole plane",
+ "version": "0.1",
+ "units": "m",
+ "up": "z",
+ "objects": [
+  {
+   "id": "arch",
+   "type": "prism",
+   "polygon": [
+    [
+     -1.5,
+     0.0
+    ],
+    [
+     -1.0,
+     0.0
+    ],
+    [
+     -1.0,
+     1.5
+    ],
+    [
+     1.0,
+     1.5
+    ],
+    [
+     1.0,
+     0.0
+    ],
+    [
+     1.5,
+     0.0
+    ],
+    [
+     1.5,
+     2.0
+    ],
+    [
+     -1.5,
+     2.0
+    ]
+   ],
+   "height": 0.5,
+   "transform": {
+    "position": [
+     0.0,
+     0.5,
+     0.0
+    ],
+    "rotation_deg": [
+     90.0,
+     0.0,
+     0.0
+    ]
+   }
+  }
+ ],
+ "lights": [
+  {
+   "id": "lamp",
+   "type": "point",
+   "position": [
+    0.3,
+    -3.0,
+    1.0
+   ]
+  }
+ ],
+ "receivers": [
+  {
+   "id": "ground",
+   "type": "plane",
+   "normal": [
+    0,
+    0,
+    1
+   ],
+   "offset": 0
+  }
+ ],
+ "camera": {
+  "position": [
+   4.0,
+   -8.0,
+   3.0
+  ],
+  "target": [
+   0.0,
+   2.0,
+   0.8
+  ],
+  "roll_deg": 0.0,
+  "focal_length_mm": 28,
+  "frame_mm": [
+   36,
+   24
+  ],
+  "shift_mm": [
+   0.0,
+   0.0
+  ],
+  "near_m": 0.05
+ },
+ "output": {
+  "canvas_mm": [
+   360,
+   240
+  ]
+ }
+}

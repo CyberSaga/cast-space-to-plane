@@ -1,0 +1,103 @@
+{
+ "description": "contract 5.1.11: wall_and_ground with output.hidden_lines on: wall base edge partial (runs s = 23/60, 37/60), ground shadow edge hidden by the plate beyond y = 6 (s = 0.713073), crate 5 hidden / 7 visible edges",
+ "version": "0.1",
+ "units": "m",
+ "up": "z",
+ "objects": [
+  {
+   "id": "crate",
+   "type": "box",
+   "size": [
+    1,
+    1,
+    1
+   ],
+   "transform": {
+    "position": [
+     0,
+     4.5,
+     0
+    ]
+   }
+  }
+ ],
+ "lights": [
+  {
+   "id": "lamp",
+   "type": "point",
+   "position": [
+    0,
+    2,
+    3
+   ]
+  }
+ ],
+ "receivers": [
+  {
+   "id": "ground",
+   "type": "plane",
+   "normal": [
+    0,
+    0,
+    1
+   ],
+   "offset": 0
+  },
+  {
+   "id": "wall",
+   "type": "plane",
+   "normal": [
+    0,
+    -1,
+    0
+   ],
+   "offset": 6,
+   "bounds": [
+    [
+     -3,
+     6,
+     0
+    ],
+    [
+     3,
+     6,
+     0
+    ],
+    [
+     3,
+     6,
+     2.5
+    ],
+    [
+     -3,
+     6,
+     2.5
+    ]
+   ]
+  }
+ ],
+ "camera": {
+  "position": [
+   0,
+   -1,
+   1.6
+  ],
+  "target": [
+   0,
+   6,
+   0.8
+  ],
+  "focal_length_mm": 35,
+  "frame_mm": [
+   36,
+   24
+  ]
+ },
+ "output": {
+  "canvas_mm": [
+   273,
+   182
+  ],
+  "hidden_lines": true
+ }
+}

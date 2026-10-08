@@ -1,0 +1,79 @@
+{
+ "description": "contract 2.6 ground chain: tilted cylinder partly below the ground: the removed part of the silhouette loop is replaced by the lit boundary of the ground cross-section (OBJECT_BELOW_RECEIVER)",
+ "version": "0.1",
+ "units": "m",
+ "up": "z",
+ "objects": [
+  {
+   "id": "drum",
+   "type": "cylinder",
+   "radius": 0.5,
+   "height": 1.6,
+   "transform": {
+    "position": [
+     0.0,
+     5.0,
+     -0.4
+    ],
+    "rotation_deg": [
+     30,
+     0,
+     20
+    ]
+   }
+  }
+ ],
+ "lights": [
+  {
+   "id": "sun",
+   "type": "directional",
+   "direction": [
+    0.3,
+    -0.4,
+    0.8660254037844386
+   ]
+  }
+ ],
+ "receivers": [
+  {
+   "id": "ground",
+   "type": "plane",
+   "normal": [
+    0,
+    0,
+    1
+   ],
+   "offset": 0.0
+  }
+ ],
+ "camera": {
+  "roll_deg": 0,
+  "focal_length_mm": 24,
+  "frame_mm": [
+   36,
+   24
+  ],
+  "shift_mm": [
+   0.0,
+   0.0
+  ],
+  "near_m": 0.05,
+  "position": [
+   3.0,
+   -2.0,
+   2.0
+  ],
+  "target": [
+   0.0,
+   5.0,
+   0.5
+  ]
+ },
+ "output": {
+  "canvas_mm": [
+   360,
+   240
+  ],
+  "png_dpi": 150
+ }
+}

@@ -1,0 +1,138 @@
+{
+ "description": "v7 (final review m4-geometry#0, D70): U-prism on the ground, lamp in the notch below the arm tops, wall beyond the opening (y = 3); two loops on the wall (the arms' shadows), 46 % of the plate, IoU >= 0.99 with the ray cast; before D70 the plate was entirely in shadow",
+ "version": "0.1",
+ "units": "m",
+ "up": "z",
+ "objects": [
+  {
+   "id": "u",
+   "type": "prism",
+   "polygon": [
+    [
+     -1,
+     -1
+    ],
+    [
+     1,
+     -1
+    ],
+    [
+     1,
+     1
+    ],
+    [
+     0.5,
+     1
+    ],
+    [
+     0.5,
+     -0.5
+    ],
+    [
+     -0.5,
+     -0.5
+    ],
+    [
+     -0.5,
+     1
+    ],
+    [
+     -1,
+     1
+    ]
+   ],
+   "height": 1.0,
+   "transform": {
+    "position": [
+     0,
+     0,
+     0
+    ]
+   }
+  }
+ ],
+ "lights": [
+  {
+   "id": "lamp",
+   "type": "point",
+   "position": [
+    0,
+    0.2,
+    0.7
+   ]
+  }
+ ],
+ "receivers": [
+  {
+   "id": "ground",
+   "type": "plane",
+   "normal": [
+    0,
+    0,
+    1
+   ],
+   "offset": 0
+  },
+  {
+   "id": "wall",
+   "type": "plane",
+   "normal": [
+    0,
+    -1,
+    0
+   ],
+   "offset": 3,
+   "bounds": [
+    [
+     -4,
+     3,
+     0
+    ],
+    [
+     4,
+     3,
+     0
+    ],
+    [
+     4,
+     3,
+     3
+    ],
+    [
+     -4,
+     3,
+     3
+    ]
+   ]
+  }
+ ],
+ "camera": {
+  "position": [
+   0,
+   -8,
+   3
+  ],
+  "target": [
+   0,
+   0,
+   0.5
+  ],
+  "roll_deg": 0.0,
+  "focal_length_mm": 35,
+  "frame_mm": [
+   36,
+   24
+  ],
+  "shift_mm": [
+   0.0,
+   0.0
+  ],
+  "near_m": 0.05
+ },
+ "output": {
+  "canvas_mm": [
+   360,
+   240
+  ]
+ }
+}
