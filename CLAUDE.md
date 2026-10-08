@@ -130,6 +130,56 @@ Python is the reference.
   - Benchmark gate limits change only with a newly recorded measurement in `benchmarks/README.md`; never loosen them to
     absorb a regression.
 
+## Subagents: splitting work for performance and cost
+
+Do the work yourself when it touches one or two files or one known symbol. Delegate when a task splits into parts that
+can run in parallel, or when a search would otherwise flood your context.
+
+**Pick the model by the kind of work, not by the task's importance:**
+
+| Model | Use it for |
+| --- | --- |
+| `fable` | geometry design (anything in `shadow`, `curved`, `umbra`, `hidden`), adversarial review of geometry, root-causing a numeric discrepancy |
+| `opus` | implementation, fixes, TS porting, merges and conflict resolution |
+| `sonnet` | docs and contract-note edits, mechanical refactors, running and reporting the gates, re-verifying a simple finding |
+| `haiku` | text-only fixes with known facts (counts, section references, typos) |
+
+**Pipeline per change:** implementer, then reviewer, then fixer (only if there are findings), then merger.
+- The reviewer is `.claude/agents/reviewer.md`. It is read-only and must give a reproducing command for each finding.
+- Run one review pass. Add independent verifiers only for blocker or major findings, one per finding. Batch the minors
+  into one `sonnet` pass. Don't fan out a verifier per minor finding.
+- Give the reviewer a different lens than the implementer; a second review of the same kind adds little.
+
+**Sharing work without collisions:**
+- Give each parallel agent its own git worktree and branch (`isolation: "worktree"`). Never push the worktree branches;
+  the merger brings them into the working branch with merge commits.
+- Split by file ownership. Two agents may touch the same file only with append-only hunks in different places:
+  implementation notes, `CHANGELOG.md`, README rows. Name the owner of each shared function in the prompt.
+- **One writer for the conformance set.** Worker agents never run `regen_conformance.py` without `--dry-run`, and they
+  don't touch `tests/conformance/`. They put candidate scenes under `tests/fixtures/<version>_candidates/`. The merger
+  makes one versioned regeneration on the merged branch.
+- Python changes land first. The TS port follows in a separate agent that merges the Python branch and mirrors the
+  report's list of behaviour changes.
+
+**Prompts and hand-offs:**
+- Make every prompt self-contained:
+  - the current state (branch, HEAD, test counts, set version);
+  - the contract sections to read;
+  - the exact gate commands;
+  - "do not end your turn while a command is still running".
+- Make prompts state-aware: tell the agent to check `git log` and `git status` first, so a re-run resumes instead of
+  redoing work.
+- Pass large inputs (findings lists, review reports) as files in the scratchpad, not pasted into the prompt.
+- Ask for a structured report: one line per item (fixed or rejected, with the reason), files changed, test counts,
+  conformance cases whose bytes changed, and commits.
+- **A subagent's report is a claim, not proof.** Re-run the gates yourself before merging or pushing, and read the diff.
+
+## Guard rails in `.claude/`
+
+- `settings.json` pre-approves the read-only and test commands. It deliberately leaves out `regen_conformance.py`
+  without `--dry-run`, and any push.
+- `hooks/protect_expected.sh` denies Edit and Write on `tests/conformance/expected/`.
+
 ## Change checklist
 
 Each behaviour fix ships with all of the following:
