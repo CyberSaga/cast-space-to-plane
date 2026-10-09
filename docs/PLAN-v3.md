@@ -58,7 +58,7 @@ restructure it.
 | `web/test/observer.test.ts`, `rig.test.ts`, `equation.test.ts` (new) | — | — | `observer.test.ts` | `rig.test.ts`, `equation.test.ts` | appended rows (§5.7.13 web table) |
 | `web/index.html`, `web/src/style.css` | — | — | switch, two-pane layout, < 880 px stacking | — | controls row, sliders, view buttons, equation field |
 | `docs/USAGE.md`, `README.md`, `web/README.md` | `camera.picture_plane` scene format, `castplane info` lines, `__all__` names | counts v8 / 63 | §4 web UI: observer view; `obs ms` numbers | — | §4 web UI: plane mode; screenshot `docs/images/web_ui_observer.png` |
-| `CLAUDE.md` | — | conformance counts v8 / 63 | — | — | — |
+| `CLAUDE.md` | — | conformance counts v8 / 63; decision range `(D1–D70)` → `(D1–D78)` | — | — | — |
 | `docs/ARCHITECTURE.md` implementation notes | §5.7 notes (append) | §5.7 notes (append) | §5.6 notes (append) | §5.7 notes (append) | §5.7 notes (append) |
 
 Step-only files (no coordination needed): step 2 `castplane/picture_plane.py`, `tests/test_picture_plane.py`,
@@ -86,14 +86,15 @@ table incl. ties), §5.6.8 round trip (hypothesis), `--dry-run` **0 changes** on
 Merge step 2; mirror `scene.ts`, `camera.ts`, `picture_plane.ts` (same names, record shapes, operation order;
 `plane_equation` with the exact-tie formatter); the compose key; the TS tests of §5.7.13 / §5.6.8. Then, on the merged
 branch: `--dry-run` (0 changes), three `regen_conformance.py --case NAME --reason "..."` runs (one v8 CHANGELOG entry),
-`python -m tests.build_identity --write`, README / USAGE / CLAUDE.md counts (v8 / 63). Acceptance: both runners pass
+`python -m tests.build_identity --write`, README / USAGE / CLAUDE.md counts (v8 / 63) and CLAUDE.md's decision range
+(D1–D78). Acceptance: both runners pass
 63/63 on the same commit; `compare_svg.py` 0 mismatches (cases and examples); TS camera-only gate unchanged.
 
 ### Step 4 — M9 observer view (§5.6)
 4a: split `main.ts` (drawing stage, pointer handlers) with no behaviour change; web tests and build green. 4b:
 `observer.ts` (board derivation, framing, element geometry), the observer pane (three.js, second camera), the switch and
 the two-pane / stacked layout, `obs ms`; `picture_plane` scene cameras handed to `orbit_from_camera` as their resolved
-block. Acceptance: §5.6.8 / §5.6.9 (switch-off identity of SVG and JSON, < 100 ms per frame on the five examples,
+block with the target at the scene centre's depth, and `D` = their `picture_plane` distance (§5.6.2). Acceptance: §5.6.8 / §5.6.9 (switch-off identity of SVG and JSON, < 100 ms per frame on the five examples,
 recorded in `web/README.md`).
 
 ### Step 4' — rig and equation pure functions (§5.7.7, §5.7.8; parallel with 4b)

@@ -4181,7 +4181,7 @@ and the hidden-run SVG groups (§5.1.8). Nothing an M4–M6 case needs lies beyo
   by default; with it off the page is exactly the §5.4.10 page, and with it on the drawing camera, `doc`, `svg` and the
   downloads are the same (§5.6.0); `main.ts` is split into the drawing stage and the pointer handlers first, without
   behaviour change (§5.6.6); a scene whose camera has the `picture_plane` form is handed to `orbit_from_camera` as its
-  resolved target-form block (§5.6.2). (2) M10 (§5.7) moves the drawing camera's state from `OrbitState` to the rig of
+  resolved target-form block with the target moved to the scene centre's depth along `f` (§5.6.2). (2) M10 (§5.7) moves the drawing camera's state from `OrbitState` to the rig of
   `web/src/rig.ts` (§5.7.7); the drawing pane's input mapping of §5.4.10 (left-drag yaw / pitch, right-drag target pan,
   wheel distance) is superseded by §5.7.9 (left drag = ring, wheel / pinch = arrow, right drag / Shift drag = pan of the
   rig); the roll slider sets the rig's `ρ`; the logarithmic focal-length slider `[8, 400]` mm stays; a `D` slider is
@@ -4891,13 +4891,19 @@ rectangle (§2.2 step 3), `D ∈ [0.05, 100]` m, any roll, shift and focal lengt
 
 #### 5.6.2 The board derived from the current camera (M9, read-only)
 In M9 the board is not a state: it is derived per frame from the drawing camera (spec-v0.2 §4.2 last bullet):
-`E = rec.C`, `f = rec.forward`, `D = 4 m` (`OBSERVER_D_M`), `Q = E + D·f`, the frame up / right are the rows `u'`, `r'` of
-`rec.R`, the pivot `P` = the M7 orbit `target` (`orbit_from_camera`, §5.4.10), `R = ` the orbit `distance`, `g = R − D`
-(may be negative: the board then lies beyond the pivot; drawn as is), pan `(0, 0)`, `ρ = roll_deg`. No clamp is applied
-(nothing is edited in M9). Once the core accepts the `picture_plane` form, a scene may carry it while the M9 UI still
-drives the M7 orbit: `main.ts` then passes `resolve_picture_plane(scene.camera).block` (the target-form block with its
-`roll_deg`, §5.7.2) to `orbit_from_camera` and to "Reset camera", so the picture is kept and `orbit.ts` stays unchanged;
-"Download scene" in M9 writes the M7 target form. The board is the plane `f·X = f·Q`; the frame is the image of the canvas rectangle on it:
+`E = rec.C`, `f = rec.forward`, `D` as in the §5.7.7 load rule (`D = rec0.picture_plane.distance` when the loaded
+`scene.camera` is of the `picture_plane` form, `rec0` its record, clamped into `[0.5, 12]` m without a notice; else
+`D = 4 m`, `OBSERVER_D_M`; fixed per loaded scene, so orbiting never makes the board jump), `Q = E + D·f`, the frame
+up / right are the rows `u'`, `r'` of `rec.R`, the pivot `P` = the M7 orbit `target` (`orbit_from_camera`, §5.4.10),
+`R = ` the orbit `distance`, `g = R − D` (may be negative: the board then lies beyond the pivot; drawn as is), pan
+`(0, 0)`, `ρ = roll_deg`. No further clamp is applied (nothing is edited in M9). Once the core accepts the
+`picture_plane` form, a scene may carry it while the M9 UI still drives the M7 orbit. Its resolved block
+(`resolve_picture_plane(scene.camera).block`, §5.7.2) has `target = E + f`, which would put the orbit pivot 1 m in front
+of the eye; so `main.ts` passes `orbit_from_camera` (and "Reset camera") that target-form block with its `roll_deg` kept
+and its `target` replaced by `E + t·f`, `t = clamp(f·(P_scene − E), 0.8, 40)` with `P_scene` the scene centre (the centre
+of stage A's `bbox`, §5.7.7) and the range of §5.7.11. Then the orbit `distance` is `R = t` (the spec-v0.2 §4.2 load
+rule's `R` whenever it is in range), the forward and roll are unchanged, so the picture is kept, and `orbit.ts` stays
+unchanged. "Download scene" in M9 writes the M7 target form. The board is the plane `f·X = f·Q`; the frame is the image of the canvas rectangle on it:
 its four corners are `unproject_to_plane(rec, (±W/2, ±H/2), D)` with `(W, H) = canvas_mm` (so a non-zero `shift_mm`
 moves the frame off `Q` correctly); its size in metres is `frame_mm · D / focal_length_mm`.
 
@@ -4913,9 +4919,9 @@ moves the frame off `Q` correctly); its size in metres is `frame_mm · D / focal
   `target + dist · (sin az · cos el, −cos az · cos el, sin el)` (the demo's convention), then framed (below).
 - Controls in the observer pane: left drag orbits (`az −= dx · 0.4°`, `el = clamp(el + dy · 0.3°, −5°, 85°)`), the wheel
   zooms (`dist ← clamp(dist · exp(0.001 · deltaY), 4, 60)` m), a two-finger pinch zooms
-  (`dist ← clamp(dist₀ · d₀ / max(d, 10 px), 4, 60)`). None of them is an undo step (§5.7.10) or touches the drawing.
+  (`dist ← clamp(dist₀ · d₀ / max(d, 10 px), 4, 60)`). None of them is an undo step (§5.7.8 item 13) or touches the drawing.
 - **Framing** ("旁觀視角取景" button; automatically after a scene load and "Reset camera" in M9, and after the M10
-  events of §5.7.10; never during a drag): keep the direction `(az, el)`, set the target to the centroid of the points
+  events of §5.7.8 items 10–13; never during a drag): keep the direction `(az, el)`, set the target to the centroid of the points
   `{E, Q, scene centre, every point light's position, the scene centre's ground point (z = 0), the four frame corners}`
   and `dist = clamp(2.3 · max_i |p_i − centroid|, 6, 60)` m. Directional lights contribute no point. The scene centre
   is the centre of stage A's `bbox` (§5.7.7).
@@ -4965,7 +4971,11 @@ The observer shows lights as in §5.4.10 (`scene3d`). Nothing in this table is w
   with Python on a fixed table within 1e-12 m.
 - Web (`web/test/observer.test.ts`): board derivation from the §5.4.10 hand camera (`position (4, −8, 5)`, `target
   (0, 0, 0.5)`: `R = 10.012492197250394`, `g = R − 4`, `Q = E + 4·forward`); frame corners on the plane `f·X = f·Q`
-  within 1e-9 m and reprojecting to the canvas corners within 1e-9 mm; framing bounds `6 ≤ dist ≤ 60` and centroid;
+  within 1e-9 m and reprojecting to the canvas corners within 1e-9 mm; the spec-v0.2 §4.1 `picture_plane` block
+  (`position (0.37, −2, 0.9)`, `normal (0, 1, 0)`, `offset −2`, focal 20 mm) with a scene whose stage-A `bbox` centre is
+  `(0.37, 5.84, 0.9)`: the orbit handed to `orbit_from_camera` has `target = (0.37, 5.84, 0.9)`, `distance = R = 7.84`,
+  and the board has `D = 4`, `g = 3.84`, `Q = (0.37, 2, 0.9)` (within 1e-9), the same with `offset −1` gives `D = 3`,
+  `g = 4.84`; framing bounds `6 ≤ dist ≤ 60` and centroid;
   every number of the element arrays finite for the five examples and for 200 random cameras (incl. a horizontal
   board and roll); the drawing on the frame reprojects onto the document drawables within 1e-6 mm; switch-off identity:
   `doc` / `svg` are the same strings with the observer geometry built and not built, and the document is not mutated
@@ -5078,9 +5088,10 @@ key), `equation` is compared exactly; `rules.json` is unchanged.
 #### 5.7.5 Equation string `plane_equation(normal, offset)` (core; spec-v0.2 §4.3)
 `normal` a unit 3-vector, plane `normal·X + offset = 0`; `c = −offset`; components `n_x, n_y, n_z`.
 1. **Axis form** if some `i` has `| |n_i| − 1 | < 1e-9` (first such `i` in x, y, z order): `"<x|y|z> = " + F2(sign(n_i)·c)`.
-2. **General form** otherwise: if the first component with `|n_i| > 1e-9` is negative, negate `normal` and `c`. Each
-   component with `|n_i| ≥ 5e-4` is a term `F3(|n_i|) + axis letter`; the first written term is prefixed `"-"` when
-   negative, every later one is joined with `" + "` / `" - "` by its sign; then `" = "` and the constant: `"0.000"` when
+2. **General form** otherwise: if the first component with `|n_i| ≥ 5e-4` (the first written term; the same threshold
+   as the dropping rule, so the written string never starts with `-`) is negative, negate `normal` and `c`. Each
+   component with `|n_i| ≥ 5e-4` is a term `F3(|n_i|) + axis letter`; the first written term has no sign, every later
+   one is joined with `" + "` / `" - "` by its sign; then `" = "` and the constant: `"0.000"` when
    `|c| < 5e-4`, else `F3(c)`. Example: `normal = (0.7071…, 0.7071…, 0)`, `c = 1.2` → `"0.707x + 0.707y = 1.200"`.
 3. `F2(v)` / `F3(v)`: fixed-point with 2 / 3 decimals, rounded **as Python's `format(v, ".2f")` / `".3f"`** (correctly
    rounded from the exact binary value; an exact tie rounds half to even); a result that reads `-0.00` / `-0.000` is
@@ -5193,7 +5204,8 @@ Pure functions of `rig.ts`; each returns a new state. `rot(v, axis, angle)` is R
     `g = |s_d|` (the board always between the eye and the pivot). Reject (field turns red with the reason; the plane is
     kept) when the syntax fails, no variable is present, `g + D > 40`, or `g + D < 0.8` [decision: the second bound keeps
     `R ≥ 0.8`]. Pan and roll are kept (`L ⊥ f` in the new basis, so the plane is the typed one); `up = null` (lock) or the
-    new `u₀` (free). One undo step; re-frames the observer. Quick buttons: `x=1`, `y=2`, `y=-3`, `z=3`, `x+y=3`. When not
+    new `u₀` (free). The typed text is applied on Enter or the 「套用」 button (each quick button applies its own text);
+    while the field is focused it is not overwritten by the current state. One undo step; re-frames the observer. Quick buttons: `x=1`, `y=2`, `y=-3`, `z=3`, `x+y=3`. When not
     focused, the field shows `plane_equation(f, −c)` of the current state. With `D = 4` and the scene-centre pivot `y=2`
     gives the demo's start (eye at `y = −2` when `P_y ≥ 2`) and `x=1` a view from the `+x` side.
 13. **Undo / reset (spec-v0.2 §5.7).** A stack of at most 50 snapshots of the state (pivot excluded). One step each: a drag
@@ -5216,7 +5228,7 @@ Pure functions of `rig.ts`; each returns a new state. `rot(v, axis, angle)` is R
   for the drawing camera (the M7 yaw / pitch / distance / target pan of `orbit.ts`).
 - **Controls row** (under both panes): readouts (§5.7.10), checkboxes "吸附" / "作圖線" / "視線", the focal-length, `D`
   and roll sliders side by side, the pivot selector, the lock-horizontal checkbox, the six view buttons. Top bar:
-  observer switch, equation field + quick buttons, undo, reset, observer framing.
+  observer switch, equation field + 「套用」 + quick buttons, undo, reset, observer framing.
 
 #### 5.7.10 Readouts and notices (web UI, not core; spec-v0.2 §5.8)
 Under the panes: the plane equation; `g` and `R`; the eye `E` (read-only, 2 decimals); `D`; the pan `(a, b)` and `ρ`; the
