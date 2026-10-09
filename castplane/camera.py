@@ -47,9 +47,9 @@ def _default_basis(forward):
 def camera_forward(cam: dict):
     """``forward`` of a validated camera dict: target form, yaw/pitch form or (M10) ``picture_plane`` form, which
     is resolved to its target form first (``castplane.picture_plane.resolve_picture_plane``; contract §2.2)."""
-    if "picture_plane" in cam:
+    if "picture_plane" in cam:   # forward is f itself (spec-v0.2 §4.1), bit for bit the document's normal
         from .picture_plane import resolve_picture_plane
-        cam = resolve_picture_plane(cam)[0]
+        return np.asarray(resolve_picture_plane(cam)[2]["normal"], dtype=np.float64)
     if "target" in cam:
         return _unit(np.asarray(cam["target"], dtype=np.float64) - np.asarray(cam["position"], dtype=np.float64))
     yaw, pitch = math.radians(cam["yaw_deg"]), math.radians(cam["pitch_deg"])
@@ -72,7 +72,8 @@ def camera_matrix(cam: dict, canvas) -> dict:
         from .picture_plane import resolve_picture_plane
         cam, roll_deg, pp_info = resolve_picture_plane(cam)
     C = np.asarray(cam["position"], dtype=np.float64)
-    forward = camera_forward(cam)
+    # picture_plane: forward is f bit for bit (the |f x z| <= 1e-9 fallback is decided on f, R[2] = document normal)
+    forward = camera_forward(cam) if pp_info is None else np.asarray(pp_info["normal"], dtype=np.float64)
     right, up, along_up = _default_basis(forward)
     if along_up and pp_info is None:
         warnings.append(make_warning("CAMERA_LOOKING_ALONG_UP", []))

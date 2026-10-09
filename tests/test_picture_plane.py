@@ -87,6 +87,13 @@ def hand_target_camera(cam):
     return out
 
 
+def polygon_area(p):
+    """Signed shoelace area of one ``[[u, v], ...]`` polygon."""
+    p = np.asarray(p, dtype=np.float64)
+    x, y = p[:, 0], p[:, 1]
+    return 0.5 * float(np.sum(x * np.roll(y, -1) - np.roll(x, -1) * y))
+
+
 def compare_docs(a, b, path=""):
     """Every numeric leaf within 1e-9 (absolute; relative above 1), identical structure and strings.
     ``camera.picture_plane`` (present in ``a`` only) and the warnings' messages are skipped by the callers."""
@@ -111,6 +118,10 @@ def assert_same_picture(doc_pp, doc_t, ignore_codes=()):
     a, b = copy.deepcopy(doc_pp), copy.deepcopy(doc_t)
     assert set(a["camera"]["picture_plane"]) == DOC_KEYS
     del a["camera"]["picture_plane"]
+    # umbra: the region agrees, the piece split can move with the last bits of R (CLAUDE.md gotcha): compare areas
+    for d in (a, b):
+        for u in d.get("umbra", []):
+            u["polygons"] = sum(polygon_area(p) for p in u["polygons"])
     for d in (a, b):
         d["warnings"] = sorted((w["code"], tuple(w["ids"])) for w in d["warnings"] if w["code"] not in ignore_codes)
     compare_docs(a, b)
@@ -507,7 +518,8 @@ def pp_cameras(draw):
     if axis is None:
         n = list(draw(direction))
         assume(np.linalg.norm(n) > 0.1)
-        # keep the default up well-conditioned when no up is given (|f x z| > 1e-3)
+        # keep the independent derivation well-conditioned (|f x z| > 1e-3): near the band its z-projection loses
+        # digits; the band boundary itself is pinned by test_frame_fallback_is_decided_on_f_itself
         assume(np.linalg.norm(np.cross(unit(n), [0, 0, 1])) > 1e-3)
     else:
         n = [0.0, 0.0, 0.0]

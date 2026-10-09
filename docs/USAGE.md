@@ -200,7 +200,7 @@ castplane import tests/fixtures/step/two_solids.step --solid 1 -o sphere.json
 | `target`、`yaw_deg`、`pitch_deg` | 與 `picture_plane` 同時給是輸入錯誤（`camera`：「give exactly one of target, yaw_deg + pitch_deg or picture_plane」） |
 | `focal_length_mm`、`frame_mm`、`shift_mm`、`near_m` | 意義不變 |
 
-換算在 B 段之前（`castplane.picture_plane.resolve_picture_plane`）：`s = n̂·E + offset/|n|`、`D = |s|`（眼睛到板子）、`f = −sign(s)·n̂`（由眼睛指向板子，即相機的 forward）、`Q = E − s·n̂`（眼睛在平面上的垂足，`shift_mm` 為 0 時就是主點）、`target = E + f`；`roll_deg` 是 `camera_matrix` 的預設 up 到畫框 up 的有號角（沒有 `up` 時為 0）。之後完全走既有的 `camera_matrix`，A 段與相機慣例都不變。由上往下看的水平平面**不會**發 `CAMERA_LOOKING_ALONG_UP`（畫框的 up 已明確決定）。
+換算在 B 段之前（`castplane.picture_plane.resolve_picture_plane`）：先把平面正規化一次（`n̂ = n/|n|`、`offset/|n|`，驗證不改寫原值，所以場景檔、`--camera` 與 `render(camera=...)` 三條路畫出的位元組相同），`s = n̂·E + offset/|n|`、`D = |s|`（眼睛到板子）、`f = −sign(s)·n̂`（由眼睛指向板子；相機的 forward 列逐位元就是 f，不是 `normalize(target − E)`，所以 \|f × z\| ≤ 1e-9 的 +y 退路直接在 f 上判定）、`Q = E − s·n̂`（眼睛在平面上的垂足，`shift_mm` 為 0 時就是主點）、`target = E + f`；`roll_deg` 是 `camera_matrix` 的預設 up 到畫框 up 的有號角（沒有 `up` 時為 0）。之後完全走既有的 `camera_matrix`，A 段與相機慣例都不變。由上往下看的水平平面**不會**發 `CAMERA_LOOKING_ALONG_UP`（畫框的 up 已明確決定）。
 
 幾何文件只有這種形式才多一個鍵 `camera.picture_plane`，其他形式的文件逐位元組不變：
 
@@ -212,7 +212,7 @@ castplane import tests/fixtures/step/two_solids.step --solid 1 -o sphere.json
 | `distance` | D（公尺） |
 | `foot` | Q（世界座標） |
 | `frame_m` | 畫框在平面上的大小 `[frame_w·D/focal, frame_h·D/focal]`（公尺） |
-| `equation` | 方程式字串：法線平行座標軸時寫成 `y = 2.00`（取正向座標軸，兩位小數），否則寫成 `0.322x + 0.919y - 0.230z = 1.286`（第一個非零係數取正，省略絕對值小於 5e-4 的係數，係數與常數三位小數；負零寫成 0） |
+| `equation` | 方程式字串：法線平行座標軸時寫成 `y = 2.00`（取正向座標軸，兩位小數），否則寫成 `0.322x + 0.919y - 0.230z = 1.286`（省略絕對值小於 5e-4 的係數，**印出的**第一個係數取正，係數與常數三位小數；負零寫成 0） |
 
 `castplane info` 對這種相機在主點之後多印三行：
 
@@ -255,7 +255,7 @@ frame on the picture plane: 7.2000 x 4.8000 m
 | `validate_light(value, field) -> dict` | 一個 `lights[i]` 項目（`id` 不含 `.`；平行光方向長度須為 1） |
 | `validate_receiver(value, field) -> dict` | 一個 `receivers[i]` 項目（M4：任意平面、選填凸多邊形 `bounds`；無 bounds 的只能是 `receivers[0]` 的地面，由 `validate_scene` 檢查） |
 | `validate_camera(value, field="camera") -> dict` | `camera` 區塊：target 形式、yaw/pitch 形式或（M10）`picture_plane` 形式，三擇一；`picture_plane` 形式不帶 `roll_deg` |
-| `validate_picture_plane(value, position, field="camera.picture_plane") -> dict` | M10：`{normal, offset, up?}` → `{"normal": n̂, "offset": offset/\|n\|}`，給了 `up` 時另有 `"up"`（原樣）；零法線、平面通過 `position`、`up` 為零或平行法線各報對應欄位（見第 1 節「場景 JSON 的 `camera.picture_plane`」） |
+| `validate_picture_plane(value, position, field="camera.picture_plane") -> dict` | M10：`{normal, offset, up?}` → 原樣（轉成 float）的 `{"normal", "offset"}`，給了 `up` 時另有 `"up"`；單位化的副本只用於檢查，所以再驗證一次不改任何位元，正規化留給 `resolve_picture_plane`；零法線、平面通過 `position`、`up` 為零或平行法線各報對應欄位（見第 1 節「場景 JSON 的 `camera.picture_plane`」） |
 | `validate_output(value, frame_mm, field="output") -> dict` | `output` 區塊：畫布長寬比須等於片幅長寬比（錯誤訊息列出兩個比值與可用的替代值）；`layers` 不得是空串列 |
 | `polygon_signed_area(poly) -> float` | 鞋帶公式的有向面積，逆時針為正 |
 | `polygon_is_simple(poly, eps_area, eps_len=None) -> bool` | 多邊形無自交（非相鄰邊不相觸） |
@@ -296,7 +296,7 @@ frame on the picture plane: 7.2000 x 4.8000 m
 
 | 函式 | 說明 |
 | --- | --- |
-| `camera_forward(cam)` | 驗證過的相機 dict 的 `forward` 向量（target 形式或 yaw/pitch 形式；M10 的 `picture_plane` 形式先換算成 target 形式） |
+| `camera_forward(cam)` | 驗證過的相機 dict 的 `forward` 向量（target 形式或 yaw/pitch 形式；M10 的 `picture_plane` 形式回傳 `resolve_picture_plane` 的 f，逐位元等於文件的 `normal`） |
 | `camera_matrix(cam, canvas) -> dict` | 相機紀錄 `{K, R, t, P (3×4), C, forward, near, s, u0, v0, canvas_mm, frame_mm, rect, warnings}`；`rect` 是外擴 25% 的畫布矩形；M10：`picture_plane` 形式先 `resolve_picture_plane`、不發 `CAMERA_LOOKING_ALONG_UP`，紀錄多一個 `picture_plane`（文件的 `camera.picture_plane` 區塊） |
 | `project(cam, X)` | x̃ = P·X，一個 4 向量或 (n, 4) 陣列 → 齊次 2D 3 向量 |
 | `divide(x)` | (u, v) = (x̃₁/x̃₃, x̃₂/x̃₃)；繪圖管線的最後一步 |
@@ -656,11 +656,11 @@ B 段在多光源場景呼叫；純 numpy、確定性；只讀畫出的 `shadows
 
 | 函式 | 說明 |
 | --- | --- |
-| `resolve_picture_plane(cam) -> (target_cam, roll_deg, info)` | 驗證過的 `picture_plane` 相機 → target 形式相機區塊（`target = E + f`、`roll_deg`、鏡頭鍵）、滾轉角（度；沒有 `up` 時恰為 0）與 `info = {normal: f, offset, distance: D, foot: Q}`（平面寫成 `f·X + offset = 0`） |
+| `resolve_picture_plane(cam) -> (target_cam, roll_deg, info)` | 驗證過的 `picture_plane` 相機 → target 形式相機區塊（`target = E + f`、`roll_deg`、鏡頭鍵）、滾轉角（度；沒有 `up` 時恰為 0）與 `info = {normal: f, offset, distance: D, foot: Q}`（平面寫成 `f·X + offset = 0`）；平面在這裡正規化一次，滾轉角的預設 up 由 f 本身決定 |
 | `picture_plane_document(info, rec, focal_length_mm) -> dict` | 文件的 `camera.picture_plane` 區塊 `{normal, offset, up, distance, foot, frame_m, equation}`；`up` 取相機紀錄 `R` 的第二列 |
 | `plane_equation(normal, offset) -> str` | 平面 `normal·X + offset = 0` 的方程式字串（先正規化；格式見第 1 節） |
 | `unproject_to_plane(rec, uv, D)` | 畫面點 (u, v)（mm）反投影回距離 D 的投影平面：`X = E + D·[((u − u0)/(focal·s))·r′ + ((v − v0)/(focal·s))·u′ + f]`；一點回傳 (3,)，(n, 2) 回傳 (n, 3)；再投影誤差 < 1e-9 mm。旁觀視角用它畫畫框、主點與線稿 |
-| `AXIS_TOL`、`NONZERO_TOL`、`DROP_TOL` | 方程式字串的門檻：座標軸判定 1e-9、非零係數 1e-9、省略係數 5e-4 |
+| `AXIS_TOL`、`DROP_TOL` | 方程式字串的門檻：座標軸判定 1e-9、省略係數 5e-4（印出的第一個係數，即第一個 \|n̂_i\| ≥ 5e-4 者，取正） |
 
 ## 3. 警告代碼（合約 §2.9）
 

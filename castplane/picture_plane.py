@@ -2,8 +2,10 @@
 
 A camera block may give ``position`` (the eye ``E``) plus ``picture_plane = {normal, offset, up?}`` instead of a
 ``target`` or ``yaw_deg`` / ``pitch_deg``.  The plane is ``n·X + offset = 0`` (the receiver convention); validation
-(:func:`castplane.scene.validate_picture_plane`) normalises it to ``n̂·X + off̂ = 0`` and rejects a plane through
-``E`` and an ``up`` parallel to the normal.
+(:func:`castplane.scene.validate_picture_plane`) keeps it as given and rejects a zero normal, a plane through ``E``
+and an ``up`` parallel to the normal.  :func:`resolve_picture_plane` normalises it to ``n̂·X + off̂ = 0`` exactly once
+(``n̂ = n/|n|``, ``off̂ = offset/|n|``, ``|n|`` summed left to right), so every path (scene file, ``--camera``,
+``render(camera=...)``) draws the same bytes.
 
 The form is resolved **before** stage B into an ordinary ``target``-form block and then goes through the unchanged
 :func:`castplane.camera.camera_matrix` (rows ``(right', up', forward)``, ``det R = -1``)::
@@ -11,8 +13,9 @@ The form is resolved **before** stage B into an ordinary ``target``-form block a
     s = n̂·E + off̂,   D = |s|,   f = -sign(s) n̂,   Q = E - s n̂,   target = E + f
 
 ``f`` points from the eye to the plane; ``Q`` is the foot of the eye on the plane (the principal point when
-``shift_mm`` is zero).  ``roll_deg`` is the signed angle, in ``camera_matrix``'s roll convention, from the default up
-of ``camera_matrix`` (world z, or +y when ``|forward × z| <= 1e-9``) to the frame up (``up`` projected onto the
+``shift_mm`` is zero).  The camera's forward row is ``f`` itself (bit for bit, not ``normalize(target - E)``), so the
+default up of ``camera_matrix`` (world z, or +y when ``|f × z| <= 1e-9``) is decided on ``f``.  ``roll_deg`` is the
+signed angle, in ``camera_matrix``'s roll convention, from that default up to the frame up (``up`` projected onto the
 plane); without ``up`` it is exactly 0.  The form never emits ``CAMERA_LOOKING_ALONG_UP``: the frame up is explicit.
 
 Only numpy.  Every scalar expression is written out left to right so that the TypeScript port
@@ -25,14 +28,14 @@ import math
 
 import numpy as np
 
-from .camera import _default_basis, camera_forward
+from .camera import _default_basis
 
 __all__ = ["resolve_picture_plane", "picture_plane_document", "plane_equation", "unproject_to_plane"]
 
 #: ``|(|n_i| - 1)| < AXIS_TOL`` marks a unit normal parallel to coordinate axis ``i`` (spec-v0.2 §4.3).
 AXIS_TOL = 1e-9
-#: ``|n_i| > NONZERO_TOL`` is a nonzero coefficient (the one made positive); ``|n_i| < DROP_TOL`` is not printed.
-NONZERO_TOL = 1e-9
+#: ``|n_i| < DROP_TOL`` is not printed; the first printed coefficient (``|n_i| >= DROP_TOL``; a unit normal always has
+#: one) is made positive.
 DROP_TOL = 5e-4
 
 
@@ -42,11 +45,14 @@ def resolve_picture_plane(cam: dict):
     ``target_cam`` is a validated ``target``-form camera block (``position``, ``target = E + f``, ``roll_deg``
     and the lens keys); ``info = {"normal": f, "offset": -f·Q, "distance": D, "foot": Q}`` describes the plane
     with its normal pointing from the eye to the plane (``offset`` is ``-off̂`` when ``s > 0`` and ``off̂``
-    otherwise: the same plane, ``f·X + offset = 0``).
+    otherwise: the same plane, ``f·X + offset = 0``).  ``f`` is also the camera's forward row (``camera_matrix``
+    uses ``info["normal"]``, not ``normalize(target - E)``).
     """
     pp = cam["picture_plane"]
     n = [float(v) for v in pp["normal"]]
-    off = float(pp["offset"])
+    nn = math.sqrt(n[0] * n[0] + n[1] * n[1] + n[2] * n[2])     # the single normalisation of the plane
+    n = [n[0] / nn, n[1] / nn, n[2] / nn]
+    off = float(pp["offset"]) / nn
     E = [float(v) for v in cam["position"]]
     s = n[0] * E[0] + n[1] * E[1] + n[2] * E[2] + off
     D = abs(s)
@@ -65,7 +71,7 @@ def resolve_picture_plane(cam: dict):
     roll = 0.0
     if "up" in pp:
         up = [float(v) for v in pp["up"]]
-        right0, up0, _along = _default_basis(camera_forward(tcam))
+        right0, up0, _along = _default_basis(np.asarray(f, dtype=np.float64))
         sin_r = -(up[0] * float(right0[0]) + up[1] * float(right0[1]) + up[2] * float(right0[2]))
         cos_r = up[0] * float(up0[0]) + up[1] * float(up0[1]) + up[2] * float(up0[2])
         roll = math.degrees(math.atan2(sin_r, cos_r)) + 0.0
@@ -106,9 +112,8 @@ def plane_equation(normal, offset) -> str:
 
     The normal is normalised first (``n̂ = n/|n|``, constant ``c = -offset/|n|``, plane ``n̂·X = c``).  A normal
     with ``||n̂_i| - 1| < 1e-9`` is axis ``i``: ``"y = 2.00"`` (the positive axis, value ``sign(n̂_i)·c`` with two
-    decimals).  Otherwise the first coefficient with ``|n̂_i| > 1e-9`` is made positive (negating ``n̂`` and ``c``),
-    coefficients with ``|n̂_i| < 5e-4`` are dropped and the rest printed with three decimals:
-    ``"0.707x - 0.707y = 1.200"``.  A value that rounds to negative zero is printed without its sign."""
+    decimals).  Otherwise coefficients with ``|n̂_i| < 5e-4`` are dropped, the first printed one is made positive
+    (negating ``n̂`` and ``c``) and the rest printed with three decimals: ``"0.707x - 0.707y = 1.200"``.  A value that rounds to negative zero is printed without its sign."""
     n = [float(v) for v in normal]
     nn = math.sqrt(n[0] * n[0] + n[1] * n[1] + n[2] * n[2])
     n = [n[0] / nn, n[1] / nn, n[2] / nn]
@@ -117,7 +122,7 @@ def plane_equation(normal, offset) -> str:
         if abs(abs(n[i]) - 1.0) < AXIS_TOL:
             sg = 1.0 if n[i] > 0.0 else -1.0
             return f"{'xyz'[i]} = {_fixed(sg * c, 2)}"
-    first = next(i for i in range(3) if abs(n[i]) > NONZERO_TOL)
+    first = next(i for i in range(3) if abs(n[i]) >= DROP_TOL)
     if n[first] < 0.0:
         n = [-n[0], -n[1], -n[2]]
         c = -c

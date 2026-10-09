@@ -273,8 +273,10 @@ def _norm3(v) -> float:
 def validate_picture_plane(value, position, field: str = "camera.picture_plane") -> dict:
     """``camera.picture_plane`` = ``{normal, offset, up?}`` of the third camera form (spec-v0.2 §4.1, M10).
 
-    The plane is ``normal·X + offset = 0``.  Returns ``{"normal": n̂, "offset": offset/|n|}`` (unit normal, the
-    sign as given) plus ``"up"`` (the given vector, unnormalised) when ``up`` was given.  Errors: a zero normal
+    The plane is ``normal·X + offset = 0``.  Returns ``{"normal", "offset"}`` and, when given, ``"up"`` exactly as
+    given (as floats): the unit copies ``n̂ = normal/|normal|``, ``offset/|normal|`` and ``û`` serve the checks only,
+    so validating a validated block changes no bit (``n/|n|`` is not idempotent on floats).  The single
+    normalisation that the drawing uses happens in :func:`castplane.picture_plane.resolve_picture_plane`.  Errors: a zero normal
     (``.normal``), a plane through ``position`` (``|n̂·position + offset/|n|| <= 1e-9``, ``.offset``), an ``up``
     that is zero or whose unit vector lies within 1e-9 of the normal direction (``|û × n̂| <= 1e-9``, ``.up``)."""
     pp = _dict(value, field)
@@ -285,7 +287,7 @@ def validate_picture_plane(value, position, field: str = "camera.picture_plane")
         raise SceneError(f"{field}.normal", f"must be a nonzero vector (|normal| > {PICTURE_PLANE_ZERO_NORMAL:g})")
     n_hat = [n[0] / nn, n[1] / nn, n[2] / nn]
     off_hat = offset / nn
-    out = {"normal": n_hat, "offset": off_hat}
+    out = {"normal": n, "offset": offset}
     if "up" in pp:
         up = _vector(pp["up"], f"{field}.up", 3)
         un = _norm3(up)

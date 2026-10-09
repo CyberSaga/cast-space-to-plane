@@ -3,6 +3,7 @@
 ## Unreleased — M10 core: `picture_plane` camera form (spec-v0.2 §4.1, §4.3)
 
 - m10-core: the camera block takes a third form, `position` + `picture_plane {normal, offset, up?}` (exactly one of `target`, `yaw_deg` + `pitch_deg`, `picture_plane`; no `roll_deg` with it); `castplane.picture_plane` resolves it to the target form before stage B (`resolve_picture_plane`), never emits `CAMERA_LOOKING_ALONG_UP`, and adds `camera.picture_plane {normal, offset, up, distance, foot, frame_m, equation}` to that form's documents only (the 60 expected files are byte-identical); `unproject_to_plane` and `plane_equation` serve the observer view, and `castplane info` prints the equation, D and the frame size in metres.
+- m10-core (review fixes): validation keeps `picture_plane` as given (validating twice changes no bit) and `resolve_picture_plane` normalises it once, so a scene camera and the same block passed as `--camera` / `render(camera=...)` give identical bytes; the camera's forward row is `f` itself (the `|f × z| <= 1e-9` +y fallback is decided on `f`, `R[2]` equals the document's `normal`); `plane_equation` makes the first *printed* coefficient positive (a dropped `|n_i| < 5e-4` term no longer picks the sign).
 
 ## Unreleased — review fixes
 
