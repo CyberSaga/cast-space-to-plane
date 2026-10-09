@@ -1798,6 +1798,8 @@ def compose(scene: dict, B: dict, hidden_lines=None) -> dict:
         },
         "warnings": list(B["warnings"]),
     })
+    if "picture_plane" in cam:   # M10 (spec-v0.2 §4.1, appendix A.3): the key of picture_plane cameras only
+        doc["camera"]["picture_plane"] = canonical(cam["picture_plane"])
     doc["construction"].update({k: list(construction[k]) for k in ("rays", "checks", "segments")})
     blocks = doc.pop("per_receiver")
     for rid, blk in blocks.items():

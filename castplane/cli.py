@@ -189,6 +189,11 @@ def cmd_info(args) -> int:
     _print_lights(scene, doc)
     print(f"canvas_mm: {doc['canvas_mm']}")
     print(f"principal point: {_fmt_point(doc['camera']['principal_point'])}")
+    pp = doc["camera"].get("picture_plane")
+    if pp is not None:   # M10 (spec-v0.2 §4.1): the picture_plane camera form
+        print(f"picture plane: {pp['equation']}")
+        print(f"eye to picture plane D: {pp['distance']:.4f} m")
+        print(f"frame on the picture plane: {pp['frame_m'][0]:.4f} x {pp['frame_m'][1]:.4f} m")
     v_mm = hz["v_mm"]
     print("horizon v_mm: " + ("none" if v_mm is None else f"{v_mm:.4f}"))
     for axis in ("x", "y", "z"):

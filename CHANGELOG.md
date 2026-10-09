@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased — M10 core: `picture_plane` camera form (spec-v0.2 §4.1, §4.3)
+
+- m10-core: the camera block takes a third form, `position` + `picture_plane {normal, offset, up?}` (exactly one of `target`, `yaw_deg` + `pitch_deg`, `picture_plane`; no `roll_deg` with it); `castplane.picture_plane` resolves it to the target form before stage B (`resolve_picture_plane`), never emits `CAMERA_LOOKING_ALONG_UP`, and adds `camera.picture_plane {normal, offset, up, distance, foot, frame_m, equation}` to that form's documents only (the 60 expected files are byte-identical); `unproject_to_plane` and `plane_equation` serve the observer view, and `castplane info` prints the equation, D and the frame size in metres.
+
 ## Unreleased — review fixes
 
 - m8-step#0: STEP `fallback="mesh"` now tessellates the unrecognised solid itself (`TransferOne` of its own Part-21 record, checked against its vertex points) instead of the k-th solid of OCC's assembly-ordered explorer, which meshed the wrong solid in renumbered multi-solid files.

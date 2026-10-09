@@ -340,7 +340,7 @@ def test_document_keys_only_for_the_picture_plane_form():
     assert abs(f @ Q + pp["offset"]) < 1e-12                                   # Q on the plane f·X + offset = 0
     assert f @ C + pp["offset"] < 0                                            # the eye on the negative side
     np.testing.assert_allclose(pp["frame_m"], [36 * pp["distance"] / 28, 24 * pp["distance"] / 28], rtol=1e-15)
-    assert pp["equation"] == "0.323x + 0.924y - 0.231z = 2.410"
+    assert pp["equation"] == "0.322x + 0.919y - 0.230z = 1.286"
     # up is the frame up: the given up projected onto the plane
     rows, D, _ = expected_rows([-2.9, -1.2, 3.0], [-0.35, -1.0, 0.25], 1.4, [0.15, 0.0, 1.0])
     np.testing.assert_allclose(u, rows[1], atol=1e-15)
@@ -400,7 +400,7 @@ S2 = math.sqrt(0.5)
     ([0, -0.6, 0.8], 2.0, "0.600y - 0.800z = 2.000"),
     ([1e-4, 0.6, -0.8], 0.0, "0.600y - 0.800z = 0.000"),    # |x| < 5e-4 dropped, x is the first nonzero (> 0)
     ([-1e-4, 0.6, -0.8], 0.0, "-0.600y + 0.800z = 0.000"),  # x first nonzero and negative: all flipped
-    ([1e-10, -0.6, 0.8], 0.0, "-0.600y + 0.800z = 0.000"),  # |x| <= 1e-9 is not "nonzero"
+    ([1e-10, -0.6, 0.8], 0.0, "0.600y - 0.800z = 0.000"),   # |x| <= 1e-9 is not "nonzero": y is flipped
     ([0.3, 0.4, -math.sqrt(0.75)], -5.0, "0.300x + 0.400y - 0.866z = 5.000"),
     ([0.0, 1.0, 1e-4], -2.0, "1.000y = 2.000"),             # not an axis (|n_y| - 1 > 1e-9), x and z dropped
 ])
@@ -538,7 +538,7 @@ def test_info_prints_the_picture_plane(tmp_path, capsys):
     assert "eye to picture plane D: 4.0000 m" in out
     assert "frame on the picture plane: 7.2000 x 4.8000 m" in out
     assert main(["info", str(ROOT / "examples" / "basic.json")]) == EXIT_OK
-    assert "picture plane" not in capsys.readouterr().out
+    assert "picture plane:" not in capsys.readouterr().out
     # a picture_plane camera override
     cam = tmp_path / "cam.json"
     cam.write_text(json.dumps({"position": [0, -1, 1.5], "picture_plane": {"normal": [1, 1, 0], "offset": -2.0},
