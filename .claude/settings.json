@@ -1,0 +1,41 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(python -m pytest *)",
+      "Bash(python3 -m pytest *)",
+      "Bash(python3 tools/regen_conformance.py --reason * --dry-run)",
+      "Bash(python3 tools/compare_svg.py *)",
+      "Bash(python3 tools/compare_svg.py)",
+      "Bash(python3 benchmarks/bench.py *)",
+      "Bash(python -m tests.build_identity)",
+      "Bash(npm ci)",
+      "Bash(npm test)",
+      "Bash(npm run -w ts build)",
+      "Bash(npm run -w ts test)",
+      "Bash(npm run -w web build)",
+      "Bash(npm run -w web test)",
+      "Bash(node --test *)",
+      "Bash(node ts/build/bench/camera_only.js *)",
+      "Bash(castplane validate *)",
+      "Bash(castplane info *)",
+      "Bash(castplane render *)",
+      "Bash(git status *)",
+      "Bash(git diff *)",
+      "Bash(git log *)"
+    ]
+  },
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Edit|Write|NotebookEdit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"$CLAUDE_PROJECT_DIR\"/.claude/hooks/protect_expected.sh",
+            "timeout": 10
+          }
+        ]
+      }
+    ]
+  }
+}
