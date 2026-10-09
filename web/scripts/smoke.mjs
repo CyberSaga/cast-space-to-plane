@@ -21,9 +21,16 @@
 // switch on records `core ms` + `dom ms` + `obs ms` per frame (< 100 ms for the five examples); an observer drag must
 // not change the drawing; the narrow (< 880 px) layout stacks the panes; switching off restores the drawing pane's
 // size; framing keeps the eye and the frame in the pane; a right or middle drag does not move the observer; the three
-// v8 `picture_plane` cases render the scene camera's document until a drag (and again after "Reset camera"); a frame
-// below the ground is drawn. With `--shots DIR` it also saves DIR/web_ui_observer.png. Prints one JSON record. Exit 1 on a page error or a
-// failed check.
+// v8 `picture_plane` cases render the scene camera's document until a drag (and again after "重設"); a frame
+// below the ground is drawn. With `--shots DIR` it also saves DIR/web_ui_observer.png. M10 (contract §5.7.13, plane
+// mode): the ring drag changes f and keeps g, D and |E − P|; the arrow drag changes g only; the wheel changes R, not
+// the focal length, a burst being one undo step; a right drag and a Shift drag pan and keep the pivot; the roll slider
+// keeps the eye; the six views give exact axes; y=2 with D = 4 puts the eye at y = −2; a bad equation turns the field
+// red and keeps the plane; undo and reset restore f, g, up (and the sliders); the eye is not draggable; the D slider
+// keeps the board; an object click sets the pivot; Download scene writes the picture_plane form and reloads to the
+// same SVG; the overlay is identical with the observer switch on and off for the same edited camera; 900 random rig
+// states render finite. With `--shots DIR` it also saves DIR/web_ui_plane_mode.png. Prints one JSON record. Exit 1 on
+// a page error or a failed check.
 import { execSync } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { createRequire } from "node:module";
@@ -57,13 +64,32 @@ const median = (xs) => {
   return n === 0 ? NaN : n % 2 ? s[(n - 1) / 2] : (s[n / 2 - 1] + s[n / 2]) / 2;
 };
 
-async function drag(steps, selector = "#stage") {
+/** A point of the observer pane (pane px) near its centre that is not on a handle (M10: a drag there orbits the
+ * observer). */
+async function observer_blank() {
+  return page.evaluate(() => {
+    const el = document.getElementById("observer");
+    const W = el.clientWidth, H = el.clientHeight;
+    for (let k = 0; k < 400; k++) {
+      const x = W / 2 + ((k % 20) - 10) * 18, y = H / 2 + (Math.floor(k / 20) - 10) * 18;
+      if (window.castplane_web.hit_at(x, y) === null) return [x, y];
+    }
+    return [W / 2, H / 2];
+  });
+}
+
+async function drag(steps, selector = "#stage", step = [3, 0.7]) {
   const box = await page.locator(selector).boundingBox();
-  const x0 = box.x + box.width / 2, y0 = box.y + box.height / 2;
+  let x0 = box.x + box.width / 2, y0 = box.y + box.height / 2;
+  if (selector === "#observer") {
+    const [bx, by] = await observer_blank();
+    x0 = box.x + bx;
+    y0 = box.y + by;
+  }
   await page.mouse.move(x0, y0);
   await page.mouse.down();
   for (let i = 1; i <= steps; i++) {
-    await page.mouse.move(x0 + i * 3, y0 + i * 0.7);
+    await page.mouse.move(x0 + i * step[0], y0 + i * step[1]);
     await frames2();
   }
   await page.mouse.up();
@@ -234,7 +260,7 @@ async function observer_check(name, load) {
   check(same_drawing(off, on), `${name}: SVG / overlay / downloads identical with the observer on and off`);
   check(obs.on && obs.names.includes("board:frame") && obs.names.includes("dots:E") && obs.names.includes("frustum")
     && obs.names.includes("d-line") && obs.names.includes("g-line") && obs.art_objects > 0, `${name}: observer elements`);
-  check(obs.labels.length === 5 && obs.labels[0].startsWith("E（讀數）"), `${name}: observer labels`);
+  check(obs.labels.length === 6 && obs.labels[0].startsWith("E（讀數）") && obs.labels[5] === "板子距離", `${name}: observer labels`);
   {
     // aspect-aware framing (§5.6 implementation notes): after the load the eye and the frame corners are in the pane
     const [W, H] = obs.size;
@@ -332,8 +358,8 @@ if (sceneFile) {
   observer.picture_plane = { labels: pp.obs.labels, same_as_scene_camera: pp.svg === pp.ref.svg };
   check(observer.picture_plane.same_as_scene_camera, "picture_plane: the scene camera's SVG");
   // the three v8 cases: until the drawing camera is edited the scene's own block is rendered, so the document and the
-  // warnings are the CLI's (no CAMERA_LOOKING_ALONG_UP for the horizontal board); after a drag the M7 orbit's
-  // target-form block; "Reset camera" returns to the scene's block (§5.6 implementation notes)
+  // warnings are the CLI's (no CAMERA_LOOKING_ALONG_UP for the horizontal board); after a drag the rig's
+  // picture_plane block (M10); 重設 returns to the scene's block (§5.6, §5.7 implementation notes)
   observer.picture_plane_cases = {};
   for (const name of ["camera_picture_plane_horizontal", "camera_picture_plane_vertical", "camera_picture_plane_tilted"]) {
     const text = readFileSync(join(ROOT, "tests", "conformance", "cases", `${name}.json`), "utf-8");
@@ -350,14 +376,15 @@ if (sceneFile) {
     check(JSON.stringify(doc.warnings) === JSON.stringify(expected.warnings) && doc.camera.picture_plane !== undefined
       && a.camera.picture_plane !== undefined && !a.rows.some((r) => r.includes("CAMERA_LOOKING_ALONG_UP")),
     `${name}: warnings and camera.picture_plane as in the expected file`);
-    await drag(6);
+    await drag(6, "#stage", [3, -3]); // upwards: from the top view a level drag downwards stays at the pole (snap)
     const b = await snap();
-    check(b.camera.target !== undefined && b.camera.picture_plane === undefined, `${name}: a drag switches to the orbit's target form`);
+    check(b.camera.target === undefined && b.camera.picture_plane !== undefined
+      && JSON.stringify(b.camera.position) !== JSON.stringify(a.camera.position), `${name}: a drag switches to the rig's picture_plane block`);
     await page.click("#reset");
     await frames2();
     await frames2();
     const c = await snap();
-    check(c.dl.json === a.dl.json && c.camera.picture_plane !== undefined, `${name}: Reset camera returns to the scene's block`);
+    check(c.dl.json === a.dl.json && c.camera.picture_plane !== undefined, `${name}: 重設 returns to the scene's block`);
     observer.picture_plane_cases[name] = { warnings: doc.warnings.map((w) => w.code), after_drag: JSON.parse(b.dl.json).warnings.map((w) => w.code) };
   }
   // a frame below the ground (E at z = 0.3 looking down): the receiver plates do not hide the board (§5.6.5)
@@ -418,6 +445,311 @@ if (sceneFile) {
   await frames2();
 }
 
+// M10 (contract §5.7.13): plane mode
+const plane = {};
+{
+  const rig = () => page.evaluate(() => window.castplane_web.rig);
+  const near = (a, b, tol) => Math.abs(a - b) <= tol;
+  const near3 = (a, b, tol) => a.every((x, i) => near(x, b[i], tol));
+  const dist = (a, b) => Math.hypot(a[0] - b[0], a[1] - b[1], a[2] - b[2]);
+  await page.evaluate(() => window.castplane_web.load_example("basic"));
+  await page.evaluate(() => window.castplane_web.set_observer(true));
+  await frames2();
+  await frames2();
+  const ob = await page.locator("#observer").boundingBox();
+  /** A mouse drag in the observer pane from pane px `p` by `(dx, dy)` in `n` steps. */
+  async function obs_drag(p, dx, dy, n = 8, opts = {}) {
+    await page.mouse.move(ob.x + p[0], ob.y + p[1]);
+    await page.mouse.down(opts);
+    for (let i = 1; i <= n; i++) {
+      await page.mouse.move(ob.x + p[0] + (dx * i) / n, ob.y + p[1] + (dy * i) / n);
+      await frames2();
+    }
+    await page.mouse.up(opts);
+    await frames2();
+  }
+  const sbox = await page.locator("#stage").boundingBox();
+  async function stage_drag(dx, dy, opts = {}, shift = false) {
+    const x0 = sbox.x + sbox.width / 2, y0 = sbox.y + sbox.height / 2;
+    if (shift) await page.keyboard.down("Shift");
+    await page.mouse.move(x0, y0);
+    await page.mouse.down(opts);
+    for (let i = 1; i <= 8; i++) {
+      await page.mouse.move(x0 + (dx * i) / 8, y0 + (dy * i) / 8);
+      await frames2();
+    }
+    await page.mouse.up(opts);
+    if (shift) await page.keyboard.up("Shift");
+    await frames2();
+  }
+  const r0 = await rig();
+  check(r0.scene_block && r0.undo === 0 && r0.up === null, "plane: the loaded scene renders its own camera, lock-horizontal");
+  {
+    // ring: grab a visible ring point inside the pane, drag 60 px right
+    const h = await page.evaluate(() => window.castplane_web.handles_px);
+    const [Wp, Hp] = h.size;
+    let k = -1;
+    for (let i = 0; i < h.ring.length; i++) {
+      const q = h.ring[i];
+      if (q === null || q[0] < 60 || q[0] > Wp - 100 || q[1] < 60 || q[1] > Hp - 60) continue;
+      if (Math.hypot(q[0] - h.tip[0], q[1] - h.tip[1]) < 40) continue;
+      const hit = await page.evaluate(([x, y]) => window.castplane_web.hit_at(x, y), q);
+      if (hit !== null && hit.kind === "ring") { k = i; break; }
+    }
+    check(k >= 0, "plane: a ring point is hit-testable");
+    const svg0 = await page.evaluate(() => window.castplane_web.svg);
+    await obs_drag(h.ring[k], 60, 0);
+    const r1 = await rig();
+    plane.ring = { from: r0.f, to: r1.f, g: [r0.g, r1.g], undo: r1.undo };
+    check(!near3(r1.f, r0.f, 1e-6) && r1.g === r0.g && r1.D === r0.D && near(dist(r1.E, r1.P), dist(r0.E, r0.P), 1e-9)
+      && r1.undo === 1 && !r1.scene_block, "plane: the ring drag changes f, keeps g, D and |E − P| (one undo step)");
+    check(svg0 !== await page.evaluate(() => window.castplane_web.svg), "plane: the ring drag changes the drawing");
+    check(r1.readouts.at(-1).startsWith("這次拖動右窗畫面變動：") && r1.delta > 0.005, "plane: the picture-delta readout");
+    // arrow: the tip, dragged 40 px up-right
+    const h2 = await page.evaluate(() => window.castplane_web.handles_px);
+    const hit = await page.evaluate(([x, y]) => window.castplane_web.hit_at(x, y), h2.tip);
+    check(hit !== null && hit.kind === "arrow", "plane: the arrow tip wins the hit test");
+    await obs_drag(h2.tip, 30, -25);
+    const r2 = await rig();
+    plane.arrow = { g: [r1.g, r2.g], E: [r1.E, r2.E] };
+    check(r2.g !== r1.g && near3(r2.f, r1.f, 0) && r2.D === r1.D && r2.a === r1.a && r2.b === r1.b && r2.roll_deg === r1.roll_deg
+      && r2.undo === 2, "plane: the arrow drag changes g only (one undo step)");
+    const dE = [r2.E[0] - r1.E[0], r2.E[1] - r1.E[1], r2.E[2] - r1.E[2]];
+    const along = dE[0] * r1.f[0] + dE[1] * r1.f[1] + dE[2] * r1.f[2];
+    check(near(Math.hypot(...dE), Math.abs(along), 1e-9), "plane: the arrow moves the eye along f only");
+    // the eye is never a handle: a drag on it orbits the observer and leaves the rig alone
+    const h3 = await page.evaluate(() => window.castplane_web.handles_px);
+    check(await page.evaluate(([x, y]) => window.castplane_web.hit_at(x, y), h3.E) === null, "plane: the hit test never returns E");
+    const v0 = (await page.evaluate(() => window.castplane_web.observer)).view;
+    await obs_drag(h3.E, 25, 10);
+    const r3 = await rig();
+    const v1 = (await page.evaluate(() => window.castplane_web.observer)).view;
+    check(JSON.stringify(r3) === JSON.stringify(r2) && v1.az_deg !== v0.az_deg, "plane: a drag on the eye orbits the observer only");
+  }
+  {
+    // right pane: wheel = arrow (R, not focal), a burst = one step
+    const a = await rig();
+    const sx = sbox.x + sbox.width / 2, sy = sbox.y + sbox.height / 2;
+    await page.mouse.move(sx, sy);
+    await page.mouse.wheel(0, 100);
+    await frames2();
+    const b = await rig();
+    await page.mouse.wheel(0, 100);
+    await frames2();
+    const c = await rig();
+    plane.wheel = { R: [a.R, b.R, c.R], focal: [a.focal, c.focal], undo: [a.undo, c.undo] };
+    check(near(b.R, a.R * Math.exp(0.1), 1e-9) && near(c.R, a.R * Math.exp(0.2), 1e-9) && c.focal === a.focal
+      && near3(c.f, a.f, 0) && c.undo === a.undo + 1, "plane: the wheel scales R by exp(0.001·ΔY), not the focal length; one burst one step");
+    // right drag and Shift drag pan; the pivot stays
+    await stage_drag(40, -20, { button: "right" });
+    const d = await rig();
+    check((d.a !== c.a || d.b !== c.b) && near3(d.P, c.P, 0) && near3(d.f, c.f, 0) && d.g === c.g && d.undo === c.undo + 1,
+      "plane: a right drag pans (a, b) and keeps P, f, g");
+    await stage_drag(-30, 15, {}, true);
+    const e = await rig();
+    check((e.a !== d.a || e.b !== d.b) && near3(e.P, d.P, 0) && near3(e.f, d.f, 0) && e.g === d.g, "plane: a Shift drag pans");
+    // left drag: the ring mapping, −Δx·κ about z
+    await stage_drag(50, 0);
+    const f1 = await rig();
+    const yaw = (Math.atan2(f1.f[1], f1.f[0]) - Math.atan2(e.f[1], e.f[0])) * 180 / Math.PI;
+    plane.right_drag = { yaw_deg: yaw };
+    check(near(((yaw + 540) % 360) - 180, -50 * 0.32, 1e-6) && f1.g === e.g && near(f1.R, e.R, 1e-12),
+      "plane: a right-pane left drag turns f about z by −Δx·κ, keeps g and R");
+  }
+  {
+    // roll slider: the eye does not move; not an undo step
+    const a = await rig();
+    await page.evaluate(() => { const el = document.getElementById("roll"); el.value = "30"; el.dispatchEvent(new Event("input")); });
+    await frames2();
+    const b = await rig();
+    check(b.roll_deg === 30 && near3(b.E, a.E, 1e-9) && b.undo === a.undo, "plane: the roll slider keeps the eye, no undo step");
+    const cam = await page.evaluate(() => window.castplane_web.camera);
+    check(cam.picture_plane !== undefined && Array.isArray(cam.picture_plane.up), "plane: with roll the block carries up");
+    // D slider: the board stays, the eye moves along −f
+    await page.evaluate(() => { const el = document.getElementById("dist"); el.value = "6"; el.dispatchEvent(new Event("input")); });
+    await frames2();
+    const c = await rig();
+    check(c.D === 6 && c.g === b.g && near(c.c, b.c, 1e-12) && c.undo === b.undo && near(dist(c.E, b.E), 2, 1e-9),
+      "plane: the D slider keeps the board (g, c), moves the eye by ΔD, no undo step");
+    await page.evaluate(() => { const el = document.getElementById("dist"); el.value = "4"; el.dispatchEvent(new Event("input")); });
+    await page.evaluate(() => { const el = document.getElementById("roll"); el.value = "0"; el.dispatchEvent(new Event("input")); });
+    await frames2();
+    const cam2 = await page.evaluate(() => window.castplane_web.camera);
+    check(cam2.picture_plane.up === undefined, "plane: lock-horizontal and roll 0 omit up");
+  }
+  {
+    // six views: exact axes, g kept, E = P − (g + D)·f
+    const axes = { front: [0, 1, 0], back: [0, -1, 0], left: [1, 0, 0], right: [-1, 0, 0], top: [0, 0, -1], bottom: [0, 0, 1] };
+    plane.views = {};
+    for (const [name, ax] of Object.entries(axes)) {
+      const a = await rig();
+      await page.click(`#views button[data-view="${name}"]`);
+      await frames2();
+      const b = await rig();
+      const E = [0, 1, 2].map((i) => b.P[i] - (b.g + b.D) * b.f[i]);
+      plane.views[name] = b.equation;
+      check(JSON.stringify(b.f) === JSON.stringify(ax) && b.g === a.g && near3(b.E, E, 1e-9) && b.a === 0 && b.b === 0,
+        `plane: view ${name} gives f = ${ax}`);
+    }
+  }
+  {
+    // equation: y=2 with D = 4 and the scene-centre pivot: the eye at y = −2
+    const a = await rig();
+    await page.fill("#equation", "y=2");
+    await page.press("#equation", "Enter");
+    await frames2();
+    const b = await rig();
+    plane.equation = { E: b.E, equation: b.equation };
+    check(b.D === 4 && b.pivot.mode === "scene" && near(b.E[1], -2, 1e-9) && b.equation === "y = 2.00" && b.undo === a.undo + 1,
+      "plane: y=2 with D = 4 puts the eye at y = −2");
+    await page.fill("#equation", "x==1");
+    await page.press("#equation", "Enter");
+    await frames2();
+    const c = await rig(), fld = await page.evaluate(() => window.castplane_web.equation_field);
+    check(fld.bad && fld.error !== null && c.equation === b.equation && c.undo === b.undo, "plane: a bad equation turns red, the plane is kept");
+    // 「套用」 applies the typed text (the field keeps it until the click)
+    await page.fill("#equation", "y = -2.5");
+    await page.click("#equation-apply");
+    await frames2();
+    const c2 = await rig();
+    check(c2.equation === "y = -2.50" && c2.undo === c.undo + 1, "plane: 「套用」 applies the typed equation");
+    await page.click('#quick-equations button[data-eq="x=1"]');
+    await frames2();
+    const d = await rig(), fld2 = await page.evaluate(() => window.castplane_web.equation_field);
+    check(d.equation === "x = 1.00" && !fld2.bad, "plane: the quick button x=1 applies its own text");
+    // undo restores f, g, up and the sliders; reset restores the loaded state
+    await page.click("#undo");
+    await frames2();
+    const e = await rig();
+    check(JSON.stringify(e.f) === JSON.stringify(c2.f) && e.g === c2.g && e.up === c2.up && e.equation === "y = -2.50",
+      "plane: undo restores f, g, up");
+    await page.evaluate(() => { const el = document.getElementById("focal"); el.value = "0.8"; el.dispatchEvent(new Event("input")); });
+    await page.click("#lock-level");
+    await frames2();
+    const f2 = await rig();
+    check(f2.up !== null && f2.focal !== r0.focal, "plane: lock off, focal changed");
+    await page.click("#reset");
+    await frames2();
+    const g2 = await rig();
+    const ui_focal = await page.evaluate(() => document.getElementById("focal-out").value);
+    check(JSON.stringify(g2.f) === JSON.stringify(r0.f) && g2.g === r0.g && g2.up === null && g2.focal === r0.focal && g2.D === r0.D
+      && g2.scene_block && ui_focal === `${r0.focal.toFixed(1)} mm` && await page.evaluate(() => document.getElementById("lock-level").checked),
+    "plane: reset restores f, g, up, focal, D, the sliders and the scene camera's block");
+  }
+  {
+    // object pivot: pick an object with a click in the observer; not an undo step; the eye faces it (pan cleared)
+    await page.selectOption("#pivot-mode", "object");
+    await frames2();
+    const a = await rig();
+    const objs = await page.evaluate(() => window.castplane_web.objects_px);
+    const [id, px] = Object.entries(objs).find(([, p]) => p !== null);
+    await page.mouse.click(ob.x + px[0], ob.y + px[1]);
+    await frames2();
+    await frames2();
+    const b = await rig();
+    plane.pivot = { clicked: id, picked: b.pivot.object_id };
+    check(b.pivot.object_id !== null && b.a === 0 && b.b === 0 && b.undo === a.undo && b.f.join() === a.f.join() && b.g === a.g,
+      "plane: a click picks the object pivot (pan cleared, no undo step)");
+    const labels = (await page.evaluate(() => window.castplane_web.observer)).labels;
+    check(labels.includes(`旋轉中心：${b.pivot.object_id}`), "plane: the pivot label names the object");
+    await page.selectOption("#pivot-mode", "scene");
+    await frames2();
+  }
+  {
+    // the overlay is the same with the observer switch on and off for the same (edited) camera; Download scene writes
+    // the picture_plane form and reloads to the same SVG
+    await page.click('#views button[data-view="left"]');
+    await page.evaluate(() => { const el = document.getElementById("roll"); el.value = "12"; el.dispatchEvent(new Event("input")); });
+    await frames2();
+    await frames2();
+    const on = await drawing();
+    await page.evaluate(() => window.castplane_web.set_observer(false));
+    await frames2();
+    await frames2();
+    const off = await drawing();
+    check(same_drawing(on, off), "plane: the drawing is identical with the observer on and off (edited camera)");
+    const [dl] = await Promise.all([page.waitForEvent("download"), page.click("#dl-scene")]);
+    const path = join(outdir, "plane_mode.scene.json");
+    await dl.saveAs(path);
+    const saved = JSON.parse(readFileSync(path, "utf-8"));
+    check(saved.camera.picture_plane !== undefined && saved.camera.target === undefined && saved.camera.roll_deg === undefined
+      && Array.isArray(saved.camera.picture_plane.up), "plane: Download scene writes the picture_plane form (with up)");
+    await page.evaluate((t) => window.castplane_web.load_text("plane_mode", t), readFileSync(path, "utf-8"));
+    await frames2();
+    const re = await page.evaluate(() => ({ svg: window.castplane_web.svg, rig: window.castplane_web.rig }));
+    check(re.svg === off.svg && re.rig.scene_block, "plane: the downloaded scene reloads to the same SVG");
+    plane.download = { camera: saved.camera };
+    await page.evaluate(() => window.castplane_web.set_observer(true));
+    await frames2();
+  }
+  {
+    // 900 random rig states (600 incl. top / bottom views, very near / far, free roll; 300 with pan and roll)
+    const res = await page.evaluate(() => {
+      let s = 12345;
+      const rnd = () => ((s = (s * 1103515245 + 12345) % 2147483648) / 2147483648);
+      const unit = () => { for (;;) { const v = [2 * rnd() - 1, 2 * rnd() - 1, 2 * rnd() - 1]; const l = Math.hypot(...v); if (l > 0.1 && l <= 1) return v.map((x) => x / l); } };
+      const base = window.castplane_web.rig;
+      const P = base.P;
+      const bad = [];
+      for (let i = 0; i < 900; i++) {
+        let f = unit();
+        if (i % 10 === 0) f = [0, 0, -1];
+        if (i % 10 === 1) f = [0, 0, 1];
+        const D = 0.5 + 11.5 * rnd();
+        const R = i % 7 === 0 ? 0.8 : i % 7 === 1 ? 40 : 0.8 + 39.2 * rnd();
+        const free = i % 3 === 0;
+        let up = null;
+        if (free) { const w = unit(); const k = w[0] * f[0] + w[1] * f[1] + w[2] * f[2]; up = [w[0] - k * f[0], w[1] - k * f[1], w[2] - k * f[2]]; if (Math.hypot(...up) < 1e-3) up = null; }
+        const pr = i >= 600;
+        const rig = { f, up, g: R - D, D, a: pr ? 6 * rnd() - 3 : 0, b: pr ? 6 * rnd() - 3 : 0, roll_deg: pr ? 360 * rnd() - 180 : 0,
+          focal: 8 * Math.pow(50, rnd()), P };
+        const out = window.castplane_web.probe_rig(rig);
+        if (out === null || out.length > 0) bad.push([i, out]);
+      }
+      return bad;
+    });
+    plane.random = { failures: res.slice(0, 5) };
+    check(res.length === 0, `plane: 900 random rig states render finite (${res.length} failures)`);
+  }
+  if (shotsDir) {
+    await page.evaluate(() => window.castplane_web.load_example("basic"));
+    await page.setViewportSize({ width: 1800, height: 1050 });
+    await frames2();
+    await page.fill("#equation", "y=2");
+    await page.press("#equation", "Enter");
+    await frames2();
+    const h = await page.evaluate(() => window.castplane_web.handles_px);
+    const ob2 = await page.locator("#observer").boundingBox();
+    let k = h.ring.findIndex((q) => q !== null && q[1] < h.Q[1] - 20 && q[0] > h.Q[0]);
+    if (k < 0) k = 0;
+    await page.mouse.move(ob2.x + h.ring[k][0], ob2.y + h.ring[k][1]);
+    await page.mouse.down();
+    for (let i = 1; i <= 8; i++) {
+      await page.mouse.move(ob2.x + h.ring[k][0] - 5 * i, ob2.y + h.ring[k][1] - 2 * i);
+      await frames2();
+    }
+    await page.mouse.up();
+    // turn the observer a little towards the board's face, then frame it
+    const [bx, by] = await observer_blank();
+    await page.mouse.move(ob2.x + bx, ob2.y + by);
+    await page.mouse.down();
+    for (let i = 1; i <= 6; i++) {
+      await page.mouse.move(ob2.x + bx + 8 * i, ob2.y + by);
+      await frames2();
+    }
+    await page.mouse.up();
+    await page.evaluate(() => window.castplane_web.frame_observer());
+    await frames2();
+    mkdirSync(shotsDir, { recursive: true });
+    plane.screenshot = join(shotsDir, "web_ui_plane_mode.png");
+    await page.waitForTimeout(300);
+    await page.screenshot({ path: plane.screenshot });
+    await page.setViewportSize({ width: 1500, height: 900 });
+  }
+  await page.evaluate(() => window.castplane_web.set_observer(false));
+  await frames2();
+}
+
 // page-wide drop, then the three downloads
 const dropped = readFileSync(join(ROOT, "examples", "curved_demo.json"), "utf-8");
 await page.evaluate((text) => {
@@ -442,6 +774,6 @@ await page.waitForFunction(() => document.getElementById("error").textContent.in
 const scene_error = await page.locator("#error").textContent();
 
 const engine = { chromium: browser.version() };
-console.log(JSON.stringify({ engine, first, rows, load_errors, phase2, observer, failures, downloads, errors: { not_json, scene_error }, logs }, null, 1));
+console.log(JSON.stringify({ engine, first, rows, load_errors, phase2, observer, plane, failures, downloads, errors: { not_json, scene_error }, logs }, null, 1));
 await browser.close();
 process.exitCode = logs.some((l) => l.startsWith("pageerror")) || failures.length > 0 ? 1 : 0;

@@ -8,6 +8,7 @@ body { display: flex; flex-direction: column; }
 #toolbar output { min-width: 4.5em; font-variant-numeric: tabular-nums; }
 #layers label { display: inline-flex; gap: 2px; align-items: center; margin-right: 6px; }
 #main { flex: 1; display: flex; min-height: 0; }
+#work { flex: 1; display: flex; flex-direction: column; min-width: 0; min-height: 0; }
 #panes { flex: 1; display: flex; min-width: 0; min-height: 0; }
 #viewport { flex: 1; position: relative; display: flex; align-items: center; justify-content: center; background: #e9e9e6; min-width: 0; overflow: hidden; }
 #viewport.dragover { outline: 3px dashed #36c; outline-offset: -6px; }
@@ -48,3 +49,20 @@ body { display: flex; flex-direction: column; }
   #panes.observer-on { flex-direction: column; }
   #observer { border-right: none; border-bottom: 1px solid #ddd; }
 }
+/* M10 plane mode (contract §5.7.9, §5.7.10): the controls row under both panes and the equation field */
+#controls { display: flex; flex-wrap: wrap; gap: 4px 18px; padding: 6px 10px; border-top: 1px solid #ddd; background: #fff; }
+#readouts { font-variant-numeric: tabular-nums; font-size: 12px; line-height: 1.4; white-space: pre; min-width: 300px; }
+#readouts .delta { color: #1d4ed8; }
+.ctl-col { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+.ctl-row { display: flex; flex-wrap: wrap; gap: 4px 12px; align-items: center; }
+.ctl-row .group { display: inline-flex; gap: 4px; align-items: center; }
+.ctl-row output { min-width: 4.5em; font-variant-numeric: tabular-nums; }
+.ctl-row.sliders input[type="range"] { width: 130px; }
+#views button { min-width: 2.4em; }
+#notices { color: #a14b00; font-size: 12px; min-height: 1.3em; }
+#notices div { margin: 0; }
+#equation { font-family: ui-monospace, monospace; }
+#equation.bad { border-color: #d33; background: #fff4f4; color: #a00; outline-color: #d33; }
+#equation-error { color: #a00; font-size: 12px; max-width: 22em; }
+#quick-equations button { font-family: ui-monospace, monospace; padding: 1px 4px; }
+.obs-label-arrow { color: #1d4ed8; margin: 6px 0 0 12px; }

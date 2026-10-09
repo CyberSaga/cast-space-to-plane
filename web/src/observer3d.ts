@@ -12,13 +12,13 @@ import { LineMaterial } from "three/addons/lines/LineMaterial.js";
 import { LineSegments2 } from "three/addons/lines/LineSegments2.js";
 import { LineSegmentsGeometry } from "three/addons/lines/LineSegmentsGeometry.js";
 
-import type { Scene, StageA, Vec3 } from "castplane";
+import type { Scene, StageA, Vec2, Vec3 } from "castplane";
 
 import {
-  OBSERVER_FAR_M, OBSERVER_FOV_DEG, OBSERVER_NEAR_M, board_labels, first_inside, frustum, initial_view, observer_accepts_pointer,
-  observer_basis, orbit_view, pinch_view, zoom_view,
+  CLICK_PX, OBSERVER_FAR_M, OBSERVER_FOV_DEG, OBSERVER_NEAR_M, board_labels, first_inside, frustum, initial_view,
+  observer_accepts_pointer, observer_basis, orbit_view, pinch_view, zoom_view,
 } from "./observer.js";
-import type { Board, BoardLabel, FillStyle, LineArt, LineStyle, ObserverView, VertexRays } from "./observer.js";
+import type { Board, BoardLabel, FillStyle, HandleHit, Handles, LineArt, LineStyle, ObserverView, VertexRays } from "./observer.js";
 import { build_scene3d } from "./scene3d.js";
 import { Stage3D } from "./stage.js";
 
@@ -30,6 +30,28 @@ export interface ObserverGeometry {
   board: Board;
   art: LineArt;
   rays: VertexRays | null;
+  /** M10 (§5.7.9): the ring and the arrow, or null (no handles). */
+  handles?: Handles | null;
+  /** M10: the id of a picked pivot object (its label `旋轉中心：<id>`). */
+  pivot_id?: string | null;
+  /** M10: the handle being dragged (drawn thicker). */
+  active?: "ring" | "arrow" | null;
+}
+
+/**
+ * M10 handle input of the observer pane (§5.7.9): on pointer-down the pane asks {@link hit} first (arrow tip > ring);
+ * a hit starts a handle drag (`begin`, `move` with the **total** displacement from pointer-down, `end`; `cancel` when
+ * a second finger turns it into an observer pinch), anything else is an observer gesture. A pointer-up within
+ * {@link CLICK_PX} of its pointer-down on blank space is a click (`click`, the object pivot pick); the observer view is
+ * then restored to its pointer-down state.
+ */
+export interface HandleInput {
+  hit(p: Vec2, touch: boolean): HandleHit;
+  begin(hit: NonNullable<HandleHit>, p: Vec2): void;
+  move(dx: number, dy: number, alt: boolean): void;
+  end(): void;
+  cancel(): void;
+  click(p: Vec2): void;
 }
 
 interface LineSpec {
@@ -66,6 +88,10 @@ const HELPER_LINES = {
   sight: { color: 0x8d8b83, width: 1, opacity: 0.75, order: 6 },
   light: { color: 0xd9a000, width: 1.5, dash: [0.1, 0.06], order: 6 },
   shadow_sight: { color: 0x282c46, width: 1, dash: [0.04, 0.06], opacity: 0.55, order: 6 },
+  ring: { color: 0xe8730c, width: 2.4, dash: [0.09, 0.06], order: 7 },
+  ring_active: { color: 0xe8730c, width: 4, dash: [0.09, 0.06], order: 7 },
+  arrow: { color: 0x1d4ed8, width: 3, order: 7 },
+  arrow_active: { color: 0x1d4ed8, width: 5, order: 7 },
 } satisfies Record<string, LineSpec>;
 
 interface DotSpec {
@@ -80,6 +106,7 @@ const DOTS = {
   crossing: { color: 0x23231f, size: 6, shape: "circle" },
   shadow: { color: 0xd9a000, size: 6, shape: "circle" },
   shadow_crossing: { color: 0xd9a000, size: 7, shape: "circle" },
+  tip: { color: 0x1d4ed8, size: 15, shape: "circle" },
 } satisfies Record<string, DotSpec>;
 
 function dot_texture(shape: "circle" | "diamond"): THREE.Texture {
@@ -120,6 +147,7 @@ export class ObserverPane {
   private readonly labelEls = new Map<string, HTMLDivElement>();
   private labels: BoardLabel[] = [];
   private boardNow: Board | null = null;
+  private handlesNow: Handles | null = null;
   private W = 1;
   private H = 1;
 
@@ -297,11 +325,54 @@ export class ObserverPane {
     this.add_dots("dots:Q", DOTS.Q, [b.Q]);
     this.add_dots("dots:pivot", DOTS.pivot, [b.P]);
     this.add_dots("dots:E", DOTS.E, [b.E]);
-    this.labels = board_labels(b);
+    // M10 handles (§5.7.9): the orange dashed ring around Q and the blue arrow Q → tip (towards the eye)
+    const h = geo.handles ?? null;
+    this.handlesNow = h;
+    if (h !== null) {
+      const ring: [Vec3, Vec3][] = h.ring.map((p, i) => [p, h.ring[(i + 1) % h.ring.length]!]);
+      const ra = geo.active === "ring", aa = geo.active === "arrow";
+      this.add_lines("handle:ring", ra ? "ring_active" : "ring", ra ? HELPER_LINES.ring_active : HELPER_LINES.ring, ring);
+      this.add_lines("handle:arrow", aa ? "arrow_active" : "arrow", aa ? HELPER_LINES.arrow_active : HELPER_LINES.arrow,
+        [[h.Q, h.tip], ...arrow_head(h.Q, h.tip, b.r)]);
+      this.add_dots("handle:tip", DOTS.tip, [h.tip]);
+    }
+    this.labels = board_labels(b, { pivot_id: geo.pivot_id ?? null, ...(h !== null ? { tip: h.tip } : {}) });
+  }
+
+  /** The handles of the last update (null without handles). */
+  get last_handles(): Handles | null {
+    return this.handlesNow;
+  }
+
+  /**
+   * The object under the pane point `p` (CSS px) nearest to the observer camera, or null (§5.7.8 item 10): a ray cast
+   * into this pane's scene group; only objects count (lights, receivers and grids are skipped).
+   */
+  pick_object(p: Vec2): string | null {
+    const group = this.stage.group;
+    if (group === null) return null;
+    this.render_camera();
+    const ndc = new THREE.Vector2((p[0] / this.W) * 2 - 1, -(p[1] / this.H) * 2 + 1);
+    const ray = new THREE.Raycaster();
+    ray.setFromCamera(ndc, this.camera);
+    const objects = group.children.filter((c) => c.name !== "" && !c.name.includes(":"));
+    for (const hit of ray.intersectObjects(objects, true)) {
+      let o: THREE.Object3D | null = hit.object;
+      while (o !== null && o.parent !== group) o = o.parent;
+      if (o !== null && o.name !== "" && !o.name.includes(":")) return o.name;
+    }
+    return null;
   }
 
   /** Draw the observer view and place the labels (a label whose anchor is behind the observer is hidden). */
   render(): void {
+    const basis = this.render_camera();
+    this.stage.render_with(this.camera);
+    this.place_labels(basis);
+  }
+
+  /** Set the three.js observer camera from {@link view} (the same projection as `observer_project`). */
+  private render_camera(): ReturnType<typeof observer_basis> {
     const basis = observer_basis(this.view);
     const { pos, r, u, f } = basis;
     const cam = this.camera;
@@ -316,7 +387,10 @@ export class ObserverPane {
     cam.matrixWorld.copy(cam.matrix);
     cam.matrixWorldInverse.copy(cam.matrixWorld).invert();
     cam.updateProjectionMatrix();
-    this.stage.render_with(cam);
+    return basis;
+  }
+
+  private place_labels(basis: ReturnType<typeof observer_basis>): void {
     const seen = new Set<string>();
     for (const l of this.labels) {
       seen.add(l.id);
@@ -339,12 +413,19 @@ export class ObserverPane {
   }
 
   /**
-   * Pointer input of the pane (§5.6.4): one pointer drags (orbit; a mouse's left button only), the wheel zooms, two
-   * pointers pinch (zoom from the state at the pinch's start). `changed` is called after every change of {@link view}.
+   * Pointer input of the pane (§5.6.4; M10 §5.7.9): one pointer drags (a handle when `handles` reports a hit, else the
+   * observer orbit; a mouse's left button only), the wheel zooms, two pointers pinch (zoom from the state at the
+   * pinch's start; a running handle drag is cancelled). `changed` is called after every change of {@link view}.
    */
-  attach_input(el: HTMLElement, changed: () => void): void {
+  attach_input(el: HTMLElement, changed: () => void, handles: HandleInput | null = null): void {
     const pointers = new Map<number, [number, number]>();
     let pinch: { d0: number; view0: ObserverView } | null = null;
+    /** The single-pointer gesture: a handle drag or the observer orbit (with its pointer-down view for a click). */
+    let one: { kind: "handle" | "orbit"; x0: number; y0: number; moved: number; view0: ObserverView } | null = null;
+    const local = (ev: PointerEvent): Vec2 => {
+      const b = el.getBoundingClientRect();
+      return [ev.clientX - b.left, ev.clientY - b.top];
+    };
     const spread = (): number => {
       const [a, b] = [...pointers.values()];
       return a !== undefined && b !== undefined ? Math.hypot(a[0] - b[0], a[1] - b[1]) : 0;
@@ -354,22 +435,62 @@ export class ObserverPane {
       if (pointers.size >= 2 || !observer_accepts_pointer(ev.pointerType, ev.button)) return;
       pointers.set(ev.pointerId, [ev.clientX, ev.clientY]);
       el.setPointerCapture(ev.pointerId);
-      pinch = pointers.size === 2 ? { d0: Math.max(spread(), 1), view0: { ...this.view } } : null;
       ev.preventDefault();
+      if (pointers.size === 2) {
+        if (one?.kind === "handle") handles?.cancel();
+        one = null;
+        pinch = { d0: Math.max(spread(), 1), view0: { ...this.view } };
+        return;
+      }
+      pinch = null;
+      const p = local(ev);
+      const hit = handles?.hit(p, ev.pointerType === "touch") ?? null;
+      one = { kind: hit !== null ? "handle" : "orbit", x0: ev.clientX, y0: ev.clientY, moved: 0, view0: { ...this.view } };
+      if (hit !== null) handles!.begin(hit, p);
     });
     el.addEventListener("pointermove", (ev) => {
       const last = pointers.get(ev.pointerId);
-      if (last === undefined) return;
+      if (last === undefined) {
+        if (handles !== null && ev.pointerType === "mouse" && pointers.size === 0) {
+          el.style.cursor = handles.hit(local(ev), false) !== null ? "pointer" : "";
+        }
+        return;
+      }
       const dx = ev.clientX - last[0], dy = ev.clientY - last[1];
       pointers.set(ev.pointerId, [ev.clientX, ev.clientY]);
-      if (pinch !== null) this.view = pinch_view(pinch.view0, pinch.d0, spread());
-      else if (dx !== 0 || dy !== 0) this.view = orbit_view(this.view, dx, dy);
-      else return;
+      if (pinch !== null) {
+        this.view = pinch_view(pinch.view0, pinch.d0, spread());
+        changed();
+        return;
+      }
+      if (one === null || (dx === 0 && dy === 0)) return;
+      const tx = ev.clientX - one.x0, ty = ev.clientY - one.y0;
+      one.moved = Math.max(one.moved, Math.hypot(tx, ty));
+      if (one.kind === "handle") {
+        handles!.move(tx, ty, ev.altKey);
+        return;
+      }
+      this.view = orbit_view(this.view, dx, dy);
       changed();
     });
     const end = (ev: PointerEvent): void => {
       if (!pointers.delete(ev.pointerId)) return;
-      pinch = null; // the remaining finger (if any) orbits from here
+      const g = one;
+      one = null;
+      if (pinch !== null) {
+        pinch = null; // the remaining finger (if any) does nothing until it is lifted
+        return;
+      }
+      if (g === null) return;
+      if (g.kind === "handle") {
+        handles!.end();
+        return;
+      }
+      if (handles !== null && ev.type === "pointerup" && g.moved < CLICK_PX) {
+        this.view = g.view0; // a click does not move the observer
+        changed();
+        handles.click(local(ev));
+      }
     };
     el.addEventListener("pointerup", end);
     el.addEventListener("pointercancel", end);
@@ -379,4 +500,14 @@ export class ObserverPane {
       changed();
     }, { passive: false });
   }
+}
+
+/** The arrowhead at `tip` of the arrow `Q → tip`: two strokes back towards `Q`, in the plane of the arrow and `side`. */
+function arrow_head(Q: Vec3, tip: Vec3, side: Vec3): [Vec3, Vec3][] {
+  const d: Vec3 = [Q[0] - tip[0], Q[1] - tip[1], Q[2] - tip[2]];
+  const l = Math.hypot(d[0], d[1], d[2]);
+  if (!(l > 0)) return [];
+  const k = Math.min(0.12, 0.3 * l) / l, w = Math.min(0.06, 0.15 * l);
+  const back: Vec3 = [tip[0] + d[0] * k, tip[1] + d[1] * k, tip[2] + d[2] * k];
+  return [1, -1].map((s) => [tip, [back[0] + s * w * side[0], back[1] + s * w * side[1], back[2] + s * w * side[2]]] as [Vec3, Vec3]);
 }

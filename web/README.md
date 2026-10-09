@@ -11,7 +11,7 @@ npm run -w ts build        # the core package "castplane" the UI imports
 npm run -w web dev         # vite dev server
 npm run -w web build       # tsc type check + vite build -> web/dist (static, base './')
 npm run -w web preview     # serve web/dist locally
-npm run -w web test        # orbit / download / rig / equation / observer unit tests (node:test, web/test/)
+npm run -w web test        # orbit / download / rig / equation / observer / plane unit tests (node:test, web/test/)
 ```
 
 ![web UI](../docs/images/web_ui.png)
@@ -23,9 +23,14 @@ Phase 2 (contract §5.4.10, the M4–M6 format): `wall_and_ground` with hidden l
 ![mesh demo](../docs/images/web_ui_mesh_demo.png)
 ![two lights](../docs/images/web_ui_two_lights.png)
 
-M9 (contract §5.6): the read-only observer view, switched on with *旁觀視角*:
+M9 (contract §5.6): the observer view, switched on with *旁觀視角*:
 
 ![observer view](../docs/images/web_ui_observer.png)
+
+M10 (contract §5.7): plane mode, the board moved with the orange ring and the blue arrow (here after `y=2` and a ring
+drag):
+
+![plane mode](../docs/images/web_ui_plane_mode.png)
 
 ## What it does
 
@@ -46,18 +51,44 @@ M9 (contract §5.6): the read-only observer view, switched on with *旁觀視角
   world coordinates) with an outline. The three.js camera is built from the core's `camera_matrix` (no `lookAt` and no
   `fov`), so the WebGL image and the SVG overlay are two renderings of one castplane camera. Three.js casts no
   shadows (`renderer.shadowMap.enabled = false`). Every shadow you see comes from the core.
-- **Modules**: `src/main.ts` keeps the state, loading, the wiring and the render loop. `src/stage.ts` is one
-  three.js view (`Stage3D`, plus `letterbox` for the canvas size), `src/input.ts` turns pointer, wheel and file-drop
-  events into callbacks (`attach_drag_input`, `attach_file_drop`), and `src/ui.ts` drives the side panel (controls,
-  layer boxes, examples menu, slider text, error panel, warnings table, status line, `save` for downloads).
-- **Camera** (`src/orbit.ts`):
-  - left drag orbits (yaw / pitch, with pitch clamped to ±89.5°; "grab the world" like OrbitControls, so dragging down lifts the camera);
-  - right drag or Shift + drag pans;
-  - the wheel zooms (distance 0.05 … 1e4 m);
-  - sliders set the focal length (logarithmic, 8–400 mm) and the roll (±180°);
-  - *Reset camera* restores the scene's camera.
-  
-  Every frame builds an explicit target-form camera block from the lens fields of the scene camera.
+- **Modules**: `src/main.ts` keeps the page state, loading, the wiring and the render loop. `src/plane.ts` is plane
+  mode's session (the rig of `src/rig.ts`, undo, pivot, readouts) and the right pane's gesture state machine (pure,
+  unit-tested). `src/stage.ts` is one three.js view (`Stage3D`, plus `letterbox` for the canvas size), `src/input.ts`
+  handles the page-wide file drop, and `src/ui.ts` drives the controls and the side panel (layer boxes, examples menu,
+  sliders, readouts, error panel, warnings table, status line, `save` for downloads). `src/orbit.ts` (the M7 camera)
+  is kept with its tests; only its focal-slider mapping is still used.
+- **Camera: plane mode** (M10, contract §5.7; `src/rig.ts`, `src/plane.ts`, `src/equation.ts`). You move the
+  **board** (the picture plane), not the eye: its direction `f` and its distance `g` from the pivot. The eye `E` sits
+  `D` behind the board and is computed (read-only): `E = P − (g + D)·f + L`, with `L` the pan. On load the scene's
+  camera is turned into this state (pivot = scene centre, `D` = the `picture_plane` distance or 4 m). `R = g + D` is
+  clamped into 0.8–40 m and `D` into 0.5–12 m, with a notice when a clamp changes the picture.
+  - Drawing pane (right): left drag / one finger orbits the board about the pivot (the orange ring: `−Δx·0.32°` about
+    `z`, the elevation by `−Δy·0.32°`, clamped at ±89.9°; dragging down raises the eye). The wheel or a pinch moves
+    the board and the eye together (the blue arrow: `R ← R·exp(0.001·ΔY)`, **not** the focal length). A right drag, a
+    Shift drag or a two-finger move pans (the pivot stays). Each gesture is one undo step at release, and a wheel
+    burst (events ≤ 400 ms apart) is one step.
+  - Observer pane (left, with *旁觀視角*): drag the orange dashed ring to orbit (lock-horizontal by default, free roll
+    with *鎖水平* off), and drag the blue arrow's tip (*板子距離*) to move the board along `f`. Hit radius: 14 px
+    for a mouse, 26 px for touch, 0.8× for the ring; the tip wins. The black eye is never a handle. Anywhere else
+    the drag orbits the observer camera.
+  - *吸附* (default on; Alt suspends it): within 5° of an axis the board snaps to it exactly, and an axis-parallel
+    board's plane coordinate snaps to 0.1 m while the arrow is dragged.
+  - Sliders: focal length (logarithmic, 8–400 mm), `D` (0.5–12 m, the board stays and the eye moves), roll (±180°
+    about the line of sight; the eye stays). None of them is an undo step.
+  - *旋轉中心*: 場景中心, or 點選物體 then click an object in the observer pane. The eye moves onto its axis (the pan
+    is cleared). This is not an undo step.
+  - Views 前 後 左 右 上 下 (`f = +y, −y, +x, −x, −z, +z`; pan and roll cleared).
+  - The plane-equation field always shows the current plane (`y = 2.00`, `0.707x + 0.707y = 1.200`). Type a linear
+    equation in `x`, `y`, `z` and press Enter or 「套用」, or use the quick buttons `x=1`, `y=2`, `y=−3`, `z=3`,
+    `x+y=3`. A bad equation turns the field red with the reason and keeps the plane.
+  - 復原 (50 steps) and 重設 (the loaded state).
+  - Readouts under the panes: the plane, `g` and `R`, `E`, `D`, pan and roll, the frame size in metres, and
+    "這次拖動右窗畫面變動" (the largest image displacement of all object vertices since the start of the last drag, in
+    frame mm). A notice appears when the eye is below the ground.
+
+  Until the first change after a load or 重設, the core renders the scene's own camera, so the document and the
+  downloads equal the CLI's. From then on it renders the rig's explicit `picture_plane` block (`position` plus
+  `picture_plane {normal, offset[, up]}`; `up` only when not lock-horizontal or roll ≠ 0).
 - **Overlay** (`src/overlay.ts`): an `<svg>` over the canvas with the same CSS box and `viewBox`. On each
   animation frame where something changed, the frame runs `project_scene` → `compose` → `write_svg` (all six
   layers) against the cached stage A. Pointer events only update the state and at most one core render runs per
@@ -72,7 +103,8 @@ M9 (contract §5.6): the read-only observer view, switched on with *旁觀視角
 - **Downloads** (`src/download.ts`):
   - *Download SVG*: `write_svg` with the checked layers (and the selected hidden style), `<name>.svg`;
   - *Download JSON*: the spec §6.2 document, `<name>.json`;
-  - *Download scene (current camera)*: the scene with the current camera block, the *Hidden lines* state as
+  - *Download scene (current camera)*: the scene with the current camera block (in plane mode the `picture_plane`
+    form once the board was moved), the *Hidden lines* state as
     `output.hidden_lines` and the *Hidden style* as `output.hidden_style`, `<name>.scene.json`. Run
     `castplane render <name>.scene.json -o out` to reproduce the picture with the Python reference: the
     smoke check below found the SVG byte-identical;
@@ -94,18 +126,17 @@ M9 (contract §5.6): the read-only observer view, switched on with *旁觀視角
   equation, and with *視線* (default on) the vertex rays of the first object: sight lines `E → P` with their crossings
   `P′` on the board, the light rays `L → S` of its vertices, the sight lines `E → S` and their crossings `S′`. The
   drawing on the frame follows the layer checkboxes; SVG arcs are drawn with 32 segments, ellipses with 72. Every
-  drawing-camera change (drag, wheel, sliders, example load, *Reset camera*) updates it in the same frame. In the
-  observer pane a left drag orbits the observer camera (0.4°/px around, 0.3°/px up, elevation −5°…85°; the right and
+  drawing-camera change (drag, wheel, sliders, example load, 重設) updates it in the same frame. In the
+  observer pane a left drag on blank space orbits the observer camera (0.4°/px around, 0.3°/px up, elevation −5°…85°; the right and
   middle mouse buttons do nothing), the wheel or a two-finger pinch zooms (4–60 m); none of this touches the drawing.
   *旁觀視角取景* frames it (keeps the direction, targets the centroid of E, Q, the scene centre and its ground point,
   the point lights and the frame corners, distance `clamp(2.3 · radius, 6, 60)` m, pulled back further when a point
   would fall outside the pane's inner 90 %, as it would in the portrait side-by-side pane); it also frames after a
-  scene load and *Reset camera*, never during a drag. The observer draws the receivers see-through, so a frame below
+  scene load, 重設, 復原, a view, an applied equation and a pivot change, never during a drag. In M10 the pane also
+  shows the plane-mode handles (the orange ring and the blue arrow, above). The observer draws the receivers see-through, so a frame below
   the ground stays visible. The status line shows `obs ms` (the observer's own cost per frame) while the switch is on.
-  A scene whose camera has the `picture_plane` form is rendered with that block until the drawing camera is first
-  edited (so the document, its warnings and the downloads are the CLI's); from then on it is driven through the M7
-  orbit, with the pivot at the scene centre's depth and the same picture (`Download scene` then writes the target
-  form, until M10).
+  A scene's own camera (any form) is rendered as it is until the board is first moved (so the document, its warnings
+  and the downloads are the CLI's); from then on the rig's `picture_plane` block, with the same picture.
 
 ### Overlay modes during a drag
 
@@ -225,9 +256,28 @@ The script needs a Playwright installed outside the repository; it is not a depe
   the panes stack (observer on top), above they sit side by side at equal width; after the large scene's drag the
   `<img>` overlay is not displayed at rest. Review fixes: after each load `E` and the frame corners are inside the
   observer pane; a right or middle drag leaves the observer still; the three v8 `picture_plane` cases render the scene
-  camera's document (the expected file's warnings, `camera.picture_plane`) until a drag, the orbit's target form after
-  it, and the scene's block again after *Reset camera*; a frame below the ground is drawn (its bottom edge's pixel
-  colour). With `--shots DIR` it also saves `DIR/web_ui_observer.png`.
+  camera's document (the expected file's warnings, `camera.picture_plane`) until a drag, the rig's `picture_plane`
+  block after it (M10), and the scene's block again after 重設; a frame below the ground is drawn (its bottom edge's
+  pixel colour). With `--shots DIR` it also saves `DIR/web_ui_observer.png`.
+- M10 (contract §5.7.13, plane mode, on `basic` with the observer on):
+  - the ring drag changes `f` and keeps `g`, `D`, `|E − P|`;
+  - the arrow tip wins the hit test, and its drag changes `g` only (the eye moves along `f`);
+  - the hit test never returns the eye, and a drag on it orbits the observer only;
+  - the wheel scales `R` by `exp(0.001·ΔY)` without touching the focal length, and a burst is one undo step;
+  - right and Shift drags pan and keep the pivot, `f`, `g`;
+  - a left drag in the drawing pane turns `f` by `−Δx·κ` about `z`;
+  - the roll slider keeps the eye, and `up` is written iff needed;
+  - the D slider keeps the board;
+  - the six views give exact axes;
+  - `y=2` with `D = 4` puts the eye at `y = −2`;
+  - `x==1` turns the field red and keeps the plane, and the quick button `x=1` applies;
+  - undo and 重設 restore `f`, `g`, `up`, the focal length and the sliders;
+  - an object click sets the pivot (label `旋轉中心：<id>`);
+  - the drawing is identical with the observer on and off for an edited camera;
+  - Download scene writes the `picture_plane` form and reloads to the same SVG;
+  - 900 random rig states render finite numbers.
+
+  With `--shots DIR` it saves `DIR/web_ui_plane_mode.png`.
 
 Last run (phase 2, part 5; exit 0, no failed check, no page error):
 
@@ -237,3 +287,7 @@ Last run (phase 2, part 5; exit 0, no failed check, no page error):
 
 Last run (M9, with `benchmark_100.json` and `--shots`): exit 0, no failed check, no page error; every M9 check above
 passed for the five examples and `benchmark_100.json`.
+
+Last run (M10, with `benchmark_100.json` and `--shots`): exit 0, no failed check, no page error; every check above
+passed. With the observer on, `core ms + dom ms + obs ms` per drag frame stayed below 25 ms on the five examples
+(maximum over 30 frames); `benchmark_100.json` (recorded, not gated): `obs ms` 136–622 ms over two runs.

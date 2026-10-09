@@ -12,7 +12,8 @@
 import { camera_matrix, plane_equation, resolve_picture_plane, unproject_to_plane } from "castplane";
 import type { Camera, CameraRecord, GeometryDocument, Scene, StageA, Vec2, Vec3 } from "castplane";
 
-import { D_MAX_M, D_MIN_M, DEFAULT_D_M, R_MAX_M, R_MIN_M, bboxCentre } from "./rig.js";
+import { D_MAX_M, D_MIN_M, DEFAULT_D_M, R_MAX_M, R_MIN_M, arrowTip, bboxCentre, foot, ringPoint } from "./rig.js";
+import type { RigState } from "./rig.js";
 
 // ------------------------------------------------------------------------------------------------ constants
 
@@ -91,7 +92,8 @@ export function observer_D(cam: Camera, canvas_mm: readonly number[]): number {
 }
 
 /**
- * The camera block handed to `orbit_from_camera` and "Reset camera" (§5.6.2). A `picture_plane` block becomes its
+ * M9 (kept for its tests; M10 loads through the rig's load rule, `PlaneSession`): the camera block handed to
+ * `orbit_from_camera` and "Reset camera" (§5.6.2). A `picture_plane` block becomes its
  * resolved target-form block (roll kept) with `target = E + t·f`, `t = clamp(f·(P_scene − E), 0.8, 40)`: the orbit
  * pivot then lies at the scene centre's depth and the picture is unchanged. Any other block is returned as is.
  */
@@ -107,7 +109,8 @@ export function orbit_camera(cam: Camera, P_scene: readonly number[]): Camera {
 }
 
 /**
- * The camera block a frame renders (§5.6 implementation notes): a `picture_plane` scene camera is rendered as it is
+ * M9 (kept for its tests; M10 generalises it to every camera form in `PlaneSession.block`): the camera block a frame
+ * renders (§5.6 implementation notes): a `picture_plane` scene camera is rendered as it is
  * until the first drawing-camera edit (drag, wheel, focal or roll slider) since the load or "Reset camera", so the
  * document, its warnings and the downloads are those of the scene's own camera (the Python CLI's); after an edit, and
  * for every other camera form, the M7 orbit's target-form block `orbit_block`. Both give the same picture (§5.6.2).
@@ -617,6 +620,60 @@ export function hit_polyline(pts: readonly (Vec2 | null)[], p: Vec2, tol: number
   return false;
 }
 
+// ------------------------------------------------------------------------------------------------ M10 handles (§5.7.9)
+
+/** Hit radius of a handle (px) for a mouse and for touch; the ring uses {@link RING_HIT_FACTOR} of it. */
+export const HIT_PX_MOUSE = 14;
+export const HIT_PX_TOUCH = 26;
+export const RING_HIT_FACTOR = 0.8;
+/** Segments of the orange ring. */
+export const RING_SEGMENTS = 72;
+/** A pointer-up within this many px of its pointer-down is a click (object pivot pick, §5.7.8 item 10). */
+export const CLICK_PX = 5;
+
+/** The two handles of the board (§5.7.9), from the rig: the ring's {@link RING_SEGMENTS} points around `Q` (in the
+ * plane of the frame's `r`, `u`; closed), `Q` and the arrow tip `Q − len·f`. The eye is not a handle. */
+export interface Handles {
+  ring: Vec3[];
+  Q: Vec3;
+  tip: Vec3;
+}
+
+export function handles_of(rig: RigState, frame_mm: readonly number[]): Handles {
+  const ring: Vec3[] = [];
+  for (let i = 0; i < RING_SEGMENTS; i++) ring.push(ringPoint(rig, frame_mm, (2 * Math.PI * i) / RING_SEGMENTS));
+  return { ring, Q: foot(rig), tip: arrowTip(rig) };
+}
+
+/** What a pointer-down at `p` grabs: the arrow tip, or the ring (with the index of the grabbed ring point: the nearer
+ * end of the nearest hit segment), or nothing (an object pick or the observer orbit, decided by the caller). */
+export type HandleHit = { kind: "arrow" } | { kind: "ring"; index: number } | null;
+
+/**
+ * The handle hit test of the observer pane (§5.7.9, spec-v0.2 §3): the arrow tip within the hit radius (14 px mouse,
+ * 26 px touch) wins over the ring (within 0.8 × the radius of one of its segments). The eye is never returned: it is
+ * not a handle (D72), so a drag on it is an observer orbit.
+ */
+export function hit_handles(basis: { pos: Vec3; r: Vec3; u: Vec3; f: Vec3 }, W: number, H: number, p: Vec2, touch: boolean,
+  h: Handles): HandleHit {
+  const tol = touch ? HIT_PX_TOUCH : HIT_PX_MOUSE;
+  const tip = observer_project_with(basis, W, H, h.tip);
+  if (tip !== null && Math.hypot(tip[0] - p[0], tip[1] - p[1]) <= tol) return { kind: "arrow" };
+  const px = h.ring.map((X) => observer_project_with(basis, W, H, X));
+  let best: HandleHit = null, bd = tol * RING_HIT_FACTOR;
+  for (let i = 0; i < px.length; i++) {
+    const j = (i + 1) % px.length;
+    const a = px[i], b = px[j];
+    if (a === null || a === undefined || b === null || b === undefined) continue;
+    const d = dist_point_segment(p, a, b);
+    if (d <= bd) {
+      bd = d;
+      best = { kind: "ring", index: Math.hypot(a[0] - p[0], a[1] - p[1]) <= Math.hypot(b[0] - p[0], b[1] - p[1]) ? i : j };
+    }
+  }
+  return best;
+}
+
 // ------------------------------------------------------------------------------------------------ labels
 
 export function fmt2(x: number): string {
@@ -633,14 +690,20 @@ export interface BoardLabel {
   alt?: Vec3[];
 }
 
+/** The label of the arrow tip (§5.7.9). */
+export const ARROW_LABEL = "板子距離";
+
 /** The labels of the observer (§5.6.5): world anchor and text; the equation sits at a corner of the patch (the
- * top-left one, else the first other corner inside the pane). */
-export function board_labels(board: Board): BoardLabel[] {
-  return [
+ * top-left one, else the first other corner inside the pane). M10: the pivot label names a picked object
+ * (`旋轉中心：<id>`) and, with the handles, the arrow tip is labelled {@link ARROW_LABEL}. */
+export function board_labels(board: Board, extra: { pivot_id?: string | null; tip?: Vec3 } = {}): BoardLabel[] {
+  const labels: BoardLabel[] = [
     { id: "E", at: board.E, text: `E（讀數）(${board.E.map(fmt2).join(", ")})` },
     { id: "D", at: lerp3(board.E, board.Q, 0.5), text: `D = ${fmt2(board.D)} m` },
     { id: "g", at: lerp3(board.Q, board.P, 0.5), text: `板子離場景 g = ${fmt2(board.g)} m` },
-    { id: "pivot", at: board.P, text: "旋轉中心" },
+    { id: "pivot", at: board.P, text: extra.pivot_id ? `旋轉中心：${extra.pivot_id}` : "旋轉中心" },
     { id: "equation", at: board.patch[3]!, text: board.equation, alt: [board.patch[2]!, board.patch[0]!, board.patch[1]!] },
   ];
+  if (extra.tip !== undefined) labels.push({ id: "arrow", at: extra.tip, text: ARROW_LABEL });
+  return labels;
 }

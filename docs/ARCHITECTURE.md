@@ -5467,3 +5467,99 @@ foot: Q}`; the §5.7.4 record is built by `picture_plane_document(info, rec, foc
 `-0` strip (`picture_plane.fixed`) in TS; `web/src/rig.ts` re-exports the port's `plane_equation` / `fixed`, resolves
 through the port's `resolve_picture_plane` and draws its readout camera through the `picture_plane` block
 (`toCameraBlock`), so the temporary `planeModeWarnings` filter is gone.
+- **[decision, implementation] (M10 web) Modules and the render path of plane mode.** `web/src/plane.ts` (pure, no DOM;
+  `web/tsconfig.test.json` includes it) holds `PlaneSession`, the plane-mode state of one loaded scene: the rig of the
+  §5.7.7 load rule (`fromCamera` of `scene.camera` at the scene centre), the reset target, the `UndoStack`, the pivot
+  selection, the load notices and the picture-delta readout. Every rig change goes through it (`begin` / `drag` / `end` /
+  `cancel` for a gesture, `wheel`, `view`, `apply_equation`, `set_lock_level`, `set_focal`, `set_D`, `set_roll`,
+  `set_pivot_mode`, `pick_object`, `undo_step`, `reset`), each calling the `rig.ts` operation of §5.7.8 unchanged; the
+  undo rules of item 13 are the stack's (a discrete action calls `record`, a gesture `begin` / `end`, the wheel
+  `wheel`). `RightPaneGesture` (same module) is the right pane's pointer state machine of §5.7.8 items 2, 5, 6: the first
+  pointer starts the gesture (button 0 = the ring mapping `orbitRightPane`, button 2 or Shift = `pan`; any other button
+  is ignored), a second **touch** pointer re-bases it as a two-finger gesture (`twoFinger` from the state at that moment
+  with `d₀` and the midpoint then); a mouse never makes two pointers. Each move is computed from the gesture's base
+  state and the total displacement. Lifting one of two fingers freezes the other until it is lifted too; the whole
+  gesture, first pointer-down to last pointer-up, is one undo step. Alt is read per move (`snap = 吸附 && !altKey`).
+  `orbit.ts` and `orbit.test.ts` are unchanged and green (Q4); the UI uses only its focal-slider mapping
+  (`focal_from_slider` / `slider_from_focal`, the kept `[8, 400]` mm log slider); `input.ts` keeps the file drop only
+  (`attach_drag_input`, the M7 pointer handler, is removed). `main.ts` holds a `PlaneSession` instead of the M7 orbit;
+  the frame renders `session.block()` through `project_scene` / `compose` / `write_svg` and `Stage3D.render`
+  (`apply_camera_block`) as before.
+- **[decision, implementation] (M10 web) The unedited scene camera, for every camera form.** This extends the M9 note
+  "(4) … an unedited `picture_plane` scene camera" to every camera form and replaces it. After a load or a reset, while
+  the rig is unchanged, the frame renders `scene.camera` as it is, provided the load rule clamped neither `D` nor `R`.
+  The document, its warnings and the downloads are then exactly the CLI's for the file. The rig's block has the same
+  picture within 1e-7 mm (§5.7.7). It is not byte-identical: the eye is recomputed as `P − R·f + L`, and a
+  target-form camera gains `camera.picture_plane`. The first rig change (`PlaneSession.scene_block` becomes false;
+  a no-op such as roll 0 → 0 does not count) switches the frame to `toCameraBlock(rig, scene.camera)`, the
+  `picture_plane` form of §5.7.7: `up` is written iff the rig is not lock-horizontal or `ρ ≠ 0`, with no `roll_deg` and
+  no `target`. With a load clamp the rig's block is rendered from the start, and the notice says that the picture
+  changed. "Download scene" and "Copy camera block" write the block that is rendered, so `castplane render` of a
+  downloaded scene reproduces the page's document. This reads §5.7.6 "writes the `picture_plane` form" as "once the
+  board was moved". The smoke check reloads a downloaded `picture_plane` scene and gets the same SVG text.
+- **[decision, implementation] (M10 web) Observer handles and their input.** `observer.ts` adds `handles_of(rig,
+  frame_mm)` (the 72 ring points `ringPoint(rig, frame_mm, 2πi/72)` around `Q`, `Q`, the arrow tip `arrowTip`) and
+  `hit_handles(basis, W, H, p, touch, handles)` with `HIT_PX_MOUSE = 14`, `HIT_PX_TOUCH = 26`, `RING_HIT_FACTOR = 0.8`:
+  the tip within the radius wins. Otherwise the ring wins when one of its projected segments lies within 0.8 × the
+  radius; the nearest such segment counts, and the grabbed ring point is that segment's nearer end (the demo takes the
+  segment's start). The eye is not an input of the test, so it can never be returned (D72). `board_labels(board,
+  {pivot_id, tip})` adds `旋轉中心：<id>` for a picked object and the arrow label `板子距離` at the tip. The board of
+  §5.6.2 is derived from the rig in M10: `derive_board(rec, {target: rig.P, distance: g + D}, rig.D)` with the rendered
+  record. `ObserverPane` draws the ring (orange dashed fat line, thicker while it is dragged) and the arrow (blue,
+  `Q → tip`, an arrowhead of two strokes in the plane of `f` and `r`, the tip as a blue dot). `attach_input(el, changed,
+  handles)` takes a `HandleInput`. On pointer-down it asks `hit`, and a hit starts a handle drag. The drag mappings use
+  the pointer-down state: the ring `orbitRing` with `ring_grab(X, P, r_c, u_c)`, where `(r_c, u_c)` are the observer
+  basis at pointer-down; the arrow `arrowDrag` with `arrowScreenVector` through `observer_project`. Any other
+  pointer-down is the M9 observer orbit. A pointer-up whose largest distance from its pointer-down stays below
+  `CLICK_PX = 5` px on such an orbit is a click: the observer view goes back to its pointer-down state, and in object
+  pivot mode `ObserverPane.pick_object(p)` names the object. It is the nearest hit of a three.js ray cast through the
+  observer camera into the pane's scene group, objects only (no lights, receivers or grids). The pivot is the centre
+  of that object's stage-A `bbox`. A second finger during a handle drag cancels it (`PlaneSession.cancel`: the
+  pointer-down state comes back, no undo step) and pinches the observer. A mouse hovering over a handle shows the
+  pointer cursor. Framing waits while any drag runs (`state.dragging`).
+- **[decision, implementation] (M10 web) Controls, readouts and notices.** The top bar holds the observer switch, the
+  framing button, the equation field (`<input>`; Enter or 「套用」 applies, Enter blurs it on success, Escape drops
+  the error; while focused it is not overwritten; on an error it gets class `bad`, `aria-invalid` and the reason next
+  to it, and the plane is kept), the five quick buttons, 復原, 重設 (the old "Reset camera" id `reset`), and the M7
+  controls (examples, file, layers, hidden lines, 3D view, downloads). The controls row under both panes holds the
+  readouts, the checkboxes 吸附 / 作圖線 / 視線 / 鎖水平, the pivot selector, the focal / D / roll sliders
+  (`[8, 400]` mm log, `[0.5, 12]` m step 0.1, `[−180, 180]`° step 1) and the six view buttons 前 後 左 右 上 下. 作圖線
+  mirrors the `construction` layer checkbox both ways. 視線 moved there from the top bar. The sliders, the lock
+  checkbox, the equation text, the readouts, the notices and the undo button's disabled state are re-synced at the end
+  of every rendered frame (`sync_controls`). Undo and reset therefore re-sync them. A slider that has focus keeps its
+  thumb, and its output shows the clamped value. Reset also turns the observer back to `(55°, 28°)`, keeps its target
+  and distance until the framing that follows, and sets the pivot selector to 場景中心. The readout lines are
+  `readout_lines(rig, frame_mm, delta)`: plane, `g` and `R`, `E`, `D`, pan and roll, frame size (2 decimals), and
+  "這次拖動右窗畫面變動". The delta is measured from the start of the current or last gesture (a drag in either pane,
+  a two-finger gesture, or a wheel burst) to now. It uses `measureRef` over every stage-A vertex through the rig's
+  block, and is measured lazily, at most once per rendered frame. A slider moved after a gesture updates it ("and
+  now"). A view, an equation, undo or a pivot change ends the measurement and keeps the value; reset and a load clear
+  it to "—". Notices: the load clamps, "眼睛在地面下方" while `E_z < 0`, and in object pivot mode with nothing picked
+  a request to click an object, with the scene centre in use until then.
+- **[implementation] (M10 web) Acceptance record.** `web/test/plane.test.ts` (14 tests) covers the session and the
+  gestures: load and the scene block, the load clamps with their notices, drag / cancel / wheel-burst / discrete-action
+  undo integration, pivot pick, undo keeping the pivot, reset, the readouts and the delta, the right-pane mappings
+  (total displacement, pan buttons, two fingers as one step), the handles and the hit test (tip > ring, the 0.8 ring
+  factor, the touch radius, the eye never), the left-pane mappings, and the Download-scene round trip (same SVG text).
+  `rig.test.ts`, `equation.test.ts`, `observer.test.ts` and `orbit.test.ts` are unchanged. `web/scripts/smoke.mjs` adds
+  the plane-mode checks of the §5.7.13 web rows in Chromium:
+  - the ring drag changes `f` and keeps `g`, `D` and `|E − P|`;
+  - the arrow drag changes `g` only, and the eye moves along `f`;
+  - the hit test never returns `E`, and a drag on `E` orbits the observer only;
+  - the wheel scales `R` by `exp(0.001·ΔY)` and leaves the focal length alone, and a burst is one step;
+  - right and Shift drags pan and keep `P`, `f` and `g`;
+  - a left drag turns `f` by `−Δx·κ` about `z`;
+  - the roll slider keeps `E`, and `up` is written iff needed;
+  - the D slider keeps `g` and `c`;
+  - the six views give exact axes and `E = P − (g + D)·f`;
+  - `y=2` with `D = 4` gives `E_y = −2`;
+  - `x==1` turns the field red and keeps the plane;
+  - undo and reset restore `f`, `g`, `up`, the focal length and the sliders;
+  - an object click picks the pivot;
+  - the drawing is identical with the observer on and off for an edited camera;
+  - Download scene writes the `picture_plane` form and reloads to the same SVG;
+  - 900 random rig states render finite numbers (camera block, record, board, handles, observer view, SVG text).
+
+  The M9 checks of the three v8 cases now expect the rig's `picture_plane` block after a drag. Measured with the
+  switch on (headless Chromium, SwiftShader), `core ms + dom ms + obs ms` per drag frame stayed below 25 ms on the five
+  examples (maximum over 30 frames). `benchmark_100.json` is recorded, not gated: `obs ms` 136–622 ms over two runs.
