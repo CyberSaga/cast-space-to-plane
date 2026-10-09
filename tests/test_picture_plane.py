@@ -310,15 +310,62 @@ def test_plane_just_off_the_eye_is_accepted():
     assert rec["warnings"] == []
 
 
-def test_validated_block_is_normalised_and_revalidates():
+def test_validated_block_keeps_the_raw_plane_and_revalidates():
+    # the single normalisation n/|n|, offset/|n| happens in resolve_picture_plane, not in validation
     cam = validate_camera({"position": [1, 2, 3], "picture_plane": {"normal": [0, 3, 4], "offset": 10, "up": [0, 0, 2]},
                            "focal_length_mm": 20, "frame_mm": [36, 24]})
-    assert cam["picture_plane"] == {"normal": [0.0, 0.6, 0.8], "offset": 2.0, "up": [0.0, 0.0, 2.0]}
+    assert cam["picture_plane"] == {"normal": [0.0, 3.0, 4.0], "offset": 10.0, "up": [0.0, 0.0, 2.0]}
     assert "roll_deg" not in cam and "target" not in cam and "yaw_deg" not in cam
     assert validate_camera(copy.deepcopy(cam)) == cam
     no_up = validate_camera({"position": [1, 2, 3], "picture_plane": {"normal": [0, 1, 0], "offset": 1},
                              "focal_length_mm": 20, "frame_mm": [36, 24]})
     assert "up" not in no_up["picture_plane"]
+
+
+def test_validate_camera_is_a_fixed_point_on_floats():
+    # n/|n| is not idempotent on floats (|n/|n|| = 1 +- ulp); validating twice must not change a bit
+    rng = np.random.default_rng(11)
+    for _ in range(500):
+        n = [float(v) for v in rng.uniform(-1.0, 1.0, 3)]
+        if math.sqrt(n[0] * n[0] + n[1] * n[1] + n[2] * n[2]) < 0.1:
+            continue
+        E = [float(v) for v in rng.uniform(-5.0, 5.0, 3)]
+        off = float(rng.uniform(-3.0, 3.0))
+        if abs(float(unit(n) @ np.asarray(E)) + off / float(np.linalg.norm(n))) < 1e-3:
+            continue
+        once = validate_camera({"position": E, "picture_plane": {"normal": n, "offset": off, "up": [0.1, 0.2, 1.0]},
+                                "focal_length_mm": 20, "frame_mm": [36, 24]})
+        assert validate_camera(copy.deepcopy(once)) == once
+
+
+def test_camera_override_renders_the_same_bytes_as_the_scene_camera():
+    # the scene path validates the camera once, the --camera / render(camera=...) path twice
+    raw = load_candidate("camera_picture_plane_tilted")
+    raw["camera"]["picture_plane"]["normal"] = [-0.35, -1.0, 0.2]       # bit-sensitive under n/|n| twice
+    scene = castplane.load_scene(raw)
+    a = castplane.render(scene)
+    b = castplane.render(scene, camera=scene["camera"])
+    c = castplane.render(scene, camera=copy.deepcopy(raw["camera"]))
+    assert dumps(b["geometry"]) == dumps(a["geometry"])
+    assert dumps(c["geometry"]) == dumps(a["geometry"])
+
+
+def test_frame_fallback_is_decided_on_f_itself():
+    # |f x z| = 1e-9 exactly for f = (1e-9, 0, 1): the +y fallback of contract §2.2 (not world z after a round trip
+    # through target = E + f); the camera's forward row is the document's normal bit for bit
+    cam = validate_camera({"position": [0.37, -2.0, 0.9], "picture_plane": {"normal": [1e-9, 0.0, 1.0], "offset": -3.0},
+                           "focal_length_mm": 20, "frame_mm": [36, 24]})
+    rec = camera_matrix(cam, [36, 24])
+    assert rec["warnings"] == []
+    assert rec["picture_plane"]["normal"] == [1e-9, 0.0, 1.0]
+    assert [float(v) for v in rec["R"][2]] == rec["picture_plane"]["normal"]
+    assert [float(v) for v in rec["forward"]] == rec["picture_plane"]["normal"]
+    np.testing.assert_allclose(rec["R"][1], [0.0, 1.0, 0.0], atol=1e-15)
+    np.testing.assert_array_equal(camera_forward(cam), rec["forward"])
+    for name in CANDIDATE_NAMES:
+        scene = castplane.load_scene(load_candidate(name))
+        r = camera_matrix(scene["camera"], scene["output"]["canvas_mm"])
+        assert [float(v) for v in r["R"][2]] == r["picture_plane"]["normal"]
 
 
 # ---------------------------------------------------------------------------------------------------- document
@@ -399,7 +446,12 @@ S2 = math.sqrt(0.5)
     ([S2, -S2, 0], 1e-4, "0.707x - 0.707y = 0.000"),        # -0.0001 -> -0.000 -> 0.000
     ([0, -0.6, 0.8], 2.0, "0.600y - 0.800z = 2.000"),
     ([1e-4, 0.6, -0.8], 0.0, "0.600y - 0.800z = 0.000"),    # |x| < 5e-4 dropped, x is the first nonzero (> 0)
-    ([-1e-4, 0.6, -0.8], 0.0, "-0.600y + 0.800z = 0.000"),  # x first nonzero and negative: all flipped
+    ([-1e-4, 0.6, -0.8], 0.0, "0.600y - 0.800z = 0.000"),   # the dropped x does not pick the sign: y does
+    ([-0.0004, 0, 1], -1.0, "1.000z = 1.000"),              # the first *printed* coefficient is positive
+    ([0.0004, 0, -1], 1.0, "1.000z = 1.000"),
+    ([0.0004, 0, 1], -1.0, "1.000z = 1.000"),
+    ([-0.0003, -0.6, 0.8], 2.0, "0.600y - 0.800z = 2.000"),
+    ([0.0006, -0.6, 0.8], 2.0, "0.001x - 0.600y + 0.800z = -2.000"),  # a printed x picks the sign
     ([1e-10, -0.6, 0.8], 0.0, "0.600y - 0.800z = 0.000"),   # |x| <= 1e-9 is not "nonzero": y is flipped
     ([0.3, 0.4, -math.sqrt(0.75)], -5.0, "0.300x + 0.400y - 0.866z = 5.000"),
     ([0.0, 1.0, 1e-4], -2.0, "1.000y = 2.000"),             # not an axis (|n_y| - 1 > 1e-9), x and z dropped
