@@ -257,14 +257,73 @@ def validate_receiver(value, field: str) -> dict:
     return out
 
 
+#: Tolerances of the ``picture_plane`` camera form (spec-v0.2 §4.1): a normal no longer than this is zero; a
+#: plane whose signed distance from ``position`` is within ``PICTURE_PLANE_TOL`` passes through the eye; an ``up``
+#: whose unit vector's component across the normal (``|û × n̂|``) is within it is parallel to the normal.
+PICTURE_PLANE_ZERO_NORMAL = 1e-12
+PICTURE_PLANE_TOL = 1e-9
+
+
+def _norm3(v) -> float:
+    """``sqrt(x·x + y·y + z·z)`` summed left to right (the TypeScript port does the same; ``_norm``'s ``sum()``
+    is compensated on CPython >= 3.12)."""
+    return math.sqrt(v[0] * v[0] + v[1] * v[1] + v[2] * v[2])
+
+
+def validate_picture_plane(value, position, field: str = "camera.picture_plane") -> dict:
+    """``camera.picture_plane`` = ``{normal, offset, up?}`` of the third camera form (spec-v0.2 §4.1, M10).
+
+    The plane is ``normal·X + offset = 0``.  Returns ``{"normal", "offset"}`` and, when given, ``"up"`` exactly as
+    given (as floats): the unit copies ``n̂ = normal/|normal|``, ``offset/|normal|`` and ``û`` serve the checks only,
+    so validating a validated block changes no bit (``n/|n|`` is not idempotent on floats).  The single
+    normalisation that the drawing uses happens in :func:`castplane.picture_plane.resolve_picture_plane`.  Errors: a zero normal
+    (``.normal``), a plane through ``position`` (``|n̂·position + offset/|n|| <= 1e-9``, ``.offset``), an ``up``
+    that is zero or whose unit vector lies within 1e-9 of the normal direction (``|û × n̂| <= 1e-9``, ``.up``)."""
+    pp = _dict(value, field)
+    n = _vector(_require(pp, "normal", field), f"{field}.normal", 3)
+    offset = _number(_require(pp, "offset", field), f"{field}.offset")
+    nn = _norm3(n)
+    if not nn > PICTURE_PLANE_ZERO_NORMAL:
+        raise SceneError(f"{field}.normal", f"must be a nonzero vector (|normal| > {PICTURE_PLANE_ZERO_NORMAL:g})")
+    n_hat = [n[0] / nn, n[1] / nn, n[2] / nn]
+    off_hat = offset / nn
+    out = {"normal": n, "offset": offset}
+    if "up" in pp:
+        up = _vector(pp["up"], f"{field}.up", 3)
+        un = _norm3(up)
+        if not un > 0.0:
+            raise SceneError(f"{field}.up", "must be a nonzero vector")
+        u = [up[0] / un, up[1] / un, up[2] / un]
+        cross = [u[1] * n_hat[2] - u[2] * n_hat[1], u[2] * n_hat[0] - u[0] * n_hat[2], u[0] * n_hat[1] - u[1] * n_hat[0]]
+        if _norm3(cross) <= PICTURE_PLANE_TOL:
+            raise SceneError(f"{field}.up", "must not be parallel to picture_plane.normal (its projection onto the "
+                                            "plane is zero)")
+        out["up"] = up
+    s = n_hat[0] * position[0] + n_hat[1] * position[1] + n_hat[2] * position[2] + off_hat
+    if abs(s) <= PICTURE_PLANE_TOL:
+        raise SceneError(f"{field}.offset", f"the plane passes through camera.position (|n̂·position + offset| "
+                                            f"<= {PICTURE_PLANE_TOL:g} after normalising the normal)")
+    return out
+
+
 def validate_camera(value, field: str = "camera") -> dict:
-    """``camera`` block (contract §2.0): target form or yaw/pitch form, exactly one."""
+    """``camera`` block (contract §2.0): target form, yaw/pitch form or (M10, spec-v0.2 §4.1) ``picture_plane``
+    form, exactly one.  The ``picture_plane`` form carries no ``roll_deg`` (``picture_plane.up`` sets the frame)."""
     c = _dict(value, field)
     out = {"position": _vector(_require(c, "position", field), f"{field}.position", 3)}
     has_target = "target" in c
     has_yp = "yaw_deg" in c or "pitch_deg" in c
     if has_target and has_yp:
         raise SceneError(field, "give either target or yaw_deg + pitch_deg, not both")
+    if "picture_plane" in c:
+        if has_target or has_yp:
+            raise SceneError(field, "give exactly one of target, yaw_deg + pitch_deg or picture_plane")
+        if "roll_deg" in c:
+            raise SceneError(f"{field}.roll_deg", "must not be given with picture_plane (the roll is carried by "
+                                                  "picture_plane.up)")
+        out["picture_plane"] = validate_picture_plane(c["picture_plane"], out["position"], f"{field}.picture_plane")
+        out.update(_validate_lens(c, field))
+        return out
     if has_target:
         t = _vector(c["target"], f"{field}.target", 3)
         if _norm([t[i] - out["position"][i] for i in range(3)]) <= 1e-12:
@@ -276,13 +335,20 @@ def validate_camera(value, field: str = "camera") -> dict:
         out["yaw_deg"] = _number(c["yaw_deg"], f"{field}.yaw_deg")
         out["pitch_deg"] = _number(c["pitch_deg"], f"{field}.pitch_deg")
     else:
-        raise SceneError(field, "needs target or yaw_deg + pitch_deg")
+        raise SceneError(field, "needs target, yaw_deg + pitch_deg or picture_plane")
     out["roll_deg"] = _number(c.get("roll_deg", 0.0), f"{field}.roll_deg")
-    out["focal_length_mm"] = _number(_require(c, "focal_length_mm", field), f"{field}.focal_length_mm", positive=True)
-    out["frame_mm"] = _vector(_require(c, "frame_mm", field), f"{field}.frame_mm", 2, positive=True)
-    out["shift_mm"] = _vector(c.get("shift_mm", [0.0, 0.0]), f"{field}.shift_mm", 2)
-    out["near_m"] = _number(c.get("near_m", 0.05), f"{field}.near_m", positive=True)
+    out.update(_validate_lens(c, field))
     return out
+
+
+def _validate_lens(c: dict, field: str) -> dict:
+    """The lens keys shared by the three camera forms, in this order (contract §2.0)."""
+    return {
+        "focal_length_mm": _number(_require(c, "focal_length_mm", field), f"{field}.focal_length_mm", positive=True),
+        "frame_mm": _vector(_require(c, "frame_mm", field), f"{field}.frame_mm", 2, positive=True),
+        "shift_mm": _vector(c.get("shift_mm", [0.0, 0.0]), f"{field}.shift_mm", 2),
+        "near_m": _number(c.get("near_m", 0.05), f"{field}.near_m", positive=True),
+    }
 
 
 def validate_output(value, frame_mm, field: str = "output") -> dict:

@@ -12,7 +12,7 @@ castplane [--version] <command> ...
 | --- | --- |
 | `castplane render SCENE -o OUTDIR [選項]` | 渲染場景，寫出 `OUTDIR/<場景檔名>.svg` / `.json` / `.png` |
 | `castplane validate SCENE [-q]` | 只驗證場景檔，印出物件、光源、受影面數量 |
-| `castplane info SCENE [--camera JSON]` | 印出物件清單、畫布、主點、地平線 v_mm、三個消失點（軸平行畫面時印 `at infinity (axis parallel to the picture plane)`，表示該方向的線在畫面上仍平行）、L′、F′（在無窮遠時印 `at infinity, direction (…)`）、點／邊／影子／作圖線數量、自我驗證最大誤差、受影面清單（M4：有界／無界、平面、各光源的 `lit` / `casts`）與警告表；M6：列出每個光源（id、種類、位置／方向、在各受影面上是否有效） |
+| `castplane info SCENE [--camera JSON]` | 印出物件清單、畫布、主點、地平線 v_mm、三個消失點（軸平行畫面時印 `at infinity (axis parallel to the picture plane)`，表示該方向的線在畫面上仍平行）、L′、F′（在無窮遠時印 `at infinity, direction (…)`）、點／邊／影子／作圖線數量、自我驗證最大誤差、受影面清單（M4：有界／無界、平面、各光源的 `lit` / `casts`）與警告表；M6：列出每個光源（id、種類、位置／方向、在各受影面上是否有效）；M10：相機是 `picture_plane` 形式時，在主點之後多印平面方程式、眼睛到板子的距離 D 與畫框在平面上的公尺尺寸（見「場景 JSON 的 `camera.picture_plane`」） |
 | `castplane stages SCENE [--camera JSON] [-o FILE] [-q]` | 把 A 段與 B 段的中間結果以標準 JSON（`{"A": …, "B": …}`）寫到 FILE 或 stdout，除錯與移植對照用 |
 | `castplane import FILE [-o OUT.json] [--into SCENE] [--id ID] [-q] [網格選項]` | 把網格檔（OBJ、glTF / GLB、STL、PLY）匯入成場景檔（M5，見下方「`castplane import`」） |
 | `castplane import FILE [-o OUT.json] [--into SCENE] [--id ID] [--solid K] [--fallback error\|mesh] [-q]` | FILE 為 STEP 檔（`.step` / `.stp`）時：把實體辨識成圓柱、球、圓錐、方塊物件，寫成場景檔（M8，見下方「`castplane import` 的 STEP 檔」） |
@@ -179,6 +179,51 @@ castplane import tests/fixtures/step/two_solids.step --solid 1 -o sphere.json
 
 `mesh` 物件的 `edges[]` 多兩個鍵：`smooth`（與相機無關）與 `camera_silhouette`（與相機有關）。非流形網格（例如缺一個面）發 `MESH_NON_MANIFOLD` 並改用逐面影子（第 3 節）。
 
+### 場景 JSON 的 `camera.picture_plane`（M10，spec-v0.2 §4.1）
+
+相機區塊的第三種寫法：`position`（眼睛 E）加 `picture_plane`（投影平面，也就是「板子」），與 `target` 形式、`yaw_deg` + `pitch_deg` 形式三擇一。平面沿用受影面的慣例 `normal·X + offset = 0`。
+
+```json
+"camera": {
+  "position": [0.37, -2.0, 0.9],
+  "picture_plane": {"normal": [0, 1, 0], "offset": -2.0},
+  "focal_length_mm": 20, "frame_mm": [36, 24], "near_m": 0.05
+}
+```
+
+| 鍵 | 規則 |
+| --- | --- |
+| `picture_plane.normal` | 必填：非零 3 向量（長度 > 1e-12），讀入時正規化；正負號與長度不影響結果。否則 `camera.picture_plane.normal` |
+| `picture_plane.offset` | 必填：有限數值（隨法線一起除以 \|normal\|）。平面通過 `position`（\|n̂·E + offset/\|n\|\| ≤ 1e-9）是輸入錯誤：`camera.picture_plane.offset` |
+| `picture_plane.up` | 選填：畫框的「上」，投影到平面上使用。省略時取世界 +z 的投影，平面水平（\|f × z\| ≤ 1e-9）時改取 +y。零向量或與法線平行（單位化後 \|û × n̂\| ≤ 1e-9）是輸入錯誤：`camera.picture_plane.up` |
+| `roll_deg` | **不可**與 `picture_plane` 同時給（`camera.roll_deg`）：滾轉由 `up` 決定 |
+| `target`、`yaw_deg`、`pitch_deg` | 與 `picture_plane` 同時給是輸入錯誤（`camera`：「give exactly one of target, yaw_deg + pitch_deg or picture_plane」） |
+| `focal_length_mm`、`frame_mm`、`shift_mm`、`near_m` | 意義不變 |
+
+換算在 B 段之前（`castplane.picture_plane.resolve_picture_plane`）：先把平面正規化一次（`n̂ = n/|n|`、`offset/|n|`，驗證不改寫原值，所以場景檔、`--camera` 與 `render(camera=...)` 三條路畫出的位元組相同），`s = n̂·E + offset/|n|`、`D = |s|`（眼睛到板子）、`f = −sign(s)·n̂`（由眼睛指向板子；相機的 forward 列逐位元就是 f，不是 `normalize(target − E)`，所以 \|f × z\| ≤ 1e-9 的 +y 退路直接在 f 上判定）、`Q = E − s·n̂`（眼睛在平面上的垂足，`shift_mm` 為 0 時就是主點）、`target = E + f`；`roll_deg` 是 `camera_matrix` 的預設 up 到畫框 up 的有號角（沒有 `up` 時為 0）。之後完全走既有的 `camera_matrix`，A 段與相機慣例都不變。由上往下看的水平平面**不會**發 `CAMERA_LOOKING_ALONG_UP`（畫框的 up 已明確決定）。
+
+幾何文件只有這種形式才多一個鍵 `camera.picture_plane`，其他形式的文件逐位元組不變：
+
+| 鍵 | 內容 |
+| --- | --- |
+| `normal` | f：單位法線，由眼睛指向平面 |
+| `offset` | 同一個平面寫成 `f·X + offset = 0` 的常數（= −f·Q） |
+| `up` | 相機最終的上方向（R 的第二列，單位向量，在平面內） |
+| `distance` | D（公尺） |
+| `foot` | Q（世界座標） |
+| `frame_m` | 畫框在平面上的大小 `[frame_w·D/focal, frame_h·D/focal]`（公尺） |
+| `equation` | 方程式字串：法線平行座標軸時寫成 `y = 2.00`（取正向座標軸，兩位小數），否則寫成 `0.322x + 0.919y - 0.230z = 1.286`（省略絕對值小於 5e-4 的係數，**印出的**第一個係數取正，係數與常數三位小數；負零寫成 0） |
+
+`castplane info` 對這種相機在主點之後多印三行：
+
+```text
+picture plane: y = 2.00
+eye to picture plane D: 4.0000 m
+frame on the picture plane: 7.2000 x 4.8000 m
+```
+
+`--camera` 覆寫也可以是 `picture_plane` 形式。網頁的「板子為主」狀態（方向、板子距離 g、D、平移、滾轉）只在網頁；核心只看到眼睛與平面。
+
 ## 2. Python API
 
 所有函式都是純函式：輸入是驗證過的場景 dict 與 numpy 陣列，輸出是可 JSON 序列化的資料（文件）或 numpy 陣列（中間結果）。公開進入點在 `castplane` 套件頂層；其餘模組依規格 §5 的符號命名，供測試、移植與進階使用。
@@ -209,7 +254,8 @@ castplane import tests/fixtures/step/two_solids.step --solid 1 -o sphere.json
 | `validate_transform(value, field) -> dict` | `transform` 區塊：選填、`scale` 不允許、補預設值 |
 | `validate_light(value, field) -> dict` | 一個 `lights[i]` 項目（`id` 不含 `.`；平行光方向長度須為 1） |
 | `validate_receiver(value, field) -> dict` | 一個 `receivers[i]` 項目（M4：任意平面、選填凸多邊形 `bounds`；無 bounds 的只能是 `receivers[0]` 的地面，由 `validate_scene` 檢查） |
-| `validate_camera(value, field="camera") -> dict` | `camera` 區塊：target 形式或 yaw/pitch 形式，二擇一 |
+| `validate_camera(value, field="camera") -> dict` | `camera` 區塊：target 形式、yaw/pitch 形式或（M10）`picture_plane` 形式，三擇一；`picture_plane` 形式不帶 `roll_deg` |
+| `validate_picture_plane(value, position, field="camera.picture_plane") -> dict` | M10：`{normal, offset, up?}` → 原樣（轉成 float）的 `{"normal", "offset"}`，給了 `up` 時另有 `"up"`；單位化的副本只用於檢查，所以再驗證一次不改任何位元，正規化留給 `resolve_picture_plane`；零法線、平面通過 `position`、`up` 為零或平行法線各報對應欄位（見第 1 節「場景 JSON 的 `camera.picture_plane`」） |
 | `validate_output(value, frame_mm, field="output") -> dict` | `output` 區塊：畫布長寬比須等於片幅長寬比（錯誤訊息列出兩個比值與可用的替代值）；`layers` 不得是空串列 |
 | `polygon_signed_area(poly) -> float` | 鞋帶公式的有向面積，逆時針為正 |
 | `polygon_is_simple(poly, eps_area, eps_len=None) -> bool` | 多邊形無自交（非相鄰邊不相觸） |
@@ -250,8 +296,8 @@ castplane import tests/fixtures/step/two_solids.step --solid 1 -o sphere.json
 
 | 函式 | 說明 |
 | --- | --- |
-| `camera_forward(cam)` | 驗證過的相機 dict 的 `forward` 向量（target 形式或 yaw/pitch 形式） |
-| `camera_matrix(cam, canvas) -> dict` | 相機紀錄 `{K, R, t, P (3×4), C, forward, near, s, u0, v0, canvas_mm, frame_mm, rect, warnings}`；`rect` 是外擴 25% 的畫布矩形 |
+| `camera_forward(cam)` | 驗證過的相機 dict 的 `forward` 向量（target 形式或 yaw/pitch 形式；M10 的 `picture_plane` 形式回傳 `resolve_picture_plane` 的 f，逐位元等於文件的 `normal`） |
+| `camera_matrix(cam, canvas) -> dict` | 相機紀錄 `{K, R, t, P (3×4), C, forward, near, s, u0, v0, canvas_mm, frame_mm, rect, warnings}`；`rect` 是外擴 25% 的畫布矩形；M10：`picture_plane` 形式先 `resolve_picture_plane`、不發 `CAMERA_LOOKING_ALONG_UP`，紀錄多一個 `picture_plane`（文件的 `camera.picture_plane` 區塊） |
 | `project(cam, X)` | x̃ = P·X，一個 4 向量或 (n, 4) 陣列 → 齊次 2D 3 向量 |
 | `divide(x)` | (u, v) = (x̃₁/x̃₃, x̃₂/x̃₃)；繪圖管線的最後一步 |
 | `nu(cam, X)` | 近平面泛函 ν(X) = forward·(x − C·w) − near·w |
@@ -603,6 +649,18 @@ B 段在多光源場景呼叫；純 numpy、確定性；只讀畫出的 `shadows
 | `EXTENSION_LOADERS` | `{".step": tessellate_step, ".stp": tessellate_step}`：`load_mesh_file` 先查這張表，所以 `{"type": "mesh", "path": "part.step"}` 直接以 OCP 網格化（**不**做解析辨識；要辨識請用 `type: "step"`），頂點為公尺、未焊接，`smooth_groups` 全為 0 |
 | `IMPORT_NOTE_CODES` | M8 接上 `STEP_UNIT_ASSUMED_MM`、`STEP_ANGLE_UNIT_ASSUMED_RAD`、`STEP_SOLID_TESSELLATED`（即 `step.STEP_WARNING_CODES`） |
 | `scene.LOADER_TYPES` | `("step",)`：`validate_scene` 遇到未展開的 `step` 物件時報 `SceneError(objects[i].type, "loader object type 'step' must be expanded first (castplane.io.expand_scene or 'castplane import')")` |
+
+### 2.23 `castplane.picture_plane` — 投影平面相機（M10，spec-v0.2 §4.1、§4.3）
+
+只依賴 numpy；每個純量算式都由左到右寫明，TypeScript 移植（`ts/src/picture_plane.ts`）逐位元重現。
+
+| 函式 | 說明 |
+| --- | --- |
+| `resolve_picture_plane(cam) -> (target_cam, roll_deg, info)` | 驗證過的 `picture_plane` 相機 → target 形式相機區塊（`target = E + f`、`roll_deg`、鏡頭鍵）、滾轉角（度；沒有 `up` 時恰為 0）與 `info = {normal: f, offset, distance: D, foot: Q}`（平面寫成 `f·X + offset = 0`）；平面在這裡正規化一次，滾轉角的預設 up 由 f 本身決定 |
+| `picture_plane_document(info, rec, focal_length_mm) -> dict` | 文件的 `camera.picture_plane` 區塊 `{normal, offset, up, distance, foot, frame_m, equation}`；`up` 取相機紀錄 `R` 的第二列 |
+| `plane_equation(normal, offset) -> str` | 平面 `normal·X + offset = 0` 的方程式字串（先正規化；格式見第 1 節） |
+| `unproject_to_plane(rec, uv, D)` | 畫面點 (u, v)（mm）反投影回距離 D 的投影平面：`X = E + D·[((u − u0)/(focal·s))·r′ + ((v − v0)/(focal·s))·u′ + f]`；一點回傳 (3,)，(n, 2) 回傳 (n, 3)；再投影誤差 < 1e-9 mm。旁觀視角用它畫畫框、主點與線稿 |
+| `AXIS_TOL`、`DROP_TOL` | 方程式字串的門檻：座標軸判定 1e-9、省略係數 5e-4（印出的第一個係數，即第一個 \|n̂_i\| ≥ 5e-4 者，取正） |
 
 ## 3. 警告代碼（合約 §2.9）
 

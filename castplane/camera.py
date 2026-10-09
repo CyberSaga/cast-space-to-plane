@@ -33,8 +33,23 @@ def _unit(v):
     return v / np.linalg.norm(v)
 
 
+def _default_basis(forward):
+    """``(right, up, along_up)`` before roll (contract §2.2): ``right = normalize(forward x up_world)``, ``up =
+    right x forward`` with ``up_world`` = world z, or +y when ``|forward x z| <= 1e-9`` (``along_up`` true)."""
+    up_world = UP_WORLD
+    along_up = bool(np.linalg.norm(np.cross(forward, up_world)) <= 1e-9)
+    if along_up:
+        up_world = FALLBACK_UP
+    right = _unit(np.cross(forward, up_world))
+    return right, np.cross(right, forward), along_up
+
+
 def camera_forward(cam: dict):
-    """``forward`` of a validated camera dict: target form or yaw/pitch form (contract §2.2)."""
+    """``forward`` of a validated camera dict: target form, yaw/pitch form or (M10) ``picture_plane`` form, which
+    is resolved to its target form first (``castplane.picture_plane.resolve_picture_plane``; contract §2.2)."""
+    if "picture_plane" in cam:   # forward is f itself (spec-v0.2 §4.1), bit for bit the document's normal
+        from .picture_plane import resolve_picture_plane
+        return np.asarray(resolve_picture_plane(cam)[2]["normal"], dtype=np.float64)
     if "target" in cam:
         return _unit(np.asarray(cam["target"], dtype=np.float64) - np.asarray(cam["position"], dtype=np.float64))
     yaw, pitch = math.radians(cam["yaw_deg"]), math.radians(cam["pitch_deg"])
@@ -44,20 +59,25 @@ def camera_forward(cam: dict):
 def camera_matrix(cam: dict, canvas) -> dict:
     """Camera record ``{K, R, t, P, C, forward, near, s, u0, v0, canvas_mm, frame_mm, rect, warnings}`` (§5.4, contract §2.2).
 
-    ``cam`` is a validated camera block (contract §2.0), ``canvas`` is
+    ``cam`` is a validated camera block (contract §2.0; a ``picture_plane`` block is resolved first and its
+    record gains ``picture_plane``, the document block of ``picture_plane_document``), ``canvas`` is
     ``output.canvas_mm``.  ``rect`` is the extended canvas rectangle
     ``(u_min, u_max, v_min, v_max)`` used by the homogeneous rectangle clip.
     """
     warnings = []
+    pp_info = None
+    roll_deg = cam.get("roll_deg", 0.0)
+    if "picture_plane" in cam:
+        # M10 (spec-v0.2 §4.1): resolve to the target form; the explicit frame up never warns
+        from .picture_plane import resolve_picture_plane
+        cam, roll_deg, pp_info = resolve_picture_plane(cam)
     C = np.asarray(cam["position"], dtype=np.float64)
-    forward = camera_forward(cam)
-    up_world = UP_WORLD
-    if np.linalg.norm(np.cross(forward, up_world)) <= 1e-9:
-        up_world = FALLBACK_UP
+    # picture_plane: forward is f bit for bit (the |f x z| <= 1e-9 fallback is decided on f, R[2] = document normal)
+    forward = camera_forward(cam) if pp_info is None else np.asarray(pp_info["normal"], dtype=np.float64)
+    right, up, along_up = _default_basis(forward)
+    if along_up and pp_info is None:
         warnings.append(make_warning("CAMERA_LOOKING_ALONG_UP", []))
-    right = _unit(np.cross(forward, up_world))
-    up = np.cross(right, forward)
-    rho = math.radians(cam.get("roll_deg", 0.0))
+    rho = math.radians(roll_deg)
     right_r = math.cos(rho) * right + math.sin(rho) * up
     up_r = -math.sin(rho) * right + math.cos(rho) * up
     R = np.stack([right_r, up_r, forward], axis=0)
@@ -74,11 +94,15 @@ def camera_matrix(cam: dict, canvas) -> dict:
     P = K @ Rt
     W, H = canvas
     rect = (-(0.5 + RECT_GROW) * W, (0.5 + RECT_GROW) * W, -(0.5 + RECT_GROW) * H, (0.5 + RECT_GROW) * H)
-    return {
+    rec = {
         "K": K, "R": R, "t": t, "Rt": Rt, "P": P, "C": C, "forward": forward,
         "near": float(cam.get("near_m", 0.05)), "s": s, "u0": u0, "v0": v0,
         "canvas_mm": canvas, "frame_mm": frame, "rect": rect, "warnings": warnings,
     }
+    if pp_info is not None:
+        from .picture_plane import picture_plane_document
+        rec["picture_plane"] = picture_plane_document(pp_info, rec, f)
+    return rec
 
 
 def project(cam: dict, X):
