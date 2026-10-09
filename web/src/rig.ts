@@ -263,6 +263,15 @@ export function toCameraBlock(rig: RigState, base: LensBase): PicturePlaneCamera
 }
 
 /**
+ * Warnings to show for the drawing camera in plane mode. The rig renders through the target-form proxy of
+ * {@link toTargetCameraBlock}, which warns `CAMERA_LOOKING_ALONG_UP` on top / bottom views; the `picture_plane` form it
+ * stands for never emits that code (spec-v0.2 §4.1), so it is dropped. Every other warning is kept, in order.
+ */
+export function planeModeWarnings<W extends { code: string }>(warnings: readonly W[]): W[] {
+  return warnings.filter((w) => w.code !== "CAMERA_LOOKING_ALONG_UP");
+}
+
+/**
  * The equivalent target-form block (`target = E + f`, `roll_deg` = the signed angle from the default up to `u`) — the
  * same camera as {@link toCameraBlock}, accepted by the port's current `camera_matrix` / `validate_camera`.
  */
@@ -390,7 +399,7 @@ export function fixed(v: number, d: number): string {
 /**
  * The equation of the plane `normal·X + offset = 0` (spec-v0.2 §4.3; contract §5.7.5), mirroring the core's
  * `plane_equation`: an axis normal gives `"y = 2.00"` (positive axis, two decimals), otherwise
- * `"0.707x + 0.707y = 1.200"` (first nonzero coefficient positive, terms `|n_i| < 5e-4` dropped, three decimals).
+ * `"0.707x + 0.707y = 1.200"` (terms `|n_i| < 5e-4` dropped, the first printed coefficient positive, three decimals).
  */
 export function plane_equation(normal: readonly number[], offset: number): string {
   const nn = Math.sqrt(normal[0]! * normal[0]! + normal[1]! * normal[1]! + normal[2]! * normal[2]!);
@@ -402,7 +411,8 @@ export function plane_equation(normal: readonly number[], offset: number): strin
       return `${"xyz"[i]} = ${fixed(sg * c, 2)}`;
     }
   }
-  const first = [0, 1, 2].find((i) => Math.abs(n[i]!) > 1e-9)!;
+  // the first PRINTED coefficient (|n_i| ≥ 5e-4) is made positive; a unit normal always has one (max |n_i| ≥ 1/√3)
+  const first = [0, 1, 2].find((i) => Math.abs(n[i]!) >= 5e-4)!;
   if (n[first]! < 0) {
     n = [-n[0]!, -n[1]!, -n[2]!];
     c = -c;
@@ -630,7 +640,10 @@ export function setD(rig: RigState, D: number): RigState {
   return { ...clone(rig), D: clamp(D, lo, hi) };
 }
 
-/** Focal-length slider `[8, 400]` mm (contract §5.7.8 item 9): field of view and frame only. Not an undo step. */
+/**
+ * Focal-length slider `[8, 400]` mm: the M7 range is kept by the [decision] of contract §5.7.8 item 9 (spec-v0.2 §5.7's
+ * 12–80 mm is the demo's range; loaded scenes use other values). Field of view and frame only. Not an undo step.
+ */
 export function setFocal(rig: RigState, focal: number): RigState {
   return { ...clone(rig), focal: clamp(focal, FOCAL_MIN_MM, FOCAL_MAX_MM) };
 }
@@ -784,14 +797,15 @@ export class UndoStack {
     return this.steps.length > 0;
   }
 
+  /** Every pushed step closes the current wheel burst; actions that record nothing leave it open (spec-v0.2 §5.7). */
   private push(rig: RigState): void {
+    this.wheelOpen = false;
     this.steps.push(clone(rig));
     if (this.steps.length > this.max) this.steps.shift();
   }
 
   /** A discrete action (view, equation, reset, lock on): one step when the state changed (pivot ignored). */
   record(before: RigState, after: RigState): boolean {
-    this.wheelOpen = false;
     if (sameState(before, after)) return false;
     this.push(before);
     return true;
@@ -799,7 +813,6 @@ export class UndoStack {
 
   /** Pointer-down of a drag or a two-finger gesture. */
   begin(rig: RigState): void {
-    this.wheelOpen = false;
     this.gesture = clone(rig);
   }
 
@@ -822,9 +835,9 @@ export class UndoStack {
     const burst = this.wheelOpen && t_ms - this.lastWheelMs <= WHEEL_BURST_MS;
     this.lastWheelMs = t_ms;
     if (sameBoard(before, after)) return false;
-    this.wheelOpen = true;
     if (burst) return false;
     this.push(before);
+    this.wheelOpen = true;
     return true;
   }
 

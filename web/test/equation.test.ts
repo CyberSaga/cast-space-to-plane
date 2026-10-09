@@ -42,7 +42,6 @@ test("valid equations: unit normal n and constant d of n·X = d", () => {
     ["X + Y = 3", [S, S, 0], 3 * S],
     ["x − 1 = 0", [1, 0, 0], 1], // U+2212 minus
     ["x – y = 0", [S, -S, 0], 0], // en dash
-    ["ｙ＝2".replace("ｙ", "y").replace("＝", "="), [0, 1, 0], 2],
     ["x ＋ y = 2", [S, S, 0], 2 * S], // full-width plus
     ["y －2 = 0", [0, 1, 0], 2], // full-width minus
     ["  2 x   =  4  ", [1, 0, 0], 2],
@@ -61,7 +60,9 @@ test("valid equations: unit normal n and constant d of n·X = d", () => {
 
 test("invalid equations: syntax errors and no variable keep the plane", () => {
   const syntax = ["x==1", "=1", "x=", "", "x", "xy=1", "x^2=1", "2(x)=1", "x+=1", "x=1=2", "1e3x=1", "x/2=1", "a=1", "x y = 1",
-    "x..=1", "--x=1", "x*y=1", "1.2.3=x", "9".repeat(400) + "x=1"];
+    "x..=1", "--x=1", "x*y=1", "1.2.3=x", "9".repeat(400) + "x=1",
+    // full-width letters and equals sign are not mapped (contract §5.7.8 item 12 maps only − – — － and ＋, as the demo)
+    "ｙ＝2", "y＝2", "ｙ=2"];
   for (const text of syntax) {
     assert.throws(() => parseEquation(text), (e: unknown) => e instanceof EquationError && e.code === "syntax", `"${text.slice(0, 20)}" syntax`);
   }
@@ -111,11 +112,6 @@ test("g + D outside [0.8, 40] is rejected and the plane is kept", () => {
   close(ok.g + ok.D, 39.9, 1e-9, "R");
   const near = { ...rig0, D: 0.5 };
   assert.throws(() => applyEquation(near, `y = ${P0[1] - 0.1}`), (e: unknown) => e instanceof EquationError && e.code === "too_near");
-  for (const code of ["syntax", "no_variable", "too_far", "too_near"] as const) {
-    assert.throws(() => {
-      throw new EquationError(code, "x");
-    }, EquationError);
-  }
 });
 
 test("pan and roll are kept; up = null under lock, the new u₀ in free mode", () => {

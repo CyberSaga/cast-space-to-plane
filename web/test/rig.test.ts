@@ -17,7 +17,7 @@ import {
   D_MAX_M, D_MIN_M, KAPPA_DEG_PER_PX, PITCH_LIMIT_DEG, R_MAX_M, R_MIN_M, UNDO_MAX, VIEWS, UndoStack, applyPlane,
   arrowDrag, arrowLength, arrowScreenVector, arrowTip, basis, bboxCentre, deltaText, equation, eye, fixed, foot,
   frameMetres, frameOf, fromCamera, fromOrbitState, measureRef, orbitFree, orbitLockLevel, orbitRightPane, orbitRing,
-  pan, pictureDelta, pinch, planeConst, planeToRig, plane_equation, readouts, resolvePicturePlane, ringPoint, ringRadius,
+  pan, pictureDelta, pinch, planeConst, planeModeWarnings, planeToRig, plane_equation, readouts, resolvePicturePlane, ringPoint, ringRadius,
   ringSign, rollOfFrame, setD, setFocal, setLockLevel, setPivot, setR, setRoll, sixView, snapToAxis, sync,
   toCameraBlock, toTargetCameraBlock, twoFinger, wheel, wrap_deg,
 } from "../src/rig.js";
@@ -262,6 +262,37 @@ test("ring, lock-horizontal: five drag directions keep g, D, |E − P|; right ve
   }
 });
 
+test("ring, lock-horizontal, KNOWN LIMITATION on the lower half of the ring (spec-v0.2 §5.2 independent signs)", () => {
+  // Spec-v0.2 §7.1 asks that the grabbed point follow the finger (cosine > 0.3). The §5.2 rule picks the yaw and
+  // pitch signs independently; on the lower half of the ring (below the ground in this geometry) the two axes can
+  // fight, so a diagonal drag moves the grabbed point against the finger. The demo behaves identically (the rig
+  // matches its ring code to 1e-15). Pinned here so a change to the rule is noticed; open question for the spec.
+  const obs = observer();
+  const rig0 = initial();
+  for (const theta of [(5 * Math.PI) / 4, (3 * Math.PI) / 2, (7 * Math.PI) / 4]) {
+    const grab = grabAt(rig0, theta, obs);
+    const X0 = ringPoint(rig0, BASE.frame_mm, theta);
+    for (const [dx, dy] of [[20, 0], [-20, 0], [0, 15], [0, -15], [14, -14], [-14, 14], [14, 14], [-14, -14]] as Vec2[]) {
+      const r1 = orbitLockLevel(rig0, dx, dy, grab, false);
+      const X1 = carry(rig0, r1, X0);
+      const p0 = obsPx(obs, X0)!, p1 = obsPx(obs, X1)!;
+      const m: Vec2 = [p1[0] - p0[0], p1[1] - p0[1]];
+      const cos = (m[0] * dx + m[1] * dy) / (Math.hypot(m[0], m[1]) * Math.hypot(dx, dy));
+      const what = `θ=${theta.toFixed(2)} (${dx}, ${dy}): cosine ${cos.toFixed(3)}`;
+      if (dx === 0 || dy === 0) {
+        // each axis alone still moves the point with the finger (measured ≥ 0.23, below the spec's 0.3 in places)
+        assert.ok(cos > 0.2, `${what} single axis`);
+      } else if (theta === (3 * Math.PI) / 2 && dx * dy < 0) {
+        // the known failure: the bottom of the ring, an up-right / down-left diagonal drag (measured −0.99, −0.95).
+        // If this starts failing, the sign rule changed: move the lower half into the test above.
+        assert.ok(cos < 0, `${what} known limitation`);
+      } else {
+        assert.ok(cos > 0.3, what);
+      }
+    }
+  }
+});
+
 test("ring sign rule: |dir·(axis × w)| < 1e-6 gives +1", () => {
   assert.equal(ringSign([0, 0, 1], [1, 0, 0], false, [0, 0, 1]), 1);
   assert.equal(ringSign([0, 0, 1], [1, 0, 0], true, [0, 0, 1]), 1);
@@ -323,7 +354,14 @@ test("top view reachable: dragging down in the right pane clamps at 89.9°, then
   assert.deepEqual(top.f, [0, 0, -1]);
   pivotCentred(top, 1e-7, "top view");
   close3(sync(top).E, add(rig0.P, [0, 0, sync(rig0).R]), 1e-9, "the eye above the pivot");
-  assert.deepEqual(camera_matrix(toTargetCameraBlock(top, BASE), CANVAS).warnings.map((w) => w.code), ["CAMERA_LOOKING_ALONG_UP"]);
+  // The target-form PROXY (toTargetCameraBlock, what the port's camera_matrix accepts today) warns
+  // CAMERA_LOOKING_ALONG_UP on a top view; the picture_plane form never does (spec-v0.2 §4.1), so plane mode drops it
+  // with planeModeWarnings. TODO(M10 wiring): render through toCameraBlock once ts/src/picture_plane.ts lands and
+  // assert `warnings.length === 0` on the picture_plane block instead.
+  const proxyWarnings = camera_matrix(toTargetCameraBlock(top, BASE), CANVAS).warnings;
+  assert.deepEqual(proxyWarnings.map((w) => w.code), ["CAMERA_LOOKING_ALONG_UP"], "proxy only");
+  assert.deepEqual(planeModeWarnings(proxyWarnings), [], "plane mode shows no warning for the top view");
+  assert.equal(toCameraBlock(top, BASE).picture_plane.up, undefined, "lock-horizontal top view: no up in the block");
   // the ring (left pane) reaches it too; dragging further keeps the eye above the pivot
   const obs = observer();
   const grab = grabAt(rig0, Math.PI / 2, obs);
@@ -454,6 +492,29 @@ test("right-pane wheel: R scales by exp(0.001·ΔY), f and the plane normal unch
   const back = undo.undo(next)!;
   assert.deepEqual(back, rig);
   close(undo.undo(back)!.g, rig0.g, 0, "undo restores the burst start");
+});
+
+test("wheel burst: a press without movement or a no-op view inside the burst does not split it", () => {
+  const rig0 = initial();
+  for (const interrupt of ["press", "view"] as const) {
+    const undo = new UndoStack();
+    const r1 = wheel(rig0, -50);
+    undo.wheel(rig0, r1, 0);
+    if (interrupt === "press") {
+      undo.begin(r1);
+      assert.equal(undo.end(r1), false, "press without movement records nothing");
+    } else {
+      assert.equal(undo.record(r1, { ...r1 }), false, "a view that changes nothing records nothing");
+    }
+    const r2 = wheel(r1, -50);
+    assert.equal(undo.wheel(r1, r2, 100), false, `${interrupt}: still the same burst`);
+    assert.equal(undo.size, 1, `${interrupt}: one step`);
+    // a recorded step does close the burst
+    const r3 = setR(r2, 5);
+    assert.equal(undo.record(r2, r3), true);
+    assert.equal(undo.wheel(r3, wheel(r3, -50), 200), true, `${interrupt}: a new burst after a recorded step`);
+    assert.equal(undo.size, 3);
+  }
 });
 
 test("right-pane two fingers: pinch scales R by d₀/d and the move pans; the gesture is one undo step", () => {
@@ -679,6 +740,10 @@ test("plane_equation: the contract §5.7.5 hand table and Python's tie rounding"
   assert.equal(plane_equation([-s, 0, s], 0), "0.707x - 0.707z = 0.000");
   assert.equal(plane_equation([0, 2, 0], -4), "y = 2.00", "normalised first");
   assert.equal(plane_equation([1e-4, 1, 1], 0), "0.707y + 0.707z = 0.000");
+  // the sign rule picks the first PRINTED coefficient (|n_i| ≥ 5e-4), not a dropped one
+  assert.equal(plane_equation([1e-4, -1, 0], 2), "1.000y = 2.000");
+  assert.equal(plane_equation([-1e-4, Math.SQRT1_2, Math.SQRT1_2], -1), "0.707y + 0.707z = 1.000");
+  assert.equal(plane_equation([1e-4, -Math.SQRT1_2, Math.SQRT1_2], 1), "0.707y - 0.707z = 1.000");
   assert.equal(fixed(0.125, 2), "0.12");
   assert.equal(fixed(0.375, 2), "0.38");
   assert.equal(fixed(2.675, 2), "2.67");
