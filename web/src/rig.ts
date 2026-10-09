@@ -8,13 +8,14 @@
  *     L = a·r₀ + b·u₀,   E = P − (g + D)·f + L,   Q = E + D·f,   plane f·X = c with c = f·P − g,   R = g + D.
  *
  * The core never sees the rig: every frame builds a camera block from it — the `picture_plane` form
- * ({@link toCameraBlock}) for files and the equivalent target form with `roll_deg` ({@link toTargetCameraBlock}) that
- * the port's current `camera_matrix` accepts. Every operation returns a new state; inputs are never mutated. A drag
+ * ({@link toCameraBlock}), which the port's `camera_matrix` / `render` resolve (`resolve_picture_plane`, contract §5.7.2),
+ * for drawing and files; the equivalent target form with `roll_deg` ({@link toTargetCameraBlock}) remains for the
+ * equivalence tests (contract §5.7.13 row 1). Every operation returns a new state; inputs are never mutated. A drag
  * is computed from the state at pointer-down and the **total** displacement `(dx, dy)` (DOM px, `dy` positive
  * downwards), never incrementally.
  */
 
-import { camera_matrix } from "castplane";
+import { camera_matrix, fixed, plane_equation, resolve_picture_plane } from "castplane";
 import type { Camera, Vec2, Vec3 } from "castplane";
 
 import { FOCAL_MAX_MM, FOCAL_MIN_MM, forward_from_angles } from "./orbit.js";
@@ -263,17 +264,9 @@ export function toCameraBlock(rig: RigState, base: LensBase): PicturePlaneCamera
 }
 
 /**
- * Warnings to show for the drawing camera in plane mode. The rig renders through the target-form proxy of
- * {@link toTargetCameraBlock}, which warns `CAMERA_LOOKING_ALONG_UP` on top / bottom views; the `picture_plane` form it
- * stands for never emits that code (spec-v0.2 §4.1), so it is dropped. Every other warning is kept, in order.
- */
-export function planeModeWarnings<W extends { code: string }>(warnings: readonly W[]): W[] {
-  return warnings.filter((w) => w.code !== "CAMERA_LOOKING_ALONG_UP");
-}
-
-/**
  * The equivalent target-form block (`target = E + f`, `roll_deg` = the signed angle from the default up to `u`) — the
- * same camera as {@link toCameraBlock}, accepted by the port's current `camera_matrix` / `validate_camera`.
+ * same picture as {@link toCameraBlock} (which never warns `CAMERA_LOOKING_ALONG_UP`; this block does on top / bottom
+ * views), kept for the equivalence tests of contract §5.7.13.
  */
 export function toTargetCameraBlock(rig: RigState, base: LensBase): TargetCamera {
   const d = sync(rig);
@@ -301,25 +294,16 @@ export interface ResolvedPicturePlane {
 
 /**
  * `s = n̂·E + off̂`, `D = |s|`, `f = −sign(s)·n̂`, `Q = E − s·n̂`, `target = E + f`; `roll_deg` from the default up of
- * `camera_matrix` to the given `up` (0 without `up`). Local mirror of the core function until the port ships it.
+ * `camera_matrix` to the given `up` (0 without `up`): the port's `resolve_picture_plane` (contract §5.7.2) with the lens
+ * fields of `cam` written explicitly.
  */
 export function resolvePicturePlane(cam: PicturePlaneCamera): ResolvedPicturePlane {
-  const pp = cam.picture_plane;
-  const nn = len(pp.normal);
-  const n = mul(pp.normal, 1 / nn), off = pp.offset / nn;
-  const E = copy3(cam.position);
-  const s = dot(n, E) + off;
-  const f: Vec3 = s > 0 ? [-n[0] + 0, -n[1] + 0, -n[2] + 0] : [n[0] + 0, n[1] + 0, n[2] + 0];
-  const offset = s > 0 ? -off + 0 : off + 0;
-  const Q = sub(E, mul(n, s));
-  const target = add(E, f);
-  let roll = 0;
-  if (pp.up !== undefined) roll = rollOfFrame(unit(sub(target, E)), pp.up);
+  const [blk, roll, info] = resolve_picture_plane(cam);
   const block: TargetCamera = {
-    position: E, target, roll_deg: roll, focal_length_mm: cam.focal_length_mm,
+    position: copy3(blk.position), target: copy3(blk.target!), roll_deg: roll, focal_length_mm: cam.focal_length_mm,
     frame_mm: [cam.frame_mm[0], cam.frame_mm[1]], shift_mm: [cam.shift_mm[0], cam.shift_mm[1]], near_m: cam.near_m,
   };
-  return { block, roll_deg: roll, normal: f, offset, distance: Math.abs(s), foot: Q };
+  return { block, roll_deg: roll, normal: copy3(info.normal), offset: info.offset, distance: info.distance, foot: copy3(info.foot) };
 }
 
 /** Notices of the load rule: which clamps were hit. */
@@ -339,8 +323,12 @@ export interface LoadResult {
 export function fromCamera(cam: AnyCamera, P: readonly number[]): LoadResult {
   let block: Pick<Camera, "position" | "focal_length_mm" | "frame_mm" | "roll_deg"> & Partial<Camera>;
   let D = DEFAULT_D_M;
-  if ("picture_plane" in cam) {
-    const res = resolvePicturePlane(cam);
+  const pp = cam.picture_plane;
+  if (pp !== undefined) {
+    const res = resolvePicturePlane({
+      position: cam.position, picture_plane: pp, focal_length_mm: cam.focal_length_mm, frame_mm: cam.frame_mm,
+      shift_mm: cam.shift_mm, near_m: cam.near_m,
+    });
     block = res.block;
     D = res.distance;
   } else {
@@ -379,54 +367,9 @@ export function bboxCentre(bbox: readonly (readonly number[])[]): Vec3 {
 
 // ------------------------------------------------------------------------------------------------ equation string
 
-/** Python `format(v, ".<d>f")`: correctly rounded, exact ties half to even; `-0.00` loses its sign. */
-export function fixed(v: number, d: number): string {
-  const x = v + 0;
-  let t = x.toFixed(d);
-  // An exact tie at d decimals is x = k / 2^(d+1) with k odd; JS rounds it away from zero, Python half to even.
-  const k = Math.abs(x) * 2 ** (d + 1);
-  if (Number.isInteger(k) && k % 2 === 1 && k < 2 ** 52) {
-    const scaled = Math.abs(x) * 10 ** d; // = n + 0.5 exactly
-    const n = Math.floor(scaled);
-    const m = n % 2 === 0 ? n : n + 1;
-    const digits = String(m).padStart(d + 1, "0");
-    t = (x < 0 ? "-" : "") + digits.slice(0, digits.length - d) + (d > 0 ? "." + digits.slice(digits.length - d) : "");
-  }
-  if (t[0] === "-" && /^-[0.]*$/.test(t)) t = t.slice(1);
-  return t;
-}
-
-/**
- * The equation of the plane `normal·X + offset = 0` (spec-v0.2 §4.3; contract §5.7.5), mirroring the core's
- * `plane_equation`: an axis normal gives `"y = 2.00"` (positive axis, two decimals), otherwise
- * `"0.707x + 0.707y = 1.200"` (terms `|n_i| < 5e-4` dropped, the first printed coefficient positive, three decimals).
- */
-export function plane_equation(normal: readonly number[], offset: number): string {
-  const nn = Math.sqrt(normal[0]! * normal[0]! + normal[1]! * normal[1]! + normal[2]! * normal[2]!);
-  let n = [normal[0]! / nn, normal[1]! / nn, normal[2]! / nn];
-  let c = -offset / nn;
-  for (let i = 0; i < 3; i++) {
-    if (Math.abs(Math.abs(n[i]!) - 1) < AXIS_TOL) {
-      const sg = n[i]! > 0 ? 1 : -1;
-      return `${"xyz"[i]} = ${fixed(sg * c, 2)}`;
-    }
-  }
-  // the first PRINTED coefficient (|n_i| ≥ 5e-4) is made positive; a unit normal always has one (max |n_i| ≥ 1/√3)
-  const first = [0, 1, 2].find((i) => Math.abs(n[i]!) >= 5e-4)!;
-  if (n[first]! < 0) {
-    n = [-n[0]!, -n[1]!, -n[2]!];
-    c = -c;
-  }
-  let out = "";
-  for (let i = 0; i < 3; i++) {
-    const v = n[i]!;
-    if (Math.abs(v) < 5e-4) continue;
-    const term = `${fixed(Math.abs(v), 3)}${"xyz"[i]}`;
-    if (!out) out = (v < 0 ? "-" : "") + term;
-    else out += (v < 0 ? " - " : " + ") + term;
-  }
-  return `${out} = ${fixed(c, 3)}`;
-}
+/** `fixed(v, d)` (Python `format(v, ".<d>f")`, exact ties to even, `-0.00` without its sign) and
+ * `plane_equation(normal, offset)` (spec-v0.2 §4.3; contract §5.7.5) are the port's (`ts/src/picture_plane.ts`). */
+export { fixed, plane_equation };
 
 /** The current plane's equation string `plane_equation(f, −c)`. */
 export function equation(rig: RigState): string {
@@ -705,7 +648,7 @@ export function applyPlane(rig: RigState, n: readonly number[], d: number): { ri
 
 /** Image of world points in frame mm (canvas mm / `s`); `null` for points behind the near plane. */
 export function measureRef(rig: RigState, base: LensBase, canvas_mm: readonly number[], points: readonly (readonly number[])[]): (Vec2 | null)[] {
-  const rec = camera_matrix(toTargetCameraBlock(rig, base), canvas_mm);
+  const rec = camera_matrix(toCameraBlock(rig, base), canvas_mm);
   const P = rec.P, Rt = rec.Rt[2];
   return points.map((X) => {
     const depth = Rt[0] * X[0]! + Rt[1] * X[1]! + Rt[2] * X[2]! + Rt[3];

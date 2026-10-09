@@ -50,3 +50,24 @@ export function cmp_code_points(a: string, b: string): number {
   }
   return a.length - b.length;
 }
+
+/**
+ * Python `format(x, ".<d>f")` for `0 <= d <= 20` and `|x| < 1e21`: correctly rounded from the exact binary value with
+ * exact ties to even (contract §5.7.5). JS `toFixed` is also exact but rounds an exact tie away from zero; a tie at `d`
+ * decimals is `x = j / 2^(d+1)` with `j` odd (`x·10^d = j·5^d / 2`), rounded here with integer arithmetic as `fmt` does
+ * at four decimals (§5.4.6). The sign of a negative value is kept (`"-0.00"` for `-0.001`), as Python does.
+ */
+export function py_fixed(x: number, d: number): string {
+  const v = x + 0;
+  if (!Number.isFinite(v)) return Number.isNaN(v) ? "nan" : v > 0 ? "inf" : "-inf";
+  const y = v * 2 ** (d + 1);
+  if (Math.abs(v) < 1e21 && Number.isInteger(y) && Math.abs(y) % 2 === 1) { // pyimod-free: absolute value
+    const n2 = BigInt(Math.abs(y)) * 5n ** BigInt(d); // = 2·x·10^d, odd
+    const f = n2 / 2n;
+    const m = f % 2n === 0n ? f : f + 1n; // pyimod-free: BigInt f >= 0
+    const scale = 10n ** BigInt(d);
+    const frac = d > 0 ? "." + (m % scale).toString().padStart(d, "0") : ""; // pyimod-free: BigInt m >= 0
+    return (v < 0 ? "-" : "") + (m / scale).toString() + frac;
+  }
+  return v.toFixed(d);
+}

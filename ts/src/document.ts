@@ -8,6 +8,7 @@
  */
 
 import type { Warning } from "./errors.js";
+import type { PicturePlaneRecord } from "./picture_plane.js";
 import type { Vec2, Vec3 } from "./types.js";
 
 export type Segment2 = [Vec2, Vec2];
@@ -211,7 +212,8 @@ export interface GeometryDocument {
   /** The effective switch (scene value or render override). */
   hidden_lines: boolean;
   canvas_mm: Vec2;
-  camera: { P: number[][]; C: Vec3; horizon_line: Vec3; principal_point: Vec2 };
+  /** `picture_plane` (M10, contract §5.7.4) only for a camera block of the `picture_plane` form. */
+  camera: { P: number[][]; C: Vec3; horizon_line: Vec3; principal_point: Vec2; picture_plane?: PicturePlaneRecord };
   /** Scene order; `receivers[0]` is the default receiver. */
   receivers: ReceiverEntry[];
   points: Record<string, PointRecord>;

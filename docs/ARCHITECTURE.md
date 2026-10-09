@@ -5356,4 +5356,22 @@ Web (`web/test/rig.test.ts`, `equation.test.ts`, `observer.test.ts`), each row o
   a separate flag).
 
 ### Implementation notes
-None yet.
+**[implementation] Python core and TypeScript port of §5.7.1–§5.7.6 (conformance v8).** Both implementations
+(`castplane/picture_plane.py`, `castplane/scene.py`, `castplane/camera.py`; `ts/src/picture_plane.ts`, `ts/src/scene.ts`,
+`ts/src/camera.ts`) agree with each other operation for operation and read these sections as follows. (1) Messages and
+order: `position` is validated first, then the form test, `roll_deg`, `normal`, `offset` (finite), the zero-normal test,
+`up`, and last the through-the-eye test at `.offset`; the field paths are those of §5.7.1, the texts are
+`"give exactly one of target, yaw_deg + pitch_deg or picture_plane"`, `"needs target, yaw_deg + pitch_deg or
+picture_plane"`, `"must not be given with picture_plane (the roll is carried by picture_plane.up)"`, `"must be a nonzero
+vector (|normal| > 1e-12)"`, `"must be a nonzero vector"` (zero `up`), `"must not be parallel to picture_plane.normal (its
+projection onto the plane is zero)"` (`|û × n̂| ≤ 1e-9`) and `"the plane passes through camera.position (…)"`; TS
+`ts/test/picture_plane.test.ts` pins them equal to Python's. (2) `resolve_picture_plane(cam)` returns
+`(target_cam, roll_deg, info)` (TS: the tuple `[target_cam, roll_deg, info]`) with `info = {normal: f, offset, distance: D,
+foot: Q}`; the §5.7.4 record is built by `picture_plane_document(info, rec, focal_length_mm)` inside `camera_matrix`.
+(3) The forward row of a `picture_plane` camera is `f` itself, bit for bit (`camera_forward` returns `info.normal`), not
+`normalize(target − E)`: the §2.2 fallback and the roll reference `(right₀, up₀)` are decided on `f`, and
+`ρ = degrees(atan2(−(up·right₀), up·up₀))` with the given `up` (its component along `f` drops out because
+`right₀, up₀ ⊥ f`). (4) `F2` / `F3` are Python `format` in Python and `pyfloat.py_fixed` (integer tie rule) plus the
+`-0` strip (`picture_plane.fixed`) in TS; `web/src/rig.ts` re-exports the port's `plane_equation` / `fixed`, resolves
+through the port's `resolve_picture_plane` and draws its readout camera through the `picture_plane` block
+(`toCameraBlock`), so the temporary `planeModeWarnings` filter is gone.

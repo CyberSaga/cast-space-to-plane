@@ -1,6 +1,7 @@
 /** Tests of the plane-mode rig (`web/src/rig.ts`; spec-v0.2 §7.1 web rows, contract §5.7.13): invariants, ring,
- * arrow, wheel, pan, roll, sliders, views, pivot, undo, the load rule and random frames. Every picture check goes
- * through the port's `camera_matrix` with `toTargetCameraBlock`. */
+ * arrow, wheel, pan, roll, sliders, views, pivot, undo, the load rule and random frames. Picture checks go through the
+ * port's `camera_matrix` with `toTargetCameraBlock` (the equivalent target form) or `toCameraBlock` (the
+ * `picture_plane` form the port resolves). */
 
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
@@ -17,7 +18,7 @@ import {
   D_MAX_M, D_MIN_M, KAPPA_DEG_PER_PX, PITCH_LIMIT_DEG, R_MAX_M, R_MIN_M, UNDO_MAX, VIEWS, UndoStack, applyPlane,
   arrowDrag, arrowLength, arrowScreenVector, arrowTip, basis, bboxCentre, deltaText, equation, eye, fixed, foot,
   frameMetres, frameOf, fromCamera, fromOrbitState, measureRef, orbitFree, orbitLockLevel, orbitRightPane, orbitRing,
-  pan, pictureDelta, pinch, planeConst, planeModeWarnings, planeToRig, plane_equation, readouts, resolvePicturePlane, ringPoint, ringRadius,
+  pan, pictureDelta, pinch, planeConst, planeToRig, plane_equation, readouts, resolvePicturePlane, ringPoint, ringRadius,
   ringSign, rollOfFrame, setD, setFocal, setLockLevel, setPivot, setR, setRoll, sixView, snapToAxis, sync,
   toCameraBlock, toTargetCameraBlock, twoFinger, wheel, wrap_deg,
 } from "../src/rig.js";
@@ -354,13 +355,11 @@ test("top view reachable: dragging down in the right pane clamps at 89.9°, then
   assert.deepEqual(top.f, [0, 0, -1]);
   pivotCentred(top, 1e-7, "top view");
   close3(sync(top).E, add(rig0.P, [0, 0, sync(rig0).R]), 1e-9, "the eye above the pivot");
-  // The target-form PROXY (toTargetCameraBlock, what the port's camera_matrix accepts today) warns
-  // CAMERA_LOOKING_ALONG_UP on a top view; the picture_plane form never does (spec-v0.2 §4.1), so plane mode drops it
-  // with planeModeWarnings. TODO(M10 wiring): render through toCameraBlock once ts/src/picture_plane.ts lands and
-  // assert `warnings.length === 0` on the picture_plane block instead.
-  const proxyWarnings = camera_matrix(toTargetCameraBlock(top, BASE), CANVAS).warnings;
-  assert.deepEqual(proxyWarnings.map((w) => w.code), ["CAMERA_LOOKING_ALONG_UP"], "proxy only");
-  assert.deepEqual(planeModeWarnings(proxyWarnings), [], "plane mode shows no warning for the top view");
+  // The picture_plane block never warns CAMERA_LOOKING_ALONG_UP (spec-v0.2 §4.1, contract §5.7.3); the equivalent
+  // target form still does on a top view.
+  assert.deepEqual(camera_matrix(toCameraBlock(top, BASE), CANVAS).warnings, [], "plane mode: no warning for the top view");
+  const targetWarnings = camera_matrix(toTargetCameraBlock(top, BASE), CANVAS).warnings;
+  assert.deepEqual(targetWarnings.map((w) => w.code), ["CAMERA_LOOKING_ALONG_UP"], "the target form only");
   assert.equal(toCameraBlock(top, BASE).picture_plane.up, undefined, "lock-horizontal top view: no up in the block");
   // the ring (left pane) reaches it too; dragging further keeps the eye above the pivot
   const obs = observer();
@@ -866,7 +865,7 @@ for (const name of EXAMPLES) {
     const A = shadow_geometry(sc);
     const P = bboxCentre(A.bbox);
     const pts = A.vertices.slice(0, 400);
-    for (const roll of [sc.camera.roll_deg, 30, 200]) {
+    for (const roll of [sc.camera.roll_deg ?? 0, 30, 200]) {
       const cam: Camera = { ...sc.camera, roll_deg: roll };
       const { rig, clampedD, clampedR } = fromCamera(cam, P);
       assert.equal(clampedD, false);

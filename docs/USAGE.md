@@ -732,6 +732,8 @@ const out   = render(scene, camera, hidden_lines, hidden_style); // {geometry: d
 
 多光源（合約 §5.3）由 `src/umbra.ts`（本影掃描線核心：`tolerances`、`scan_pieces`、`record_pieces`、`umbra_pieces`、`umbra_from_document`；`import { umbra } from "castplane"`）與 `src/multilight.ts`（`silhouette_lights`、`unlit_union`、`form_table`、`split_form`、`plate_form_lights`、`assemble_form_shadow`、`construction_block`、`construction_blocks`、`construction_doc`、`active_lights`、`umbra_entries`、`multi_light_name` 等；`import { multilight } from "castplane"`）移植；兩盞以上光源時文件與 SVG 帶 `constructions`、`umbra`、`form_shadow_core`、`form_shadow.<光源>`、`cast_shadow.umbra` 等（見第 1 節「多光源場景」）。`project_scene(scene, A, camera, umbra)` 與 `render(scene, camera, hidden_lines, hidden_style, umbra)` 的 `umbra = false` 讓 `umbra[].polygons` 為 `null`（網頁 UI 拖曳中即如此），其餘不變。本影由畫出的 `shadows[].polygons` 計算：兩個實作的這些多邊形可差幾個 ulp，因此本影碎片在比較器容差內相同，若物體立在受影面上（不同光源的接地頂點與共線邊在捨入範圍內），碎片的切分方式可能不同而區域相同（合約 §5.4 實作附註）。
 
+`picture_plane` 相機形式（M10，合約 §5.7）由 `src/picture_plane.ts` 移植，名稱與 `castplane.picture_plane` 相同：`resolve_picture_plane(cam)` 回傳 `[target_cam, roll_deg, info]`（Python 的三元組）、`picture_plane_document`、`plane_equation(normal, offset)`（數字依 Python `format` 捨入，恰好落在中間時取偶數：`fixed(x, d)`、`py_fixed`）、`unproject_to_plane(rec, uv, D)`（一個 `[u, v]` 或一串）。`validate_camera` / `validate_picture_plane` 的錯誤欄位與訊息和 Python 相同；`camera_forward` / `camera_matrix` 先解析這個形式（forward 逐位元就是 f、不發 `CAMERA_LOOKING_ALONG_UP`，相機紀錄多一個 `picture_plane`），文件只有這個形式才有 `camera.picture_plane`。
+
 與 Python 的差異：
 
 | 項目 | TypeScript |

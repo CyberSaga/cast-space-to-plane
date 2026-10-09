@@ -471,6 +471,16 @@ def test_plane_equation(normal, offset, text):
     assert plane_equation(normal, offset) == text
 
 
+def test_fixed_rounds_exact_ties_to_even():
+    # contract §5.7.5 item 3: the TypeScript port pins the same values (ts/test/picture_plane.test.ts)
+    from castplane.picture_plane import _fixed
+    assert _fixed(0.125, 2) == "0.12" and _fixed(0.375, 2) == "0.38" and _fixed(2.675, 2) == "2.67"
+    assert _fixed(-0.001, 2) == "0.00" and _fixed(0.0625, 3) == "0.062" and _fixed(-0.125, 2) == "-0.12"
+    assert _fixed(-0.0, 3) == "0.000"
+    assert plane_equation([0, 1, 0], -0.125) == "y = 0.12" and plane_equation([0, 1, 0], 0.125) == "y = -0.12"
+    assert plane_equation([0, 0.6, 0.8], -0.0625) == "0.600y + 0.800z = 0.062"
+
+
 # ---------------------------------------------------------------------------------------------------- unproject
 
 def test_unproject_principal_point_is_the_foot_and_corners_span_frame_m():

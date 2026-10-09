@@ -9,6 +9,8 @@
 import { make_warning } from "./errors.js";
 import type { Warning } from "./errors.js";
 import { TOL_DIR, ZERO_REL, clip_polygon_halfspace, clip_segment_halfspace, cross3, join, normalize_max } from "./homogeneous.js";
+import { picture_plane_document, resolve_picture_plane } from "./picture_plane.js";
+import type { PicturePlaneInfo, PicturePlaneRecord } from "./picture_plane.js";
 import type { Camera } from "./scene.js";
 import { radians } from "./transform.js";
 import type { Mat3, Mat34, Vec2, Vec3, Vec4 } from "./types.js";
@@ -37,6 +39,8 @@ export interface CameraRecord {
   frame_mm: Vec2;
   rect: Rect;
   warnings: Warning[];
+  /** M10: only for a `picture_plane` camera block, the document block of `picture_plane_document`. */
+  picture_plane?: PicturePlaneRecord;
 }
 
 /** The fields of a validated camera block that the camera model reads. */
@@ -51,8 +55,20 @@ function unit(v: readonly number[]): Vec3 {
   return [(v[0] as number) / n, (v[1] as number) / n, (v[2] as number) / n];
 }
 
-/** `forward` of a validated camera: target form or yaw/pitch form (contract §2.2). */
+/** `(right, up, along_up)` before roll (contract §2.2): `right = normalize(forward × up_world)`, `up = right × forward`
+ * with `up_world` = world z, or +y when `|forward × z| <= 1e-9` (`along_up` true). Python `camera._default_basis`. */
+export function default_basis(forward: readonly number[]): [Vec3, Vec3, boolean] {
+  let up_world = UP_WORLD;
+  const along_up = norm3(cross3(forward, up_world)) <= 1e-9;
+  if (along_up) up_world = FALLBACK_UP;
+  const right = unit(cross3(forward, up_world));
+  return [right, cross3(right, forward), along_up];
+}
+
+/** `forward` of a validated camera: target form, yaw/pitch form or (M10) `picture_plane` form, whose forward is `f`
+ * of `resolve_picture_plane` bit for bit (contract §2.2, §5.7.2). */
 export function camera_forward(cam: CameraBlock): Vec3 {
+  if (cam.picture_plane !== undefined) return [...resolve_picture_plane(cam)[2].normal] as Vec3;
   if (cam.target !== undefined) {
     const t = cam.target, p = cam.position;
     return unit([t[0] - p[0], t[1] - p[1], t[2] - p[2]]);
@@ -62,18 +78,21 @@ export function camera_forward(cam: CameraBlock): Vec3 {
 }
 
 /** Camera record `{K, R, t, Rt, P, C, forward, near, s, u0, v0, canvas_mm, frame_mm, rect, warnings}` (§5.4, §2.2). */
-export function camera_matrix(cam: CameraBlock, canvas: readonly number[]): CameraRecord {
+export function camera_matrix(cam_in: CameraBlock, canvas: readonly number[]): CameraRecord {
   const warnings: Warning[] = [];
-  const C: Vec3 = [cam.position[0], cam.position[1], cam.position[2]];
-  const forward = camera_forward(cam);
-  let up_world = UP_WORLD;
-  if (norm3(cross3(forward, up_world)) <= 1e-9) {
-    up_world = FALLBACK_UP;
-    warnings.push(make_warning("CAMERA_LOOKING_ALONG_UP", []));
+  let cam = cam_in;
+  let pp_info: PicturePlaneInfo | null = null;
+  let roll_deg = cam.roll_deg ?? 0.0;
+  if (cam.picture_plane !== undefined) {
+    // M10 (spec-v0.2 §4.1): resolve to the target form; the explicit frame up never warns
+    [cam, roll_deg, pp_info] = resolve_picture_plane(cam);
   }
-  const right = unit(cross3(forward, up_world));
-  const up = cross3(right, forward);
-  const rho = radians(cam.roll_deg ?? 0.0);
+  const C: Vec3 = [cam.position[0], cam.position[1], cam.position[2]];
+  // picture_plane: forward is f bit for bit (the |f × z| <= 1e-9 fallback is decided on f, R[2] = document normal)
+  const forward: Vec3 = pp_info === null ? camera_forward(cam) : [...pp_info.normal] as Vec3;
+  const [right, up, along_up] = default_basis(forward);
+  if (along_up && pp_info === null) warnings.push(make_warning("CAMERA_LOOKING_ALONG_UP", []));
+  const rho = radians(roll_deg);
   const cr = Math.cos(rho), sr = Math.sin(rho);
   const right_r: Vec3 = [cr * right[0] + sr * up[0], cr * right[1] + sr * up[1], cr * right[2] + sr * up[2]];
   const up_r: Vec3 = [-sr * right[0] + cr * up[0], -sr * right[1] + cr * up[1], -sr * right[2] + cr * up[2]];
@@ -92,7 +111,9 @@ export function camera_matrix(cam: CameraBlock, canvas: readonly number[]): Came
   const [W, H] = cv;
   const g = 0.5 + RECT_GROW;
   const rect: Rect = [-g * W, g * W, -g * H, g * H];
-  return { K, R, t, Rt, P, C, forward, near: cam.near_m ?? 0.05, s, u0, v0, canvas_mm: cv, frame_mm: frame, rect, warnings };
+  const rec: CameraRecord = { K, R, t, Rt, P, C, forward, near: cam.near_m ?? 0.05, s, u0, v0, canvas_mm: cv, frame_mm: frame, rect, warnings };
+  if (pp_info !== null) rec.picture_plane = picture_plane_document(pp_info, rec, f);
+  return rec;
 }
 
 /** `x̃ = P·X` for one 4-vector (left-to-right 4-term sums, §5.4.4 (2)). */
