@@ -55,9 +55,9 @@ export interface Controls {
   statusLine: HTMLDivElement;
   errorPanel: HTMLDivElement;
   warningsBody: HTMLTableSectionElement;
-  /** M9 (contract §5.6.3): the observer switch, its pane and its controls. */
+  /** M9 (contract §5.6.3): the observer pane and its controls; the "預覽" button hides them (D80). */
   panes: HTMLDivElement;
-  observerOn: HTMLInputElement;
+  preview: HTMLButtonElement;
   observerControls: HTMLSpanElement;
   observerFrame: HTMLButtonElement;
   observerRays: HTMLInputElement;
@@ -100,7 +100,7 @@ export function controls(): Controls {
     errorPanel: $<HTMLDivElement>("error"),
     warningsBody: $<HTMLTableElement>("warnings").tBodies[0]!,
     panes: $<HTMLDivElement>("panes"),
-    observerOn: $<HTMLInputElement>("observer-on"),
+    preview: $<HTMLButtonElement>("preview"),
     observerControls: $<HTMLSpanElement>("observer-controls"),
     observerFrame: $<HTMLButtonElement>("observer-frame"),
     observerRays: $<HTMLInputElement>("observer-rays"),

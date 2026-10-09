@@ -98,6 +98,8 @@ the two-pane / stacked layout, `obs ms`; `picture_plane` scene cameras handed to
 block with the target at the scene centre's depth, and `D` = their `picture_plane` distance (§5.6.2). Acceptance: §5.6.8 / §5.6.9 (switch-off identity of SVG and JSON, < 100 ms per frame on the five examples,
 recorded in `web/README.md`).
 
+Note (D80, after M10): the "switch" in this step became the default-on observer pane with a 預覽 toggle that hides it; "switch-off identity" reads as the preview. See contract §5.6 implementation notes and DECISIONS D80.
+
 ### Step 4' — rig and equation pure functions (§5.7.7, §5.7.8; parallel with 4b)
 `rig.ts`: state, derived quantities, `camera_of_rig`, load rule, ring (both modes), right-pane orbit, snap, arrow,
 wheel / pinch, pan, roll, D, pivot, views, undo stack helpers; `equation.ts`: the grammar of §5.7.8 item 12. Acceptance:

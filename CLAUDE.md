@@ -53,7 +53,7 @@ match what you changed:
   - New behaviour goes in as an appended `[decision, implementation]` paragraph at the end of that section's
     `### Implementation notes`.
   - Never rewrite existing contract text; amend it by reference.
-- `docs/DECISIONS.md` (D1–D79) explains each decision in plain language. A real new decision gets the next D-number,
+- `docs/DECISIONS.md` (D1–D80) explains each decision in plain language. A real new decision gets the next D-number,
   written in the same 規格 / 問題 / 決定 / 理由 style.
 - `docs/spec/spec-v0.1.md` is the original spec. The contract overrides it where marked **[decision]**.
 - In the contract, "§N" means the contract and "spec §N" means the spec.

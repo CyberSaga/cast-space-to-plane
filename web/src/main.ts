@@ -425,7 +425,6 @@ resize.observe(viewport);
 resize.observe(ui.observerPane);
 
 // ---------------------------------------------------------------------------- observer (M9, contract §5.6)
-const OBSERVER_KEY = "castplane.observer";
 
 /** Update the observer from the drawing camera's record and document (§5.6.2, §5.6.5): board, drawing on the frame
  * (checked layers), vertex rays; frame it when a framing is pending and no drag is running (§5.6.4); then draw it.
@@ -467,14 +466,13 @@ function request_observer_render(): void {
   });
 }
 
+/** Show or hide the observer pane (D80: shown at page start; hidden only while "預覽" is pressed, which is the M9
+ * switch-off state: the drawing pane takes the full width and the outputs are unchanged). */
 function set_observer(on: boolean): void {
   state.obs.on = on;
-  ui.observerOn.checked = on;
-  try {
-    localStorage.setItem(OBSERVER_KEY, on ? "1" : "0");
-  } catch {
-    // storage unavailable: the switch still works for this page
-  }
+  ui.preview.setAttribute("aria-pressed", on ? "false" : "true");
+  ui.preview.textContent = on ? "預覽" : "返回編輯";
+  ui.preview.title = on ? "只看作圖畫面（Esc 返回）" : "回到旁觀視角";
   ui.observerPane.hidden = !on;
   ui.observerControls.hidden = !on;
   ui.panes.classList.toggle("observer-on", on);
@@ -488,7 +486,15 @@ function set_observer(on: boolean): void {
   request_render(); // the resting frame: the observer is built from it (and the drawing pane re-letterboxed)
 }
 
-ui.observerOn.addEventListener("change", () => set_observer(ui.observerOn.checked));
+/** "預覽" (D80): the drawing pane alone; pressed again ("返回編輯") or Esc returns to the edit view. */
+function set_preview(preview: boolean): void {
+  if (preview === !state.obs.on) return;
+  set_observer(!preview);
+}
+ui.preview.addEventListener("click", () => set_preview(state.obs.on));
+window.addEventListener("keydown", (ev) => {
+  if (ev.key === "Escape" && !state.obs.on) set_preview(false);
+});
 ui.observerFrame.addEventListener("click", () => {
   state.obs.needs_framing = true;
   observer_refresh(true);
@@ -627,10 +633,13 @@ function frame(): void {
     svg: svg_blob(state.doc, state.layersChecked, state.sceneName, hidden_style()).text,
     json: json_blob(state.doc, state.sceneName).text,
   },
-  /** M9: switch the observer on / off as the "旁觀視角" checkbox does. */
+  /** D80: press / release "預覽" (the observer pane hidden / shown) as a user would. */
+  set_preview: (preview: boolean) => {
+    if (preview === state.obs.on) ui.preview.click();
+  },
+  /** M9: show / hide the observer pane (`set_preview(!on)`). */
   set_observer: (on: boolean) => {
-    ui.observerOn.checked = on;
-    ui.observerOn.dispatchEvent(new Event("change"));
+    if (on !== state.obs.on) ui.preview.click();
   },
   /** M9: the observer's state (`null` before it was first switched on). */
   get observer() {
@@ -679,13 +688,8 @@ function frame(): void {
   },
 };
 
-let stored_on = false;
-try {
-  stored_on = localStorage.getItem(OBSERVER_KEY) === "1";
-} catch {
-  stored_on = false;
-}
-if (stored_on) set_observer(true);
+// D80: the page always opens in the edit view (observer pane shown); the old "castplane.observer" storage key is ignored
+set_preview(TOGGLES.preview);
 layout();
 const first = EXAMPLES.find((e) => e.name === "basic") ?? EXAMPLES[0];
 if (first !== undefined) {

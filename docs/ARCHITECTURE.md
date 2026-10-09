@@ -5116,6 +5116,31 @@ The observer shows lights as in §5.4.10 (`scene3d`). Nothing in this table is w
   that `E` and the frame corners lie inside the pane after each load, that right and middle drags leave the observer
   still, the three v8 cases before a drag, after one and after "Reset camera", and that a frame below the ground is
   drawn (pixel colour on its bottom edge). Each smoke check fails on a build with its fix disabled.
+- **[decision, implementation] (M9, D80) The observer pane is shown by default; the 旁觀視角 switch is replaced by the
+  預覽 button.** Amends, by reference and with the existing text unchanged: §5.6.0 "Switch-off identity", the first two
+  bullets of §5.6.3 ("default **off**; persisted per viewer in `localStorage`"; "On: ... Off: ..."), the two sentences of
+  §5.6.4 that create the pane "on the first switch-on only" and store the switch state under
+  `localStorage["castplane.observer"]`, the last sentence of the §5.4 M10 / D79 note ("The M9 observer switch keeps its
+  default (off)"), and "The top bar holds the observer switch" in the §5.7 "Controls, readouts and notices" note.
+  (1) **Default.** The "旁觀視角" checkbox no longer exists. The page always opens in the **edit view**: the observer
+  pane is shown from the first frame, left of the drawing pane at equal width, and stacked on top of it below 880 px of
+  page width (the layout the old switch gave when on). The observer is where the board is manipulated (§5.7.9, D79),
+  so it is not an optional extra. (2) **The 預覽 button.** The top bar gets a toggle button "預覽" with `aria-pressed`
+  (`false` in the edit view). While previewing (`aria-pressed="true"`) the observer pane, its toolbar control
+  「旁觀視角取景」 and the `obs ms` status are hidden and the drawing pane takes the full width: this is exactly the old
+  "switch off" state, so no observer update runs (`obs_ms` is `null` in the frame records, as it was with the switch
+  off). The button then reads 「返回編輯」; clicking it again, or pressing Esc, returns to the edit view (observer
+  shown, `obs ms` back). The sliders (focal length, `D`, roll), the six views, the equation field and its quick buttons,
+  復原, 重設, lock-horizontal and the pivot selector work in both views. The board cannot be dragged while previewing,
+  because the drawing pane is view-only (D79, §5.7 note) and the handles live in the observer pane. (3) **Identity.**
+  The "switch-off identity" of §5.6.0 holds with "preview" in place of "switch off": the layout of a previewing page,
+  its render loop and its outputs are those of the §5.4.10 page (as the D79 note reads the identity: layout, render loop
+  and outputs, not input), and for the same drawing camera the SVG overlay markup, the downloaded SVG
+  and the downloaded JSON are byte-identical between the edit view and the preview (the §5.6.8 and §5.6.9 tests keep
+  their content, read with "edit view" for "switch on" and "preview" for "switch off"). (4) **Storage.** Whether the
+  observer is shown is no longer remembered: `localStorage["castplane.observer"]` is neither read nor written (a value
+  left by an earlier page is ignored), the preview state is not stored, and every page start is the edit view. No
+  document byte, warning code or conformance case changes (docs/DECISIONS.md D80).
 
 ### 5.7 M10 — plane mode, board-first (spec-v0.2 §1, §4, §5, §6, §7)
 
@@ -5640,3 +5665,7 @@ through the port's `resolve_picture_plane` and draws its readout camera through 
   check of the new row. (7) **D78** keeps its distinctions; its mapping "右窗左拖＝圓環、滾輪＝箭頭、右拖＝平移" is
   withdrawn (docs/DECISIONS.md D79 amends it by reference). §5.4.10's input mapping for the drawing pane was already
   superseded by §5.7.9, and now has no replacement on that pane.
+- **[decision, implementation] (M10, D80) Amendment to the D79 note above.** In (2), "With the observer switch off no
+  drag or wheel can change the camera" is read as "while previewing (§5.6, D80 note)"; the 旁觀視角 switch is gone and
+  the observer is shown by default, so the drag and wheel on the board are available in the edit view without any
+  switch. The rest of the D79 note stands.

@@ -528,3 +528,19 @@ test("the drawing pane is view-only: no pointer, wheel, touch or contextmenu lis
   assert.ok(!/touch-action|cursor/.test(stageRule), stageRule);
   assert.match(css, /^#observer \{[^}]*touch-action: none;/m);
 });
+
+test("the page opens in the edit view: no observer checkbox, a 預覽 toggle button, nothing remembered in storage (D80)", () => {
+  assert.equal(initial_toggles(LAYER_IDS).preview, false, "not previewing at start: the observer pane is shown");
+  const html = readFileSync(resolve(ROOT, "web", "index.html"), "utf-8");
+  assert.ok(!html.includes('id="observer-on"'), "the 旁觀視角 checkbox is gone");
+  assert.match(html, /<button id="preview" type="button" aria-pressed="false"[^>]*>預覽<\/button>/);
+  assert.ok(!/<span class="group" id="observer-controls" hidden>/.test(html), "旁觀視角取景 is shown with the pane");
+  const src = readFileSync(resolve(ROOT, "web", "src", "main.ts"), "utf-8");
+  assert.ok(!/localStorage|OBSERVER_KEY|castplane\.observer"/.test(src.replace(/\/\/.*$/gm, "")), "no stored observer state");
+  assert.match(src, /^set_preview\(TOGGLES\.preview\);$/m, "the start state comes from initial_toggles");
+  // the button toggles; its label and aria-pressed follow; Esc leaves the preview
+  assert.match(src, /ui\.preview\.addEventListener\("click", \(\) => set_preview\(state\.obs\.on\)\)/);
+  assert.match(src, /ui\.preview\.setAttribute\("aria-pressed", on \? "false" : "true"\)/);
+  assert.match(src, /ui\.preview\.textContent = on \? "預覽" : "返回編輯"/);
+  assert.match(src, /ev\.key === "Escape" && !state\.obs\.on\) set_preview\(false\)/);
+});

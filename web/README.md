@@ -23,7 +23,7 @@ Phase 2 (contract §5.4.10, the M4–M6 format): `wall_and_ground` with hidden l
 ![mesh demo](../docs/images/web_ui_mesh_demo.png)
 ![two lights](../docs/images/web_ui_two_lights.png)
 
-M9 (contract §5.6): the observer view, switched on with *旁觀視角*:
+M9 (contract §5.6): the observer view, shown by default (hidden by the *預覽* button, D80):
 
 ![observer view](../docs/images/web_ui_observer.png)
 
@@ -68,11 +68,12 @@ drag):
     natively; `touch-action` is the browser default on `#stage` and `none` only on `#observer`) and does not suppress
     the context menu. A file drop still works anywhere on the page. The former mappings (left drag = ring, wheel or
     pinch = arrow, right drag / Shift drag / two-finger move = pan) are removed.
-  - Observer pane (left, with *旁觀視角*) is where the board is moved: drag the orange dashed ring to orbit (lock-horizontal by default, free roll
+  - Observer pane (left, shown by default) is where the board is moved: drag the orange dashed ring to orbit (lock-horizontal by default, free roll
     with *鎖水平* off), and drag the blue arrow's tip (*板子距離*) to move the board along `f`. Hit radius: 14 px
     for a mouse, 26 px for touch, 0.8× for the ring; the tip wins. The black eye is never a handle. Anywhere else
-    the drag orbits the observer camera; the wheel or a pinch zooms the observer camera. With the switch off no drag or
-    wheel changes the camera: use the sliders, views, equation field, undo and 重設.
+    the drag orbits the observer camera; the wheel or a pinch zooms the observer camera. While previewing (*預覽*)
+    no drag or wheel changes the camera: use the sliders, views, equation field, undo and 重設, or go back with
+    *返回編輯* (or Esc).
   - *吸附* (default on; Alt suspends it): within 5° of an axis the board snaps to it exactly, and an axis-parallel
     board's plane coordinate snaps to 0.1 m while the arrow is dragged.
   - Sliders: focal length (logarithmic, 8–400 mm), `D` (0.5–12 m, the board stays and the eye moves), roll (±180°
@@ -121,10 +122,13 @@ drag):
   `message` of the current document.
 
 - **Observer view** (M9, contract §5.6; `src/observer.ts` pure and unit-tested, `src/observer3d.ts` the three.js
-  pane). The toolbar switch *旁觀視角* (off by default, remembered per browser in `localStorage`) opens a second
-  three.js view left of the drawing pane, at equal width; below 880 px of page width the two panes stack, the
-  observer on top. With the switch off there is only the drawing pane: no second WebGL context is created and nothing is
-  computed for it. The observer shows, from outside, the drawing camera's eye **E** (read-only, with its coordinates),
+  pane). The page always opens in the edit view (D80): a second
+  three.js view is shown left of the drawing pane, at equal width; below 880 px of page width the two panes stack, the
+  observer on top. The toolbar toggle *預覽* (`aria-pressed`) hides the observer pane, its toolbar control *旁觀視角取景*
+  and `obs ms`, and the drawing pane takes the full width: the old "switch off" state, with nothing computed for the
+  observer. While previewing the button reads *返回編輯*; clicking it again or pressing Esc returns to the edit view. The
+  choice is not remembered (`localStorage["castplane.observer"]` is neither read nor written), and the board cannot be
+  dragged while previewing (the drawing pane is view-only, D79). The observer shows, from outside, the drawing camera's eye **E** (read-only, with its coordinates),
   the board (the picture plane at distance `D` in front of the eye: 4 m, or the `picture_plane` distance of the
   scene's camera clamped into 0.5–12 m), the frame on it (the canvas rectangle unprojected with the core's
   `unproject_to_plane`) with the current drawing laid on it 0.012 m towards the eye, the frustum (dotted on to 1.9×),
@@ -140,7 +144,7 @@ drag):
   would fall outside the pane's inner 90 %, as it would in the portrait side-by-side pane); it also frames after a
   scene load, 重設, 復原, a view, an applied equation and a pivot change, never during a drag. In M10 the pane also
   shows the plane-mode handles (the orange ring and the blue arrow, above). The observer draws the receivers see-through, so a frame below
-  the ground stays visible. The status line shows `obs ms` (the observer's own cost per frame) while the switch is on.
+  the ground stays visible. The status line shows `obs ms` (the observer's own cost per frame) in the edit view.
   A scene's own camera (any form) is rendered as it is until the board is first moved (so the document, its warnings
   and the downloads are the CLI's); from then on the rig's `picture_plane` block, with the same picture.
 
@@ -212,7 +216,7 @@ number); its resting DOM frames took 100–169 ms of `innerHTML`.
 ### M9: the observer view on
 
 Same script and container (headless Chromium 141.0.7390.37, SwiftShader): a 30-step drag of the drawing camera per
-scene with the observer switched on. `obs ms` is the observer's update (board, drawing on the frame, vertex rays and
+scene in the edit view (observer shown). `obs ms` is the observer's update (board, drawing on the frame, vertex rays and
 the `renderer.render` call, which returns before the GPU work completes); `total` is `core ms + dom ms + obs ms` of
 the frame. Minimum / median / maximum over the drag frames of one run:
 
@@ -226,7 +230,7 @@ the frame. Minimum / median / maximum over the drag frames of one run:
 | benchmark_100 (recorded, not gated) | 54.3 / 158.8 / 238.1 | 166.8 / 286.2 / 486.2 |
 
 The five examples stay far below the 100 ms frame of contract §5.6.9. `benchmark_100.json` draws ≈ 30 k segments on
-the frame; with the observer off its drag frames are unchanged (table above).
+the frame; in the preview its drag frames are unchanged (table above).
 
 ## Smoke check
 
@@ -253,11 +257,14 @@ The script needs a Playwright installed outside the repository; it is not a depe
   3D view has the ground plane with its grid and the wall as a plate with an outline; `mesh_demo` shows the house
   mesh and the tank; `two_lights` has one helper per light, the per-light construction blocks and umbra pieces at
   rest, none during a drag and again after it. With `--shots DIR` it saves `DIR/web_ui_<name>.png` for these three.
-- M9 (contract §5.6.9): for the five phase-1 examples and the optional scene file the observer is switched on and
-  off: the writer's SVG text, the overlay markup, the SVG / JSON download texts and the camera must be identical with
-  the switch on and off; a 30-step drag of the drawing camera with the switch on records `obs ms` and checks
+- D80: the page opens in the edit view (observer pane shown, no 旁觀視角 checkbox, *預覽* not pressed); *預覽* hides
+  the pane and widens the drawing pane with the drawing and the downloads unchanged, and a second click (*返回編輯*)
+  or Esc returns; a reload opens in the edit view even with the old `castplane.observer` key set to off.
+- M9 (contract §5.6.9): for the five phase-1 examples and the optional scene file the observer pane is hidden and
+  shown (*預覽*): the writer's SVG text, the overlay markup, the SVG / JSON download texts and the camera must be
+  identical either way; a 30-step drag of the drawing camera with the pane shown records `obs ms` and checks
   `core + dom + obs < 100 ms` per frame on the five examples, and that the observer follows the drawing camera; an
-  observer drag and wheel move only the observer; switching off hides the pane, its controls and `obs ms` and restores
+  observer drag and wheel move only the observer; *預覽* hides the pane, its controls and `obs ms` and restores
   the drawing pane's size; a `picture_plane` scene camera loads with the board `y = 2.00`, `D = 4.00 m`; below 880 px
   the panes stack (observer on top), above they sit side by side at equal width; after the large scene's drag the
   `<img>` overlay is not displayed at rest. Review fixes: after each load `E` and the frame corners are inside the
@@ -265,7 +272,7 @@ The script needs a Playwright installed outside the repository; it is not a depe
   camera's document (the expected file's warnings, `camera.picture_plane`) until a drag, the rig's `picture_plane`
   block after it (M10), and the scene's block again after 重設; a frame below the ground is drawn (its bottom edge's
   pixel colour). With `--shots DIR` it also saves `DIR/web_ui_observer.png`.
-- M10 (contract §5.7.13, plane mode, on `basic` with the observer on):
+- M10 (contract §5.7.13, plane mode, on `basic` in the edit view):
   - the ring drag changes `f` and keeps `g`, `D`, `|E − P|`;
   - the arrow tip wins the hit test, and its drag changes `g` only (the eye moves along `f`);
   - the hit test never returns the eye, and a drag on it orbits the observer only;
@@ -279,7 +286,7 @@ The script needs a Playwright installed outside the repository; it is not a depe
   - `x==1` turns the field red and keeps the plane, and the quick button `x=1` applies;
   - undo and 重設 restore `f`, `g`, `up`, the focal length and the sliders;
   - an object click sets the pivot (label `旋轉中心：<id>`);
-  - the drawing is identical with the observer on and off for an edited camera;
+  - the drawing is identical with the observer pane shown and hidden (*預覽*) for an edited camera;
   - Download scene writes the `picture_plane` form and reloads to the same SVG;
   - 900 random rig states render finite numbers;
   - review fixes: a drag held across a scene load leaves

@@ -18,10 +18,13 @@
 // picker; the phase-2 checks load `wall_and_ground` (hidden lines on: the hidden sub-groups in the overlay, the
 // "omit" style, the wall plate in the 3D view), `mesh_demo` (the house mesh) and `two_lights` (two light helpers, the
 // per-light construction blocks, umbra pieces at rest and none during a drag), and with `--shots DIR` save
-// DIR/web_ui_<name>.png for each. M9 (contract §5.6.9): for the five phase-1 examples (and the optional scene file)
-// the "旁觀視角" switch is turned on and off: the writer's SVG text, the overlay markup and the SVG / JSON downloads
-// must be identical with the switch on and off for the same camera; a 30-step ring drag of the drawing camera with
-// the switch on records `core ms` + `dom ms` + `obs ms` per frame (< 100 ms for the five examples); an observer drag must
+// DIR/web_ui_<name>.png for each. D80: the page opens in the edit view (observer pane shown, no 旁觀視角 checkbox);
+// "預覽" hides the pane and widens the drawing pane without changing the drawing or the downloads, toggles back on a
+// second click and on Esc, and a reload opens in the edit view whatever was stored. M9 (contract §5.6.9): for the
+// five phase-1 examples (and the optional scene file) the observer pane is hidden and shown (預覽 pressed and
+// released): the writer's SVG text, the overlay markup and the SVG / JSON downloads must be identical with the pane
+// hidden and shown for the same camera; a 30-step ring drag of the drawing camera with
+// the pane shown records `core ms` + `dom ms` + `obs ms` per frame (< 100 ms for the five examples); an observer drag must
 // not change the drawing; the narrow (< 880 px) layout stacks the panes; switching off restores the drawing pane's
 // size; framing keeps the eye and the frame in the pane; a right or middle drag does not move the observer; the three
 // v8 `picture_plane` cases render the scene camera's document until an arrow drag (and again after "重設"); a frame
@@ -33,7 +36,7 @@
 // keeps the eye; the six views give exact axes; y=2 with D = 4 puts the eye at y = −2; a bad equation turns the field
 // red and keeps the plane; undo and reset restore f, g, up (and the sliders); the eye is not draggable; the D slider
 // keeps the board; an object click sets the pivot; Download scene writes the picture_plane form and reloads to the
-// same SVG; the overlay is identical with the observer switch on and off for the same edited camera; 900 random rig
+// same SVG; the overlay is identical with the observer pane shown and hidden (預覽) for the same edited camera; 900 random rig
 // states render finite. With `--shots DIR` it also saves DIR/web_ui_plane_mode.png. Prints one JSON record. Exit 1 on
 // a page error or a failed check.
 import { execSync } from "node:child_process";
@@ -252,6 +255,61 @@ const toggle_checks = {};
   check(is_default(back), `toggles: the defaults after loading another example (${JSON.stringify(back)})`);
 }
 
+// D80: the page opens in the edit view (the observer pane shown); "預覽" hides the pane (the drawing pane takes the
+// full width, the drawing unchanged) and toggles back on a second click or Esc; nothing is remembered across visits
+const preview_state = () => page.evaluate(() => {
+  const b = document.getElementById("preview");
+  return {
+    observer_shown: !document.getElementById("observer").hidden,
+    controls_shown: !document.getElementById("observer-controls").hidden,
+    pressed: b.getAttribute("aria-pressed"), label: b.textContent,
+    obs_ms: document.getElementById("status").textContent.includes("obs ms"),
+    no_checkbox: document.getElementById("observer-on") === null,
+    stage_w: document.getElementById("stage").getBoundingClientRect().width,
+    svg: window.castplane_web.svg, dl: JSON.stringify(window.castplane_web.download_texts()),
+  };
+});
+const edit_view = (s) => s.observer_shown && s.controls_shown && s.pressed === "false" && s.label === "預覽" && s.obs_ms
+  && s.no_checkbox;
+const preview_view = (s) => !s.observer_shown && !s.controls_shown && s.pressed === "true" && s.label === "返回編輯"
+  && !s.obs_ms && s.no_checkbox;
+const preview_checks = {};
+{
+  const brief = (s) => ({ ...s, svg: s.svg.length, dl: s.dl.length });
+  const edit0 = await preview_state();
+  preview_checks.page_load = brief(edit0);
+  check(edit_view(edit0), `preview: the page opens in the edit view (${JSON.stringify(brief(edit0))})`);
+  await page.click("#preview");
+  await frames2();
+  await frames2();
+  const pv = await preview_state();
+  preview_checks.preview = brief(pv);
+  check(preview_view(pv) && pv.stage_w > edit0.stage_w, `preview: 預覽 hides the observer pane, the drawing widens (${JSON.stringify(brief(pv))})`);
+  check(pv.svg === edit0.svg && pv.dl === edit0.dl, "preview: the drawing and the downloads are unchanged by 預覽");
+  await page.keyboard.press("Escape");
+  await frames2();
+  await frames2();
+  const esc = await preview_state();
+  check(edit_view(esc) && esc.stage_w === edit0.stage_w && esc.svg === edit0.svg, "preview: Esc returns to the edit view");
+  await page.click("#preview");
+  await frames2();
+  await page.click("#preview");
+  await frames2();
+  await frames2();
+  check(edit_view(await preview_state()), "preview: a second click (返回編輯) returns to the edit view");
+  // the old stored switch state is ignored: a visit that left the observer off still opens in the edit view
+  await page.evaluate(() => localStorage.setItem("castplane.observer", "0"));
+  await page.click("#preview");
+  await page.reload();
+  await page.waitForFunction(() => document.getElementById("status").textContent.includes("core ms"), null, { timeout: 30000 });
+  await frames2();
+  await frames2();
+  const again = await preview_state();
+  preview_checks.after_reload = brief(again);
+  check(edit_view(again), `preview: a reload opens in the edit view whatever was stored (${JSON.stringify(brief(again))})`);
+  check(is_default(await toggles()), "preview: the toggles are the defaults after a reload");
+}
+
 /** Load a scene file through the file picker under the name `<name>.json` and wait for its first frame. */
 async function load_file_as(name, path) {
   await page.setInputFiles("#file", { name: `${name}.json`, mimeType: "application/json", buffer: readFileSync(path) });
@@ -441,9 +499,9 @@ async function observer_check(name, load) {
   const off2 = await drawing();
   const hidden = await page.evaluate(() => document.getElementById("observer").hidden
     && document.getElementById("observer-controls").hidden && !document.getElementById("status").textContent.includes("obs ms"));
-  check(hidden, `${name}: switch off hides the observer pane, its controls and obs ms`);
+  check(hidden, `${name}: 預覽 hides the observer pane, its controls and obs ms`);
   check(same_drawing(before, off2) && off2.stage.width === off.stage.width && off2.stage.height === off.stage.height,
-    `${name}: switch off restores the drawing pane`);
+    `${name}: 預覽 restores the drawing pane`);
   row.followed = moved !== obs.labels[0];
   check(row.followed, `${name}: the observer follows the drawing camera`);
   observer.rows[name] = row;
@@ -897,7 +955,7 @@ const plane = {};
     check(overlaps.length === 0, `plane: the observer labels do not overlap (${JSON.stringify(overlaps)})`);
   }
   {
-    // the overlay is the same with the observer switch on and off for the same (edited) camera; Download scene writes
+    // the overlay is the same with the observer pane shown and hidden (預覽) for the same (edited) camera; Download scene writes
     // the picture_plane form and reloads to the same SVG
     await page.click('#views button[data-view="left"]');
     await page.evaluate(() => { const el = document.getElementById("roll"); el.value = "12"; el.dispatchEvent(new Event("input")); });
@@ -1015,6 +1073,6 @@ await page.waitForFunction(() => document.getElementById("error").textContent.in
 const scene_error = await page.locator("#error").textContent();
 
 const engine = { chromium: browser.version() };
-console.log(JSON.stringify({ engine, first, toggles: toggle_checks, rows, load_errors, phase2, observer, plane, failures, downloads, errors: { not_json, scene_error }, logs }, null, 1));
+console.log(JSON.stringify({ engine, first, toggles: toggle_checks, preview: preview_checks, rows, load_errors, phase2, observer, plane, failures, downloads, errors: { not_json, scene_error }, logs }, null, 1));
 await browser.close();
 process.exitCode = logs.some((l) => l.startsWith("pageerror")) || failures.length > 0 ? 1 : 0;
