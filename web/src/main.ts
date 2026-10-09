@@ -151,7 +151,10 @@ function load(name: string, make: () => Scene): boolean {
     vertices: A.vertices,
   });
   state.obs.needs_framing = true;
+  // a drag held across the load (keyboard on the examples menu, a drop) belongs to the old scene: drop it
   state.handle = null;
+  gesture.reset();
+  state.dragging = false;
   set_equation_error(null);
   ui.pivotMode.value = "scene";
   state.rec = null;
@@ -252,7 +255,12 @@ distInput.addEventListener("input", () => {
 rollInput.addEventListener("input", () => {
   if (state.plane?.set_roll(Number(rollInput.value))) after_action({ changed: true, framing: false });
 });
-for (const el of [focalInput, distInput, rollInput]) el.addEventListener("change", () => sync_controls()); // thumb to the clamped value
+// at the end of a slider drag the thumb goes to the clamped value (the focused slider is not re-synced while it moves)
+for (const el of [focalInput, distInput, rollInput]) {
+  el.addEventListener("change", () => {
+    if (state.plane !== null) set_rig_controls(ui, state.plane.rig, true);
+  });
+}
 ui.lockLevel.addEventListener("change", () => {
   if (state.plane !== null) after_action(state.plane.set_lock_level(ui.lockLevel.checked));
 });
@@ -282,7 +290,11 @@ ui.equation.addEventListener("keydown", (ev) => {
     ui.equation.blur();
   }
 });
-ui.equation.addEventListener("blur", () => sync_controls());
+// leaving the field discards the typed text, and with it the text's error
+ui.equation.addEventListener("blur", () => {
+  set_equation_error(null);
+  sync_controls();
+});
 ui.undo.addEventListener("click", () => {
   if (state.plane !== null) after_action(state.plane.undo_step());
 });
@@ -605,11 +617,13 @@ function frame(): void {
     return Object.fromEntries([...pl.scene.object_centres].map(([id, c]) => [id, observer_project(view, o.W, o.H, c)]));
   },
   /** M10 random-frame check (§5.7.13 last row): put `rig` (a full state; its `P` is kept as given) into the session as a
-   * drag step would, render one frame synchronously, and report whether every number handed to drawing calls is
-   * finite: the camera block, the camera record, the observer's board, drawing, rays and handles, and the SVG text. */
+   * one-move drag would (cancelled afterwards), render one frame synchronously, and report whether every number handed
+   * to drawing calls is finite: the camera block, the camera record, the observer's board, drawing, rays and handles,
+   * and the SVG text. */
   probe_rig: (rig: RigState) => {
     const pl = state.plane;
     if (pl === null) return null;
+    pl.begin(); // a one-move gesture, cancelled after the checks: no undo step, the state comes back
     pl.drag(clone(rig));
     state.dirty = true;
     frame();
@@ -624,6 +638,8 @@ function frame(): void {
       if (!finite(observer.last_handles)) bad.push("handles");
       if (!finite(observer.view)) bad.push("observer view");
     }
+    pl.cancel();
+    state.dirty = true;
     return bad;
   },
   /** M10: the observer's handle hit test at pane px `(x, y)` (mouse radius). */

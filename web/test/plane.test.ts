@@ -10,11 +10,12 @@ import { dirname, resolve } from "node:path";
 import { test } from "node:test";
 import { fileURLToPath } from "node:url";
 
-import { compose, dumps, load_scene, load_scene_text, project_scene, shadow_geometry, validate_camera, write_svg } from "castplane";
+import { LAYER_IDS, compose, dumps, load_scene, load_scene_text, project_scene, shadow_geometry, validate_camera, write_svg } from "castplane";
 import type { Scene, StageA, Vec2, Vec3 } from "castplane";
 
 import {
-  ARROW_LABEL, HIT_PX_MOUSE, HIT_PX_TOUCH, RING_HIT_FACTOR, RING_SEGMENTS, board_labels, derive_board, handles_of, hit_handles,
+  ARROW_LABEL, HIT_PX_MOUSE, HIT_PX_TOUCH, LABEL_GAP_PX, LABEL_H_PX, LABEL_OFFSET_PX, RING_HIT_FACTOR, RING_SEGMENTS, board_labels,
+  derive_board, first_inside, frame_view, framing_points, handles_of, hit_handles, initial_view, label_width, layout_labels,
   observer_basis, observer_project, observer_project_with, scene_centre,
 } from "../src/observer.js";
 import type { ObserverView } from "../src/observer.js";
@@ -27,6 +28,8 @@ import {
   KAPPA_DEG_PER_PX, arrowLength, arrowScreenVector, arrowTip, clone, foot, orbitRightPane, orbitRing, pan, ringRadius, sync,
   toCameraBlock, twoFinger, wheel,
 } from "../src/rig.js";
+import { OBJECT_ID_KEY, RECEIVER_ID_KEY, object_id_of } from "../src/helpers3d.js";
+import type { TaggedNode } from "../src/helpers3d.js";
 
 // web/build/test/plane.test.js -> repository root
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..", "..");
@@ -422,4 +425,139 @@ test("Download scene: the rig's picture_plane block reloads to the same SVG (sce
   close(s2.rig.g, s.rig.g, 1e-9, "g");
   close(s2.rig.D, s.rig.D, 1e-12, "D");
   close(s2.rig.roll_deg, 12, 1e-9, "roll");
+});
+
+// ------------------------------------------------------------------------------------------------ M10 review fixes
+
+test("wheel inside an open drag gesture is ignored: the gesture stays one undo step and the move is not undone", () => {
+  const s = session();
+  const rig0 = clone(s.rig);
+  s.begin();
+  s.drag(orbitRightPane(rig0, 20, 0));
+  const mid = clone(s.rig);
+  assert.equal(s.wheel(300, 1000), false, "no wheel step during a drag");
+  assert.deepEqual(s.rig, mid);
+  s.drag(orbitRightPane(rig0, 40, 0));
+  assert.equal(s.end(), true);
+  assert.equal(s.undo.size, 1, "one physical gesture, one undo step");
+  s.undo_step();
+  assert.deepEqual(s.rig, rig0);
+  assert.equal(s.undo.size, 0);
+  // after the release the wheel works again
+  assert.equal(s.wheel(300, 2000), true);
+});
+
+test("a gesture held across a scene load does not reach the new session", () => {
+  const old = session();
+  const g = new RightPaneGesture();
+  assert.equal(g.down({ id: 1, x: 100, y: 100, button: 0 }, old.rig), "start");
+  old.begin();
+  // the page loads another scene: a new session, the held gesture is dropped
+  const fresh = session(load(raw("curved_demo")));
+  const rig = clone(fresh.rig);
+  g.reset();
+  assert.equal(g.active, null);
+  assert.equal(g.move({ id: 1, x: 140, y: 100 }, CTX), null, "the old pointer moves nothing");
+  assert.equal(g.up(1), false, "its release ends nothing");
+  // even a state computed from the old scene's pointer-down rig is ignored outside a gesture of this session
+  assert.equal(fresh.drag(orbitRightPane(old.rig, 40, 0)), false);
+  assert.deepEqual(fresh.rig, rig);
+  assert.equal(fresh.scene_block, true);
+});
+
+test("switching the pivot mode without a pick keeps the pan (the pivot point did not change)", () => {
+  const s = session();
+  s.begin();
+  s.drag(pan(clone(s.rig), 30, 10, 480, 24));
+  s.end();
+  const panned = clone(s.rig);
+  assert.ok(panned.a !== 0 || panned.b !== 0);
+  const r = s.set_pivot_mode("object");
+  assert.deepEqual(r, { changed: false, framing: false });
+  assert.deepEqual(s.rig, panned);
+  // an explicit pick re-centres the picked object (pan cleared), also when it is picked again after a pan
+  const id = BASIC.scene.objects[0]!.id;
+  assert.ok(s.pick_object(id).changed);
+  s.begin();
+  s.drag(pan(clone(s.rig), 30, 10, 480, 24));
+  s.end();
+  const again = s.pick_object(id);
+  assert.ok(again.changed && again.framing);
+  assert.equal(s.rig.a, 0);
+  assert.equal(s.rig.b, 0);
+  // back to the scene centre: a real pivot change clears the pan
+  s.begin();
+  s.drag(pan(clone(s.rig), 30, 10, 480, 24));
+  s.end();
+  const back = s.set_pivot_mode("scene");
+  assert.ok(back.changed && back.framing);
+  assert.deepEqual(s.rig.P, BASIC.ss.centre);
+  assert.equal(s.rig.a, 0);
+});
+
+test("object picking identifies objects by their userData tag, whatever their id (an id may contain ':')", () => {
+  const node = (userData: Record<string, unknown>, parent: TaggedNode | null): TaggedNode => ({ userData, parent });
+  const group = node({}, null);
+  const crate = node({ [OBJECT_ID_KEY]: "crate:1" }, group);
+  const tricky = node({ [OBJECT_ID_KEY]: "receiver:x" }, group);
+  const ground = node({ [RECEIVER_ID_KEY]: "ground" }, group);
+  const light = node({}, group);
+  assert.equal(object_id_of(crate, group), "crate:1");
+  assert.equal(object_id_of(tricky, group), "receiver:x");
+  assert.equal(object_id_of(node({}, crate), group), "crate:1", "a nested child climbs to its object");
+  assert.equal(object_id_of(ground, group), null);
+  assert.equal(object_id_of(light, group), null);
+  assert.equal(object_id_of(group, group), null);
+  // scene3d.ts tags every object mesh and every receiver plate (the browser smoke picks an object named "crate:1")
+  const src = readFileSync(resolve(ROOT, "web", "src", "scene3d.ts"), "utf-8");
+  assert.ok(src.includes("mesh.userData[OBJECT_ID_KEY] = obj.id;"));
+  assert.equal(src.match(/userData\[RECEIVER_ID_KEY\] = rec\.id;/g)?.length, 2);
+});
+
+test("no element id of the page equals an id of the SVG overlay (layers, sub-layers)", () => {
+  const html = readFileSync(resolve(ROOT, "web", "index.html"), "utf-8");
+  const page = [...html.matchAll(/\bid="([^"]+)"/g)].map((m) => m[1]!);
+  const svgIds = new Set<string>(LAYER_IDS);
+  for (const name of ["basic", "two_lights", "wall_and_ground"]) {
+    const l = load(raw(name));
+    for (const m of svg_of(l, l.scene.camera).matchAll(/\bid="([^"]+)"/g)) svgIds.add(m[1]!);
+  }
+  assert.deepEqual(page.filter((id) => svgIds.has(id)), []);
+});
+
+test("observer labels never overlap: the default basic state (D next to 板子距離, 旋轉中心 next to g) is laid apart", () => {
+  const boxOverlap = (a: { x: number; y: number; w: number; h: number }, b: typeof a): boolean =>
+    a.x < b.x + b.w && b.x < a.x + a.w && a.y < b.y + b.h && b.y < a.y + a.h;
+  let raw_overlaps = 0;
+  for (const [name, aspect] of [["basic", 640 / 480], ["basic", 480 / 640], ["curved_demo", 640 / 480], ["three_point", 1]] as const) {
+    const l = load(raw(name));
+    const s = session(l);
+    const d = sync(s.rig);
+    const rec = project_scene(l.scene, l.A, s.block()).camera;
+    const board = derive_board(rec, { target: s.rig.P, distance: d.R }, s.rig.D);
+    const h = handles_of(s.rig, l.scene.camera.frame_mm);
+    const labels = board_labels(board, { tip: h.tip });
+    const Hp = 480, Wp = Math.round(Hp * aspect);
+    const view = frame_view(initial_view(), framing_points(board, l.scene, l.ss.centre), Wp / Hp);
+    const basis = observer_basis(view);
+    const items = labels.map((lb) => ({ id: lb.id, text: lb.text,
+      p: first_inside(basis, Wp, Hp, [lb.at, ...(lb.alt ?? [])], lb.alt !== undefined ? [4, 170, 4, 24] : [0, 0, 0, 0]) }));
+    // without the layout rule (each box at its anchor plus its offset)
+    const naive = items.map((it) => it.p === null ? null : { x: it.p[0] + (LABEL_OFFSET_PX[it.id]?.[0] ?? 10),
+      y: it.p[1] + (LABEL_OFFSET_PX[it.id]?.[1] ?? -18), w: label_width(it.text), h: LABEL_H_PX });
+    const boxes = layout_labels(items);
+    for (let i = 0; i < boxes.length; i++) {
+      assert.ok(boxes[i] !== null, `${name}: label ${labels[i]!.id} shown`);
+      assert.equal(boxes[i]!.x, naive[i]!.x, "labels only move vertically");
+      for (let j = 0; j < i; j++) {
+        if (boxOverlap(naive[i]!, naive[j]!)) raw_overlaps++;
+        assert.ok(!boxOverlap(boxes[i]!, boxes[j]!), `${name} ${aspect}: ${labels[i]!.id} overlaps ${labels[j]!.id}`);
+      }
+    }
+  }
+  assert.ok(raw_overlaps > 0, "the cases exercise the rule");
+  // the rule itself: a later label moves below the earlier one, gap included; a hidden anchor blocks nothing
+  const b = layout_labels([{ id: "x", p: [0, 0], text: "abc" }, { id: "y", p: null, text: "abc" }, { id: "z", p: [5, 4], text: "abc" }]);
+  assert.equal(b[1], null);
+  assert.equal(b[2]!.y, b[0]!.y + LABEL_H_PX + LABEL_GAP_PX);
 });

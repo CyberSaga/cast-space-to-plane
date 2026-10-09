@@ -15,10 +15,11 @@ import { LineSegmentsGeometry } from "three/addons/lines/LineSegmentsGeometry.js
 import type { Scene, StageA, Vec2, Vec3 } from "castplane";
 
 import {
-  CLICK_PX, OBSERVER_FAR_M, OBSERVER_FOV_DEG, OBSERVER_NEAR_M, board_labels, first_inside, frustum, initial_view,
+  CLICK_PX, OBSERVER_FAR_M, OBSERVER_FOV_DEG, OBSERVER_NEAR_M, board_labels, first_inside, frustum, initial_view, layout_labels,
   observer_accepts_pointer, observer_basis, orbit_view, pinch_view, zoom_view,
 } from "./observer.js";
 import type { Board, BoardLabel, FillStyle, HandleHit, Handles, LineArt, LineStyle, ObserverView, VertexRays } from "./observer.js";
+import { OBJECT_ID_KEY, RECEIVER_ID_KEY, object_id_of } from "./helpers3d.js";
 import { build_scene3d } from "./scene3d.js";
 import { Stage3D } from "./stage.js";
 
@@ -166,7 +167,7 @@ export class ObserverPane {
     this.stage.replace_group(() => {
       const group = build_scene3d(scene, A);
       for (const c of group.children) {
-        if (!c.name.startsWith("receiver:")) continue;
+        if (typeof c.userData[RECEIVER_ID_KEY] !== "string") continue;
         const mats = (c as THREE.Mesh).material;
         for (const m of Array.isArray(mats) ? mats : [mats]) {
           m.transparent = true;
@@ -355,11 +356,10 @@ export class ObserverPane {
     const ndc = new THREE.Vector2((p[0] / this.W) * 2 - 1, -(p[1] / this.H) * 2 + 1);
     const ray = new THREE.Raycaster();
     ray.setFromCamera(ndc, this.camera);
-    const objects = group.children.filter((c) => c.name !== "" && !c.name.includes(":"));
+    const objects = group.children.filter((c) => typeof c.userData[OBJECT_ID_KEY] === "string");
     for (const hit of ray.intersectObjects(objects, true)) {
-      let o: THREE.Object3D | null = hit.object;
-      while (o !== null && o.parent !== group) o = o.parent;
-      if (o !== null && o.name !== "" && !o.name.includes(":")) return o.name;
+      const id = object_id_of(hit.object, group);
+      if (id !== null) return id;
     }
     return null;
   }
@@ -392,7 +392,11 @@ export class ObserverPane {
 
   private place_labels(basis: ReturnType<typeof observer_basis>): void {
     const seen = new Set<string>();
-    for (const l of this.labels) {
+    // the equation label needs ≈ 160 px to its right; the others are placed at their anchor; overlapping labels are
+    // moved apart (`layout_labels`)
+    const boxes = layout_labels(this.labels.map((l) => ({ id: l.id, text: l.text,
+      p: first_inside(basis, this.W, this.H, [l.at, ...(l.alt ?? [])], l.alt !== undefined ? [4, 170, 4, 24] : [0, 0, 0, 0]) })));
+    this.labels.forEach((l, i) => {
       seen.add(l.id);
       let el = this.labelEls.get(l.id);
       if (el === undefined) {
@@ -401,14 +405,13 @@ export class ObserverPane {
         this.labelBox.append(el);
         this.labelEls.set(l.id, el);
       }
-      // the equation label needs ≈ 160 px to its right; the others are placed at their anchor
-      const p = first_inside(basis, this.W, this.H, [l.at, ...(l.alt ?? [])], l.alt !== undefined ? [4, 170, 4, 24] : [0, 0, 0, 0]);
-      el.hidden = p === null;
-      if (p !== null) {
+      const box = boxes[i]!;
+      el.hidden = box === null;
+      if (box !== null) {
         if (el.textContent !== l.text) el.textContent = l.text;
-        el.style.transform = `translate(${p[0].toFixed(1)}px, ${p[1].toFixed(1)}px)`;
+        el.style.transform = `translate(${box.x.toFixed(1)}px, ${box.y.toFixed(1)}px)`;
       }
-    }
+    });
     for (const [id, el] of this.labelEls) if (!seen.has(id)) el.hidden = true;
   }
 
@@ -452,7 +455,8 @@ export class ObserverPane {
       const last = pointers.get(ev.pointerId);
       if (last === undefined) {
         if (handles !== null && ev.pointerType === "mouse" && pointers.size === 0) {
-          el.style.cursor = handles.hit(local(ev), false) !== null ? "pointer" : "";
+          // the cursor belongs to the canvas under the mouse (its own `cursor: grab` rule), hence a class on the pane
+          el.classList.toggle("on-handle", handles.hit(local(ev), false) !== null);
         }
         return;
       }

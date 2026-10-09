@@ -62,3 +62,24 @@ export function receiver_plates(receivers: readonly Receiver[]): ReceiverPlate[]
       : { id: r.id, kind: "plate", positions: plate_positions(r.bounds), outline: plate_outline(r.bounds) },
   );
 }
+
+/** `userData` keys that tag the 3D group's children by role (`scene3d.ts`). An id may contain any character but '.',
+ * so a child's `name` cannot tell an object `crate:1` from a receiver's `receiver:<id>`. */
+export const OBJECT_ID_KEY = "castplane_object_id";
+export const RECEIVER_ID_KEY = "castplane_receiver_id";
+
+/** The node shape {@link object_id_of} reads (a three.js `Object3D`). */
+export interface TaggedNode {
+  userData: Record<string, unknown>;
+  parent: TaggedNode | null;
+}
+
+/** The scene object id of `hit` or of its nearest tagged ancestor below `group` (object picking, §5.7.8 item 10);
+ * null for anything else (lights, receivers, outlines, grids). */
+export function object_id_of(hit: TaggedNode, group: TaggedNode): string | null {
+  for (let o: TaggedNode | null = hit; o !== null && o !== group; o = o.parent) {
+    const id = o.userData[OBJECT_ID_KEY];
+    if (typeof id === "string") return id;
+  }
+  return null;
+}

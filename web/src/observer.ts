@@ -707,3 +707,53 @@ export function board_labels(board: Board, extra: { pivot_id?: string | null; ti
   if (extra.tip !== undefined) labels.push({ id: "arrow", at: extra.tip, text: ARROW_LABEL });
   return labels;
 }
+
+/** Offset (px) of a label's top-left corner from its projected anchor, per label id (default for others). */
+export const LABEL_OFFSET_PX: Readonly<Record<string, Vec2>> = {
+  E: [12, -24], pivot: [12, -24], g: [12, 8], equation: [4, 4], arrow: [12, 6],
+};
+const LABEL_OFFSET_DEFAULT: Vec2 = [10, -18];
+/** Line height (px) of a label (12 px font). */
+export const LABEL_H_PX = 16;
+/** Vertical gap (px) kept between two labels that would overlap. */
+export const LABEL_GAP_PX = 2;
+
+/** An estimate of a label's width in px (12 px semi-bold: CJK and full-width characters 12 px, others 7.2 px), with
+ * no layout read so that labels can be placed every frame. */
+export function label_width(text: string): number {
+  let w = 0;
+  for (const ch of text) w += ch.codePointAt(0)! >= 0x2e80 ? 12 : 7.2;
+  return Math.ceil(w);
+}
+
+/** A placed label box in pane px. */
+export interface LabelBox {
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+}
+
+const overlaps = (a: LabelBox, b: LabelBox, gap: number): boolean =>
+  a.x < b.x + b.w && b.x < a.x + a.w && a.y < b.y + b.h + gap && b.y < a.y + a.h + gap;
+
+/**
+ * The boxes of the observer's labels (spec-v0.2 §3: each label readable on its own): each at its anchor `p` plus its
+ * {@link LABEL_OFFSET_PX}, then, in the given order, moved down below any earlier box it would overlap (greedy; a
+ * label whose anchor is hidden, `p = null`, gets no box and blocks nothing).
+ */
+export function layout_labels(items: readonly { id: string; p: Vec2 | null; text: string }[]): (LabelBox | null)[] {
+  const placed: LabelBox[] = [];
+  return items.map((it) => {
+    if (it.p === null) return null;
+    const [ox, oy] = LABEL_OFFSET_PX[it.id] ?? LABEL_OFFSET_DEFAULT;
+    const box: LabelBox = { x: it.p[0] + ox, y: it.p[1] + oy, w: label_width(it.text), h: LABEL_H_PX };
+    for (let k = 0; k <= placed.length; k++) {
+      const hit = placed.find((o) => overlaps(box, o, LABEL_GAP_PX));
+      if (hit === undefined) break;
+      box.y = hit.y + hit.h + LABEL_GAP_PX;
+    }
+    placed.push(box);
+    return box;
+  });
+}

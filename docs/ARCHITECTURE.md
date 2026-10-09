@@ -5563,3 +5563,25 @@ through the port's `resolve_picture_plane` and draws its readout camera through 
   The M9 checks of the three v8 cases now expect the rig's `picture_plane` block after a drag. Measured with the
   switch on (headless Chromium, SwiftShader), `core ms + dom ms + obs ms` per drag frame stayed below 25 ms on the five
   examples (maximum over 30 frames). `benchmark_100.json` is recorded, not gated: `obs ms` 136–622 ms over two runs.
+- **[decision, implementation] (M10 web) Review fixes: gestures, pivot mode, picking, controls, labels.** (1) A wheel
+  event is ignored while a drag gesture is open (`PlaneSession.wheel` returns false between `begin` and `end` / `cancel`):
+  the gesture computes every move from its pointer-down state, so a wheel step inside it would be overwritten by the next
+  move and would split the gesture into two undo steps. (2) `PlaneSession.drag` is ignored outside a gesture, and a load
+  drops a held right-pane gesture (`RightPaneGesture.reset`, `state.dragging = false`): a drag held across a scene load
+  never moves the new scene. The smoke hook `probe_rig` therefore runs as a one-move gesture that it cancels. (3) Only a
+  pivot point that actually moves clears the pan (§5.7.8 item 10): switching the selector to 點選物體 with nothing picked
+  keeps the scene centre and so changes nothing; an explicit object pick still re-centres that object, also when it was
+  already the pivot (spec-v0.2 §7.1). (4) Objects and receivers of the 3D group are tagged in `userData`
+  (`OBJECT_ID_KEY`, `RECEIVER_ID_KEY` of `helpers3d.ts`) and picking reads the tag (`object_id_of`), not the child's
+  `name`: an id may contain any character but `.`, so an object `crate:1` is pickable and an object `receiver:x` is not
+  drawn see-through. (5) The 作圖線 checkbox has the id `construction-lines`; no page element id equals an SVG overlay id
+  (a unit test checks `web/index.html` against the layer ids and the ids of three rendered examples). (6) Blurring the
+  equation field drops its typed text and with it the error state. A slider's `change` (end of its drag) writes the
+  clamped value back to the thumb even though the slider still has focus (`set_rig_controls(…, force)`). (7) The hover
+  cursor over a handle is set on the observer canvas (class `on-handle` on the pane; the canvas has its own `grab`
+  cursor). (8) Observer labels are laid out by `layout_labels` (`observer.ts`): each box is its anchor plus a per-label
+  offset (`LABEL_OFFSET_PX`, formerly CSS margins), with an estimated width (`label_width`: 12 px per CJK character,
+  7.2 px otherwise) and a 16 px line; in the order of `board_labels`, a box that overlaps an earlier one moves down below
+  it (2 px gap). The default state of `basic` no longer draws `D = 4.00 m` over 板子距離 nor 旋轉中心 over the `g`
+  label. Tests: `web/test/plane.test.ts` (wheel in a gesture, gesture across a load, pivot mode keeps the pan, tagging,
+  page ids, label layout on three examples and two aspects) and the smoke script's review-fix checks.

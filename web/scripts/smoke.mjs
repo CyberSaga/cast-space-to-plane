@@ -656,6 +656,111 @@ const plane = {};
     await frames2();
   }
   {
+    // M10 review fixes. A wheel inside a held right-pane drag is ignored: one gesture, one undo step
+    const sx = sbox.x + sbox.width / 2, sy = sbox.y + sbox.height / 2;
+    const a = await rig();
+    await page.mouse.move(sx, sy);
+    await page.mouse.down();
+    await page.mouse.move(sx + 20, sy);
+    await frames2();
+    const mid = await rig();
+    await page.mouse.wheel(0, 300);
+    await frames2();
+    const w = await rig();
+    await page.mouse.move(sx + 40, sy);
+    await frames2();
+    await page.mouse.up();
+    await frames2();
+    const b = await rig();
+    check(w.R === mid.R && b.undo === a.undo + 1, "plane: a wheel during a right-pane drag is ignored (one undo step)");
+    // a scene loaded while a right-pane drag is held: the held drag does not reach the new scene
+    await page.mouse.move(sx, sy);
+    await page.mouse.down();
+    await page.mouse.move(sx + 25, sy + 5);
+    await frames2();
+    await page.evaluate(() => window.castplane_web.load_example("curved_demo"));
+    await frames2();
+    const c0 = await rig();
+    await page.mouse.move(sx + 60, sy + 10);
+    await frames2();
+    await page.mouse.up();
+    await frames2();
+    const c1 = await rig();
+    check(c0.scene_block && JSON.stringify(c1) === JSON.stringify(c0), "plane: a drag held across a scene load leaves the new scene alone");
+    // an object whose id contains ':' can be picked as the pivot
+    const data = JSON.parse(readFileSync(join(ROOT, "examples", "basic.json"), "utf-8"));
+    data.objects[0].id = "crate:1";
+    await page.evaluate((t) => window.castplane_web.load_text("basic_colon", t), JSON.stringify(data));
+    await frames2();
+    await frames2();
+    await page.selectOption("#pivot-mode", "object");
+    await frames2();
+    const px = (await page.evaluate(() => window.castplane_web.objects_px))["crate:1"];
+    await page.mouse.click(ob.x + px[0], ob.y + px[1]);
+    await frames2();
+    check((await rig()).pivot.object_id === "crate:1", "plane: an object id with ':' is pickable");
+    // switching the pivot mode alone keeps the pan (the pivot point did not move)
+    await page.evaluate(() => window.castplane_web.load_example("basic"));
+    await frames2();
+    await frames2();
+    await stage_drag(30, 10, { button: "right" });
+    const p0 = await rig();
+    await page.selectOption("#pivot-mode", "object");
+    await frames2();
+    const p1 = await rig();
+    check((p0.a !== 0 || p0.b !== 0) && p1.a === p0.a && p1.b === p0.b && near3(p1.E, p0.E, 0),
+      "plane: switching to object mode without a pick keeps the pan and the eye");
+    await page.selectOption("#pivot-mode", "scene");
+    await frames2();
+    // a rejected equation: leaving the field restores the plane's text and clears the error
+    await page.fill("#equation", "x==1");
+    await page.press("#equation", "Enter");
+    await page.evaluate(() => document.getElementById("equation").blur());
+    await frames2();
+    const fld = await page.evaluate(() => ({ ...window.castplane_web.equation_field,
+      aria: document.getElementById("equation").getAttribute("aria-invalid"),
+      msg: document.getElementById("equation-error").textContent }));
+    check(!fld.bad && fld.error === null && fld.aria === "false" && fld.msg === "" && fld.value === (await rig()).equation,
+      "plane: blurring a rejected equation clears its error");
+    // a D slider dragged into its clamped range: the thumb goes to the clamped value at release
+    await page.mouse.move(sx, sy);
+    await page.mouse.wheel(0, -6000);
+    await frames2();
+    const q0 = await rig();
+    const dbox = await page.locator("#dist").boundingBox();
+    await page.mouse.move(dbox.x + dbox.width / 2, dbox.y + dbox.height / 2);
+    await page.mouse.down();
+    await page.mouse.move(dbox.x - 20, dbox.y + dbox.height / 2, { steps: 6 });
+    await page.mouse.up();
+    await frames2();
+    const q1 = await rig();
+    const thumb = await page.evaluate(() => document.getElementById("dist").value);
+    plane.d_clamp = { R: q0.R, D: q1.D, thumb };
+    check(q0.R < 1 && q1.D > 0.5 && Number(thumb) === q1.D, "plane: the D slider's thumb shows the clamped value after a drag");
+    // hovering the arrow tip shows the pointer cursor on the canvas under the mouse
+    await page.click("#reset");
+    await frames2();
+    await frames2();
+    const h = await page.evaluate(() => window.castplane_web.handles_px);
+    await page.mouse.move(ob.x + h.tip[0], ob.y + h.tip[1]);
+    await frames2();
+    const cur = await page.evaluate(([x, y]) => getComputedStyle(document.elementFromPoint(x, y)).cursor, [ob.x + h.tip[0], ob.y + h.tip[1]]);
+    check(cur === "pointer", `plane: hovering the arrow tip shows the pointer cursor (${cur})`);
+    await page.mouse.move(ob.x + 4, ob.y + 4);
+    // observer labels do not overlap (spec-v0.2 §3: each label readable)
+    const overlaps = await page.evaluate(() => {
+      const r = [...document.querySelectorAll(".obs-label")].filter((e) => !e.hidden).map((e) => [e.textContent, e.getBoundingClientRect()]);
+      const out = [];
+      for (let i = 0; i < r.length; i++) for (let j = 0; j < i; j++) {
+        const [ta, a] = r[i], [tb, b] = r[j];
+        if (a.left < b.right && b.left < a.right && a.top < b.bottom && b.top < a.bottom) out.push([ta, tb]);
+      }
+      return out;
+    });
+    plane.label_overlaps = overlaps;
+    check(overlaps.length === 0, `plane: the observer labels do not overlap (${JSON.stringify(overlaps)})`);
+  }
+  {
     // the overlay is the same with the observer switch on and off for the same (edited) camera; Download scene writes
     // the picture_plane form and reloads to the same SVG
     await page.click('#views button[data-view="left"]');

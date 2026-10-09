@@ -275,7 +275,11 @@ The script needs a Playwright installed outside the repository; it is not a depe
   - an object click sets the pivot (label `旋轉中心：<id>`);
   - the drawing is identical with the observer on and off for an edited camera;
   - Download scene writes the `picture_plane` form and reloads to the same SVG;
-  - 900 random rig states render finite numbers.
+  - 900 random rig states render finite numbers;
+  - review fixes: a wheel during a right-pane drag is ignored (one undo step); a drag held across a scene load leaves
+    the new scene alone; an object id with `:` is pickable; switching to object pivot mode without a pick keeps the
+    pan; blurring a rejected equation clears its error; the D slider's thumb shows the clamped value after a drag;
+    hovering the arrow tip shows the pointer cursor; the observer labels do not overlap.
 
   With `--shots DIR` it saves `DIR/web_ui_plane_mode.png`.
 

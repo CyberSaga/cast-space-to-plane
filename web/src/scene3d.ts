@@ -9,7 +9,7 @@ import * as THREE from "three";
 import { transform_frame } from "castplane";
 import type { ObjectRecord, Scene, SceneObject, StageA, Vec3 } from "castplane";
 
-import { light_colour, receiver_plates, shading_intensity } from "./helpers3d.js";
+import { OBJECT_ID_KEY, RECEIVER_ID_KEY, light_colour, receiver_plates, shading_intensity } from "./helpers3d.js";
 import { mesh_positions } from "./mesh3d.js";
 
 /** Per-object colours (cycled). */
@@ -104,6 +104,7 @@ export function build_scene3d(scene: Scene, A?: StageA): THREE.Group {
     const world = rec !== undefined && rec.triangles !== undefined;
     const mesh = new THREE.Mesh(primitive_geometry(obj, rec), material);
     mesh.name = obj.id;
+    mesh.userData[OBJECT_ID_KEY] = obj.id;
     mesh.matrixAutoUpdate = false;
     mesh.matrix.copy(world ? new THREE.Matrix4() : object_matrix(obj));
     mesh.matrixWorldNeedsUpdate = true;
@@ -157,6 +158,7 @@ export function build_scene3d(scene: Scene, A?: StageA): THREE.Group {
       geometry.computeVertexNormals();
       const mesh = new THREE.Mesh(geometry, receiver_material(i === 0 ? 0xf4f4f0 : 0xeceae2));
       mesh.name = `receiver:${rec.id}`;
+      mesh.userData[RECEIVER_ID_KEY] = rec.id;
       mesh.receiveShadow = false;
       group.add(mesh);
       const edge = new THREE.Line(
@@ -171,6 +173,7 @@ export function build_scene3d(scene: Scene, A?: StageA): THREE.Group {
     const size = 4 * extent;
     const ground = new THREE.Mesh(new THREE.PlaneGeometry(size, size), receiver_material(0xf4f4f0));
     ground.name = `receiver:${rec.id}`;
+    ground.userData[RECEIVER_ID_KEY] = rec.id;
     const n = new THREE.Vector3(...rec.normal);
     ground.quaternion.setFromUnitVectors(new THREE.Vector3(0, 0, 1), n);
     // the receiver point nearest to the scene centre's ground point (the plane n·X + offset = 0)

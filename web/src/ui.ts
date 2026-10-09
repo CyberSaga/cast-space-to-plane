@@ -80,7 +80,7 @@ export function controls(): Controls {
     distInput: $<HTMLInputElement>("dist"),
     distOut: $<HTMLOutputElement>("dist-out"),
     snap: $<HTMLInputElement>("snap"),
-    construction: $<HTMLInputElement>("construction"),
+    construction: $<HTMLInputElement>("construction-lines"),
     lockLevel: $<HTMLInputElement>("lock-level"),
     pivotMode: $<HTMLSelectElement>("pivot-mode"),
     views: $<HTMLDivElement>("views"),
@@ -164,9 +164,10 @@ export function roll_text(roll_deg: number): string {
 }
 
 /** Set the focal, D and roll sliders and their outputs, and the lock checkbox, from the rig (§5.7.8 item 13: undo and
- * reset re-sync them). A slider being dragged keeps its thumb (the clamped value shows in its output). */
-export function set_rig_controls(c: Controls, rig: RigState): void {
-  const active = document.activeElement;
+ * reset re-sync them). A slider being dragged keeps its thumb (the clamped value shows in its output) unless `force`
+ * (a slider's `change` at the end of its drag: the thumb goes to the clamped value). */
+export function set_rig_controls(c: Controls, rig: RigState, force = false): void {
+  const active = force ? null : document.activeElement;
   if (active !== c.focalInput) c.focalInput.value = String(slider_from_focal(rig.focal));
   c.focalOut.value = focal_text(rig.focal);
   if (active !== c.distInput) c.distInput.value = String(rig.D);

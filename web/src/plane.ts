@@ -142,8 +142,10 @@ export class PlaneSession {
     this.ref0 = null;
   }
 
-  /** A move of the current gesture: the new state computed from the pointer-down state by the caller. */
+  /** A move of the current gesture: the new state computed from the pointer-down state by the caller. Ignored
+   * outside a gesture (a move of a gesture begun on another session, e.g. one held across a scene load). */
   drag(next: RigState): boolean {
+    if (this.gesture0 === null) return false;
     return this.assign(next);
   }
 
@@ -154,8 +156,10 @@ export class PlaneSession {
   }
 
   /** Wheel in the right pane (the arrow's twin, §5.7.8 item 5): a burst (≤ 400 ms apart) is one undo step and one
-   * delta measurement. */
+   * delta measurement. Ignored while a drag gesture is open: the gesture computes every move from its pointer-down
+   * state, so a wheel step inside it would be overwritten by the next move and split the gesture's undo step. */
   wheel(deltaY: number, t_ms: number): boolean {
+    if (this.gesture0 !== null) return false;
     const before = this.rig;
     const after = wheel(before, deltaY);
     if (this.undo.wheel(before, after, t_ms) || this.ref0 === null) {
@@ -215,17 +219,19 @@ export class PlaneSession {
   }
 
   /** Pivot mode (§5.7.8 item 10): "scene" moves the pivot to the scene centre; "object" keeps the current pivot until
-   * an object is picked (the scene centre until then). Not an undo step; re-frames the observer when it moved. */
+   * an object is picked (the scene centre until then). Not an undo step; only a pivot that actually moves clears the
+   * pan and re-frames the observer (switching the mode alone, with the same pivot point, changes nothing). */
   set_pivot_mode(mode: PivotSelection["mode"]): ActionResult {
     this.pivot = { mode, object_id: mode === "scene" ? null : this.pivot.object_id };
-    return this.move_pivot(this.pivot_point());
+    return this.move_pivot(this.pivot_point(), false);
   }
 
-  /** Pick an object as the pivot (object mode only): the eye moves onto its axis (pan cleared). */
+  /** Pick an object as the pivot (object mode only): the eye moves onto its axis (pan cleared), also when the object
+   * was already the pivot (an explicit pick re-centres it, spec-v0.2 §7.1). */
   pick_object(id: string): ActionResult {
     if (this.pivot.mode !== "object" || !this.scene.object_centres.has(id)) return { changed: false, framing: false };
     this.pivot = { mode: "object", object_id: id };
-    return this.move_pivot(this.pivot_point());
+    return this.move_pivot(this.pivot_point(), true);
   }
 
   /** The pivot of the current selection (§5.7.7). */
@@ -235,8 +241,9 @@ export class PlaneSession {
     return c === undefined ? [...this.scene.centre] as Vec3 : [...c] as Vec3;
   }
 
-  private move_pivot(P: Vec3): ActionResult {
-    if (same3(P, this.rig.P) && this.rig.a === 0 && this.rig.b === 0) return { changed: false, framing: false };
+  /** Move the pivot to `P` (pan cleared). With the same `P`, only a `recentre` (an explicit pick) clears the pan. */
+  private move_pivot(P: Vec3, recentre: boolean): ActionResult {
+    if (same3(P, this.rig.P) && (!recentre || (this.rig.a === 0 && this.rig.b === 0))) return { changed: false, framing: false };
     this.ref0 = null;
     const changed = this.assign(setPivot(this.rig, P));
     return { changed, framing: changed };
@@ -375,6 +382,15 @@ export class RightPaneGesture {
 
   get active(): RightPaneMode | null {
     return this.mode;
+  }
+
+  /** Drop the gesture and its pointers (a scene load while a drag is held): later moves and releases of those
+   * pointers are ignored. */
+  reset(): void {
+    this.pointers.clear();
+    this.mode = null;
+    this.rig0 = null;
+    this.frozen = false;
   }
 
   /** A pointer goes down; `rig` is the current state. `"start"` opens a gesture, `"two"` turns it into a two-finger
