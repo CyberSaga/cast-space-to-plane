@@ -8,9 +8,8 @@
   <body>
     <header id="toolbar">
       <span class="brand">castplane</span>
-      <button id="preview" type="button" aria-pressed="false" title="只看作圖畫面（Esc 返回）">預覽</button>
       <span class="group" id="observer-controls">
-        <button id="observer-frame" type="button">旁觀視角取景</button>
+        <button id="observer-frame" type="button">整體顯示</button>
       </span>
       <span class="group" id="equation-group">
         <label class="group" for="equation">平面</label>
@@ -42,13 +41,14 @@
     </header>
     <main id="main">
       <div id="work">
-        <div id="panes">
-          <section id="observer" aria-label="observer view" hidden>
+        <div id="panes" class="observer-on">
+          <section id="observer" aria-label="observer view">
             <canvas id="obs-gl"></canvas>
             <div id="obs-labels"></div>
             <div class="obs-hint">旁觀視角 · 拖橘色圓環＝方向 · 拖藍色箭頭尖端＝板子距離 · 拖空白處繞轉 · 滾輪或雙指縮放</div>
           </section>
           <section id="viewport" aria-label="viewport">
+            <button id="preview" type="button" aria-pressed="false" title="只看作圖畫面（Esc 返回）">預覽</button>
             <div id="stage">
               <canvas id="gl" class="hidden"></canvas>
             </div>

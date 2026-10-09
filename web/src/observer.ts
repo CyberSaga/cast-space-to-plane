@@ -6,7 +6,7 @@
  * `f = rec.forward`, `D` fixed per loaded scene ({@link observer_D}), `Q = E + D·f`, the frame's corners the canvas
  * corners unprojected to depth `D` (`unproject_to_plane`), the pivot `P` and `R` the M7 orbit's `target` and `distance`,
  * `g = R − D`. Everything here only reads the camera record, the document, the scene and stage A; nothing is written
- * back (the switch-off identity of §5.6.0).
+ * back (the switch-off identity of §5.6.0, now the 預覽 state, D80).
  */
 
 import { camera_matrix, plane_equation, resolve_picture_plane, unproject_to_plane } from "castplane";

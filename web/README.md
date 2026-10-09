@@ -124,7 +124,7 @@ drag):
 - **Observer view** (M9, contract §5.6; `src/observer.ts` pure and unit-tested, `src/observer3d.ts` the three.js
   pane). The page always opens in the edit view (D80): a second
   three.js view is shown left of the drawing pane, at equal width; below 880 px of page width the two panes stack, the
-  observer on top. The toolbar toggle *預覽* (`aria-pressed`) hides the observer pane, its toolbar control *旁觀視角取景*
+  observer on top. The toggle *預覽* at the top right of the drawing pane (`aria-pressed`) hides the observer pane, its toolbar control *整體顯示*
   and `obs ms`, and the drawing pane takes the full width: the old "switch off" state, with nothing computed for the
   observer. While previewing the button reads *返回編輯*; clicking it again or pressing Esc returns to the edit view. The
   choice is not remembered (`localStorage["castplane.observer"]` is neither read nor written), and the board cannot be
@@ -139,7 +139,7 @@ drag):
   drawing-camera change (handle drag, sliders, views, equation, example load, 重設) updates it in the same frame. In the
   observer pane a left drag on blank space orbits the observer camera (0.4°/px around, 0.3°/px up, elevation −5°…85°; the right and
   middle mouse buttons do nothing), the wheel or a two-finger pinch zooms (4–60 m); none of this touches the drawing.
-  *旁觀視角取景* frames it (keeps the direction, targets the centroid of E, Q, the scene centre and its ground point,
+  *整體顯示* frames it (keeps the direction, targets the centroid of E, Q, the scene centre and its ground point,
   the point lights and the frame corners, distance `clamp(2.3 · radius, 6, 60)` m, pulled back further when a point
   would fall outside the pane's inner 90 %, as it would in the portrait side-by-side pane); it also frames after a
   scene load, 重設, 復原, a view, an applied equation and a pivot change, never during a drag. In M10 the pane also

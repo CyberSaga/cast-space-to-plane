@@ -53,7 +53,7 @@ const TOGGLES = initial_toggles(LAYER_IDS);
 interface FrameRecord {
   core_ms: number;
   dom_ms: number;
-  /** The observer's own cost (geometry + its render), `null` while the switch is off. */
+  /** The observer's own cost (geometry + its render), `null` while 預覽 hides the pane. */
   obs_ms: number | null;
   mode: OverlayMode;
   dragging: boolean;
@@ -111,7 +111,7 @@ const { viewport, stage, canvas, examplesSelect, fileInput, focalInput, distInpu
 const view = new Stage3D(canvas);
 const overlay = new Overlay(stage);
 const warnings = new WarningsTable(ui.warningsBody);
-/** The observer pane, created on the first switch-on (with the switch off the layout and outputs are the §5.4.10 page's;
+/** The observer pane, created at startup (D80; while 預覽 hides it the layout and outputs are the §5.4.10 page's;
  *  the drawing pane takes no input either way, D79). */
 let observer: ObserverPane | null = null;
 
@@ -227,7 +227,7 @@ function sync_controls(): void {
   set_lines(ui.readouts, pl.readout_lines());
   const notes = pl.notices();
   if (pl.pivot.mode === "object" && pl.pivot.object_id === null) {
-    notes.push(state.obs.on ? "請點一下左窗的物體，把它設為旋轉中心（目前暫用場景中心）" : "打開旁觀視角後點一下左窗的物體，把它設為旋轉中心（目前暫用場景中心）");
+    notes.push(state.obs.on ? "請點一下左窗的物體，把它設為旋轉中心（目前暫用場景中心）" : "按「返回編輯」後點一下左窗的物體，把它設為旋轉中心（目前暫用場景中心）");
   }
   set_lines(ui.notices, notes);
   ui.undo.disabled = !pl.undo.canUndo;
@@ -297,6 +297,7 @@ ui.equation.addEventListener("keydown", (ev) => {
     ev.preventDefault();
     if (apply_equation(ui.equation.value)) ui.equation.blur();
   } else if (ev.key === "Escape") {
+    ev.stopPropagation(); // the field's Esc cancels the typed text only; it does not also leave 預覽
     set_equation_error(null);
     ui.equation.blur();
   }
@@ -488,7 +489,8 @@ function set_observer(on: boolean): void {
 
 /** "預覽" (D80): the drawing pane alone; pressed again ("返回編輯") or Esc returns to the edit view. */
 function set_preview(preview: boolean): void {
-  if (preview === !state.obs.on) return;
+  // a held drag (observer handle or orbit) keeps the pane: hiding it mid-gesture would move the board unseen
+  if (preview === !state.obs.on || state.dragging || state.handle !== null) return;
   set_observer(!preview);
 }
 ui.preview.addEventListener("click", () => set_preview(state.obs.on));
@@ -641,7 +643,7 @@ function frame(): void {
   set_observer: (on: boolean) => {
     if (on !== state.obs.on) ui.preview.click();
   },
-  /** M9: the observer's state (`null` before it was first switched on). */
+  /** M9: the observer's state (`null` only before startup creates it). */
   get observer() {
     if (observer === null) return null;
     const names = observer.names;
@@ -653,7 +655,7 @@ function frame(): void {
     return { on: state.obs.on, D: state.plane?.rig.D ?? null, view: observer.view, labels: observer.label_texts, names,
       art_objects: count("art"), ms: state.obs.ms, size: [W, H], px };
   },
-  /** M9: the "旁觀視角取景" button. */
+  /** M9: the "整體顯示" button. */
   frame_observer: () => ui.observerFrame.click(),
   /** The UI's hidden-line state: the checkbox and the style select. */
   get hidden() { return { lines: hiddenLines.checked, style: hidden_style() }; },

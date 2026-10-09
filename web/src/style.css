@@ -36,6 +36,8 @@ body { display: flex; flex-direction: column; }
 #observer { flex: 1; position: relative; min-width: 0; min-height: 0; overflow: hidden; background: #f3f2ec; touch-action: none; border-right: 1px solid #ddd; }
 #observer[hidden] { display: none; }
 /* D80: "預覽" pressed (the observer pane hidden) */
+/* top right of the drawing pane, above the stage */
+#preview { position: absolute; top: 8px; right: 8px; z-index: 5; }
 #preview[aria-pressed="true"] { background: #2563eb; border-color: #1d4ed8; color: #fff; }
 #observer canvas { position: absolute; inset: 0; width: 100%; height: 100%; display: block; cursor: grab; }
 #observer.on-handle canvas { cursor: pointer; }

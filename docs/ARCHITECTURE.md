@@ -5141,6 +5141,12 @@ The observer shows lights as in §5.4.10 (`scene3d`). Nothing in this table is w
   observer is shown is no longer remembered: `localStorage["castplane.observer"]` is neither read nor written (a value
   left by an earlier page is ignored), the preview state is not stored, and every page start is the edit view. No
   document byte, warning code or conformance case changes (docs/DECISIONS.md D80).
+- **[decision, implementation] (M9, D80 follow-up)** Amends the previous note by reference: the 預覽 toggle sits at the
+  top right of the drawing pane (`#viewport`, absolutely positioned), not in the toolbar, so it stays visible in both
+  views; the toolbar button 旁觀視角取景 is renamed 整體顯示 (same action, §5.6.4). 預覽 is refused while an observer
+  gesture is held (`state.dragging` or a held handle), so the board never moves with the pane hidden; Esc inside the
+  equation field cancels the typed text only and does not also leave 預覽. The page markup starts in the edit view
+  (`#panes.observer-on`, `#observer` not hidden).
 
 ### 5.7 M10 — plane mode, board-first (spec-v0.2 §1, §4, §5, §6, §7)
 

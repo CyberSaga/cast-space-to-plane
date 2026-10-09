@@ -534,7 +534,14 @@ test("the page opens in the edit view: no observer checkbox, a 預覽 toggle but
   const html = readFileSync(resolve(ROOT, "web", "index.html"), "utf-8");
   assert.ok(!html.includes('id="observer-on"'), "the 旁觀視角 checkbox is gone");
   assert.match(html, /<button id="preview" type="button" aria-pressed="false"[^>]*>預覽<\/button>/);
-  assert.ok(!/<span class="group" id="observer-controls" hidden>/.test(html), "旁觀視角取景 is shown with the pane");
+  assert.ok(!/<span class="group" id="observer-controls" hidden>/.test(html), "整體顯示 is shown with the pane");
+  assert.match(html, /<div id="panes" class="observer-on">/, "the markup starts in the edit view");
+  // 預覽 sits at the top right of the drawing pane; 旁觀視角取景 is now 整體顯示
+  assert.match(html, /<section id="viewport" aria-label="viewport">\s*<button id="preview"/);
+  assert.match(html, /<button id="observer-frame" type="button">整體顯示<\/button>/);
+  const css = readFileSync(resolve(ROOT, "web", "src", "style.css"), "utf-8");
+  assert.match(css, /^#preview \{ position: absolute; top: 8px; right: 8px;/m);
+  assert.match(html, /<section id="observer" aria-label="observer view">/, "the observer pane is not hidden in the markup");
   const src = readFileSync(resolve(ROOT, "web", "src", "main.ts"), "utf-8");
   assert.ok(!/localStorage|OBSERVER_KEY|castplane\.observer"/.test(src.replace(/\/\/.*$/gm, "")), "no stored observer state");
   assert.match(src, /^set_preview\(TOGGLES\.preview\);$/m, "the start state comes from initial_toggles");
@@ -543,4 +550,8 @@ test("the page opens in the edit view: no observer checkbox, a 預覽 toggle but
   assert.match(src, /ui\.preview\.setAttribute\("aria-pressed", on \? "false" : "true"\)/);
   assert.match(src, /ui\.preview\.textContent = on \? "預覽" : "返回編輯"/);
   assert.match(src, /ev\.key === "Escape" && !state\.obs\.on\) set_preview\(false\)/);
+  // Esc in the equation field stays there; 預覽 is refused while a drag is held
+  assert.match(src, /ev\.stopPropagation\(\); \/\/ the field's Esc/);
+  assert.match(src, /preview === !state\.obs\.on \|\| state\.dragging \|\| state\.handle !== null\) return;/);
+  assert.ok(!src.includes("打開旁觀視角"), "no notice tells the user to switch the observer on");
 });

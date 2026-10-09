@@ -226,7 +226,7 @@ export function umbra_count(doc: GeometryDocument): number {
   return (doc.umbra ?? []).reduce((n, u) => n + (u.polygons?.length ?? 0), 0);
 }
 
-/** The status line of a rendered frame; `obs_ms` (the observer's per-frame cost, §5.6.3) only while the switch is on.
+/** The status line of a rendered frame; `obs_ms` (the observer's per-frame cost, §5.6.3) only while the observer pane is shown (not 預覽).
  * The camera line reads the record of the rendered block (`C`, `forward`) and its form. */
 export function status_text(
   sceneName: string, timings: { stage_a_ms: number; core_ms: number; dom_ms: number }, mode: OverlayMode,
