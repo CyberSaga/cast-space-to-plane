@@ -1,0 +1,93 @@
+{
+ "description": "picture_plane camera form (spec-v0.2 4.1): vertical plane y = 2 (normal +y, offset -2), eye 4 m behind it on the axis through the scene centre (R = 7.35 m), no up (world z, roll 0)",
+ "version": "0.1",
+ "units": "m",
+ "up": "z",
+ "objects": [
+  {
+   "id": "crate",
+   "type": "box",
+   "size": [
+    1.0,
+    0.8,
+    0.6
+   ],
+   "transform": {
+    "position": [
+     1.0,
+     5.0,
+     0.0
+    ],
+    "rotation_deg": [
+     0,
+     0,
+     30
+    ]
+   }
+  },
+  {
+   "id": "pillar",
+   "type": "cylinder",
+   "radius": 0.3,
+   "height": 2.0,
+   "transform": {
+    "position": [
+     -1.5,
+     6.0,
+     0.0
+    ]
+   }
+  }
+ ],
+ "lights": [
+  {
+   "id": "lamp",
+   "type": "point",
+   "position": [
+    0.0,
+    3.0,
+    3.5
+   ]
+  }
+ ],
+ "receivers": [
+  {
+   "id": "ground",
+   "type": "plane",
+   "normal": [
+    0,
+    0,
+    1
+   ],
+   "offset": 0.0
+  }
+ ],
+ "camera": {
+  "position": [
+   -0.0835,
+   -2.0,
+   1.0
+  ],
+  "picture_plane": {
+   "normal": [
+    0,
+    1,
+    0
+   ],
+   "offset": -2.0
+  },
+  "focal_length_mm": 20,
+  "frame_mm": [
+   36,
+   24
+  ],
+  "near_m": 0.05
+ },
+ "output": {
+  "canvas_mm": [
+   360,
+   240
+  ],
+  "png_dpi": 150
+ }
+}

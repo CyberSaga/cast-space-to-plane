@@ -1,0 +1,93 @@
+{
+ "description": "picture_plane camera form (spec-v0.2 4.1): oblique plane -0.35x - y + 0.25z + 1.4 = 0 (unnormalised, normal pointing back at the eye, so f = -n), explicit up [0.15, 0, 1] (rolled frame), D = 4.0099 m",
+ "version": "0.1",
+ "units": "m",
+ "up": "z",
+ "objects": [
+  {
+   "id": "b",
+   "type": "box",
+   "size": [
+    1.0,
+    1.0,
+    2.5
+   ],
+   "transform": {
+    "position": [
+     0.5,
+     5.5,
+     0.0
+    ]
+   }
+  },
+  {
+   "id": "cone",
+   "type": "cone",
+   "radius": 0.5,
+   "height": 1.2,
+   "transform": {
+    "position": [
+     -1.5,
+     6.0,
+     0.0
+    ]
+   }
+  }
+ ],
+ "lights": [
+  {
+   "id": "lamp",
+   "type": "point",
+   "position": [
+    0.3,
+    3.0,
+    4.0
+   ]
+  }
+ ],
+ "receivers": [
+  {
+   "id": "ground",
+   "type": "plane",
+   "normal": [
+    0,
+    0,
+    1
+   ],
+   "offset": 0.0
+  }
+ ],
+ "camera": {
+  "position": [
+   -2.9,
+   -1.2,
+   3.0
+  ],
+  "picture_plane": {
+   "normal": [
+    -0.35,
+    -1.0,
+    0.25
+   ],
+   "offset": 1.4,
+   "up": [
+    0.15,
+    0.0,
+    1.0
+   ]
+  },
+  "focal_length_mm": 28,
+  "frame_mm": [
+   36,
+   24
+  ],
+  "near_m": 0.05
+ },
+ "output": {
+  "canvas_mm": [
+   360,
+   240
+  ],
+  "png_dpi": 150
+ }
+}
