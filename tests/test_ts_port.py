@@ -223,6 +223,19 @@ def test_v7_changelog_entry_records_both_runners_green():
     assert "60 of 60 cases" in line and "each of the 60" in line
     assert "ts/test/conformance.test.ts" in line and "# todo 0" in line and "# fail 0" in line
 
+
+def test_v8_changelog_entry_records_both_runners_green():
+    """M10 core merge (conformance v8, contract §5.7.14 / §5.7.15): the port mirrors the ``picture_plane`` camera form
+    and the v8 entry records "both runners green on v8" with the TypeScript runner's result on all 63 cases."""
+    text = (ROOT / "tests" / "conformance" / "CHANGELOG.md").read_text(encoding="utf-8")
+    versions = [int(v) for v in re.findall(r"^## v(\d+) ", text, re.M)]
+    assert 8 in versions
+    v8 = re.split(r"^## v\d+ ", text, flags=re.M)[versions.index(8) + 1]
+    line = next((ln for ln in v8.splitlines() if ln.startswith("- both runners green on v8")), None)
+    assert line is not None, "the v8 entry lacks the 'both runners green on v8' line"
+    assert "63 of 63 cases" in line and "each of the 63" in line
+    assert "ts/test/conformance.test.ts" in line and "# todo 0" in line and "# fail 0" in line
+
 @needs_node
 def test_ts_conformance_runner_is_green_on_the_whole_set(built_port):
     """The final TypeScript conformance runner (contract §5.4.8, §5.4.0 phase 2: "both runners green on v6"): run

@@ -24,8 +24,9 @@ const EXAMPLES = ["basic", "construction_demo", "curved_demo", "directional", "t
 const DOC_KEYS = ["distance", "equation", "foot", "frame_m", "normal", "offset", "up"];
 const TOL_MM = 1e-9;
 
+/** The three scenes were v8 candidates (`tests/fixtures/v8_candidates/`) and are conformance cases since v8. */
 function load_candidate(name: string): any {
-  return read_json(repo_path("tests", "fixtures", "v8_candidates", `${name}.json`));
+  return read_json(repo_path("tests", "conformance", "cases", `${name}.json`));
 }
 
 function clone<T>(x: T): T {

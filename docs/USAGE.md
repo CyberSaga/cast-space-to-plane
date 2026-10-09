@@ -691,7 +691,7 @@ M4 改變的適用範圍（合約 §5.1.9）：`LIGHT_BELOW_RECEIVER`、`DIRECTI
 
 ## 4. TypeScript API 與網頁 UI（合約 §5.4）
 
-核心有一份 TypeScript 移植（`ts/`，npm 套件名 `castplane`，版本與 Python 相同為 `0.1.0`，不發佈）。另有一個 three.js 網頁 UI（`web/`）建在移植之上。Python 仍是**參考實作**：移植以一致性測試集驗收，對測試集沒有任何權限（`tests/conformance/README.md` 規則 3）。第一階段以 v3 的 34 個案例驗收；第二階段（合約 §5.4.0 / §5.4.14，M7 第 11 步）把 M4–M6 的格式（有界受影面、取樣式消隱、網格、多光源與本影）移植完成，v6 的 50 個案例兩個執行器都全部通過，記錄在 `tests/conformance/CHANGELOG.md` 的 v6 條目。
+核心有一份 TypeScript 移植（`ts/`，npm 套件名 `castplane`，版本與 Python 相同為 `0.1.0`，不發佈）。另有一個 three.js 網頁 UI（`web/`）建在移植之上。Python 仍是**參考實作**：移植以一致性測試集驗收，對測試集沒有任何權限（`tests/conformance/README.md` 規則 3）。第一階段以 v3 的 34 個案例驗收；第二階段（合約 §5.4.0 / §5.4.14，M7 第 11 步）把 M4–M6 的格式（有界受影面、取樣式消隱、網格、多光源與本影）移植完成，v6 的 50 個案例兩個執行器都全部通過，記錄在 `tests/conformance/CHANGELOG.md` 的 v6 條目。M10 的 `picture_plane` 相機形式移植後，一致性測試集 v8 的 63 個案例兩個執行器都全部通過，記錄在 v8 條目。
 
 ### 4.1 建置、測試、基準
 

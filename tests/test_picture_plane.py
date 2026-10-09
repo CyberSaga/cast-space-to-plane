@@ -30,7 +30,8 @@ from castplane.picture_plane import plane_equation, resolve_picture_plane, unpro
 from castplane.scene import validate_camera, validate_scene
 
 ROOT = Path(__file__).resolve().parents[1]
-CANDIDATES = ROOT / "tests" / "fixtures" / "v8_candidates"
+#: The scenes were v8 candidates (tests/fixtures/v8_candidates/) and are conformance cases since v8.
+CANDIDATES = ROOT / "tests" / "conformance" / "cases"
 CANDIDATE_NAMES = ("camera_picture_plane_vertical", "camera_picture_plane_tilted", "camera_picture_plane_horizontal")
 EXAMPLES = ("basic", "construction_demo", "curved_demo", "directional", "three_point", "two_lights", "mesh_demo",
             "wall_and_ground")

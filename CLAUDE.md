@@ -53,7 +53,7 @@ match what you changed:
   - New behaviour goes in as an appended `[decision, implementation]` paragraph at the end of that section's
     `### Implementation notes`.
   - Never rewrite existing contract text; amend it by reference.
-- `docs/DECISIONS.md` (D1–D70) explains each decision in plain language. A real new decision gets the next D-number,
+- `docs/DECISIONS.md` (D1–D78) explains each decision in plain language. A real new decision gets the next D-number,
   written in the same 規格 / 問題 / 決定 / 理由 style.
 - `docs/spec/spec-v0.1.md` is the original spec. The contract overrides it where marked **[decision]**.
 - In the contract, "§N" means the contract and "spec §N" means the spec.
@@ -86,7 +86,7 @@ match what you changed:
 - **Keep `tests/reference/` (the ray caster and z-buffer) independent of `castplane`.** It shares no code with it. It
   is the ground truth for shadow regions (IoU ≥ 0.99).
 
-## Conformance set (`tests/conformance/`, the output contract, v7 / 60 cases)
+## Conformance set (`tests/conformance/`, the output contract, v8 / 63 cases)
 
 - **Never edit `expected/` by hand.**
   - New case: `python3 tools/regen_conformance.py --case NAME --reason "..."`.
