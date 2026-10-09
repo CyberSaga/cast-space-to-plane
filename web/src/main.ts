@@ -23,7 +23,8 @@ import {
 } from "./orbit.js";
 import type { OrbitState } from "./orbit.js";
 import {
-  derive_board, frame_view, framing_points, line_art, observer_D, orbit_camera, scene_centre, vertex_rays,
+  derive_board, frame_camera_block, frame_view, framing_points, line_art, observer_D, observer_project, orbit_camera,
+  scene_centre, vertex_rays,
 } from "./observer.js";
 import { ObserverPane } from "./observer3d.js";
 import { IMG_MODE_THRESHOLD, Overlay } from "./overlay.js";
@@ -52,6 +53,8 @@ interface State {
   sceneName: string;
   A: StageA | null;
   orbit: OrbitState | null;
+  /** Whether the drawing camera was edited since the load or "Reset camera" (see {@link drawing_block}). */
+  camera_edited: boolean;
   layersChecked: Set<string>;
   doc: GeometryDocument | null;
   svg: string;
@@ -71,6 +74,7 @@ const state: State = {
   sceneName: "",
   A: null,
   orbit: null,
+  camera_edited: false,
   layersChecked: new Set(LAYER_IDS),
   doc: null,
   svg: "",
@@ -85,6 +89,12 @@ const state: State = {
 
 const ui = controls();
 const { viewport, stage, canvas, examplesSelect, fileInput, focalInput, focalOut, rollInput, rollOut, view3d, hiddenLines, hiddenStyle } = ui;
+
+/** The block the core renders and the downloads write: an unedited `picture_plane` scene camera as it is, else the M7
+ * orbit's target-form block (`frame_camera_block`, §5.6 implementation notes). */
+function drawing_block(scene: Scene, orbit: OrbitState): ReturnType<typeof camera_from_orbit> | Scene["camera"] {
+  return frame_camera_block(scene.camera, camera_from_orbit(orbit, scene.camera), state.camera_edited);
+}
 
 // ---------------------------------------------------------------------------- three.js and overlay
 const view = new Stage3D(canvas);
@@ -130,6 +140,7 @@ function load(name: string, make: () => Scene): boolean {
   state.obs.D = observer_D(scene.camera, scene.output.canvas_mm);
   state.obs.needs_framing = true;
   state.orbit = orbit_from_camera(orbit_camera(scene.camera, state.obs.centre), scene);
+  state.camera_edited = false;
   state.rec = null;
   state.full_svg_length = 0;
   state.frames = [];
@@ -187,18 +198,21 @@ function sync_sliders(): void {
 focalInput.addEventListener("input", () => {
   if (state.orbit === null) return;
   state.orbit = set_focal(state.orbit, focal_from_slider(Number(focalInput.value)));
+  state.camera_edited = true;
   focalOut.value = focal_text(state.orbit);
   request_render();
 });
 rollInput.addEventListener("input", () => {
   if (state.orbit === null) return;
   state.orbit = set_roll(state.orbit, Number(rollInput.value));
+  state.camera_edited = true;
   rollOut.value = roll_text(state.orbit);
   request_render();
 });
 $<HTMLButtonElement>("reset").addEventListener("click", () => {
   if (state.scene === null) return;
   state.orbit = orbit_from_camera(orbit_camera(state.scene.camera, state.obs.centre), state.scene);
+  state.camera_edited = false;
   state.obs.needs_framing = true;
   sync_sliders();
   request_render();
@@ -227,11 +241,11 @@ $<HTMLButtonElement>("dl-json").addEventListener("click", () => {
   if (state.doc !== null) save(json_blob(state.doc, state.sceneName));
 });
 $<HTMLButtonElement>("dl-scene").addEventListener("click", () => {
-  if (state.scene !== null && state.orbit !== null) save(scene_blob(state.scene, camera_from_orbit(state.orbit, state.scene.camera), state.sceneName, hiddenLines.checked, hidden_style()));
+  if (state.scene !== null && state.orbit !== null) save(scene_blob(state.scene, drawing_block(state.scene, state.orbit), state.sceneName, hiddenLines.checked, hidden_style()));
 });
 $<HTMLButtonElement>("copy-camera").addEventListener("click", () => {
   if (state.scene === null || state.orbit === null) return;
-  const text = camera_block_text(camera_from_orbit(state.orbit, state.scene.camera));
+  const text = camera_block_text(drawing_block(state.scene, state.orbit));
   navigator.clipboard.writeText(text).then(
     () => show_error(null),
     (e) => show_error(`clipboard unavailable (${describe_error(e)}); camera block:\n${text}`),
@@ -249,6 +263,7 @@ attach_drag_input(stage, {
     state.orbit = pan
       ? pan_orbit(state.orbit, dx, dy, H_px, state.scene.camera, state.scene.output.canvas_mm)
       : rotate_orbit(state.orbit, dx, dy, H_px);
+    state.camera_edited = true;
     request_render();
   },
   end: () => {
@@ -258,6 +273,7 @@ attach_drag_input(stage, {
   wheel: (deltaY) => {
     if (state.orbit === null) return;
     state.orbit = zoom_orbit(state.orbit, deltaY);
+    state.camera_edited = true;
     request_render();
   },
 });
@@ -289,7 +305,7 @@ function update_observer(rec: CameraRecord, doc: GeometryDocument): number {
   const art = line_art(doc, rec, state.obs.D, state.layersChecked);
   const rays = ui.observerRays.checked ? vertex_rays(doc, state.scene, board, rec.near) : null;
   if (state.obs.needs_framing && !state.dragging) {
-    observer.view = frame_view(observer.view, framing_points(board, state.scene, state.obs.centre));
+    observer.view = frame_view(observer.view, framing_points(board, state.scene, state.obs.centre), observer.aspect);
     state.obs.needs_framing = false;
   }
   observer.update({ board, art, rays });
@@ -359,12 +375,13 @@ function frame(): void {
   if (!state.dirty || state.scene === null || state.A === null || state.orbit === null) return;
   state.dirty = false;
   const scene = state.scene;
-  const cam = camera_from_orbit(state.orbit, scene.camera);
+  const cam = camera_from_orbit(state.orbit, scene.camera); // the M7 orbit's block (status line)
+  const block = frame_camera_block(scene.camera, cam, state.camera_edited); // what the core renders
   const img_mode = state.dragging && state.full_svg_length > IMG_MODE_THRESHOLD;
   let doc: GeometryDocument, svg: string, rec: CameraRecord;
   const t0 = performance.now();
   try {
-    const B = project_scene(scene, state.A, cam, !state.dragging);
+    const B = project_scene(scene, state.A, block, !state.dragging);
     rec = B.camera;
     // hidden lines are skipped during a drag (§5.4.11: a documented switch whose off state is a contract document);
     // the resting frame recomputes them
@@ -383,7 +400,7 @@ function frame(): void {
   state.doc = doc;
   state.svg = svg;
   state.rec = rec;
-  if (view3d.checked) view.render(cam, scene.output.canvas_mm, state.A.scene_scale);
+  if (view3d.checked) view.render(block, scene.output.canvas_mm, state.A.scene_scale);
   warnings.update(doc);
   const obs_ms = state.obs.on ? update_observer(rec, doc) : null;
   state.obs.ms = obs_ms;
@@ -409,7 +426,7 @@ function frame(): void {
   load_text,
   get frames() { return state.frames.slice(); },
   get timings() { return { ...state.timings }; },
-  get camera() { return state.orbit && state.scene ? camera_from_orbit(state.orbit, state.scene.camera) : null; },
+  get camera() { return state.orbit && state.scene ? drawing_block(state.scene, state.orbit) : null; },
   get svg_length() { return state.svg.length; },
   /** The writer's SVG text of the last frame (the overlay's source). */
   get svg() { return state.svg; },
@@ -428,8 +445,12 @@ function frame(): void {
     if (observer === null) return null;
     const names = observer.names;
     const count = (prefix: string) => names.filter((n) => n.startsWith(prefix)).length;
+    const [W, H] = observer.size, b = observer.last_board;
+    /** The frame corners and the eye in observer-pane px (`null` behind the observer). */
+    const px = b === null ? null : { corners: b.corners.map((c) => observer_project(observer!.view, W, H, c)),
+      E: observer_project(observer.view, W, H, b.E) };
     return { on: state.obs.on, D: state.obs.D, view: observer.view, labels: observer.label_texts, names,
-      art_objects: count("art"), ms: state.obs.ms };
+      art_objects: count("art"), ms: state.obs.ms, size: [W, H], px };
   },
   /** M9: the "旁觀視角取景" button. */
   frame_observer: () => ui.observerFrame.click(),

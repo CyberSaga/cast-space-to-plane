@@ -17,8 +17,9 @@ import type { OrbitState } from "../src/orbit.js";
 import {
   DRAWING_OFFSET_M, FRAMING_MAX_M, FRAMING_MIN_M, FRUSTUM_EXTEND, OBSERVER_DIST_MAX_M, OBSERVER_DIST_MIN_M,
   OBSERVER_EL_MAX_DEG, OBSERVER_EL_MIN_DEG, OBSERVER_D_M, board_labels, canvas_corners, clip_polygon, clip_segment,
-  derive_board, dist_point_segment, document_drawables, first_inside, frame_view, framing_points, frustum, hit_point, hit_polyline,
-  initial_view, line_art, observer_D, observer_basis, observer_project, orbit_camera, orbit_view, pinch_view,
+  FRAMING_FIT, derive_board, dist_point_segment, document_drawables, first_inside, frame_camera_block, frame_view, framing_points,
+  frustum, hit_point, hit_polyline, initial_view, line_art, observer_D, observer_accepts_pointer, observer_basis, observer_project,
+  orbit_camera, orbit_view, pinch_view,
   sample_arc, sample_ellipse, scene_centre, vertex_rays, zoom_view,
 } from "../src/observer.js";
 import type { Board } from "../src/observer.js";
@@ -215,16 +216,16 @@ test("frustum: E to each corner, continued to E + 1.9·(corner − E)", () => {
   });
 });
 
-test("framing: centroid target, dist = clamp(2.3 · max radius, 6, 60), direction kept", () => {
+test("framing: centroid target, dist = clamp(2.3 · max radius, 6, 60) in a wide pane, direction kept", () => {
   const v0 = { ...initial_view(), az_deg: 12, el_deg: 33 };
-  const small = frame_view(v0, [[0, 0, 0], [1, 0, 0], [0, 1, 0], [1, 1, 0]]);
+  const small = frame_view(v0, [[0, 0, 0], [1, 0, 0], [0, 1, 0], [1, 1, 0]], 1.5);
   close3(small.target, [0.5, 0.5, 0], 1e-15, "centroid");
   assert.equal(small.dist, FRAMING_MIN_M);
   assert.equal(small.az_deg, 12);
   assert.equal(small.el_deg, 33);
-  const mid = frame_view(v0, [[0, 0, 0], [10, 0, 0]]);
+  const mid = frame_view(v0, [[0, 0, 0], [10, 0, 0]], 1.5);
   close(mid.dist, 2.3 * 5, 1e-12, "2.3 · radius");
-  const huge = frame_view(v0, [[0, 0, 0], [100, 0, 0]]);
+  const huge = frame_view(v0, [[0, 0, 0], [100, 0, 0]], 1.5);
   assert.equal(huge.dist, FRAMING_MAX_M);
   // the points of §5.6.4: E, Q, scene centre, point lights, ground point, four corners
   const scene = example("basic");
@@ -238,8 +239,40 @@ test("framing: centroid target, dist = clamp(2.3 · max radius, 6, 60), directio
   close3(pts[4]!, [c[0], c[1], 0], 0, "the ground point");
   const dirScene = example("directional");
   assert.equal(framing_points(b, dirScene, c).length, 3 + 1 + 4, "a directional light contributes no point");
-  const v = frame_view(initial_view(), pts);
+  const v = frame_view(initial_view(), pts, 1.5);
   assert.ok(v.dist >= FRAMING_MIN_M && v.dist <= FRAMING_MAX_M);
+});
+
+test("framing is aspect-aware: every framing point inside a portrait, square or wide pane (the eye stays in view)", () => {
+  for (const name of [...FIVE, "two_lights", "wall_and_ground"]) {
+    const scene = example(name);
+    const A = shadow_geometry(scene);
+    const c = scene_centre(A);
+    const orbit = orbit_from_camera(orbit_camera(scene.camera, c), scene);
+    const b = derive_board(frame_rec(scene, orbit), orbit, observer_D(scene.camera, scene.output.canvas_mm));
+    const pts = framing_points(b, scene, c);
+    for (const [W, H] of [[630, 840], [790, 1016], [1000, 1000], [1600, 700]] as const) {
+      for (const az of [55, -30, 160]) {
+        const v = frame_view({ ...initial_view(), az_deg: az }, pts, W / H);
+        assert.ok(v.dist >= Math.min(FRAMING_MAX_M, 2.3 * Math.max(...pts.map((p) => len(sub(p, v.target))))) - 1e-9,
+          `${name}: never closer than the spec's 2.3 · max radius`);
+        for (const p of pts) {
+          const q = observer_project(v, W, H, p);
+          assert.ok(q !== null, `${name} ${W}x${H} az ${az}: a framing point behind the observer`);
+          assert.ok(Math.abs(q[0] - W / 2) <= (FRAMING_FIT * W) / 2 + 1e-6 && Math.abs(q[1] - H / 2) <= (FRAMING_FIT * H) / 2 + 1e-6,
+            `${name} ${W}x${H} az ${az}: ${JSON.stringify(p)} projects to ${q} outside the pane`);
+        }
+      }
+    }
+  }
+});
+
+test("the observer orbits on a mouse's left button only (touch and pen report button 0)", () => {
+  assert.equal(observer_accepts_pointer("mouse", 0), true);
+  assert.equal(observer_accepts_pointer("mouse", 1), false, "middle button");
+  assert.equal(observer_accepts_pointer("mouse", 2), false, "right button");
+  assert.equal(observer_accepts_pointer("touch", 0), true);
+  assert.equal(observer_accepts_pointer("pen", 0), true);
 });
 
 test("observer camera: drag, wheel and pinch bounds; projection of the target is the pane centre", () => {
@@ -447,7 +480,7 @@ function all_geometry(doc: GeometryDocument, scene: Scene, rec: CameraRecord, or
   centre: Vec3): unknown {
   const b = derive_board(rec, orbit, D);
   return { b, fr: frustum(b), art: line_art(doc, rec, D, new Set(LAYER_IDS)), rays: vertex_rays(doc, scene, b, rec.near),
-    view: frame_view(initial_view(), framing_points(b, scene, centre)), labels: board_labels(b) };
+    view: frame_view(initial_view(), framing_points(b, scene, centre), 0.75), labels: board_labels(b) };
 }
 
 test("every number finite: the five examples and 200 random cameras (incl. horizontal boards and roll)", () => {
@@ -505,6 +538,30 @@ test("switch-off identity: building the observer geometry leaves the document an
     const doc2 = compose(scene, project_scene(scene, A, scene.camera));
     assert.equal(dumps(doc2), json0, `${name}: re-render differs`);
   }
+});
+
+test("an unedited picture_plane scene camera renders as it is: the CLI's document (no CAMERA_LOOKING_ALONG_UP), same SVG", () => {
+  for (const name of ["camera_picture_plane_horizontal", "camera_picture_plane_vertical", "camera_picture_plane_tilted"]) {
+    const scene = load_scene(JSON.parse(readFileSync(resolve(ROOT, "tests", "conformance", "cases", `${name}.json`), "utf-8")));
+    const A = shadow_geometry(scene);
+    const ref = compose(scene, project_scene(scene, A));
+    const orbit = orbit_from_camera(orbit_camera(scene.camera, scene_centre(A)), scene);
+    const orbit_block = camera_from_orbit(orbit, scene.camera);
+    const block = frame_camera_block(scene.camera, orbit_block, false);
+    assert.equal(block, scene.camera, `${name}: unedited → the scene's own block`);
+    const doc = compose(scene, project_scene(scene, A, block));
+    assert.equal(dumps(doc), dumps(ref), `${name}: the document of the scene camera`);
+    assert.ok(doc.camera.picture_plane !== undefined, `${name}: camera.picture_plane present`);
+    assert.deepEqual(doc.warnings.filter((w) => w.code === "CAMERA_LOOKING_ALONG_UP"), [], `${name}: no CAMERA_LOOKING_ALONG_UP`);
+    // the orbit's target form (after an edit) keeps the picture: same SVG
+    assert.equal(frame_camera_block(scene.camera, orbit_block, true), orbit_block, `${name}: edited → the orbit's block`);
+    const doc2 = compose(scene, project_scene(scene, A, orbit_block));
+    assert.equal(write_svg(doc2, LAYER_IDS), write_svg(ref, LAYER_IDS), `${name}: the orbit's block keeps the picture`);
+  }
+  // any other form: the orbit's block whether edited or not (the §5.4.10 page)
+  const basic = example("basic");
+  const ob = camera_from_orbit(orbit_from_camera(basic.camera, basic), basic.camera);
+  assert.equal(frame_camera_block(basic.camera, ob, false), ob);
 });
 
 test("labels: E with its coordinates, D, g, pivot, equation at a patch corner", () => {

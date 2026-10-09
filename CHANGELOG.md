@@ -3,6 +3,7 @@
 ## Unreleased — M9: the read-only observer view (spec-v0.2 §2, §3; contract §5.6)
 
 - m9-observer: the web UI's "旁觀視角" switch (off by default; off = the M7 page) opens an observer pane left of the drawing pane (stacked below 880 px) showing the eye E, the board and frame with the current drawing on it (`unproject_to_plane`, D − 0.012 m, following the layer checkboxes), the frustum, Q, the D and g lines, the pivot, the plane equation and the first object's vertex rays; `web/src/observer.ts` (pure, `web/test/observer.test.ts`) and `web/src/observer3d.ts`; a `picture_plane` scene camera loads into the M7 orbit with its picture kept; SVG / JSON downloads are byte-identical with the switch on and off; `web/scripts/smoke.mjs` checks it and records `obs ms`; the `<img>` drag overlay is no longer displayed at rest (`#stage .overlay[hidden]`; it stayed over a smaller scene after `benchmark_100.json`'s drag).
+- m9-observer (review fixes): framing pulls the observer back until every framing point is inside the pane (the side-by-side pane is portrait, and `E` fell outside after nearly every load); the observer draws receivers see-through so a frame below the ground stays visible; a right or middle drag no longer orbits the observer; a `picture_plane` scene camera renders with its own block until the first camera edit, so the web document equals the CLI's (`camera.picture_plane`, no `CAMERA_LOOKING_ALONG_UP` for the horizontal v8 case).
 
 ## Unreleased — M10 core: `picture_plane` camera form (spec-v0.2 §4.1, §4.3)
 

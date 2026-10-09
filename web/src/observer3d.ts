@@ -15,12 +15,15 @@ import { LineSegmentsGeometry } from "three/addons/lines/LineSegmentsGeometry.js
 import type { Scene, StageA, Vec3 } from "castplane";
 
 import {
-  OBSERVER_FAR_M, OBSERVER_FOV_DEG, OBSERVER_NEAR_M, board_labels, first_inside, frustum, initial_view, observer_basis,
-  orbit_view, pinch_view, zoom_view,
+  OBSERVER_FAR_M, OBSERVER_FOV_DEG, OBSERVER_NEAR_M, board_labels, first_inside, frustum, initial_view, observer_accepts_pointer,
+  observer_basis, orbit_view, pinch_view, zoom_view,
 } from "./observer.js";
 import type { Board, BoardLabel, FillStyle, LineArt, LineStyle, ObserverView, VertexRays } from "./observer.js";
 import { build_scene3d } from "./scene3d.js";
 import { Stage3D } from "./stage.js";
+
+/** Opacity of the receiver plates in the observer pane (see {@link ObserverPane.set_scene}). */
+const RECEIVER_OPACITY = 0.5;
 
 /** What one observer update draws. */
 export interface ObserverGeometry {
@@ -116,6 +119,7 @@ export class ObserverPane {
   private readonly fillMats = new Map<string, THREE.MeshBasicMaterial>();
   private readonly labelEls = new Map<string, HTMLDivElement>();
   private labels: BoardLabel[] = [];
+  private boardNow: Board | null = null;
   private W = 1;
   private H = 1;
 
@@ -127,9 +131,23 @@ export class ObserverPane {
     this.stage.scene3.add(this.board);
   }
 
-  /** Show `scene` (a second build of the `scene3d` group: three.js objects belong to one scene each). */
+  /** Show `scene` (a second build of the `scene3d` group: three.js objects belong to one scene each). Its receiver
+   * plates are see-through here (opacity {@link RECEIVER_OPACITY}, no depth write; this build's own materials, so the
+   * drawing pane is unchanged): a board, frame or frustum below a receiver stays visible (§5.6.5). */
   set_scene(scene: Scene, A: StageA): void {
-    this.stage.replace_group(() => build_scene3d(scene, A));
+    this.stage.replace_group(() => {
+      const group = build_scene3d(scene, A);
+      for (const c of group.children) {
+        if (!c.name.startsWith("receiver:")) continue;
+        const mats = (c as THREE.Mesh).material;
+        for (const m of Array.isArray(mats) ? mats : [mats]) {
+          m.transparent = true;
+          m.opacity = RECEIVER_OPACITY;
+          m.depthWrite = false;
+        }
+      }
+      return group;
+    });
   }
 
   set_size(w: number, h: number): void {
@@ -137,6 +155,21 @@ export class ObserverPane {
     this.H = Math.max(1, h);
     this.stage.set_size(this.W, this.H);
     for (const m of this.lineMats.values()) m.resolution.set(this.W, this.H);
+  }
+
+  /** The board of the last update (smoke test). */
+  get last_board(): Board | null {
+    return this.boardNow;
+  }
+
+  /** The pane's size in CSS px. */
+  get size(): [number, number] {
+    return [this.W, this.H];
+  }
+
+  /** The pane's aspect `W / H` (framing, §5.6.4). */
+  get aspect(): number {
+    return this.W / this.H;
   }
 
   /** The names of the board group's children (smoke test). */
@@ -219,6 +252,7 @@ export class ObserverPane {
       (c as THREE.Mesh).geometry.dispose();
     }
     const b = geo.board;
+    this.boardNow = b;
     const loop = (pts: readonly Vec3[]): [Vec3, Vec3][] => pts.map((p, i) => [p, pts[(i + 1) % pts.length]!]);
     const square: [number, number][] = [[-1, -1], [1, -1], [1, 1], [-1, 1]];
     // board patch and frame (back-filled), then the drawing on the frame
@@ -305,8 +339,8 @@ export class ObserverPane {
   }
 
   /**
-   * Pointer input of the pane (§5.6.4): one pointer drags (orbit), the wheel zooms, two pointers pinch (zoom from the
-   * state at the pinch's start). `changed` is called after every change of {@link view}.
+   * Pointer input of the pane (§5.6.4): one pointer drags (orbit; a mouse's left button only), the wheel zooms, two
+   * pointers pinch (zoom from the state at the pinch's start). `changed` is called after every change of {@link view}.
    */
   attach_input(el: HTMLElement, changed: () => void): void {
     const pointers = new Map<number, [number, number]>();
@@ -317,7 +351,7 @@ export class ObserverPane {
     };
     el.addEventListener("contextmenu", (ev) => ev.preventDefault());
     el.addEventListener("pointerdown", (ev) => {
-      if (pointers.size >= 2) return;
+      if (pointers.size >= 2 || !observer_accepts_pointer(ev.pointerType, ev.button)) return;
       pointers.set(ev.pointerId, [ev.clientX, ev.clientY]);
       el.setPointerCapture(ev.pointerId);
       pinch = pointers.size === 2 ? { d0: Math.max(spread(), 1), view0: { ...this.view } } : null;

@@ -20,7 +20,9 @@
 // must be identical with the switch on and off for the same camera; a 30-step drag of the drawing camera with the
 // switch on records `core ms` + `dom ms` + `obs ms` per frame (< 100 ms for the five examples); an observer drag must
 // not change the drawing; the narrow (< 880 px) layout stacks the panes; switching off restores the drawing pane's
-// size. With `--shots DIR` it also saves DIR/web_ui_observer.png. Prints one JSON record. Exit 1 on a page error or a
+// size; framing keeps the eye and the frame in the pane; a right or middle drag does not move the observer; the three
+// v8 `picture_plane` cases render the scene camera's document until a drag (and again after "Reset camera"); a frame
+// below the ground is drawn. With `--shots DIR` it also saves DIR/web_ui_observer.png. Prints one JSON record. Exit 1 on a page error or a
 // failed check.
 import { execSync } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
@@ -233,6 +235,12 @@ async function observer_check(name, load) {
   check(obs.on && obs.names.includes("board:frame") && obs.names.includes("dots:E") && obs.names.includes("frustum")
     && obs.names.includes("d-line") && obs.names.includes("g-line") && obs.art_objects > 0, `${name}: observer elements`);
   check(obs.labels.length === 5 && obs.labels[0].startsWith("E（讀數）"), `${name}: observer labels`);
+  {
+    // aspect-aware framing (§5.6 implementation notes): after the load the eye and the frame corners are in the pane
+    const [W, H] = obs.size;
+    const inside = (p) => p !== null && p[0] >= 0 && p[0] <= W && p[1] >= 0 && p[1] <= H;
+    check(obs.px !== null && inside(obs.px.E) && obs.px.corners.every(inside), `${name}: framing keeps E and the frame in the ${W}x${H} pane`);
+  }
   // a drag of the drawing camera with the observer on: per-frame core + dom + obs
   await page.evaluate(() => { window.castplane_web.frames.length = 0; });
   await drag(30);
@@ -258,6 +266,23 @@ async function observer_check(name, load) {
   const after = await drawing();
   check(same_drawing(before, after), `${name}: an observer drag leaves the drawing unchanged`);
   check(view1.az_deg !== view0.az_deg && view1.dist !== view0.dist, `${name}: the observer drag / wheel moves the observer`);
+  {
+    // the observer has a left drag only (§5.6.4): a right or middle drag leaves its view unchanged
+    for (const button of ["right", "middle"]) {
+      const v0 = JSON.stringify((await page.evaluate(() => window.castplane_web.observer)).view);
+      const x0 = obox.x + obox.width / 2, y0 = obox.y + obox.height / 2;
+      await page.mouse.move(x0, y0);
+      await page.mouse.down({ button });
+      for (let i = 1; i <= 5; i++) {
+        await page.mouse.move(x0 + 16 * i, y0 + 6 * i);
+        await frames2();
+      }
+      await page.mouse.up({ button });
+      await frames2();
+      const v1 = JSON.stringify((await page.evaluate(() => window.castplane_web.observer)).view);
+      check(v0 === v1, `${name}: a ${button} drag in the observer does not move it`);
+    }
+  }
   // switching off restores the §5.4.10 page: the drawing pane's size and the same drawing
   await page.evaluate(() => window.castplane_web.set_observer(false));
   await frames2();
@@ -305,6 +330,60 @@ if (sceneFile) {
     svg: window.castplane_web.svg }));
   check(pp.obs.labels.includes("y = 2.00") && pp.obs.labels.includes("D = 4.00 m"), "picture_plane: board y = 2.00, D = 4.00 m");
   observer.picture_plane = { labels: pp.obs.labels, same_as_scene_camera: pp.svg === pp.ref.svg };
+  check(observer.picture_plane.same_as_scene_camera, "picture_plane: the scene camera's SVG");
+  // the three v8 cases: until the drawing camera is edited the scene's own block is rendered, so the document and the
+  // warnings are the CLI's (no CAMERA_LOOKING_ALONG_UP for the horizontal board); after a drag the M7 orbit's
+  // target-form block; "Reset camera" returns to the scene's block (§5.6 implementation notes)
+  observer.picture_plane_cases = {};
+  for (const name of ["camera_picture_plane_horizontal", "camera_picture_plane_vertical", "camera_picture_plane_tilted"]) {
+    const text = readFileSync(join(ROOT, "tests", "conformance", "cases", `${name}.json`), "utf-8");
+    await page.evaluate(([n, t]) => window.castplane_web.load_text(n, t), [name, text]);
+    await frames2();
+    await frames2();
+    const snap = () => page.evaluate(() => ({ ref: window.castplane_web.reference_render(), dl: window.castplane_web.download_texts(),
+      svg: window.castplane_web.svg, camera: window.castplane_web.camera,
+      rows: [...document.querySelectorAll("#warnings tbody tr")].map((tr) => tr.textContent) }));
+    const a = await snap();
+    const expected = JSON.parse(readFileSync(join(ROOT, "tests", "conformance", "expected", `${name}.json`), "utf-8"));
+    const doc = JSON.parse(a.dl.json);
+    check(a.dl.json === a.ref.json + "\n" && a.svg === a.ref.svg, `${name}: the loaded page renders the scene camera's document`);
+    check(JSON.stringify(doc.warnings) === JSON.stringify(expected.warnings) && doc.camera.picture_plane !== undefined
+      && a.camera.picture_plane !== undefined && !a.rows.some((r) => r.includes("CAMERA_LOOKING_ALONG_UP")),
+    `${name}: warnings and camera.picture_plane as in the expected file`);
+    await drag(6);
+    const b = await snap();
+    check(b.camera.target !== undefined && b.camera.picture_plane === undefined, `${name}: a drag switches to the orbit's target form`);
+    await page.click("#reset");
+    await frames2();
+    await frames2();
+    const c = await snap();
+    check(c.dl.json === a.dl.json && c.camera.picture_plane !== undefined, `${name}: Reset camera returns to the scene's block`);
+    observer.picture_plane_cases[name] = { warnings: doc.warnings.map((w) => w.code), after_drag: JSON.parse(b.dl.json).warnings.map((w) => w.code) };
+  }
+  // a frame below the ground (E at z = 0.3 looking down): the receiver plates do not hide the board (§5.6.5)
+  const low = JSON.parse(readFileSync(join(ROOT, "examples", "basic.json"), "utf-8"));
+  low.camera.position = [0, -1, 0.3];
+  low.camera.target = [0, 3, -2];
+  await page.evaluate((text) => window.castplane_web.load_text("frame_below_ground", text), JSON.stringify(low));
+  await frames2();
+  await frames2();
+  const lowObs = await page.evaluate(() => window.castplane_web.observer);
+  const [c0, c1] = lowObs.px.corners;
+  const blue = await page.evaluate(([x, y]) => {
+    const gl = document.getElementById("obs-gl");
+    const k = gl.width / gl.clientWidth;
+    const c = document.createElement("canvas");
+    c.width = gl.width;
+    c.height = gl.height;
+    const g = c.getContext("2d");
+    g.drawImage(gl, 0, 0);
+    const d = g.getImageData(Math.round(x * k) - 4, Math.round(y * k) - 4, 9, 9).data;
+    let best = -255;
+    for (let i = 0; i < d.length; i += 4) best = Math.max(best, d[i + 2] - d[i]);
+    return best;
+  }, [(c0[0] + c1[0]) / 2, (c0[1] + c1[1]) / 2]);
+  observer.below_ground = { frame_bottom_mid_blue_minus_red: blue };
+  check(blue > 50, `frame below the ground: the frame's bottom edge is drawn (blue − red ${blue})`);
   await page.evaluate(() => window.castplane_web.set_observer(false));
 }
 {

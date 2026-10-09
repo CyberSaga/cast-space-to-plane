@@ -95,13 +95,17 @@ M9 (contract §5.6): the read-only observer view, switched on with *旁觀視角
   `P′` on the board, the light rays `L → S` of its vertices, the sight lines `E → S` and their crossings `S′`. The
   drawing on the frame follows the layer checkboxes; SVG arcs are drawn with 32 segments, ellipses with 72. Every
   drawing-camera change (drag, wheel, sliders, example load, *Reset camera*) updates it in the same frame. In the
-  observer pane a left drag orbits the observer camera (0.4°/px around, 0.3°/px up, elevation −5°…85°), the wheel or a
-  two-finger pinch zooms (4–60 m); none of this touches the drawing. *旁觀視角取景* frames it (keeps the direction,
-  targets the centroid of E, Q, the scene centre and its ground point, the point lights and the frame corners, distance
-  `clamp(2.3 · radius, 6, 60)` m); it also frames after a scene load and *Reset camera*, never during a drag. The status
-  line shows `obs ms` (the observer's own cost per frame) while the switch is on. A scene whose camera has the
-  `picture_plane` form is driven through the M7 orbit with the pivot at the scene centre's depth, so its picture is
-  kept (`Download scene` writes the target form until M10).
+  observer pane a left drag orbits the observer camera (0.4°/px around, 0.3°/px up, elevation −5°…85°; the right and
+  middle mouse buttons do nothing), the wheel or a two-finger pinch zooms (4–60 m); none of this touches the drawing.
+  *旁觀視角取景* frames it (keeps the direction, targets the centroid of E, Q, the scene centre and its ground point,
+  the point lights and the frame corners, distance `clamp(2.3 · radius, 6, 60)` m, pulled back further when a point
+  would fall outside the pane's inner 90 %, as it would in the portrait side-by-side pane); it also frames after a
+  scene load and *Reset camera*, never during a drag. The observer draws the receivers see-through, so a frame below
+  the ground stays visible. The status line shows `obs ms` (the observer's own cost per frame) while the switch is on.
+  A scene whose camera has the `picture_plane` form is rendered with that block until the drawing camera is first
+  edited (so the document, its warnings and the downloads are the CLI's); from then on it is driven through the M7
+  orbit, with the pivot at the scene centre's depth and the same picture (`Download scene` then writes the target
+  form, until M10).
 
 ### Overlay modes during a drag
 
@@ -219,7 +223,11 @@ The script needs a Playwright installed outside the repository; it is not a depe
   observer drag and wheel move only the observer; switching off hides the pane, its controls and `obs ms` and restores
   the drawing pane's size; a `picture_plane` scene camera loads with the board `y = 2.00`, `D = 4.00 m`; below 880 px
   the panes stack (observer on top), above they sit side by side at equal width; after the large scene's drag the
-  `<img>` overlay is not displayed at rest. With `--shots DIR` it also saves `DIR/web_ui_observer.png`.
+  `<img>` overlay is not displayed at rest. Review fixes: after each load `E` and the frame corners are inside the
+  observer pane; a right or middle drag leaves the observer still; the three v8 `picture_plane` cases render the scene
+  camera's document (the expected file's warnings, `camera.picture_plane`) until a drag, the orbit's target form after
+  it, and the scene's block again after *Reset camera*; a frame below the ground is drawn (its bottom edge's pixel
+  colour). With `--shots DIR` it also saves `DIR/web_ui_observer.png`.
 
 Last run (phase 2, part 5; exit 0, no failed check, no page error):
 

@@ -5072,6 +5072,33 @@ The observer shows lights as in §5.4.10 (`scene3d`). Nothing in this table is w
   scene camera (spec-v0.2 §4.1 block) loads with the board `y = 2.00`, `D = 4.00 m`. Per drag frame with the switch on,
   `core ms + dom ms + obs ms` stayed below 25 ms on the five examples (maximum over 30 frames, headless Chromium with
   SwiftShader); `benchmark_100.json` is recorded (not gated): `obs ms` 54–238 ms, the total 167–486 ms.
+- **[decision, implementation] (M9 review fixes) Aspect-aware framing, see-through receivers, the left button, an
+  unedited `picture_plane` scene camera.** (1) Framing amends §5.6.4 and replaces reading (4) of "Readings of the §5.6.5
+  table": `dist = clamp(max(2.3 · max_i |p_i − c|, d_fit), 6, 60)` m, `c` the centroid, with
+  `d_fit = max_i (max(|p_i'·r| / t_h, |p_i'·u| / t_v) − p_i'·f)`, `p_i' = p_i − c`, `(r, u, f)` the observer basis of
+  the kept direction, `t_v = 0.9 · tan 20°` and `t_h = t_v · W / H` (`W × H` the observer pane in CSS px). This is the
+  least distance at which every framing point projects within 90 % of the pane's half-width and half-height
+  (`frame_view(view, points, aspect)`, `FRAMING_FIT = 0.9`). The spec-v0.2 §3 formula stays as the lower bound. It was
+  tuned on the demo's wide canvas, while the side-by-side observer pane is portrait (half of the page width minus the
+  side panel, by the full height); there the formula left `E` outside the pane after nearly every load (14 of 15 scenes
+  at 1600 × 900, all four checked at 1920 × 1080), and even a square pane does not hold every point. (2) The observer's
+  own `scene3d` build draws its receiver plates see-through (opacity 0.5, `depthWrite` off). Only that build's materials
+  change, so the drawing pane is unchanged. The board, the frame with its drawing, and the frustum are then visible
+  below a receiver: a camera that looks down puts part or all of the frame under the ground (`basic`'s frame bottom
+  is at z ≈ −0.27 m), and spec-v0.2 §3 draws the frame with the drawing unconditionally. (3) Only a mouse's left button
+  starts an observer gesture (touch and pen report button 0; `observer_accepts_pointer`). A right or middle drag does
+  nothing: §5.6.4 defines only a left drag, and the drawing pane keeps its right-button pan. (4) This amends the last
+  sentences of §5.6.2. While the drawing camera is unedited since the load or "Reset camera" (no drag, wheel, focal or
+  roll change), a `picture_plane` scene camera is rendered as it is (`frame_camera_block`). The document is then the
+  CLI's: `camera.picture_plane` is present and a horizontal board has no `CAMERA_LOOKING_ALONG_UP` (§5.7.3). "Download
+  scene" and "Copy camera block" write that block. The first edit switches to the M7 orbit's target-form block, which
+  has the same picture (§5.6.2); only from then on does "Download scene" write the target form. Every other camera
+  form is unchanged (the §5.4.10 page). Tests: `web/test/observer.test.ts` (21 tests) adds framing inside portrait,
+  square and wide panes (seven examples, three azimuths), the pointer filter, and the three v8 cases (the unedited
+  block's document equals the scene camera's, and the orbit's block keeps the SVG). `web/scripts/smoke.mjs` checks
+  that `E` and the frame corners lie inside the pane after each load, that right and middle drags leave the observer
+  still, the three v8 cases before a drag, after one and after "Reset camera", and that a frame below the ground is
+  drawn (pixel colour on its bottom edge). Each smoke check fails on a build with its fix disabled.
 
 ### 5.7 M10 — plane mode, board-first (spec-v0.2 §1, §4, §5, §6, §7)
 

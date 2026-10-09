@@ -37,6 +37,9 @@ export const OBSERVER_PINCH_MIN_PX = 10;
 export const FRAMING_K = 2.3;
 export const FRAMING_MIN_M = 6;
 export const FRAMING_MAX_M = 60;
+/** Framing pulls back further when a framing point would leave the pane: every point within this fraction of the
+ * pane's half-width and half-height (§5.6 implementation notes, aspect-aware framing). */
+export const FRAMING_FIT = 0.9;
 /** The drawing on the frame sits this much in front of the board, along the rays (§5.6.5). */
 export const DRAWING_OFFSET_M = 0.012;
 /** The frustum lines continue to `E + FRUSTUM_EXTEND·(corner − E)` (dotted). */
@@ -101,6 +104,16 @@ export function orbit_camera(cam: Camera, P_scene: readonly number[]): Camera {
     position: E, target: add(E, mul(f, t)), roll_deg: roll, focal_length_mm: cam.focal_length_mm,
     frame_mm: [cam.frame_mm[0], cam.frame_mm[1]], shift_mm: [cam.shift_mm[0], cam.shift_mm[1]], near_m: cam.near_m,
   };
+}
+
+/**
+ * The camera block a frame renders (§5.6 implementation notes): a `picture_plane` scene camera is rendered as it is
+ * until the first drawing-camera edit (drag, wheel, focal or roll slider) since the load or "Reset camera", so the
+ * document, its warnings and the downloads are those of the scene's own camera (the Python CLI's); after an edit, and
+ * for every other camera form, the M7 orbit's target-form block `orbit_block`. Both give the same picture (§5.6.2).
+ */
+export function frame_camera_block<T>(scene_camera: Camera, orbit_block: T, edited: boolean): Camera | T {
+  return !edited && scene_camera.picture_plane !== undefined ? scene_camera : orbit_block;
 }
 
 // ------------------------------------------------------------------------------------------------ the board (§5.6.2)
@@ -528,14 +541,35 @@ export function framing_points(board: Pick<Board, "E" | "Q" | "corners">, scene:
   return pts;
 }
 
-/** Framing (§5.6.4): keep `(az, el)`, target = the centroid of `points`, `dist = clamp(2.3 · max radius, 6, 60)`. */
-export function frame_view(view: ObserverView, points: readonly (readonly number[])[]): ObserverView {
+/**
+ * Framing (§5.6.4, amended in the §5.6 implementation notes): keep `(az, el)`, target = the centroid `c` of `points`,
+ * `dist = clamp(max(2.3 · max radius, d_fit), 6, 60)` where `d_fit` is the least distance at which every point projects
+ * within {@link FRAMING_FIT} of the half-width and half-height of a pane of aspect `aspect` (= W / H): with the
+ * observer basis `r, u, f`, `t_v = FRAMING_FIT · tan(20°)`, `t_h = t_v · aspect` and `p' = p − c`,
+ * `d_fit = max_p (max(|p'·r| / t_h, |p'·u| / t_v) − p'·f)`. In a wide pane the spec's `2.3 · max radius` usually
+ * decides; in a portrait or square pane `d_fit` keeps the eye and the frame in view.
+ */
+export function frame_view(view: ObserverView, points: readonly (readonly number[])[], aspect: number): ObserverView {
   let c: Vec3 = [0, 0, 0];
   for (const p of points) c = add(c, p);
   c = mul(c, 1 / Math.max(1, points.length));
   let rad = 0;
   for (const p of points) rad = Math.max(rad, len(sub(p, c)));
-  return { ...view, target: c, dist: clamp(FRAMING_K * rad, FRAMING_MIN_M, FRAMING_MAX_M) };
+  const { r, u, f } = observer_basis({ ...view, target: c, dist: 1 });
+  const t_v = FRAMING_FIT * Math.tan((OBSERVER_FOV_DEG / 2) * DEG);
+  const t_h = t_v * (aspect > 0 && Number.isFinite(aspect) ? aspect : 1);
+  let d_fit = 0;
+  for (const p of points) {
+    const q = sub(p, c);
+    d_fit = Math.max(d_fit, Math.max(Math.abs(dot(q, r)) / t_h, Math.abs(dot(q, u)) / t_v) - dot(q, f));
+  }
+  return { ...view, target: c, dist: clamp(Math.max(FRAMING_K * rad, d_fit), FRAMING_MIN_M, FRAMING_MAX_M) };
+}
+
+/** Whether a pointer-down may start an observer gesture: the observer has a left drag only (§5.6.4), so a mouse's
+ * right or middle button does nothing (touch and pen report button 0). */
+export function observer_accepts_pointer(pointerType: string, button: number): boolean {
+  return pointerType !== "mouse" || button === 0;
 }
 
 // ------------------------------------------------------------------------------------------------ hit-test helpers
