@@ -11,7 +11,7 @@ npm run -w ts build        # the core package "castplane" the UI imports
 npm run -w web dev         # vite dev server
 npm run -w web build       # tsc type check + vite build -> web/dist (static, base './')
 npm run -w web preview     # serve web/dist locally
-npm run -w web test        # orbit / download unit tests (node:test, web/test/)
+npm run -w web test        # orbit / download / rig / equation / observer unit tests (node:test, web/test/)
 ```
 
 ![web UI](../docs/images/web_ui.png)
@@ -22,6 +22,10 @@ Phase 2 (contract §5.4.10, the M4–M6 format): `wall_and_ground` with hidden l
 ![wall and ground, hidden lines](../docs/images/web_ui_wall_and_ground.png)
 ![mesh demo](../docs/images/web_ui_mesh_demo.png)
 ![two lights](../docs/images/web_ui_two_lights.png)
+
+M9 (contract §5.6): the read-only observer view, switched on with *旁觀視角*:
+
+![observer view](../docs/images/web_ui_observer.png)
 
 ## What it does
 
@@ -77,6 +81,27 @@ Phase 2 (contract §5.4.10, the M4–M6 format): `wall_and_ground` with hidden l
   update), the overlay mode, the point / edge / ray counts (rays of every light), the umbra piece count (two or more
   lights), and the light and receiver ids. The warnings table lists `code`, `ids` and
   `message` of the current document.
+
+- **Observer view** (M9, contract §5.6; `src/observer.ts` pure and unit-tested, `src/observer3d.ts` the three.js
+  pane). The toolbar switch *旁觀視角* (off by default, remembered per browser in `localStorage`) opens a second
+  three.js view left of the drawing pane, at equal width; below 880 px of page width the two panes stack, the
+  observer on top. With the switch off the page is the M7 page: no second WebGL context is created and nothing is
+  computed for it. The observer shows, from outside, the drawing camera's eye **E** (read-only, with its coordinates),
+  the board (the picture plane at distance `D` in front of the eye: 4 m, or the `picture_plane` distance of the
+  scene's camera clamped into 0.5–12 m), the frame on it (the canvas rectangle unprojected with the core's
+  `unproject_to_plane`) with the current drawing laid on it 0.012 m towards the eye, the frustum (dotted on to 1.9×),
+  the principal point `Q`, the `D` line, the pivot (the orbit target) with the `g` line (`g = R − D`), the plane's
+  equation, and with *視線* (default on) the vertex rays of the first object: sight lines `E → P` with their crossings
+  `P′` on the board, the light rays `L → S` of its vertices, the sight lines `E → S` and their crossings `S′`. The
+  drawing on the frame follows the layer checkboxes; SVG arcs are drawn with 32 segments, ellipses with 72. Every
+  drawing-camera change (drag, wheel, sliders, example load, *Reset camera*) updates it in the same frame. In the
+  observer pane a left drag orbits the observer camera (0.4°/px around, 0.3°/px up, elevation −5°…85°), the wheel or a
+  two-finger pinch zooms (4–60 m); none of this touches the drawing. *旁觀視角取景* frames it (keeps the direction,
+  targets the centroid of E, Q, the scene centre and its ground point, the point lights and the frame corners, distance
+  `clamp(2.3 · radius, 6, 60)` m); it also frames after a scene load and *Reset camera*, never during a drag. The status
+  line shows `obs ms` (the observer's own cost per frame) while the switch is on. A scene whose camera has the
+  `picture_plane` form is driven through the M7 orbit with the pivot at the scene centre's depth, so its picture is
+  kept (`Download scene` writes the target form until M10).
 
 ### Overlay modes during a drag
 
@@ -143,6 +168,25 @@ the screenshots shows the resting frame's `core ms`: `wall_and_ground` 3.4 ms wi
 than in phase 1 (66–78 ms against 57–63 ms minimum; the node benchmark, `benchmarks/README.md`, is the gated
 number); its resting DOM frames took 100–169 ms of `innerHTML`.
 
+### M9: the observer view on
+
+Same script and container (headless Chromium 141.0.7390.37, SwiftShader): a 30-step drag of the drawing camera per
+scene with the observer switched on. `obs ms` is the observer's update (board, drawing on the frame, vertex rays and
+the `renderer.render` call, which returns before the GPU work completes); `total` is `core ms + dom ms + obs ms` of
+the frame. Minimum / median / maximum over the drag frames of one run:
+
+| scene | obs ms | total |
+| --- | --- | --- |
+| basic | 2.3 / 4.6 / 10.3 | 4.1 / 6.7 / 14.3 |
+| construction_demo | 2.3 / 3.5 / 7.6 | 4.1 / 5.5 / 9.9 |
+| curved_demo | 2.1 / 2.8 / 8.3 | 4.3 / 5.3 / 11.1 |
+| directional | 1.5 / 3.2 / 5.3 | 3.5 / 6.0 / 10.3 |
+| three_point | 2.0 / 3.0 / 17.7 | 3.5 / 4.9 / 24.0 |
+| benchmark_100 (recorded, not gated) | 54.3 / 158.8 / 238.1 | 166.8 / 286.2 / 486.2 |
+
+The five examples stay far below the 100 ms frame of contract §5.6.9. `benchmark_100.json` draws ≈ 30 k segments on
+the frame; with the observer off its drag frames are unchanged (table above).
+
 ## Smoke check
 
 ```sh
@@ -168,9 +212,20 @@ The script needs a Playwright installed outside the repository; it is not a depe
   3D view has the ground plane with its grid and the wall as a plate with an outline; `mesh_demo` shows the house
   mesh and the tank; `two_lights` has one helper per light, the per-light construction blocks and umbra pieces at
   rest, none during a drag and again after it. With `--shots DIR` it saves `DIR/web_ui_<name>.png` for these three.
+- M9 (contract §5.6.9): for the five phase-1 examples and the optional scene file the observer is switched on and
+  off: the writer's SVG text, the overlay markup, the SVG / JSON download texts and the camera must be identical with
+  the switch on and off; a 30-step drag of the drawing camera with the switch on records `obs ms` and checks
+  `core + dom + obs < 100 ms` per frame on the five examples, and that the observer follows the drawing camera; an
+  observer drag and wheel move only the observer; switching off hides the pane, its controls and `obs ms` and restores
+  the drawing pane's size; a `picture_plane` scene camera loads with the board `y = 2.00`, `D = 4.00 m`; below 880 px
+  the panes stack (observer on top), above they sit side by side at equal width; after the large scene's drag the
+  `<img>` overlay is not displayed at rest. With `--shots DIR` it also saves `DIR/web_ui_observer.png`.
 
 Last run (phase 2, part 5; exit 0, no failed check, no page error):
 
 - the bundled core in Chromium wrote SVG byte-identical to the Python writer for all eight examples
   (`mesh_demo` from its expansion), and its JSON passes the conformance comparator;
 - the downloaded `<name>.scene.json`, rendered with the Python CLI, gives the downloaded SVG byte for byte.
+
+Last run (M9, with `benchmark_100.json` and `--shots`): exit 0, no failed check, no page error; every M9 check above
+passed for the five examples and `benchmark_100.json`.

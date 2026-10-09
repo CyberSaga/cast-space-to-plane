@@ -51,6 +51,11 @@ export class Stage3D {
     apply_camera_block(this.camera3, block, canvas_mm, scene_scale);
     this.renderer.render(this.scene3, this.camera3);
   }
+
+  /** Draw the scene through any three.js camera (the M9 observer camera, §5.6.4; not a castplane camera). */
+  render_with(camera: THREE.Camera): void {
+    this.renderer.render(this.scene3, camera);
+  }
 }
 
 /** Size `box` to the largest `aspect` rectangle inside `viewport` (8 px margin each side); returns `[w, h]` px. */

@@ -37,6 +37,15 @@ export interface Controls {
   statusLine: HTMLDivElement;
   errorPanel: HTMLDivElement;
   warningsBody: HTMLTableSectionElement;
+  /** M9 (contract §5.6.3): the observer switch, its pane and its controls. */
+  panes: HTMLDivElement;
+  observerOn: HTMLInputElement;
+  observerControls: HTMLSpanElement;
+  observerFrame: HTMLButtonElement;
+  observerRays: HTMLInputElement;
+  observerPane: HTMLElement;
+  observerCanvas: HTMLCanvasElement;
+  observerLabels: HTMLDivElement;
 }
 
 export function controls(): Controls {
@@ -57,6 +66,14 @@ export function controls(): Controls {
     statusLine: $<HTMLDivElement>("status"),
     errorPanel: $<HTMLDivElement>("error"),
     warningsBody: $<HTMLTableElement>("warnings").tBodies[0]!,
+    panes: $<HTMLDivElement>("panes"),
+    observerOn: $<HTMLInputElement>("observer-on"),
+    observerControls: $<HTMLSpanElement>("observer-controls"),
+    observerFrame: $<HTMLButtonElement>("observer-frame"),
+    observerRays: $<HTMLInputElement>("observer-rays"),
+    observerPane: $<HTMLElement>("observer"),
+    observerCanvas: $<HTMLCanvasElement>("obs-gl"),
+    observerLabels: $<HTMLDivElement>("obs-labels"),
   };
 }
 
@@ -142,13 +159,14 @@ export function umbra_count(doc: GeometryDocument): number {
   return (doc.umbra ?? []).reduce((n, u) => n + (u.polygons?.length ?? 0), 0);
 }
 
-/** The status line of a rendered frame. */
+/** The status line of a rendered frame; `obs_ms` (the observer's per-frame cost, §5.6.3) only while the switch is on. */
 export function status_text(
   sceneName: string, timings: { stage_a_ms: number; core_ms: number; dom_ms: number }, mode: OverlayMode,
-  doc: GeometryDocument, scene: Scene, cam: TargetCamera,
+  doc: GeometryDocument, scene: Scene, cam: TargetCamera, obs_ms: number | null = null,
 ): string {
   return `${sceneName}: stage A ${timings.stage_a_ms.toFixed(1)} ms (cached)\n` +
-    `core ms ${timings.core_ms.toFixed(1)} · dom ms ${timings.dom_ms.toFixed(1)} · overlay ${mode}\n` +
+    `core ms ${timings.core_ms.toFixed(1)} · dom ms ${timings.dom_ms.toFixed(1)}` +
+    (obs_ms === null ? "" : ` · obs ms ${obs_ms.toFixed(1)}`) + ` · overlay ${mode}\n` +
     `points ${Object.keys(doc.points).length} · edges ${doc.edges.length} · rays ${ray_count(doc)}` +
     (doc.umbra !== undefined ? ` · umbra pieces ${umbra_count(doc)}` : "") + "\n" +
     `lights ${scene.lights.map((l) => l.id).join(", ")} · receivers ${scene.receivers.map((r) => r.id).join(", ")}\n` +

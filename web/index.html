@@ -8,6 +8,11 @@
   <body>
     <header id="toolbar">
       <span class="brand">castplane</span>
+      <label class="group"><input id="observer-on" type="checkbox" /> 旁觀視角</label>
+      <span class="group" id="observer-controls" hidden>
+        <button id="observer-frame" type="button">旁觀視角取景</button>
+        <label class="group"><input id="observer-rays" type="checkbox" checked /> 視線</label>
+      </span>
       <label class="group">Example
         <select id="examples"><option value="">—</option></select>
       </label>
@@ -31,12 +36,19 @@
       </span>
     </header>
     <main id="main">
-      <section id="viewport" aria-label="viewport">
-        <div id="stage">
-          <canvas id="gl"></canvas>
-        </div>
-        <div id="drop-hint">Drop a scene JSON file anywhere, or pick an example.</div>
-      </section>
+      <div id="panes">
+        <section id="observer" aria-label="observer view" hidden>
+          <canvas id="obs-gl"></canvas>
+          <div id="obs-labels"></div>
+          <div class="obs-hint">旁觀視角（唯讀）· 左拖繞轉 · 滾輪或雙指縮放</div>
+        </section>
+        <section id="viewport" aria-label="viewport">
+          <div id="stage">
+            <canvas id="gl"></canvas>
+          </div>
+          <div id="drop-hint">Drop a scene JSON file anywhere, or pick an example.</div>
+        </section>
+      </div>
       <aside id="side">
         <div id="status">no scene</div>
         <div id="error" hidden></div>

@@ -8,11 +8,14 @@ body { display: flex; flex-direction: column; }
 #toolbar output { min-width: 4.5em; font-variant-numeric: tabular-nums; }
 #layers label { display: inline-flex; gap: 2px; align-items: center; margin-right: 6px; }
 #main { flex: 1; display: flex; min-height: 0; }
+#panes { flex: 1; display: flex; min-width: 0; min-height: 0; }
 #viewport { flex: 1; position: relative; display: flex; align-items: center; justify-content: center; background: #e9e9e6; min-width: 0; overflow: hidden; }
 #viewport.dragover { outline: 3px dashed #36c; outline-offset: -6px; }
 #stage { position: relative; background: #fff; box-shadow: 0 0 0 1px #ccc; touch-action: none; }
 #stage canvas, #stage .overlay { position: absolute; inset: 0; width: 100%; height: 100%; display: block; }
 #stage .overlay { pointer-events: none; }
+/* the <img> overlay of a drag frame (§5.4.11) is hidden at rest: `display: block` above must not override [hidden] */
+#stage .overlay[hidden] { display: none; }
 #stage canvas.hidden { visibility: hidden; }
 #drop-hint { position: absolute; bottom: 8px; left: 0; right: 0; text-align: center; color: #777; pointer-events: none; }
 #side { width: 340px; overflow: auto; padding: 8px 10px; border-left: 1px solid #ddd; background: #fff; }
@@ -26,3 +29,22 @@ body { display: flex; flex-direction: column; }
 /* layer toggles of the DOM overlay: ids are the §2.10 layer ids */
 .hide-horizon #horizon, .hide-objects #objects, .hide-form_shadow #form_shadow, .hide-cast_shadow #cast_shadow,
 .hide-construction #construction, .hide-labels #labels { display: none; }
+#toolbar .group[hidden] { display: none; }
+/* M9 observer pane (contract §5.6.3): left of the drawing pane, equal width; stacked (observer on top) below 880 px */
+#observer { flex: 1; position: relative; min-width: 0; min-height: 0; overflow: hidden; background: #f3f2ec; touch-action: none; border-right: 1px solid #ddd; }
+#observer[hidden] { display: none; }
+#observer canvas { position: absolute; inset: 0; width: 100%; height: 100%; display: block; cursor: grab; }
+#obs-labels { position: absolute; inset: 0; pointer-events: none; overflow: hidden; }
+.obs-label { position: absolute; left: 0; top: 0; margin: -18px 0 0 10px; white-space: nowrap; font-size: 12px; font-weight: 600; color: #47463f; text-shadow: 0 0 3px #fff, 0 0 3px #fff; }
+.obs-label[hidden] { display: none; }
+.obs-label-E { color: #111; }
+.obs-label-g, .obs-label-pivot { color: #a233c4; }
+.obs-label-pivot { margin: -24px 0 0 12px; }
+.obs-label-g { margin: 8px 0 0 12px; }
+.obs-label-E { margin: -24px 0 0 12px; }
+.obs-label-equation { color: #2563d9; margin: 4px 0 0 4px; }
+.obs-hint { position: absolute; left: 8px; bottom: 6px; color: #777; pointer-events: none; font-size: 12px; }
+@media (max-width: 879.98px) {
+  #panes.observer-on { flex-direction: column; }
+  #observer { border-right: none; border-bottom: 1px solid #ddd; }
+}

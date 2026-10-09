@@ -86,6 +86,7 @@ B = castplane.project_scene(scene, A, camera=camera, umbra=False)   # umbra[].po
 - 消隱開關與虛線／省略樣式選單；
 - 作圖線稿每個影格由移植的核心重新寫出 SVG，疊在 3D 畫面上；
 - 可下載 SVG、JSON，以及帶目前相機的場景檔（Python 命令列可重現同一張圖）。
+- 旁觀視角（M9，唯讀）：打開「旁觀視角」開關後，左窗從外面看作圖相機的眼睛 E、投影平面與畫框（畫框上就是右窗的線稿）、視錐、主點、D 與 g、旋轉中心、平面方程式，以及第一個物體頂點的視線與光線；右窗的作圖與下載完全不變。
 
 它是純靜態網頁，不需要伺服器。
 
@@ -95,7 +96,9 @@ npm run -w web preview           # 本機開啟 web/dist
 npm test                         # TypeScript 與網頁的測試
 ```
 
-說明見 [`docs/USAGE.md`](docs/USAGE.md) §4、[`ts/README.md`](ts/README.md) 與 [`web/README.md`](web/README.md)。截圖：[`docs/images/web_ui.png`](docs/images/web_ui.png)，以及第二階段的 [`web_ui_wall_and_ground.png`](docs/images/web_ui_wall_and_ground.png)（開啟消隱）、[`web_ui_mesh_demo.png`](docs/images/web_ui_mesh_demo.png)、[`web_ui_two_lights.png`](docs/images/web_ui_two_lights.png)。
+說明見 [`docs/USAGE.md`](docs/USAGE.md) §4、[`ts/README.md`](ts/README.md) 與 [`web/README.md`](web/README.md)。截圖：[`docs/images/web_ui.png`](docs/images/web_ui.png)，以及第二階段的 [`web_ui_wall_and_ground.png`](docs/images/web_ui_wall_and_ground.png)（開啟消隱）、[`web_ui_mesh_demo.png`](docs/images/web_ui_mesh_demo.png)、[`web_ui_two_lights.png`](docs/images/web_ui_two_lights.png)，以及 M9 的旁觀視角 [`web_ui_observer.png`](docs/images/web_ui_observer.png)：
+
+![旁觀視角](docs/images/web_ui_observer.png)
 
 ## 作圖線是什麼
 

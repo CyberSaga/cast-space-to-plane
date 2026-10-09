@@ -15,7 +15,13 @@
 // picker; the phase-2 checks load `wall_and_ground` (hidden lines on: the hidden sub-groups in the overlay, the
 // "omit" style, the wall plate in the 3D view), `mesh_demo` (the house mesh) and `two_lights` (two light helpers, the
 // per-light construction blocks, umbra pieces at rest and none during a drag), and with `--shots DIR` save
-// DIR/web_ui_<name>.png for each. Prints one JSON record. Exit 1 on a page error or a failed phase-2 check.
+// DIR/web_ui_<name>.png for each. M9 (contract §5.6.9): for the five phase-1 examples (and the optional scene file)
+// the "旁觀視角" switch is turned on and off: the writer's SVG text, the overlay markup and the SVG / JSON downloads
+// must be identical with the switch on and off for the same camera; a 30-step drag of the drawing camera with the
+// switch on records `core ms` + `dom ms` + `obs ms` per frame (< 100 ms for the five examples); an observer drag must
+// not change the drawing; the narrow (< 880 px) layout stacks the panes; switching off restores the drawing pane's
+// size. With `--shots DIR` it also saves DIR/web_ui_observer.png. Prints one JSON record. Exit 1 on a page error or a
+// failed check.
 import { execSync } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { createRequire } from "node:module";
@@ -49,8 +55,8 @@ const median = (xs) => {
   return n === 0 ? NaN : n % 2 ? s[(n - 1) / 2] : (s[n / 2 - 1] + s[n / 2]) / 2;
 };
 
-async function drag(steps) {
-  const box = await page.locator("#stage").boundingBox();
+async function drag(steps, selector = "#stage") {
+  const box = await page.locator(selector).boundingBox();
   const x0 = box.x + box.width / 2, y0 = box.y + box.height / 2;
   await page.mouse.move(x0, y0);
   await page.mouse.down();
@@ -201,6 +207,138 @@ if (sceneFile) {
   rows[stem] = await drag_stats();
 }
 
+// M9 (contract §5.6.9): the observer switch
+const observer = { rows: {} };
+const PHASE1 = ["basic", "construction_demo", "curved_demo", "directional", "three_point"];
+const drawing = () => page.evaluate(() => ({
+  svg: window.castplane_web.svg,
+  overlay: document.querySelector("svg.overlay").innerHTML,
+  dl: window.castplane_web.download_texts(),
+  camera: JSON.stringify(window.castplane_web.camera),
+  stage: (({ width, height }) => ({ width, height }))(document.getElementById("stage").getBoundingClientRect()),
+}));
+const same_drawing = (a, b) => a.svg === b.svg && a.overlay === b.overlay && a.dl.svg === b.dl.svg && a.dl.json === b.dl.json
+  && a.camera === b.camera;
+async function observer_check(name, load) {
+  await page.evaluate(() => window.castplane_web.set_observer(false));
+  await load();
+  await frames2();
+  const off = await drawing();
+  await page.evaluate(() => window.castplane_web.set_observer(true));
+  await frames2();
+  await frames2();
+  const on = await drawing();
+  const obs = await page.evaluate(() => window.castplane_web.observer);
+  check(same_drawing(off, on), `${name}: SVG / overlay / downloads identical with the observer on and off`);
+  check(obs.on && obs.names.includes("board:frame") && obs.names.includes("dots:E") && obs.names.includes("frustum")
+    && obs.names.includes("d-line") && obs.names.includes("g-line") && obs.art_objects > 0, `${name}: observer elements`);
+  check(obs.labels.length === 5 && obs.labels[0].startsWith("E（讀數）"), `${name}: observer labels`);
+  // a drag of the drawing camera with the observer on: per-frame core + dom + obs
+  await page.evaluate(() => { window.castplane_web.frames.length = 0; });
+  await drag(30);
+  const frames = (await page.evaluate(() => window.castplane_web.frames)).filter((f) => f.dragging);
+  const totals = frames.map((f) => f.core_ms + f.dom_ms + (f.obs_ms ?? 0));
+  const row = {
+    drag_frames: frames.length,
+    obs_ms: { min: Math.min(...frames.map((f) => f.obs_ms)), median: median(frames.map((f) => f.obs_ms)), max: Math.max(...frames.map((f) => f.obs_ms)) },
+    total_ms: { min: Math.min(...totals), median: median(totals), max: Math.max(...totals) },
+  };
+  check(frames.length > 0 && frames.every((f) => typeof f.obs_ms === "number"), `${name}: obs ms recorded during the drag`);
+  // the observer follows the drawing camera
+  const moved = await page.evaluate(() => window.castplane_web.observer.labels[0]);
+  // an observer drag (and wheel) changes only the observer view
+  const before = await drawing();
+  const view0 = (await page.evaluate(() => window.castplane_web.observer)).view;
+  await drag(10, "#observer");
+  const obox = await page.locator("#observer").boundingBox();
+  await page.mouse.move(obox.x + obox.width / 2, obox.y + obox.height / 2);
+  await page.mouse.wheel(0, 120);
+  await frames2();
+  const view1 = (await page.evaluate(() => window.castplane_web.observer)).view;
+  const after = await drawing();
+  check(same_drawing(before, after), `${name}: an observer drag leaves the drawing unchanged`);
+  check(view1.az_deg !== view0.az_deg && view1.dist !== view0.dist, `${name}: the observer drag / wheel moves the observer`);
+  // switching off restores the §5.4.10 page: the drawing pane's size and the same drawing
+  await page.evaluate(() => window.castplane_web.set_observer(false));
+  await frames2();
+  const off2 = await drawing();
+  const hidden = await page.evaluate(() => document.getElementById("observer").hidden
+    && document.getElementById("observer-controls").hidden && !document.getElementById("status").textContent.includes("obs ms"));
+  check(hidden, `${name}: switch off hides the observer pane, its controls and obs ms`);
+  check(same_drawing(before, off2) && off2.stage.width === off.stage.width && off2.stage.height === off.stage.height,
+    `${name}: switch off restores the drawing pane`);
+  row.followed = moved !== obs.labels[0];
+  check(row.followed, `${name}: the observer follows the drawing camera`);
+  observer.rows[name] = row;
+  for (const f of frames) {
+    if (PHASE1.includes(name) && f.core_ms + f.dom_ms + f.obs_ms >= 100) {
+      failures.push(`${name}: a drag frame took ${(f.core_ms + f.dom_ms + f.obs_ms).toFixed(1)} ms with the observer on`);
+      break;
+    }
+  }
+}
+for (const name of PHASE1) {
+  await observer_check(name, () => page.evaluate((n) => window.castplane_web.load_example(n), name));
+}
+if (sceneFile) {
+  const stem = sceneFile.replace(/^.*\//, "").replace(/\.json$/, "");
+  await observer_check(stem, () => load_file_as(stem, sceneFile));
+}
+if (sceneFile) {
+  // after a drag in the <img> mode (a large scene), a small scene's resting overlay is the DOM one: the stale image
+  // must not stay on top
+  await page.evaluate(() => window.castplane_web.load_example("basic"));
+  await frames2();
+  const img = await page.evaluate(() => getComputedStyle(document.querySelector("img.overlay")).display);
+  check(img === "none", "the <img> overlay of a drag frame is not displayed at rest");
+}
+{
+  // a picture_plane scene camera (spec-v0.2 §4.1): loads through the M7 orbit with the picture kept
+  const data = JSON.parse(readFileSync(join(ROOT, "examples", "basic.json"), "utf-8"));
+  data.camera = { position: [0.37, -2, 0.9], picture_plane: { normal: [0, 1, 0], offset: -2 }, focal_length_mm: 20,
+    frame_mm: [36, 24], shift_mm: [0, 0], near_m: 0.05 };
+  await page.evaluate((text) => window.castplane_web.load_text("picture_plane", text), JSON.stringify(data));
+  await page.evaluate(() => window.castplane_web.set_observer(true));
+  await frames2();
+  await frames2();
+  const pp = await page.evaluate(() => ({ obs: window.castplane_web.observer, ref: window.castplane_web.reference_render(),
+    svg: window.castplane_web.svg }));
+  check(pp.obs.labels.includes("y = 2.00") && pp.obs.labels.includes("D = 4.00 m"), "picture_plane: board y = 2.00, D = 4.00 m");
+  observer.picture_plane = { labels: pp.obs.labels, same_as_scene_camera: pp.svg === pp.ref.svg };
+  await page.evaluate(() => window.castplane_web.set_observer(false));
+}
+{
+  // the narrow layout: below 880 px the panes stack, observer on top
+  await page.evaluate(() => window.castplane_web.load_example("basic"));
+  await page.evaluate(() => window.castplane_web.set_observer(true));
+  await page.setViewportSize({ width: 820, height: 900 });
+  await frames2();
+  await frames2();
+  const o = await page.locator("#observer").boundingBox(), v = await page.locator("#viewport").boundingBox();
+  check(o.y + o.height <= v.y + 1 && Math.abs(o.x - v.x) < 1, "narrow page: observer stacked above the drawing pane");
+  observer.narrow = { observer: o, viewport: v };
+  await page.setViewportSize({ width: 1500, height: 900 });
+  await frames2();
+  const o2 = await page.locator("#observer").boundingBox(), v2 = await page.locator("#viewport").boundingBox();
+  check(o2.x + o2.width <= v2.x + 1 && Math.abs(o2.width - v2.width) < 2, "wide page: observer left, equal width");
+  if (shotsDir) {
+    await page.setViewportSize({ width: 1800, height: 1000 });
+    await frames2();
+    await page.evaluate(() => window.castplane_web.frame_observer());
+    const ob = await page.locator("#observer").boundingBox();
+    await page.mouse.move(ob.x + ob.width / 2, ob.y + ob.height / 2);
+    await page.mouse.wheel(0, 260);
+    await frames2();
+    mkdirSync(shotsDir, { recursive: true });
+    observer.screenshot = join(shotsDir, "web_ui_observer.png");
+    await page.waitForTimeout(300);
+    await page.screenshot({ path: observer.screenshot });
+    await page.setViewportSize({ width: 1500, height: 900 });
+  }
+  await page.evaluate(() => window.castplane_web.set_observer(false));
+  await frames2();
+}
+
 // page-wide drop, then the three downloads
 const dropped = readFileSync(join(ROOT, "examples", "curved_demo.json"), "utf-8");
 await page.evaluate((text) => {
@@ -225,6 +363,6 @@ await page.waitForFunction(() => document.getElementById("error").textContent.in
 const scene_error = await page.locator("#error").textContent();
 
 const engine = { chromium: browser.version() };
-console.log(JSON.stringify({ engine, first, rows, load_errors, phase2, failures, downloads, errors: { not_json, scene_error }, logs }, null, 1));
+console.log(JSON.stringify({ engine, first, rows, load_errors, phase2, observer, failures, downloads, errors: { not_json, scene_error }, logs }, null, 1));
 await browser.close();
 process.exitCode = logs.some((l) => l.startsWith("pageerror")) || failures.length > 0 ? 1 : 0;

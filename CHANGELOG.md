@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased — M9: the read-only observer view (spec-v0.2 §2, §3; contract §5.6)
+
+- m9-observer: the web UI's "旁觀視角" switch (off by default; off = the M7 page) opens an observer pane left of the drawing pane (stacked below 880 px) showing the eye E, the board and frame with the current drawing on it (`unproject_to_plane`, D − 0.012 m, following the layer checkboxes), the frustum, Q, the D and g lines, the pivot, the plane equation and the first object's vertex rays; `web/src/observer.ts` (pure, `web/test/observer.test.ts`) and `web/src/observer3d.ts`; a `picture_plane` scene camera loads into the M7 orbit with its picture kept; SVG / JSON downloads are byte-identical with the switch on and off; `web/scripts/smoke.mjs` checks it and records `obs ms`; the `<img>` drag overlay is no longer displayed at rest (`#stage .overlay[hidden]`; it stayed over a smaller scene after `benchmark_100.json`'s drag).
+
 ## Unreleased — M10 core: `picture_plane` camera form (spec-v0.2 §4.1, §4.3)
 
 - m10-core: the camera block takes a third form, `position` + `picture_plane {normal, offset, up?}` (exactly one of `target`, `yaw_deg` + `pitch_deg`, `picture_plane`; no `roll_deg` with it); `castplane.picture_plane` resolves it to the target form before stage B (`resolve_picture_plane`), never emits `CAMERA_LOOKING_ALONG_UP`, and adds `camera.picture_plane {normal, offset, up, distance, foot, frame_m, equation}` to that form's documents only (the 60 expected files are byte-identical); `unproject_to_plane` and `plane_equation` serve the observer view, and `castplane info` prints the equation, D and the frame size in metres.

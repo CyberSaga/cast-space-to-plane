@@ -705,7 +705,7 @@ node ts/build/bench/camera_only.js --gate both --reps 20   # 規格 §8 基準�
 node ts/scripts/render.mjs examples/basic.json out/        # 開發工具：out/basic.svg 與 out/basic.json
 python3 tools/compare_svg.py                               # 開發工具：逐案例比對兩個實作的 SVG 文字
 npm run -w web build && npm run -w web preview             # 網頁 UI（靜態檔，web/dist）
-npm run -w web test                                        # orbit / download 單元測試
+npm run -w web test                                        # orbit / download / rig / equation / observer 單元測試
 ```
 
 `npm test` 與 `npm run build` 會依 ts → web 的順序執行兩個 workspace。Python 的 `tests/test_ts_port.py` 檢查兩邊共用的檔案：版本、`rules.json` 與比對常數、`INT_KEYS`、核心不碰 node API、npm 版本釘選。PATH 上有 node 時，它也會建置並執行移植的整套測試；單獨執行 TypeScript 一致性執行器，要求每個案例各有一個通過的測試、沒有失敗、略過或 todo；比對全部八個範例（含 M4–M6 的 `wall_and_ground`、`mesh_demo`、`two_lights`）的 SVG（逐位元組）與 JSON；並跑網頁的單元測試。
@@ -793,5 +793,13 @@ vite + three.js（版本釘選：three 0.186.1、vite 8.3.3）。`vite build` �
 - **面板**：
   - 狀態列顯示 A 段 ms（快取）、`core ms`（B + C + SVG）、`dom ms`（疊圖更新）、疊圖模式、點／邊／作圖線數量（所有光源的作圖線）、本影碎片數（兩盞以上光源），以及光源與受影面的 id；
   - 警告表列出目前文件的 `code`、`ids` 與 `message`。
+- **旁觀視角**（M9，合約 §5.6；唯讀）：
+  - 工具列的「旁觀視角」開關預設關閉（每個瀏覽器記住上次的選擇）。關閉時頁面與 M7 完全相同，也不會建立第二個 WebGL 畫面。打開後左窗是旁觀視角、右窗是原本的作圖畫面，兩窗等寬並排；頁面寬度小於 880 px 時改為上下堆疊，旁觀視角在上；
+  - 左窗從外面看作圖相機：眼睛 E（黑點，標出座標，不能拖）、投影平面（淡藍色半透明片）與粗框畫框、畫框上的線稿（就是右窗的圖，以核心的 `unproject_to_plane` 反投影到眼前 D − 0.012 m 處，跟隨右窗的圖層勾選）、視錐（經過畫框四角，虛點延伸到 1.9 倍）、主點 Q、D 線、旋轉中心（菱形）與 g 線（「板子離場景 g = x m」）、平面方程式（例如 `y = 2.00`），以及場景與光源；
+  - 「視線」勾選框（預設開）：第一個物體每個頂點的視線 E→P 與穿過畫框的點 P′，光線 L→P→S（平行光從 S 沿光的方向畫），眼睛看影子點 S 的視線與穿過點 S′；
+  - D 在 M9 是固定的：一般相機為 4 m；場景相機是 `picture_plane` 形式時取它的 D（夾在 0.5–12 m）。旋轉中心是 M7 環繞相機的目標點，`g = R − D`；
+  - 右窗每次改相機（拖曳、滾輪、滑桿、載入範例、「Reset camera」）左窗都在同一格更新。左窗裡左拖繞轉、滾輪或雙指縮放，只動旁觀相機，不影響作圖；「旁觀視角取景」把所有重點（E、Q、場景中心與它的地面點、點光源、畫框四角）放進畫面，載入場景與「Reset camera」後也會自動取景，拖曳中不取景；
+  - 開關打開與關閉時，同一台相機下載的 SVG 與 JSON 逐位元組相同（`web/scripts/smoke.mjs` 檢查）。狀態列另外顯示 `obs ms`（旁觀視角每格的成本），五個範例拖曳時每格總計約 4–24 ms；
+  - 場景相機是 `picture_plane` 形式時，M9 仍以 M7 的環繞相機驅動，旋轉中心放在場景中心的深度，畫面不變；「Download scene」寫出 target 形式（M10 才改）。
 
-範例與 `benchmark_100.json` 拖曳時的 `core ms` / `dom ms` 實測見 `web/README.md`：八個範例每格約 1–3 ms，`benchmark_100.json` 約 66–78 ms（`<img>` 模式，第二階段量測）。截圖見 `docs/images/web_ui.png`，第二階段的三張是 `docs/images/web_ui_wall_and_ground.png`（開啟消隱：箱子背面的邊畫成虛線，牆畫成有界的板子）、`docs/images/web_ui_mesh_demo.png`（網格房子與圓柱，房子由展開後的場景載入）與 `docs/images/web_ui_two_lights.png`（兩盞點光源各有一個輔助小球，兩組影子與較深的本影）。
+範例與 `benchmark_100.json` 拖曳時的 `core ms` / `dom ms` 實測見 `web/README.md`：八個範例每格約 1–3 ms，`benchmark_100.json` 約 66–78 ms（`<img>` 模式，第二階段量測）。截圖見 `docs/images/web_ui.png`，第二階段的三張是 `docs/images/web_ui_wall_and_ground.png`（開啟消隱：箱子背面的邊畫成虛線，牆畫成有界的板子）、`docs/images/web_ui_mesh_demo.png`（網格房子與圓柱，房子由展開後的場景載入）與 `docs/images/web_ui_two_lights.png`（兩盞點光源各有一個輔助小球，兩組影子與較深的本影）。旁觀視角的截圖是 `docs/images/web_ui_observer.png`。

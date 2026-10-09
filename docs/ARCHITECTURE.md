@@ -4204,6 +4204,12 @@ and the hidden-run SVG groups (§5.1.8). Nothing an M4–M6 case needs lies beyo
   green through M9; M10 stops driving the UI with them in the same change that wires `rig.ts`, keeps the §5.4.13 orbit
   tests green, and any removal of `orbit.ts` is a separate, recorded amendment of §5.4.13. (4) `scene3d.ts`,
   `threeCamera.ts`, `overlay.ts` and the DOM budget rule of §5.4.10 apply to the drawing pane unchanged.
+- **[decision, implementation] (M9) The `<img>` overlay is not displayed at rest.** `#stage .overlay` sets
+  `display: block`, which overrode the `hidden` attribute that `Overlay.set_svg` sets on the `<img>` of the §5.4.11
+  drag mode: after a drag of a scene above `IMG_MODE_THRESHOLD`, the last drag image stayed on top of the DOM overlay
+  (visibly so after loading a smaller scene: `benchmark_100.json`'s drawing over `basic`). `style.css` adds
+  `#stage .overlay[hidden] { display: none; }`; `web/scripts/smoke.mjs` checks the computed `display` after loading
+  `basic` behind the benchmark drag. No overlay text, document or download changes.
 
 ### 5.5 M8 — STEP import (spec §9 row "STEP", spec §10 M8) — a loader, outside the core
 
@@ -5006,7 +5012,66 @@ The observer shows lights as in §5.4.10 (`scene3d`). Nothing in this table is w
   runner and `compare_svg.py` are unchanged.
 
 ### Implementation notes
-None yet.
+- **[decision, implementation] (M9) Modules, state and the render path.** `web/src/observer.ts` is the pure part
+  (no DOM, no three.js; `web/tsconfig.test.json` includes it): `observer_D` and `orbit_camera` (the §5.6.2 load rule),
+  `derive_board(rec, {target, distance}, D)` (the board: `E`, `f`, `r`, `u`, `Q`, `P`, `R`, `g`, the four frame corners
+  `unproject_to_plane(rec, (±W/2, ±H/2), D)` in the order `(−,−), (+,−), (+,+), (−,+)`, `frame_m = canvas_mm·D/K[0][0]`,
+  the patch, the equation), `frustum`, `document_drawables` / `line_art` (the drawing on the frame), `vertex_rays`,
+  the observer camera (`ObserverView {target, dist, az_deg, el_deg}`, `observer_basis`, `observer_project`, `orbit_view`,
+  `zoom_view`, `pinch_view`, `framing_points`, `frame_view`), the hit-test helpers M10 will use (`dist_point_segment`,
+  `hit_point`, `hit_polyline`) and `board_labels`. `web/src/observer3d.ts` (`ObserverPane`) draws them: a second
+  `Stage3D` on its own canvas with its own `build_scene3d` group (three.js objects belong to one scene), a board group
+  rebuilt per update (fat lines: `LineSegments2` / `LineMaterial` in CSS px; fills: `ShapeUtils.triangulateShape` in
+  the polygon's own 2D frame, mapped to its world points, which is exact because `unproject_to_plane` at a fixed depth
+  is affine in `(u, v)`; dots: `Points` with a round or diamond sprite, no depth test), and HTML labels placed with
+  `observer_project`. `Stage3D` gains `render_with(camera)`; its castplane-block `render` is unchanged. The observer
+  camera's matrix is set from `observer_basis` (`r = normalize(f × z)`, `u = r × f`; equal to `lookAt` with up `+z`)
+  so labels and hit tests use the same projection as the WebGL image. `main.ts` creates the pane on the first switch-on
+  only (the switch-off page has no second WebGL context and builds no observer geometry); the core frame takes the
+  camera record from `project_scene`'s stage B (`B.camera`, no second `camera_matrix`) and, with the switch on, calls
+  `update_observer(rec, doc)` after the drawing pane (board, drawing, rays, pending framing, draw), whose cost is the
+  status line's `obs ms` and the `obs_ms` field of the frame records (`null` while off). Observer gestures re-draw the
+  observer only (one animation frame, no core frame); the layer and "視線" checkboxes rebuild its geometry from the last
+  frame's `rec` / `doc` without a core frame. The switch state is stored under `localStorage["castplane.observer"]`
+  (`"1"` / `"0"`, read and written in `try` / `catch`). Framing is pending after a load, "Reset camera" and the
+  "旁觀視角取景" button, and runs on the next observer update that is not part of a drag. Measurements are in
+  `web/README.md`.
+- **[decision, implementation] (M9) What the drawing on the frame is.** `document_drawables(doc)` takes, per SVG
+  layer: `horizon` — `horizon.segment`; `objects` — `edges[].segment` and `outlines[].generators[].segment` (style
+  `objects`, or `objects_back` for a back edge; with `doc.hidden_lines` the pieces of `runs` by their image fraction
+  `s`, hidden runs in a dashed `hidden` style), `outlines[].conics` (`polylines`, `arcs`, `ellipses`); `form_shadow` —
+  `form_shadow[].polygons` (fill) and the terminators (`polylines` of a segment entry, conic drawables otherwise);
+  `cast_shadow` — `shadows[].polygons` (fill and outline) and `shadows[].conics`; `construction` — the `LP`, `FQ`, `PQ`
+  segments of every construction block (`constructions` when present, else `construction`) and of their
+  `per_receiver` blocks. Not drawn: text (the `labels` layer, `VP`, `PP`, `L′`, `F′` labels), point markers and
+  `umbra[]` (none is in the §5.6.5 list). Every shadow polygon is filled on its own (no even-odd or non-zero union:
+  overlapping translucent fills darken, a hole is filled), which is a display simplification. SVG arcs are sampled
+  with the SVG 1.1 F.6.5 endpoint-to-centre conversion applied in the document's v-up frame with the document's flags
+  as they are (the writer's sign flips for the y-down frame are a reflection, so the arc is the same point set), 32
+  segments per arc, 72 per full ellipse. Segments are clipped to the canvas rectangle (Liang–Barsky), fills
+  (Sutherland–Hodgman); a horizon that misses the canvas is not drawn.
+- **[decision, implementation] (M9) Readings of the §5.6.5 table.** (1) The board patch is `max(0.62·W_m, 3.2)` by
+  `max(0.62·H_m, 2.4)` **half**-extents about `Q` along `r`, `u` (the demo's `patchCorners`): read as full sizes the
+  patch would be smaller than the frame (`0.62 < 1`). (2) A directional light's ray is `S → S + max(1.5·|P − S|, 1 m)·l̂`
+  with `l̂` the scene's `direction` normalised (towards the light), so it passes the vertex and a vertex on the receiver
+  still gets a visible ray (the table's `extent`). (3) The plane label sits at the patch's top-left corner
+  (`(−r, +u)`), else at the first of the other corners whose projection leaves room for the text inside the pane
+  (`first_inside`); the other labels sit at their anchors (`E`, the midpoints of `E Q` and `Q P`, `P`). A label whose
+  anchor is behind the observer is hidden. (4) The observer pane is not letterboxed (it fills its half of the page);
+  framing keeps the §5.6.4 formula, so in a tall pane (side by side on a narrow window) points near the sides can fall
+  outside the view until the wheel zooms out. (5) The vertex-ray sight lines `E → S` and the `S` / `S′` dots are drawn
+  for the light rays of `lights[0]` that start at the focus object's vertices, as §5.6.5 says; no vertex of a curved
+  focus object (no `<obj>.v<k>` points) means no vertex rays.
+- **[decision, implementation] (M9) Acceptance record.** `web/test/observer.test.ts` (18 tests) covers §5.6.8 and the
+  `unproject_to_plane` round trip through the port's `camera_matrix` (< 1e-9 mm, 300 random target / yaw-pitch /
+  `picture_plane` cameras with roll, shift and focal 8–400 mm, `D ∈ [0.05, 100]` m). `web/scripts/smoke.mjs` switches the
+  observer on and off for the five examples and the optional `benchmark_100.json`: the writer's SVG text, the overlay
+  markup, the SVG / JSON download texts and the camera are identical with the switch on and off; an observer drag and
+  wheel change only the observer; switching off restores the drawing pane's size and hides the pane, its controls and
+  `obs ms`; the pane stacks above the drawing pane below 880 px and sits left at equal width above; a `picture_plane`
+  scene camera (spec-v0.2 §4.1 block) loads with the board `y = 2.00`, `D = 4.00 m`. Per drag frame with the switch on,
+  `core ms + dom ms + obs ms` stayed below 25 ms on the five examples (maximum over 30 frames, headless Chromium with
+  SwiftShader); `benchmark_100.json` is recorded (not gated): `obs ms` 54–238 ms, the total 167–486 ms.
 
 ### 5.7 M10 — plane mode, board-first (spec-v0.2 §1, §4, §5, §6, §7)
 

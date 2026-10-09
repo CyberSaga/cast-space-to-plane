@@ -4,7 +4,8 @@
  * re-rendered per animation frame with stage A cached. No server, no network access at runtime.
  *
  * This module owns the state, loading and the render loop, and wires the others: `stage.ts` (one three.js view),
- * `input.ts` (pointer / wheel / file-drop gestures), `ui.ts` (controls and panels), `overlay.ts` (the SVG overlay).
+ * `input.ts` (pointer / wheel / file-drop gestures), `ui.ts` (controls and panels), `overlay.ts` (the SVG overlay),
+ * and, behind the "旁觀視角" switch (M9, contract §5.6), `observer.ts` / `observer3d.ts` (the read-only observer pane).
  */
 
 import "./style.css";
@@ -12,7 +13,7 @@ import "./style.css";
 import * as THREE from "three";
 
 import { LAYER_IDS, compose, dumps, load_scene, load_scene_text, project_scene, shadow_geometry, write_svg } from "castplane";
-import type { GeometryDocument, Scene, StageA } from "castplane";
+import type { CameraRecord, GeometryDocument, Scene, StageA, Vec3 } from "castplane";
 
 import { EXAMPLES } from "./examples.js";
 import { camera_block_text, json_blob, ordered_layers, scene_blob, svg_blob } from "./download.js";
@@ -21,6 +22,10 @@ import {
   camera_from_orbit, focal_from_slider, orbit_from_camera, pan_orbit, rotate_orbit, set_focal, set_roll, zoom_orbit,
 } from "./orbit.js";
 import type { OrbitState } from "./orbit.js";
+import {
+  derive_board, frame_view, framing_points, line_art, observer_D, orbit_camera, scene_centre, vertex_rays,
+} from "./observer.js";
+import { ObserverPane } from "./observer3d.js";
 import { IMG_MODE_THRESHOLD, Overlay } from "./overlay.js";
 import type { OverlayMode } from "./overlay.js";
 import { build_scene3d } from "./scene3d.js";
@@ -35,6 +40,8 @@ THREE.Object3D.DEFAULT_UP.set(0, 0, 1);
 interface FrameRecord {
   core_ms: number;
   dom_ms: number;
+  /** The observer's own cost (geometry + its render), `null` while the switch is off. */
+  obs_ms: number | null;
   mode: OverlayMode;
   dragging: boolean;
   svg_bytes: number;
@@ -53,6 +60,10 @@ interface State {
   dirty: boolean;
   full_svg_length: number;
   frames: FrameRecord[];
+  /** The camera record of the last frame (the observer reads it, §5.6.2). */
+  rec: CameraRecord | null;
+  /** M9 observer (contract §5.6): `D` and the scene centre per loaded scene, whether a framing is pending. */
+  obs: { on: boolean; D: number; centre: Vec3; needs_framing: boolean; ms: number | null };
 }
 
 const state: State = {
@@ -68,6 +79,8 @@ const state: State = {
   dirty: false,
   full_svg_length: 0,
   frames: [],
+  rec: null,
+  obs: { on: false, D: 4, centre: [0, 0, 0], needs_framing: true, ms: null },
 };
 
 const ui = controls();
@@ -77,6 +90,8 @@ const { viewport, stage, canvas, examplesSelect, fileInput, focalInput, focalOut
 const view = new Stage3D(canvas);
 const overlay = new Overlay(stage);
 const warnings = new WarningsTable(ui.warningsBody);
+/** The observer pane, created on the first switch-on (with the switch off the page is the §5.4.10 page). */
+let observer: ObserverPane | null = null;
 
 // ---------------------------------------------------------------------------- layer checkboxes
 const layerBoxes = build_layer_boxes(ui.layersBox, LAYER_IDS, (id, checked) => {
@@ -84,6 +99,7 @@ const layerBoxes = build_layer_boxes(ui.layersBox, LAYER_IDS, (id, checked) => {
   else state.layersChecked.delete(id);
   overlay.set_hidden_layers(state.layersChecked);
   if (overlay.mode === "img") request_render();
+  observer_refresh(true); // the drawing on the frame follows the layer checkboxes
 });
 
 function show_error(message: string | null): void {
@@ -109,10 +125,16 @@ function load(name: string, make: () => Scene): boolean {
   state.sceneName = name;
   state.A = A;
   state.timings.stage_a_ms = stage_a_ms;
-  state.orbit = orbit_from_camera(scene.camera, scene);
+  // §5.6.2: a picture_plane camera reaches the M7 orbit as its target form with the pivot at the scene centre's depth
+  state.obs.centre = scene_centre(A);
+  state.obs.D = observer_D(scene.camera, scene.output.canvas_mm);
+  state.obs.needs_framing = true;
+  state.orbit = orbit_from_camera(orbit_camera(scene.camera, state.obs.centre), scene);
+  state.rec = null;
   state.full_svg_length = 0;
   state.frames = [];
   view.replace_group(() => build_scene3d(scene, A));
+  observer?.set_scene(scene, A);
   state.layersChecked = new Set(scene.output.layers);
   for (const [id, box] of layerBoxes) box.checked = state.layersChecked.has(id);
   overlay.set_hidden_layers(state.layersChecked);
@@ -176,7 +198,8 @@ rollInput.addEventListener("input", () => {
 });
 $<HTMLButtonElement>("reset").addEventListener("click", () => {
   if (state.scene === null) return;
-  state.orbit = orbit_from_camera(state.scene.camera, state.scene);
+  state.orbit = orbit_from_camera(orbit_camera(state.scene.camera, state.obs.centre), state.scene);
+  state.obs.needs_framing = true;
   sync_sliders();
   request_render();
 });
@@ -244,11 +267,80 @@ function layout(): void {
   const aspect = state.scene ? state.scene.output.canvas_mm[0] / state.scene.output.canvas_mm[1] : 3 / 2;
   const [w, h] = letterbox(viewport, stage, aspect);
   view.set_size(w, h);
+  if (state.obs.on && observer !== null) observer.set_size(ui.observerPane.clientWidth, ui.observerPane.clientHeight);
 }
-new ResizeObserver(() => {
+const resize = new ResizeObserver(() => {
   layout();
   request_render();
-}).observe(viewport);
+});
+resize.observe(viewport);
+resize.observe(ui.observerPane);
+
+// ---------------------------------------------------------------------------- observer (M9, contract §5.6)
+const OBSERVER_KEY = "castplane.observer";
+
+/** Update the observer from the drawing camera's record and document (§5.6.2, §5.6.5): board, drawing on the frame
+ * (checked layers), vertex rays; frame it when a framing is pending and no drag is running (§5.6.4); then draw it.
+ * Returns the observer's own cost in ms. Reads `rec` and `doc` only. */
+function update_observer(rec: CameraRecord, doc: GeometryDocument): number {
+  if (observer === null || state.scene === null || state.orbit === null) return 0;
+  const t0 = performance.now();
+  const board = derive_board(rec, state.orbit, state.obs.D);
+  const art = line_art(doc, rec, state.obs.D, state.layersChecked);
+  const rays = ui.observerRays.checked ? vertex_rays(doc, state.scene, board, rec.near) : null;
+  if (state.obs.needs_framing && !state.dragging) {
+    observer.view = frame_view(observer.view, framing_points(board, state.scene, state.obs.centre));
+    state.obs.needs_framing = false;
+  }
+  observer.update({ board, art, rays });
+  observer.render();
+  return performance.now() - t0;
+}
+
+/** Re-draw the observer without a core frame: `rebuild` re-derives its geometry from the last frame (layer or ray
+ * checkboxes), else only its camera changed. */
+function observer_refresh(rebuild: boolean): void {
+  if (!state.obs.on || observer === null) return;
+  if (rebuild && state.rec !== null && state.doc !== null) update_observer(state.rec, state.doc);
+  else observer.render();
+}
+
+let obsRafPending = false;
+function request_observer_render(): void {
+  if (obsRafPending) return;
+  obsRafPending = true;
+  requestAnimationFrame(() => {
+    obsRafPending = false;
+    observer_refresh(false);
+  });
+}
+
+function set_observer(on: boolean): void {
+  state.obs.on = on;
+  ui.observerOn.checked = on;
+  try {
+    localStorage.setItem(OBSERVER_KEY, on ? "1" : "0");
+  } catch {
+    // storage unavailable: the switch still works for this page
+  }
+  ui.observerPane.hidden = !on;
+  ui.observerControls.hidden = !on;
+  ui.panes.classList.toggle("observer-on", on);
+  if (on && observer === null) {
+    observer = new ObserverPane(ui.observerCanvas, ui.observerLabels);
+    observer.attach_input(ui.observerPane, request_observer_render);
+    if (state.scene !== null && state.A !== null) observer.set_scene(state.scene, state.A);
+  }
+  layout();
+  request_render(); // the resting frame: the observer is built from it (and the drawing pane re-letterboxed)
+}
+
+ui.observerOn.addEventListener("change", () => set_observer(ui.observerOn.checked));
+ui.observerFrame.addEventListener("click", () => {
+  state.obs.needs_framing = true;
+  observer_refresh(true);
+});
+ui.observerRays.addEventListener("change", () => observer_refresh(true));
 
 // ---------------------------------------------------------------------------- render loop
 let rafPending = false;
@@ -269,10 +361,11 @@ function frame(): void {
   const scene = state.scene;
   const cam = camera_from_orbit(state.orbit, scene.camera);
   const img_mode = state.dragging && state.full_svg_length > IMG_MODE_THRESHOLD;
-  let doc: GeometryDocument, svg: string;
+  let doc: GeometryDocument, svg: string, rec: CameraRecord;
   const t0 = performance.now();
   try {
     const B = project_scene(scene, state.A, cam, !state.dragging);
+    rec = B.camera;
     // hidden lines are skipped during a drag (§5.4.11: a documented switch whose off state is a contract document);
     // the resting frame recomputes them
     doc = compose(scene, B, hiddenLines.checked && !state.dragging);
@@ -289,14 +382,17 @@ function frame(): void {
   if (!img_mode) state.full_svg_length = svg.length;
   state.doc = doc;
   state.svg = svg;
+  state.rec = rec;
   if (view3d.checked) view.render(cam, scene.output.canvas_mm, state.A.scene_scale);
   warnings.update(doc);
+  const obs_ms = state.obs.on ? update_observer(rec, doc) : null;
+  state.obs.ms = obs_ms;
   state.timings.core_ms = t1 - t0;
   state.timings.dom_ms = t2 - t1;
   state.timings.mode = overlay.mode;
-  state.frames.push({ core_ms: t1 - t0, dom_ms: t2 - t1, mode: overlay.mode, dragging: state.dragging, svg_bytes: svg.length });
+  state.frames.push({ core_ms: t1 - t0, dom_ms: t2 - t1, obs_ms, mode: overlay.mode, dragging: state.dragging, svg_bytes: svg.length });
   if (state.frames.length > 500) state.frames.shift();
-  ui.statusLine.textContent = status_text(state.sceneName, state.timings, overlay.mode, doc, scene, cam);
+  ui.statusLine.textContent = status_text(state.sceneName, state.timings, overlay.mode, doc, scene, cam, obs_ms);
 }
 
 // ---------------------------------------------------------------------------- start
@@ -315,6 +411,28 @@ function frame(): void {
   get timings() { return { ...state.timings }; },
   get camera() { return state.orbit && state.scene ? camera_from_orbit(state.orbit, state.scene.camera) : null; },
   get svg_length() { return state.svg.length; },
+  /** The writer's SVG text of the last frame (the overlay's source). */
+  get svg() { return state.svg; },
+  /** The texts "Download SVG" / "Download JSON" would save now. */
+  download_texts: () => state.doc === null ? null : {
+    svg: svg_blob(state.doc, state.layersChecked, state.sceneName, hidden_style()).text,
+    json: json_blob(state.doc, state.sceneName).text,
+  },
+  /** M9: switch the observer on / off as the "旁觀視角" checkbox does. */
+  set_observer: (on: boolean) => {
+    ui.observerOn.checked = on;
+    ui.observerOn.dispatchEvent(new Event("change"));
+  },
+  /** M9: the observer's state (`null` before it was first switched on). */
+  get observer() {
+    if (observer === null) return null;
+    const names = observer.names;
+    const count = (prefix: string) => names.filter((n) => n.startsWith(prefix)).length;
+    return { on: state.obs.on, D: state.obs.D, view: observer.view, labels: observer.label_texts, names,
+      art_objects: count("art"), ms: state.obs.ms };
+  },
+  /** M9: the "旁觀視角取景" button. */
+  frame_observer: () => ui.observerFrame.click(),
   /** The UI's hidden-line state: the checkbox and the style select. */
   get hidden() { return { lines: hiddenLines.checked, style: hidden_style() }; },
   /** Set the hidden-line checkbox and style as a user would (fires their change handlers). */
@@ -348,6 +466,13 @@ function frame(): void {
   },
 };
 
+let stored_on = false;
+try {
+  stored_on = localStorage.getItem(OBSERVER_KEY) === "1";
+} catch {
+  stored_on = false;
+}
+if (stored_on) set_observer(true);
 layout();
 const first = EXAMPLES.find((e) => e.name === "basic") ?? EXAMPLES[0];
 if (first !== undefined) {
