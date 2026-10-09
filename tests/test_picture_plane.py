@@ -480,6 +480,10 @@ def test_fixed_rounds_exact_ties_to_even():
     assert _fixed(-0.0, 3) == "0.000"
     assert plane_equation([0, 1, 0], -0.125) == "y = 0.12" and plane_equation([0, 1, 0], 0.125) == "y = -0.12"
     assert plane_equation([0, 0.6, 0.8], -0.0625) == "0.600y + 0.800z = 0.062"
+    # |offset| >= 1e21 prints every digit (the TS port must not fall back to exponent notation)
+    assert plane_equation([0, 1, 0], -1e22) == "y = 10000000000000000000000.00"
+    assert plane_equation([0, -1, 0], -1e22) == "y = -10000000000000000000000.00"
+    assert plane_equation([1, 1, 0], -1e22) == "0.707x + 0.707y = 7071067811865475153920.000"
 
 
 # ---------------------------------------------------------------------------------------------------- unproject

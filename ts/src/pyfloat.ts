@@ -52,10 +52,12 @@ export function cmp_code_points(a: string, b: string): number {
 }
 
 /**
- * Python `format(x, ".<d>f")` for `0 <= d <= 20` and `|x| < 1e21`: correctly rounded from the exact binary value with
- * exact ties to even (contract §5.7.5). JS `toFixed` is also exact but rounds an exact tie away from zero; a tie at `d`
- * decimals is `x = j / 2^(d+1)` with `j` odd (`x·10^d = j·5^d / 2`), rounded here with integer arithmetic as `fmt` does
- * at four decimals (§5.4.6). The sign of a negative value is kept (`"-0.00"` for `-0.001`), as Python does.
+ * Python `format(x, ".<d>f")` for `0 <= d <= 20`: correctly rounded from the exact binary value with exact ties to
+ * even (contract §5.7.5). JS `toFixed` is also exact but rounds an exact tie away from zero; a tie at `d` decimals is
+ * `x = j / 2^(d+1)` with `j` odd (`x·10^d = j·5^d / 2`), rounded here with integer arithmetic as `fmt` does at four
+ * decimals (§5.4.6). From `|x| >= 1e21` on, `toFixed` switches to exponent notation; every such double is an integer
+ * (`>= 2^53`), so its exact digits come from `BigInt` (`"10000000000000000000000.00"` for `1e22`, as Python). The sign
+ * of a negative value is kept, negative zero included (`"-0.00"` for `-0.001` and for `-0.0`), as Python does.
  */
 export function py_fixed(x: number, d: number): string {
   const v = x + 0;
@@ -69,5 +71,7 @@ export function py_fixed(x: number, d: number): string {
     const frac = d > 0 ? "." + (m % scale).toString().padStart(d, "0") : ""; // pyimod-free: BigInt m >= 0
     return (v < 0 ? "-" : "") + (m / scale).toString() + frac;
   }
+  if (Math.abs(v) >= 1e21) return BigInt(v).toString() + (d > 0 ? "." + "0".repeat(d) : "");
+  if (Object.is(x, -0)) return "-" + (0).toFixed(d); // toFixed drops the sign of -0
   return v.toFixed(d);
 }

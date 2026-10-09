@@ -516,6 +516,15 @@ test("F2 / F3 round as Python format (exact ties to even), -0.00 loses its sign"
   assert.equal(py_fixed(-0.001, 2), "-0.00");
   assert.equal(py_fixed(2.5, 0), "2");
   assert.equal(py_fixed(3.5, 0), "4");
+  // |x| >= 1e21: toFixed would switch to exponent notation; Python prints every digit (review M10, minor)
+  assert.equal(py_fixed(-0.0, 3), "-0.000");
+  assert.equal(py_fixed(1e21, 2), "1000000000000000000000.00");
+  assert.equal(py_fixed(-1e22, 0), "-10000000000000000000000");
+  assert.equal(py_fixed(Number.MAX_VALUE, 1), `${BigInt(Number.MAX_VALUE)}.0`);
+  assert.equal(py_fixed(Number.MAX_VALUE, 1).length, 311);
+  assert.equal(plane_equation([0, 1, 0], -1e22), "y = 10000000000000000000000.00");
+  assert.equal(plane_equation([0, -1, 0], -1e22), "y = -10000000000000000000000.00");
+  assert.equal(plane_equation([1, 1, 0], -1e22), "0.707x + 0.707y = 7071067811865475153920.000");
   // every exact tie of 2 and 3 decimals below 4 (x = j / 2^(d+1), j odd) against the integer rule
   for (const d of [2, 3]) {
     const q = 2 ** (d + 1);
