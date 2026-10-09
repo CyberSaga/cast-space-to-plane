@@ -96,6 +96,13 @@ users who want JIS B5 paper should set `frame_mm` to a matching aspect (e.g. `[3
 
 Unknown keys are ignored. `load_scene` returns a new plain dict with all defaults filled in.
 
+**Amendment (M10, see §5.7.1) [decision, implementation].** The `camera` row above gains a third form: `position` +
+`picture_plane` (`{normal, offset, up?}`, the plane `normal·X + offset = 0`), exactly one of `target`,
+`yaw_deg` + `pitch_deg` and `picture_plane`. In that form `roll_deg` is rejected (`camera.roll_deg`) and the validated
+block carries no `roll_deg`; every rule, message and field path (`camera.picture_plane.normal` / `.offset` / `.up`) is in
+§5.7.1. The two existing forms validate exactly as before; only the "needs …" message of a block with no form names the
+third form.
+
 ### 2.1 Coordinates and units
 *Amended by §5.1.2 (receivers are any plane `π = (n, d)` with bounds; the ground stays the only unbounded receiver).*
 - World: right-handed, Z up, metres. Ground receiver is `z = 0` → π = (0,0,1,0) (the only v1 receiver).
@@ -160,6 +167,14 @@ Unknown keys are ignored. `load_scene` returns a new plain dict with all default
   normalised by max component and as `v_mm` (its `v` at `u=0`, `null` if the line is vertical or at infinity).
   Vanishing points: `P·(d,0)` for `d ∈ {x,y,z}`; JSON gives `[u,v]` or `null` when `|x̃3| ≤ tol`. The horizon
   segment drawn in SVG is the line clipped to the extended canvas rectangle (step 3 above).
+
+**Amendment (M10, see §5.7.2–§5.7.3) [decision, implementation].** A `picture_plane` block is resolved to a target-form
+block (`resolve_picture_plane`, §5.7.2: `target = E + f`, `roll_deg` derived) at the start of `camera_forward` and
+`camera_matrix`; everything in this section then applies unchanged to the resolved block (rows `(right', up', forward)`,
+`det R = −1`, the roll convention, `K`, the drawing pipeline; D14, D71). The roll is measured from the default up of the
+first bullet (same `|forward × up_world| ≤ 1e-9` test and `(0, 1, 0)` fallback) to the frame up (§5.7.3, D74), and the
+`CAMERA_LOOKING_ALONG_UP` warning of the first bullet (§2.9 row 1) is **not** emitted for a `picture_plane` block, whose
+frame up is explicit; the target and yaw / pitch forms warn as before. No warning code is added (§5.0.5 stays at 18).
 
 ### 2.3 Light, plane projection, feet (spec §5.1–5.3) — use these exact function names
 *Amended by §5.1.2–§5.1.3 (per-(light, receiver) light side, `RECEIVER_UNLIT`, silent clip and bounds clip for bounded receivers, plates as casters) and §5.2.5 (per-face fallback for non-manifold meshes).*
@@ -489,6 +504,15 @@ the uncut shadow of a construction point is named by it, e.g. `<obj>.g1.base.sha
 at the quarter points of an unclipped sphere circle; every other finite vertex is a ground point), and the camera
 outline points `"<obj>.og<k>.base/.top"`. Floats are written with `repr`-style shortest round-trip formatting after
 `+ 0.0`; `json.dumps(doc, sort_keys=True, indent=1, ensure_ascii=False)`.
+
+**Amendment (M10, see §5.7.4) [decision, implementation].** A document rendered with a `picture_plane` camera, and only
+such a document, has one more key in the `camera` block above (and in its §5.0.3 listing):
+`picture_plane: {normal, offset, up, distance, foot, frame_m, equation}` (the canonical eye-to-plane unit normal, its
+offset, the unit frame up, the eye-to-plane distance `D`, the foot `Q`, the frame size on the plane in metres and the
+equation string of §5.7.5). Every other document keeps exactly the keys of this section and §5.0.3, byte for byte: the
+60 expected files of conformance v7 do not change (D75, §5.7.14), following the M6 precedent of conditional keys
+(§5.3.5). The key is camera-dependent (§5.0.3 lists `camera` there); its numbers fall under the existing relative 1e-9
+rule and `equation` is compared exactly, so `rules.json` is unchanged.
 
 ## 4. Testing contract (spec §7)
 *Amended by §5.0.8 (conformance set versions v3–v6, `rules.json`) and §5.0.9 (benchmark rows); per-milestone test contracts in §5.1.11, §5.2.11, §5.3.10, §5.4.13, §5.5.10.*
@@ -4152,6 +4176,21 @@ and the hidden-run SVG groups (§5.1.8). Nothing an M4–M6 case needs lies beyo
   lone surrogates; empty and 300-level nested containers; top-level scalars; `-0.0`, numpy values) and a seeded fuzz
   of 3000 random documents, on 3.10 and 3.13; "JSON dumps only" on 3.10 went from 787 to 269 ms (full render 1124 →
   653 ms). CPython >= 3.13 is unchanged: `_C_ENCODER` still writes the indented text and the new path is never taken.
+- **[decision, implementation] (M9 / M10, spec-v0.2) The §5.4.10 web UI after the observer view and plane mode.**
+  §5.4.10 is amended by reference, its text unchanged: (1) M9 (§5.6) adds the observer pane behind a switch that is off
+  by default; with it off the page is exactly the §5.4.10 page, and with it on the drawing camera, `doc`, `svg` and the
+  downloads are the same (§5.6.0); `main.ts` is split into the drawing stage and the pointer handlers first, without
+  behaviour change (§5.6.6); a scene whose camera has the `picture_plane` form is handed to `orbit_from_camera` as its
+  resolved target-form block with the target moved to the scene centre's depth along `f` (§5.6.2). (2) M10 (§5.7) moves the drawing camera's state from `OrbitState` to the rig of
+  `web/src/rig.ts` (§5.7.7); the drawing pane's input mapping of §5.4.10 (left-drag yaw / pitch, right-drag target pan,
+  wheel distance) is superseded by §5.7.9 (left drag = ring, wheel / pinch = arrow, right drag / Shift drag = pan of the
+  rig); the roll slider sets the rig's `ρ`; the logarithmic focal-length slider `[8, 400]` mm stays; a `D` slider is
+  added; "Download scene (current camera)" and "Copy camera block" write the `picture_plane` form of `camera_of_rig`
+  (§5.7.6–§5.7.7) instead of `camera_from_orbit`'s target form; `apply_camera_block` is unchanged (it calls
+  `camera_matrix`, which resolves the form). (3) `web/src/orbit.ts` and `web/test/orbit.test.ts` stay unchanged and
+  green through M9; M10 stops driving the UI with them in the same change that wires `rig.ts`, keeps the §5.4.13 orbit
+  tests green, and any removal of `orbit.ts` is a separate, recorded amendment of §5.4.13. (4) `scene3d.ts`,
+  `threeCamera.ts`, `overlay.ts` and the DOM budget rule of §5.4.10 apply to the drawing pane unchanged.
 
 ### 5.5 M8 — STEP import (spec §9 row "STEP", spec §10 M8) — a loader, outside the core
 
@@ -4799,3 +4838,509 @@ LGPL-2.1；確定性只到 OCC 版本；頂點重建誤差 1.4e-9 mm；OCP 8 的
   `CIRCLE` should be meshed instead): `CIRCLE.radius` is a `positive_length_measure` in ISO 10303-42, no
   file in the repository has one, and OCC meshes a frustum whose 3-D top `CIRCLE` has radius 0 into 5
   triangles without complaint, so the error is the safer answer.
+
+### 5.6 M9 — observer view, read-only (spec-v0.2 §2, §3, §4.2 last bullet, §4.3, §7.2 row M9)
+
+§5.6 and §5.7 extend this section for the two milestones of `docs/spec/spec-v0.2.md` (a supplement to the spec; it
+replaces nothing in it). Every convention of the §5 preface applies unchanged (carried-over constraints, **[decision]**
+markers, renumbered references). In §5.6–§5.7 "spec-v0.2 §N" names a section of `docs/spec/spec-v0.2.md`, "spec §N"
+still names `docs/spec/spec-v0.1.md`, and an unprefixed "§N" is this contract. The plain-language log is
+`docs/DECISIONS.md` D71–D78; the implementation order is `docs/PLAN-v3.md`. The behaviour reference
+`docs/demo/picture_plane_demo.html` is **not** normative: where it and this contract differ, this contract wins (the
+known differences are listed in §5.7.15); where it and spec-v0.2 differ, spec-v0.2 wins.
+
+M9 is a pure web-UI milestone: the observer pane shows, from outside, the drawing camera's eye, its picture plane, the
+frame on that plane with the drawing on it, the frustum and the scene. It changes nothing that the core outputs. Its one
+core dependency, `unproject_to_plane` (§5.6.1), is delivered by the core step of §5.7 (both implementations) before M9
+starts (`docs/PLAN-v3.md`).
+
+#### 5.6.0 Scope, non-goals and hard rules
+- **Read-only.** The observer camera is a separate, display-only camera. Nothing the user does in the observer pane
+  changes the drawing camera, the §3.1 document or the SVG in M9 (the handles of the board come with M10, §5.7.9). The
+  eye is never draggable (D72, D77).
+- **Switch-off identity [decision].** With the observer switch off the page is the §5.4.10 page: same layout (the
+  drawing pane at full width), same render loop, same downloads. With it on, the drawing camera, `doc` and `svg` are
+  the same objects the switch-off page computes for the same camera: the downloaded SVG and JSON are byte-identical with
+  the switch on and off (spec-v0.2 §7.2 M9 acceptance).
+- **Core untouched by M9.** No document key, no warning code, no conformance case, no change to `camera_matrix`; the
+  observer reads the camera record (`camera_matrix(block, canvas_mm)`), the document and stage A, and never mutates
+  them (documents and stage-A lists are shared read-only, CLAUDE.md "Stage A must not depend on the camera").
+- **One camera model.** The drawing camera in the observer pane is drawn from the castplane camera record (the rows of
+  `R`, `C`, `K`, `s`, `(u0, v0)`); `apply_camera_block` (§5.4.10) stays the only place that turns a block into a three.js
+  drawing camera. The demo's Canvas-2D camera code is not copied into `web/` (spec-v0.2 §A.5).
+- **Observer camera.** The observer camera is an ordinary `THREE.PerspectiveCamera` (vertical field of view 40°,
+  `lookAt` allowed); it is not a castplane camera and the §5.4.10 "never `lookAt`" rule applies to the drawing camera only.
+
+#### 5.6.1 Core: `unproject_to_plane` (both implementations; spec-v0.2 §4.3)
+`castplane/picture_plane.py` (new, numpy only) and `ts/src/picture_plane.ts` (same name, same record shapes, §5.4.2):
+```
+unproject_to_plane(rec, uv, D) -> X
+```
+`rec` is a camera record of `camera_matrix` (any camera form); `uv` canvas-mm image coordinates (§2.1: origin at the
+frame centre, `v` up); `D > 0` metres. With `r'`, `u'`, `f` the three rows of `rec.R` (`f` = `forward`), `C` the eye and
+`k = rec.K[0][0]` (= `focal_length_mm · s`, §2.2):
+```
+X(u, v) = C + D · [ ((u − u0) / k) · r' + ((v − v0) / k) · u' + f ]
+```
+`X` is the point of the viewing ray of `(u, v)` at depth `D` (camera-space z = `D`). Python accepts `uv` of shape `(2,)`
+or `(n, 2)` and returns `(3,)` / `(n, 3)` (fixed-shape expression, no reduction over a variable axis); TypeScript takes
+one `[u, v]` and returns a `Vec3` (callers loop). Not part of any document, so not bit-pinned; the contract is the round
+trip: `divide(project(rec, [X, 1]))` equals `(u, v)` within **1e-9 mm** for every `(u, v)` inside the extended canvas
+rectangle (§2.2 step 3), `D ∈ [0.05, 100]` m, any roll, shift and focal length (property test, §5.6.8). No validation
+(callers pass finite values); `D ≤ 0` is the caller's error and is not checked.
+
+#### 5.6.2 The board derived from the current camera (M9, read-only)
+In M9 the board is not a state: it is derived per frame from the drawing camera (spec-v0.2 §4.2 last bullet):
+`E = rec.C`, `f = rec.forward`, `D` as in the §5.7.7 load rule (`D = rec0.picture_plane.distance` when the loaded
+`scene.camera` is of the `picture_plane` form, `rec0` its record, clamped into `[0.5, 12]` m without a notice; else
+`D = 4 m`, `OBSERVER_D_M`; fixed per loaded scene, so orbiting never makes the board jump), `Q = E + D·f`, the frame
+up / right are the rows `u'`, `r'` of `rec.R`, the pivot `P` = the M7 orbit `target` (`orbit_from_camera`, §5.4.10),
+`R = ` the orbit `distance`, `g = R − D` (may be negative: the board then lies beyond the pivot; drawn as is), pan
+`(0, 0)`, `ρ = roll_deg`. No further clamp is applied (nothing is edited in M9). Once the core accepts the
+`picture_plane` form, a scene may carry it while the M9 UI still drives the M7 orbit. Its resolved block
+(`resolve_picture_plane(scene.camera).block`, §5.7.2) has `target = E + f`, which would put the orbit pivot 1 m in front
+of the eye; so `main.ts` passes `orbit_from_camera` (and "Reset camera") that target-form block with its `roll_deg` kept
+and its `target` replaced by `E + t·f`, `t = clamp(f·(P_scene − E), 0.8, 40)` with `P_scene` the scene centre (the centre
+of stage A's `bbox`, §5.7.7) and the range of §5.7.11. Then the orbit `distance` is `R = t` (the spec-v0.2 §4.2 load
+rule's `R` whenever it is in range), the forward and roll are unchanged, so the picture is kept, and `orbit.ts` stays
+unchanged. "Download scene" in M9 writes the M7 target form. The board is the plane `f·X = f·Q`; the frame is the image of the canvas rectangle on it:
+its four corners are `unproject_to_plane(rec, (±W/2, ±H/2), D)` with `(W, H) = canvas_mm` (so a non-zero `shift_mm`
+moves the frame off `Q` correctly); its size in metres is `frame_mm · D / focal_length_mm`.
+
+#### 5.6.3 Layout (web UI, not core)
+- A top-bar switch "旁觀視角" (default **off**; persisted per viewer in `localStorage`, read in `try`/`catch`).
+- On: two panes side by side, observer left, drawing right, equal width; below 880 px of page width the panes stack,
+  observer on top. Off: the drawing pane alone at full width, exactly the §5.4.10 layout.
+- The drawing pane keeps every §5.4.10 element (WebGL view, SVG overlay, layer checkboxes, warnings panel, status line).
+  The status line gains `obs ms` (the observer's own per-frame cost) while the switch is on.
+
+#### 5.6.4 Observer camera (web UI, not core)
+- Initial direction: elevation 28° above the horizon, azimuth 55° with the camera at
+  `target + dist · (sin az · cos el, −cos az · cos el, sin el)` (the demo's convention), then framed (below).
+- Controls in the observer pane: left drag orbits (`az −= dx · 0.4°`, `el = clamp(el + dy · 0.3°, −5°, 85°)`), the wheel
+  zooms (`dist ← clamp(dist · exp(0.001 · deltaY), 4, 60)` m), a two-finger pinch zooms
+  (`dist ← clamp(dist₀ · d₀ / max(d, 10 px), 4, 60)`). None of them is an undo step (§5.7.8 item 13) or touches the drawing.
+- **Framing** ("旁觀視角取景" button; automatically after a scene load and "Reset camera" in M9, and after the M10
+  events of §5.7.8 items 10–13; never during a drag): keep the direction `(az, el)`, set the target to the centroid of the points
+  `{E, Q, scene centre, every point light's position, the scene centre's ground point (z = 0), the four frame corners}`
+  and `dist = clamp(2.3 · max_i |p_i − centroid|, 6, 60)` m. Directional lights contribute no point. The scene centre
+  is the centre of stage A's `bbox` (§5.7.7).
+
+#### 5.6.5 What the observer pane draws (web UI, not core; spec-v0.2 §3)
+All geometry is built in world coordinates by `web/src/observer.ts` (pure functions, no DOM) from the camera record,
+the document, stage A and the board of §5.6.2 (M10: of the rig, §5.7.7), and rendered in the observer's three.js view
+together with the `scene3d` group of §5.4.10.
+| element | definition | default |
+| --- | --- | --- |
+| eye `E` | black dot, label `E（讀數）` with its coordinates (2 decimals); never a drag target | on |
+| board | translucent patch on the plane, centred on `Q`, `max(0.62·W_m, 3.2) × max(0.62·H_m, 2.4)` m (`W_m, H_m` the frame size in metres), plus the frame rectangle (bold outline, back-filled) | on |
+| drawing on the frame | the current document's drawables (`edges[].segment`, `shadows[].polygons`, `form_shadow[].polygons`, `outlines[].generators[].segment`, conic `polylines` / `arcs` / `ellipses`, `construction.segments`, `horizon.segment`), clipped to the canvas rectangle, mapped by `unproject_to_plane(rec, uv, D − 0.012)` (0.012 m towards the eye, along the rays, so the copy registers exactly as seen from `E`); SVG arcs and ellipses are sampled (count recorded in `web/README.md`); the visible layers follow the drawing pane's layer checkboxes | on |
+| frustum | `E` to each frame corner (solid), continued to `E + 1.9·(corner − E)` (dotted) | on |
+| principal point | `Q`, the foot of the perpendicular from `E` (the frame centre when `shift_mm = 0`) | on |
+| D line | dashed `E → Q`, labelled `D = x.xx m` | on |
+| pivot | diamond at `P`; label `旋轉中心`, plus `：<object id>` when an object is the pivot (M10) | on |
+| g line | dashed `Q → P`, labelled `板子離場景 g = x.xx m` | on |
+| horizon | inside the frame: the document's `horizon.segment` (it is part of the drawing; absent when the ground's line at infinity is at infinity in the image, e.g. a horizontal board) | on |
+| plane label | the equation string of the board (`plane_equation`, §5.7.5), at a corner of the patch | on |
+| ring and arrow | M10 only (§5.7.9) | — |
+| vertex rays | checkbox "視線", default on. Focus object = `objects[0]`. For each of its vertices `<obj>.v<k>` (document `points[*].world`): the sight line `E → P` and its crossing `P′ = E + (P − E)·D / (f·(P − E))` when `f·(P − E) > near_m`; for each light ray `["L", name]` of `construction.rays` (light `lights[0]`) whose name is a vertex of the focus object: the light ray `L → P → S` (`S` = `name.shadow.<light>`; a directional light draws `S → S + extent·l`), the sight line `E → S` and its crossing `S′` | on |
+
+The observer shows lights as in §5.4.10 (`scene3d`). Nothing in this table is written to the document or the SVG.
+
+#### 5.6.6 Modules and the `main.ts` split (web UI, not core)
+- Before the observer is added, `web/src/main.ts` (≈ 500 lines) is split without behaviour change: the drawing stage
+  (WebGL view + overlay + render loop) and the pointer handlers move to their own modules; the existing web tests and
+  the §5.4.10 behaviour stay as they are. The split is its own commit.
+- `web/src/observer.ts` (new, pure, unit-tested): board derivation (§5.6.2), framing (§5.6.4), the element geometry of
+  §5.6.5 as plain arrays, and (M10) the hit test of §5.7.9. A thin DOM / three.js module draws them.
+- `web/src/orbit.ts` and `web/test/orbit.test.ts` are **not changed** in M9 (spec-v0.2 §A.2).
+
+#### 5.6.7 Degenerate cases (M9)
+| situation | handling |
+| --- | --- |
+| a frame corner or the eye behind the observer camera | three.js near clipping; labels of points behind the observer are not drawn |
+| `g < 0` (the board beyond the pivot) | drawn as is |
+| the focus object has vertices behind the eye (`f·(P − E) ≤ near_m`) | sight line drawn, crossing `P′` omitted |
+| no point light | framing uses the other points; the light-ray part of the vertex rays is drawn only for `lights[0]` |
+| a horizontal board (`f = ±z`) | no horizon on the frame (the document's `horizon.segment` is `null`) |
+
+#### 5.6.8 Testing contract (M9)
+- Core (`tests/test_picture_plane.py`, `ts/test/picture_plane.test.ts`): the §5.6.1 round trip (hypothesis on the
+  Python side: random target / yaw-pitch / `picture_plane` cameras, roll, shift, focal 8–400 mm, `(u, v)` in the extended
+  rectangle, `D ∈ [0.05, 100]`; < 1e-9 mm); `X` lies at depth `D` (`f·(X − C) = D` within 1e-9 m); the TS port agrees
+  with Python on a fixed table within 1e-12 m.
+- Web (`web/test/observer.test.ts`): board derivation from the §5.4.10 hand camera (`position (4, −8, 5)`, `target
+  (0, 0, 0.5)`: `R = 10.012492197250394`, `g = R − 4`, `Q = E + 4·forward`); frame corners on the plane `f·X = f·Q`
+  within 1e-9 m and reprojecting to the canvas corners within 1e-9 mm; the spec-v0.2 §4.1 `picture_plane` block
+  (`position (0.37, −2, 0.9)`, `normal (0, 1, 0)`, `offset −2`, focal 20 mm) with a scene whose stage-A `bbox` centre is
+  `(0.37, 5.84, 0.9)`: the orbit handed to `orbit_from_camera` has `target = (0.37, 5.84, 0.9)`, `distance = R = 7.84`,
+  and the board has `D = 4`, `g = 3.84`, `Q = (0.37, 2, 0.9)` (within 1e-9), the same with `offset −1` gives `D = 3`,
+  `g = 4.84`; framing bounds `6 ≤ dist ≤ 60` and centroid;
+  every number of the element arrays finite for the five examples and for 200 random cameras (incl. a horizontal
+  board and roll); the drawing on the frame reprojects onto the document drawables within 1e-6 mm; switch-off identity:
+  `doc` / `svg` are the same strings with the observer geometry built and not built, and the document is not mutated
+  (deep-equal before and after).
+- `orbit.test.ts` unchanged and green.
+
+#### 5.6.9 Acceptance (spec-v0.2 §7.2 M9)
+- The §5.6.8 tests pass on both runners' CI jobs (`npm test`, Python suite).
+- The SVG and JSON downloaded with the switch on are byte-identical to those with the switch off, for the five examples
+  and `benchmark_100.json` (recorded test or scripted browser check with the Chromium at `/opt/pw-browsers/chromium`).
+- While dragging the drawing camera with the switch on, the per-frame recompute (`core ms` + `dom ms` + `obs ms`) is
+  < 100 ms on the five examples, measured and recorded in `web/README.md` (`benchmark_100.json` is recorded, not gated,
+  as for §5.4.10's DOM budget).
+- `npm run -w web build` succeeds; the Python suite, `--dry-run` (0 changes), `bench.py --gate full`, the TS conformance
+  runner and `compare_svg.py` are unchanged.
+
+### Implementation notes
+None yet.
+
+### 5.7 M10 — plane mode, board-first (spec-v0.2 §1, §4, §5, §6, §7)
+
+The user manipulates the **board** (the picture plane): its direction `f` (the orange ring) and its distance from the
+scene `g` (the blue arrow); the eye `E` follows from them and is read-only (D72, D77). The core does not know this: it
+gains exactly one new way to write the camera block, `picture_plane` (§5.7.1–§5.7.6), resolved before stage B into the
+existing target form; stage A, stage B and the conventions of §2.2 are unchanged (D71). Everything else in this
+section is web UI (§5.7.7–§5.7.11) and is marked so.
+
+#### 5.7.0 Scope, hard rules and merge sequencing
+- **Core:** validation of the third camera form (§5.7.1), `resolve_picture_plane` (§5.7.2), the roll reference and the
+  warning suppression (§5.7.3), the document key (§5.7.4), `plane_equation` (§5.7.5), in Python and TypeScript with the
+  same names, record shapes and operation order (§5.4.2, §5.4.4), plus `unproject_to_plane` (§5.6.1). Numpy only;
+  constant time; the camera-only paths of both implementations and their gates (`bench.py --gate full`,
+  `camera_only.js --gate both`) are not loosened and must not regress beyond noise.
+- **Closed lists stay closed:** no warning code (§5.0.5 stays at 18), no new object type, no change to `rules.json`.
+- **Every other document is byte-identical** (D75): only a document rendered with a `picture_plane` camera carries the
+  new key; the 60 expected files of conformance v7 do not change (`--dry-run`: 0 changes before the v8 cases are added).
+- **Web UI (not core):** the rig (§5.7.7) lives only in `web/src/rig.ts` (pure, no DOM, unit-tested like `orbit.ts`);
+  the equation parser in `web/src/equation.ts`; the web reuses the port's `camera_matrix`, `resolve_picture_plane`,
+  `plane_equation`, `unproject_to_plane` and `apply_camera_block`; it never re-implements the camera model.
+- **Sequencing** (`docs/PLAN-v3.md`): contract → Python core (candidates under `tests/fixtures/v8_candidates/`) → TS port
+  + conformance v8 by one merger → M9 → M10. Python lands first; the TS port mirrors the Python branch's list of
+  behaviour changes; both runners pass v8 on the same commit.
+
+#### 5.7.1 Camera form `picture_plane` — validation (amends the `camera` row of §2.0)
+The `camera` block has **exactly one** of three forms: `target`; `yaw_deg` + `pitch_deg`; `picture_plane`. The lens
+fields (`focal_length_mm`, `frame_mm`, `shift_mm`, `near_m`) and `position` keep their §2.0 rules in every form.
+| field | rule (each raises `SceneError(field, message)`) |
+| --- | --- |
+| `camera` | `picture_plane` together with `target` and / or `yaw_deg` / `pitch_deg` → `SceneError("camera", "give exactly one of target, yaw_deg + pitch_deg, picture_plane")`; none of the three → `SceneError("camera", "needs target, yaw_deg + pitch_deg, or picture_plane")` (the old "needs target or yaw_deg + pitch_deg" message is replaced; the target / yaw-pitch "not both" message is unchanged) |
+| `camera.roll_deg` | present together with `picture_plane` → `SceneError("camera.roll_deg", "not allowed with picture_plane (the frame up is picture_plane.up)")`, whatever its value (also `0`) |
+| `camera.picture_plane` | an object (`"must be an object"`) |
+| `camera.picture_plane.normal` | required; 3 finite numbers (`…normal[i]`: `"must be a finite number"`); `\|normal\| ≤ 1e-12` → `"must be a non-zero vector"` at `camera.picture_plane.normal`. Any length, either sign: the sign and the length do not change the result |
+| `camera.picture_plane.offset` | required; a finite number. With `n̂ = normal / \|normal\|` and `ô = offset / \|normal\|`: `\|n̂·position + ô\| ≤ 1e-9` (metres; the plane passes through the eye) → `"the plane passes through camera.position"` at `camera.picture_plane.offset` |
+| `camera.picture_plane.up` | optional; 3 finite numbers; with `â = up / \|up\|`, `\|â − (â·n̂)·n̂\| ≤ 1e-9` (zero `up`, or `up` parallel to the normal: no direction on the plane; the same sine test as §2.2's `\|forward × up_world\| ≤ 1e-9`) → `"must not be parallel to picture_plane.normal"` at `camera.picture_plane.up` (`\|up\| ≤ 1e-12` counts as zero, same message) |
+Unknown keys inside `picture_plane` are ignored (§2.0). Check order: the form test (`camera`), then `position`, then
+`roll_deg`, then `picture_plane.normal`, `.offset` (finite, then the through-the-eye test), `.up`, then the lens fields.
+**Validated output [decision]:** `validate_camera` returns `{position, picture_plane: {normal, offset[, up]}, focal_length_mm,
+frame_mm, shift_mm, near_m}` with the numbers as `float` and **as given** (not normalised, `up` only when given) and **no
+`roll_deg`** key, so a validated block validates again unchanged (the web's "Download scene" writes it back, §5.7.6, and
+`pipeline._resolve_camera` re-validates overrides). The target and yaw / pitch forms keep their output, `roll_deg`
+default `0` included. The TS `Camera` type makes `roll_deg` optional and adds `picture_plane?`; every reader of
+`roll_deg` already defaults it (`cam.get("roll_deg", 0.0)`, `cam.roll_deg ?? 0`).
+
+#### 5.7.2 Resolution `resolve_picture_plane` (core; spec-v0.2 §4.1)
+`castplane.picture_plane.resolve_picture_plane(cam) -> (block, record)` (TS: returns `{block, record}`) for a validated
+`picture_plane` block, in this operation order (scalars in a fixed order, as `camera._unit`; TS mirrors it):
+```
+m = |normal|;  n̂ = normal / m;  ô = offset / m;  E = position
+s = n̂·E + ô                  (signed distance of the eye; |s| > 1e-9 by §5.7.1)
+D = |s|;  f = −sign(s)·n̂     (unit, from the eye towards the plane)
+Q = E − s·n̂                  (foot of the perpendicular = principal point when shift_mm = 0)
+target = E + f
+```
+`block` = `{position: E, target, roll_deg: ρ (§5.7.3), focal_length_mm, frame_mm, shift_mm, near_m}` — a target-form
+block that `validate_camera` accepts (`|target − E| = 1`). `record` = the document value of §5.7.4. `camera_forward(cam)`
+and `camera_matrix(cam, canvas)` call `resolve_picture_plane` first when `"picture_plane" in cam` and then run their
+unchanged target-form code on `block`; `camera_matrix` adds `record` to its camera record under the key
+`picture_plane` (absent for the other forms). No other caller changes (`pipeline._resolve_camera` validates, stage B
+calls `camera_matrix`). The forward used by `camera_matrix` is therefore `normalize(target − E)`, which equals `f` up to
+ulps; every derived quantity of §5.7.3 uses that same vector (below), so the two can never disagree about the fallback.
+
+#### 5.7.3 Roll reference and `CAMERA_LOOKING_ALONG_UP` (amends §2.2 and §2.9 row 1; D74)
+- `fwd = camera_forward(block)` (the vector `camera_matrix` will use). Default basis exactly as §2.2:
+  `up_world = (0, 0, 1)`, or `(0, 1, 0)` when `|fwd × (0, 0, 1)| ≤ 1e-9`; `right₀ = normalize(fwd × up_world)`;
+  `up₀ = right₀ × fwd`.
+- Frame up `u`: `a = picture_plane.up` if given, else `up_world`; `u = normalize(a − (a·fwd)·fwd)`. (Without `up` this
+  is `up₀` and `ρ = 0`; the §5.7.1 test makes the projection non-zero; the `1e-9` gap between `n̂` and `fwd` is far below
+  it.)
+- `ρ = degrees(atan2(−(u·right₀), u·up₀))`, in `(−180°, 180°]`. With §2.2's roll formula this gives
+  `up' = −sin ρ·right₀ + cos ρ·up₀ = u` (up to rounding): positive `ρ` turns the frame counter-clockwise about the line of
+  sight as seen from behind the eye, the §2.2 convention (det R = −1 unchanged, D14).
+- **Suppression [decision]:** for a `picture_plane` block `camera_matrix` does not append `CAMERA_LOOKING_ALONG_UP`; the
+  fallback `up_world = (0, 1, 0)` is still used as the roll reference. The frame up is explicit (given or defaulted by
+  this rule), so nothing is ambiguous. Target and yaw / pitch blocks warn exactly as before. The §2.9 row stays in the
+  closed list unchanged; its predicate is now read "… and the block is not of the `picture_plane` form".
+
+#### 5.7.4 Document key `camera.picture_plane` (amends §3.1 and the §5.0.3 listing; D75)
+Only for a `picture_plane` camera, the document's `camera` block gains
+```
+camera.picture_plane = {normal: f, offset: −f·Q, up: u, distance: D, foot: Q,
+                        frame_m: [frame_w·D/focal_length_mm, frame_h·D/focal_length_mm], equation: string}
+```
+`f`, `Q`, `D`, `u` from §5.7.2–§5.7.3 (`normal` is the canonical unit normal pointing from the eye to the plane, whatever
+sign and length the input had; `up` the unit frame up of §5.7.3; `frame_m` in metres, `frame_mm` from the block);
+`equation = plane_equation(f, −f·Q)` (§5.7.5). Floats are canonical (`+ 0.0`, §2.8) and keys sorted. The key is
+camera-dependent (§5.0.3's camera-dependent list already names `camera`). Every other document has exactly the
+§3.1 / §5.0.3 keys, byte for byte. Comparator: the numbers fall under the existing relative 1e-9 rule (none is an mm
+key), `equation` is compared exactly; `rules.json` is unchanged.
+
+#### 5.7.5 Equation string `plane_equation(normal, offset)` (core; spec-v0.2 §4.3)
+`normal` a unit 3-vector, plane `normal·X + offset = 0`; `c = −offset`; components `n_x, n_y, n_z`.
+1. **Axis form** if some `i` has `| |n_i| − 1 | < 1e-9` (first such `i` in x, y, z order): `"<x|y|z> = " + F2(sign(n_i)·c)`.
+2. **General form** otherwise: if the first component with `|n_i| ≥ 5e-4` (the first written term; the same threshold
+   as the dropping rule, so the written string never starts with `-`) is negative, negate `normal` and `c`. Each
+   component with `|n_i| ≥ 5e-4` is a term `F3(|n_i|) + axis letter`; the first written term has no sign, every later
+   one is joined with `" + "` / `" - "` by its sign; then `" = "` and the constant: `"0.000"` when
+   `|c| < 5e-4`, else `F3(c)`. Example: `normal = (0.7071…, 0.7071…, 0)`, `c = 1.2` → `"0.707x + 0.707y = 1.200"`.
+3. `F2(v)` / `F3(v)`: fixed-point with 2 / 3 decimals, rounded **as Python's `format(v, ".2f")` / `".3f"`** (correctly
+   rounded from the exact binary value; an exact tie rounds half to even); a result that reads `-0.00` / `-0.000` is
+   written without the sign. The TS port reproduces this exactly: JS `toFixed` rounds exact ties away from zero, so the
+   port applies the exact-tie rule of its `fmt` (§5.4.6) at 2 and 3 decimals, keeping trailing zeros; `ts/test` and
+   `tests/test_picture_plane.py` pin `F2(0.125) = "0.12"`, `F2(0.375) = "0.38"`, `F2(2.675) = "2.67"`,
+   `F2(-0.001) = "0.00"`, `F3(0.0625) = "0.062"`.
+Hand table (tested in both implementations): `((0,1,0), −2) → "y = 2.00"`; `((0,−1,0), 2) → "y = 2.00"`;
+`((−1,0,0), 1) → "x = 1.00"` (plane `x = 1`); `((0,0,−1), 3) → "z = 3.00"`; `((0,1,0), 3) → "y = -3.00"`;
+`((1/√2, 1/√2, 0), −3/√2) → "0.707x + 0.707y = 2.121"`; `((−1/√2, 0, 1/√2), 0) → "0.707x - 0.707z = 0.000"`.
+
+#### 5.7.6 API, CLI and file round trip (core and web)
+- Python: `castplane/picture_plane.py` exports `resolve_picture_plane`, `plane_equation`, `unproject_to_plane`
+  (`__all__`, documented in `docs/USAGE.md`); `castplane/scene.py` gains `validate_picture_plane(value, field)` (called by
+  `validate_camera`); `castplane/camera.py` resolves first in `camera_forward` / `camera_matrix`. TypeScript mirrors in
+  `ts/src/picture_plane.ts`, `ts/src/scene.ts`, `ts/src/camera.ts` and re-exports from `ts/src/index.ts`.
+- CLI `castplane info`: when the document has `camera.picture_plane`, three more lines after `principal point:` —
+  `picture plane: <equation>`, `eye to plane D: <D:.4f> m`, `frame on the plane: <w:.4f> × <h:.4f> m`. `render`,
+  `validate`, `stages` and `--camera FILE` accept the form unchanged (exit 2 with the §5.7.1 field paths on errors).
+- **Round trip:** a scene with a `picture_plane` camera and the scene with the resolved target-form `block` render the
+  same picture (§5.7.13 row 1); "Download scene" of the M10 web writes the `picture_plane` form (§5.7.7), and
+  `castplane render x.scene.json` reproduces the web's picture.
+
+#### 5.7.7 Rig state (web UI, not core; spec-v0.2 §4.2)
+State (`web/src/rig.ts`, plain data, cloned for undo):
+`{f: Vec3 (unit, eye → board), up: Vec3 | null, g, D, a, b, rho_deg, focal_length_mm}` plus the pivot selection
+`{mode: "scene" | "object", object_id: string | null}` (not in the undo snapshot). Derived, never stored:
+- Pivot `P`: `mode = "scene"`, or `"object"` with nothing picked → the scene centre = the centre of stage A's `bbox`;
+  `"object"` with `object_id` → the centre of the bounding box of that object's stage-A vertices.
+- **Pre-roll basis** `(r₀, u₀)`: `a = up` if not null, else `(0, 0, 1)`, replaced by `(0, 1, 0)` when `up` is null and
+  `|f × (0, 0, 1)| ≤ 1e-9` (the §2.2 test, so the rig's default basis is `camera_matrix`'s); `u₀ = normalize(a − (a·f)·f)`;
+  `r₀ = normalize(f × u₀)`; `u₀ = r₀ × f`.
+- **Frame basis:** `r = cos ρ·r₀ + sin ρ·u₀`, `u = −sin ρ·r₀ + cos ρ·u₀` (§2.2 roll convention).
+- `L = a·r₀ + b·u₀`; `E = P − (g + D)·f + L`; `Q = E + D·f`; plane `f·X = c` with `c = f·P − g`; `R = g + D` (the pivot's
+  depth along `f`; with no pan, `|E − P|`). `L ⊥ f`, so the plane does not depend on the pan.
+- **Lock-horizontal ⇔ `up === null`** (the "鎖水平" checkbox mirrors it; switching on sets `up = null`, switching off sets
+  `up = u₀` of the current basis, so switching off changes nothing visible).
+- **To the core block** (`camera_of_rig(rig, scene)`): `{position: E, picture_plane: {normal: f, offset: −c[, up: u]},
+  focal_length_mm, frame_mm: scene.camera.frame_mm, shift_mm: scene.camera.shift_mm, near_m: scene.camera.near_m}`, written
+  explicitly (never `{...base}`, §5.4.10); `up` is omitted iff `up === null` and `rho_deg === 0`. Then `s = −D` and the core's
+  forward is `f`, its frame up `u`. `shift_mm` is copied from the scene and not editable (the UI's own value is `0` for
+  every bundled example; with a non-zero scene shift the pivot sits at the principal point, not at the frame centre).
+- **Ranges (constants, §5.7.11):** `R ∈ [R_MIN, R_MAX] = [0.8, 40]` m, i.e. `g ∈ [0.8 − D, 40 − D]` (`g` may be negative:
+  the board beyond the pivot); `D ∈ [0.5, 12]` m.
+- **Initial state on scene load [decision]:** the load rule below applied to `scene.camera` (every scene has a camera);
+  the spec-v0.2 §4.2 numbers (`f = +y`, `g = P_y − 2`, `D = 4`, focal 20 mm: plane `y = 2`) are the demo's starting state,
+  reproduced by typing `y=2` with `D = 4` (§5.7.9).
+- **Load rule** (any camera form; also M9's derivation with the differences of §5.6.2): `rec = camera_matrix(block)`;
+  `f = rec.forward`; `P` = scene centre (`mode = "scene"`); `D` = `rec.picture_plane.distance` for a `picture_plane` block,
+  else `4`; clamp `D` into `[0.5, 12]` (notice when clamped); `R = f·(P − E)`; if `R ∉ [0.8, 40]` clamp it (notice
+  "相機與場景中心的距離超出範圍，已調整"; the eye and the board move along `f`); `g = R − D`; `L = (E − P) + R·f` (the
+  eye's offset from the pivot's axis, `⊥ f`), `a = L·r₀`, `b = L·u₀` with the lock basis; `rho_deg` = the block's
+  `roll_deg` (`picture_plane` form: the resolved `block.roll_deg`, §5.7.3), wrapped into `(−180, 180]`; `up = null`;
+  `focal_length_mm` = the block's. Without the clamps the loaded picture is unchanged (within 1e-7 mm); with a clamp it
+  changes and the notice says so.
+
+#### 5.7.8 Rig operations (web UI, not core; spec-v0.2 §5)
+Pure functions of `rig.ts`; each returns a new state. `rot(v, axis, angle)` is Rodrigues' rotation (right-handed);
+`κ = 0.32°/px`. A drag is computed from the state at pointer-down and the **total** displacement `(Δx, Δy)` (DOM px,
+`Δy` positive downwards), never incrementally.
+1. **Ring orbit (left pane; spec-v0.2 §5.2).** At pointer-down record the grabbed ring point `w` relative to `P` and the
+   observer camera's right / up axes `r_c`, `u_c`. `sgn(axis, dir, flip) = sign(±dir·(axis × w))` (negated when `flip`),
+   `+1` when `|dir·(axis × w)| < 1e-6`. Rotations apply to `f` and, when not null, to `up`:
+   - lock-horizontal: rotate about `z = (0,0,1)` by `sgn(z, r_c, false)·Δx·κ`; then `r₁` = the pre-roll right axis of the
+     rotated `f` (lock basis, so `+y` fallback at `f = ±z`), `p₀ = asin(f_z)`,
+     `p₁ = clamp(p₀ + sgn(r₁, u_c, true)·Δy·κ, −89.9°, 89.9°)`, rotate about `r₁` by `p₁ − p₀`;
+   - free roll: rotate about `u_c` by `sgn(u_c, r_c, false)·Δx·κ`, then about `r_c` by `sgn(r_c, u_c, true)·Δy·κ`.
+   Then snap (item 3), then `f = normalize(f)` with components `|f_i| < 1e-12` set to `0`. `g`, `D`, `(a, b)`, `ρ` are
+   unchanged, so the eye moves rigidly about `P` and `R` is constant.
+2. **Right-pane left drag (spec-v0.2 §5.9):** the same with `−Δx·κ` about `z` and `p₁ = clamp(p₀ − Δy·κ, ±89.9°)` (lock),
+   or about the frame's `u` then `r` (of the pointer-down state, roll included) by `−Δx·κ`, `−Δy·κ` (free); snapping as
+   item 3. Dragging down raises the eye; the scene follows the finger (M7 convention).
+3. **Snap (spec-v0.2 §5.1, §5.2):** when snapping is on (checkbox "吸附", default on) and Alt is not held: if
+   `f·a > cos 5°` for one of `±x, ±y, ±z` (first in that order), rotate `f` (and `up`) by the minimal rotation about
+   `normalize(f × a)` (angle `acos(clamp(f·a, −1, 1))`; when `|f × a| < 1e-12` only set `f = a`) and set `f = a` exactly.
+   Exact axes make the top / bottom views reachable (`±90°`).
+4. **Arrow (left pane; spec-v0.2 §5.3).** At pointer-down: `g₀ = g`; `tip = Q − len·f` with `len = clamp(0.55·D, 0.3,
+   1.4)` m; `v` = screen(`tip + f`) − screen(`tip`) in observer px; `v = (0, −40)` when either point is behind the observer
+   camera. Move: `t = (Δ·v) / max(|v|², 64)` (metres the board moves towards the scene), `g' = clamp(g₀ − t, 0.8 − D, 40 − D)`.
+   Snap (as item 3's switches) when `f` is an exact axis `±e_i`: `s_g = sign(f_i)`, `c = f·P − g'`,
+   `c' = s_g·Math.round(10·s_g·c)/10`, `g' = clamp(f·P − c', 0.8 − D, 40 − D)`. `f`, `D`, `(a, b)`, `ρ` unchanged: the eye
+   moves along `f` only and the frame's size in metres is unchanged.
+5. **Wheel / pinch (right pane; the arrow's twin):** `R ← R·exp(0.001·deltaY)`; pinch `R ← R₀·d₀ / d` with
+   `d₀, d = max(finger distance, 10 px)`; then `g = clamp(R − D, 0.8 − D, 40 − D)`. No snapping. The wheel never changes
+   the focal length (D78).
+6. **Pan (right drag, Shift + left drag, two-finger move in the right pane):** `k = R₀·(frame_h / focal) / H_px`
+   (`H_px` the drawing pane's height, `R₀` at pointer-down; for a pinch the current `R`); `ΔL = −Δx·k·r + Δy·k·u` (frame
+   basis); `a = a₀ + ΔL·r₀`, `b = b₀ + ΔL·u₀`. `f`, `g`, `c`, `P` unchanged; the scene follows the finger. Panning never
+   changes the pivot (D78).
+7. **Roll slider** `[−180°, 180°]`, step 1°: sets `rho_deg`; `E`, the board and `(r₀, u₀)` are unchanged, so the eye does
+   not move; with lock-horizontal the horizon tilts by `ρ` and keeps that tilt while orbiting. Not an undo step.
+8. **D slider** `[0.5, 12]` m, step 0.1, beside the focal-length slider: `D = clamp(value, max(0.5, 0.8 − g),
+   min(12, 40 − g))`; `g` and `c` unchanged, so the board stays and the eye moves along `−f`; the frame grows in metres in
+   proportion. Not an undo step.
+9. **Focal-length slider [decision]:** the §5.4.10 logarithmic slider `[8, 400]` mm is kept (spec-v0.2 §5.7's 12–80 mm is
+   the demo's range; loaded scenes use other values); it changes the field of view and the frame only. Not an undo step.
+10. **Pivot (spec-v0.2 §5.4):** modes "場景中心" (default) and "點選物體". In object mode a click in the observer pane
+    (pointer-up within 5 px of pointer-down, on blank space in the hit order of §5.7.9) picks the object under the
+    pointer nearest to the observer camera; until one is picked the scene centre is used. A pivot change keeps `f`,
+    `g`, `D`, `up`, `ρ`, sets `(a, b) = (0, 0)` (the eye moves onto the new pivot's axis, so the pivot is at the frame
+    centre) and re-frames the observer. It is **not** an undo step.
+11. **Six views (spec-v0.2 §5.5):** front `f = +y`, back `−y`, left `+x`, right `−x`, top `−z`, bottom `+z`; `up = null`
+    (lock) or the new `u₀` (free); `(a, b) = (0, 0)`, `ρ = 0`; `g`, `D` unchanged. One undo step; re-frames the observer.
+12. **Equation field (spec-v0.2 §5.6; `web/src/equation.ts`).** Grammar (after removing all white space and mapping
+    `− – — －` to `-` and `＋` to `+`): `equation := side "=" side` (exactly one `=`); `side := term (("+" | "-") term)*`
+    with an optional leading sign; `term := coef? "*"? var | number`; `coef := digits ("." digits?)? | "." digits` (an empty
+    coefficient is 1); `number := digits ("." digits?)? | "." digits`; `var := x | y | z | X | Y | Z`. No exponents, no
+    products of variables. Result: `a·X = k` collected over both sides; `|a| < 1e-9` → error "式子裡要有 x、y 或 z";
+    `n = a/|a|` (`-0` → `0`), `d = k/|a|` (plane `n·X = d`). To the rig: `s_d = d − n·P`; `f = −n` if `s_d ≥ 0`, else `n`;
+    `g = |s_d|` (the board always between the eye and the pivot). Reject (field turns red with the reason; the plane is
+    kept) when the syntax fails, no variable is present, `g + D > 40`, or `g + D < 0.8` [decision: the second bound keeps
+    `R ≥ 0.8`]. Pan and roll are kept (`L ⊥ f` in the new basis, so the plane is the typed one); `up = null` (lock) or the
+    new `u₀` (free). The typed text is applied on Enter or the 「套用」 button (each quick button applies its own text);
+    while the field is focused it is not overwritten by the current state. One undo step; re-frames the observer. Quick buttons: `x=1`, `y=2`, `y=-3`, `z=3`, `x+y=3`. When not
+    focused, the field shows `plane_equation(f, −c)` of the current state. With `D = 4` and the scene-centre pivot `y=2`
+    gives the demo's start (eye at `y = −2` when `P_y ≥ 2`) and `x=1` a view from the `+x` side.
+13. **Undo / reset (spec-v0.2 §5.7).** A stack of at most 50 snapshots of the state (pivot excluded). One step each: a drag
+    that changed the state (ring, arrow, right-pane left / right drag, a two-finger gesture — settled at release; a press
+    without change records nothing: the snapshot is dropped when `(f, g, up, a, b)` is unchanged), one wheel burst (events
+    ≤ 400 ms apart), a view button, an equation apply, reset, and switching lock-horizontal from off to on. Not steps: the
+    observer camera, focal length, `D`, roll, pivot changes. Undo restores the snapshot, re-syncs the three sliders and
+    the lock checkbox, and re-frames the observer. **Reset:** the initial state (§5.7.7 load rule of `scene.camera`),
+    pivot = scene centre, the observer at its initial direction and framed.
+
+#### 5.7.9 Interaction surfaces (web UI, not core)
+- **Left (observer) pane in M10.** The ring (orange dashed circle on the board, centre `Q`, radius
+  `max(1.03 · ½·√(W_m² + H_m²), 0.45)` m, in the plane of `r`, `u`, 72 segments) and the arrow (blue, `Q → Q − len·f`,
+  `len` as §5.7.8 item 4, tip = handle, label "板子距離") are added to §5.6.5. Hit order on pointer-down: arrow tip (within
+  the hit radius) > ring (within 0.8 × the hit radius of a ring segment) > an object (object pivot mode, click only) >
+  blank (observer orbit, §5.6.4). Hit radius 14 px for a mouse, 26 px for touch. The eye is never returned by the hit
+  test and a drag on it is an observer orbit.
+- **Right (drawing) pane in M10 (spec-v0.2 §5.9; D78):** left drag / one finger = ring (§5.7.8 item 2); wheel / pinch =
+  arrow (item 5); right drag, Shift + drag, two-finger move = pan (item 6). This supersedes the §5.4.10 input mapping
+  for the drawing camera (the M7 yaw / pitch / distance / target pan of `orbit.ts`).
+- **Controls row** (under both panes): readouts (§5.7.10), checkboxes "吸附" / "作圖線" / "視線", the focal-length, `D`
+  and roll sliders side by side, the pivot selector, the lock-horizontal checkbox, the six view buttons. Top bar:
+  observer switch, equation field + 「套用」 + quick buttons, undo, reset, observer framing.
+
+#### 5.7.10 Readouts and notices (web UI, not core; spec-v0.2 §5.8)
+Under the panes: the plane equation; `g` and `R`; the eye `E` (read-only, 2 decimals); `D`; the pan `(a, b)` and `ρ`; the
+frame size in metres; "這次拖動右窗畫面變動": the maximum displacement, in frame mm (canvas mm / `s`), of the images of
+all stage-A vertices between the start of the current (or last) drag and now, skipping points behind the eye in either
+camera; below 0.005 mm it reads "0.00 mm（不變）". Notices (not document warnings): "眼睛在地面下方" when `E_z < 0`; the
+load-rule clamps (§5.7.7); equation errors (§5.7.8 item 12).
+
+#### 5.7.11 Constants (web UI, not core)
+| constant | value | constant | value |
+| --- | --- | --- | --- |
+| `KAPPA_DEG_PER_PX` | 0.32 | `SNAP_DEG` | 5 |
+| `PITCH_LIMIT_DEG` (lock drag) | 89.9 | `PLANE_GRID_M` | 0.1 |
+| `R_MIN_M`, `R_MAX_M` | 0.8, 40 | `D_MIN_M`, `D_MAX_M`, `D_STEP_M` | 0.5, 12, 0.1 |
+| `UNDO_MAX` | 50 | `WHEEL_BURST_MS` | 400 |
+| `WHEEL_K` | 0.001 | `HIT_PX_MOUSE`, `HIT_PX_TOUCH`, ring factor | 14, 26, 0.8 |
+| `CLICK_PX` | 5 | `OBSERVER_FOV_DEG` | 40 |
+| `OBSERVER_D_M` (M9) | 4 | drawing offset towards the eye | 0.012 m |
+| frustum extension | 1.9 | ring radius factor, minimum | 1.03, 0.45 m |
+| arrow length | `clamp(0.55·D, 0.3, 1.4)` m | framing | `clamp(2.3·r_max, 6, 60)` m |
+| observer initial `(az, el)` | (55°, 28°) | observer orbit / zoom limits | 0.4°/px, 0.3°/px, el ∈ [−5°, 85°], dist ∈ [4, 60] m |
+| narrow layout | < 880 px | "unchanged" readout | < 0.005 mm |
+
+#### 5.7.12 Degenerate cases (spec-v0.2 §6)
+| situation | handling |
+| --- | --- |
+| scene centre behind the eye | cannot happen after a load: `R ≥ 0.8` m always (§5.7.7 clamp) |
+| part of the scene behind the eye (small `R`, large object) | the §2.2 near clip, nothing new (`POINT_BEHIND_CAMERA` as before) |
+| objects between the eye and the board (incl. `g < 0`) | drawn, larger than life; the construction is unaffected |
+| equation with `g + D > 40` (or `< 0.8`) | rejected, plane kept |
+| arrow / wheel beyond the range | `R` clamped to `[0.8, 40]` |
+| horizontal board (`f = ±z`) | default up `+y` (§5.7.3, §5.7.7); no horizon on the frame; no warning |
+| `D` slider would put `R` out of range | the slider clamps |
+| pan moves the pivot off the frame centre / out of the frame | normal; orbiting still turns about the pivot |
+| eye below the ground (`E_z < 0`) | rendered; notice "眼睛在地面下方" |
+| lock drag at the elevation limit | clamped at ±89.9°; views and snapping reach exactly ±90° |
+| grabbed ring point with `\|dir·(axis × w)\| < 1e-6` | rotation sign `+1` |
+| core: plane through the eye, zero normal, `up` ∥ normal, `roll_deg` given, two forms | `SceneError` (§5.7.1) |
+
+#### 5.7.13 Testing contract (spec-v0.2 §7.1)
+Core (`tests/test_picture_plane.py`, `ts/test/picture_plane.test.ts`; hypothesis on the Python side):
+| test | criterion |
+| --- | --- |
+| equivalence: `picture_plane` camera vs the hand-written equivalent target camera (`target = E + f`, `roll_deg = ρ`), on the three v8 cases, the five examples and random scenes / planes incl. horizontal and tilted boards and a given `up` | every image coordinate and drawable within **1e-9 mm**; the two documents pass `compare_documents` after removing `camera.picture_plane` and the `CAMERA_LOOKING_ALONG_UP` warning of the target camera |
+| translation invariance: same eye, same direction, different `offset` (both sides of the eye give opposite normals and the same `f`) | image coordinates within 1e-9 mm; only `distance`, `foot`, `offset`, `frame_m`, `equation` differ |
+| hand values | spec-v0.2 §4.1 block (`position (0.37, −2.0, 0.9)`, `normal (0,1,0)`, `offset −2.0`, focal 20, frame 36×24): `D = 4`, `f = (0,1,0)`, `Q = (0.37, 2.0, 0.9)`, `target = (0.37, −1.0, 0.9)`, `ρ = 0`, `offset = −2.0`, `up = (0,0,1)`, `frame_m = [7.2, 4.8]`, `"y = 2.00"`; negated normal and offset give the same record; the §5.7.5 equation table |
+| roll reference | a given `up` rotated by `θ` about the line of sight gives `ρ = −θ` for right-handed `θ` about `f` (`ρ = atan2(−u·right₀, u·up₀)`); `up'` of `R` equals `u` within 1e-12; a horizontal board with and without `up = (0,1,0)` gives `ρ = 0` and no warning; looking down (`f = (0,0,−1)`, default `up₀ = (0,1,0)`, `right₀ = (1,0,0)`) with `up = (1,0,0)`: `ρ = −90°` |
+| `CAMERA_LOOKING_ALONG_UP` | never emitted for a `picture_plane` block (horizontal board); still emitted by the equivalent target block |
+| input errors | each §5.7.1 row raises `SceneError` with that field path (plane through `E`, zero normal, `up` ∥ normal, zero `up`, non-finite entries, `roll_deg` incl. `0`, `picture_plane` with `target`, with `yaw_deg` / `pitch_deg`, not an object, missing `normal` / `offset`); CLI exit 2 with the path |
+| validated block round trip | `validate_camera(validate_camera(b)) == validate_camera(b)`; no `roll_deg` key; `load_scene` of a "Download scene" output reproduces the document |
+| unproject round trip | §5.6.1 (< 1e-9 mm) |
+| determinism and port parity | both runners on the v8 cases; `compare_svg.py` 0 mismatches; the TS `plane_equation` tie table of §5.7.5 |
+
+Web (`web/test/rig.test.ts`, `equation.test.ts`, `observer.test.ts`), each row of spec-v0.2 §7.1:
+| test | criterion |
+| --- | --- |
+| equation parser | valid and invalid sets (incl. Unicode minus, `2x - y + 3 = 0`, `x + y = 2`, `.5x=1`, `x==1`, `=1`, `2=3`, `xy=1`); `(f, g)` of `y=2`, `x=1`, `z=3`, `y=-3` per §5.7.8 item 12; the plane passes through `Q` (1e-9 m) |
+| rig invariants | random `f`, `g`, `up`, pan 0: `E = P − (g + D)·f`; the pivot projects to `(0, 0)` within 1e-7 mm |
+| ring, lock-horizontal, five drag directions | `g`, `D`, `\|E − P\|` unchanged; the frame right vector horizontal; the grabbed point moves with the finger (cosine > 0.3) |
+| ring, one long drag | a full turn around the scene; the pivot stays at the frame centre throughout |
+| ring: snap, top view, free roll | after a snap `f` is an exact axis; the top view is reachable; free mode keeps `up ⊥ f` and `g` |
+| arrow towards / away from the scene | `f` unchanged; the eye moves along `f` only; `D` and the frame size in metres unchanged; a tall object's image grows when nearer, shrinks when farther; the tip follows the finger |
+| arrow snap and clamp | the plane coordinate on the 0.1 m grid (not with snapping off); `R` clamped at 0.8 |
+| eye read-only | the hit test never returns `E`; a drag on `E` does not change the rig |
+| six views | `f` an exact axis, `g` unchanged, `E = P − (g + D)·f` |
+| D slider | `c`, `g` unchanged; the eye moves along `−f`; the frame grows; objects shrink; the pivot stays centred; clamped so that `R ≥ 0.8` when `g < 0`; no undo step; reset / undo re-sync the slider |
+| undo details | a press without movement records nothing; a pivot change records nothing |
+| right-pane left drag | `f` turns about `z` by `−Δx·κ`; dragging down raises the eye; `g`, `R` unchanged; horizon level under lock |
+| right-pane wheel | `R` scales by `exp(0.001·ΔY)`, `f` and the plane normal unchanged; a burst is one undo step; clamped |
+| right drag and Shift drag | `f`, `g`, `c`, `P` unchanged; the eye moves within the board's plane; the scene centre follows the finger |
+| orbit after pan | both orbit modes rigid about `P`, `(a, b)` unchanged |
+| roll slider | the eye does not move; the horizon tilts by `ρ`; kept while orbiting; no undo step |
+| views and equation after pan / roll | views clear pan and roll; the equation keeps them and the plane is the typed one |
+| right-pane two fingers | pinch scales `R` by `d₀/d`, the move pans; the whole gesture is one undo step |
+| object pivot | the eye faces the picked object again (pan cleared); orbiting keeps the radius |
+| undo and reset | restore `f`, `g`, `up` (and `D`, `ρ`, focal with the sliders) |
+| load rule | for the five examples and the v8 cases: the rig's block renders the scene camera's picture within 1e-7 mm (no clamp hit), `Download scene` round-trips through `load_scene_text` |
+| random frames | 600 states incl. top / bottom views, very near / far, free roll, plus 300 with pan and roll: every number passed to drawing calls (observer geometry, camera block) is finite |
+
+#### 5.7.14 Conformance set v8 (amends §5.0.8; spec-v0.2 §A.3)
+| version | by | expected changed | cases added | rules.json |
+| --- | --- | --- | --- | --- |
+| v8 | the M10 core merge (Python + TS on one commit) | **0** of the 60 v7 files (`--dry-run` 0 changes before the cases are added) | 3 | unchanged |
+- Cases (scenes with a `picture_plane` camera and a `description`): `camera_picture_plane_vertical` (plane `y = 2`, the
+  spec-v0.2 §4.1 block over a small polyhedral scene), `camera_picture_plane_tilted` (a board tilted about a horizontal
+  axis, with a given `up` so that `ρ ≠ 0`), `camera_picture_plane_horizontal` (plane `z = 3` seen from above: `f = −z`, no
+  `CAMERA_LOOKING_ALONG_UP`, horizon `null`). Each case's image coordinates must equal the render of its hand-written
+  equivalent target camera (§5.7.13 row 1), which `tests/test_picture_plane.py` checks.
+- Placement: off the ulp-amplifying boundaries of rule 3 of `tests/conformance/README.md`. In particular the horizontal
+  case uses **polyhedra only** (seen from exactly above, every horizontal circle images to an exact circle, whose
+  `rotation_deg` is such a boundary) and keeps light points away from the camera axis; every number written by
+  `plane_equation` must lie at least 1e-6 away from a rounding boundary of its format (the string is compared exactly,
+  and two builds may differ in the last ulps of `c`).
+- Workers put candidate scenes under `tests/fixtures/v8_candidates/`; the merger runs, on the merged branch,
+  `python3 tools/regen_conformance.py --case NAME --reason "..."` per case (after `--dry-run` shows 0 changes for the 60),
+  then `python -m tests.build_identity --write`; the CHANGELOG gets one v8 entry. `tests/conformance/README.md` gains a
+  `### M10 投影平面` heading with the three rows, and the counts become v8 / 63 in README, USAGE and CLAUDE.md.
+  `test_set_covers_the_required_sources` additionally requires a `picture_plane` case.
+- Capacity: `expected/` measures 2 706 181 bytes at v7 (2.58 MiB of the 3 MiB limit: 439 547 bytes left); the camera
+  cases of v7 are 24–55 KB, so three small scenes fit; keep them minimal.
+
+#### 5.7.15 Acceptance and recorded differences from the demo
+- **Acceptance (spec-v0.2 §7.2 M10):** every row of §5.7.13 passes; both conformance runners pass v8 (63 cases) on the
+  same commit; `compare_svg.py` 0 mismatches; `bench.py --gate full` and `camera_only.js --gate both` pass unchanged;
+  `npm run -w web build` succeeds; the Python suite passes on 3.10 and 3.13.
+- **Differences from `picture_plane_demo.html` [decision]** (this contract wins): the default-up fallback test is §2.2's
+  `|f × z| ≤ 1e-9` (the demo: `< 1e-6`), so the rig's basis is always `camera_matrix`'s; the drawing on the frame is
+  offset towards the eye along the rays (`D − 0.012`) instead of translated by `−0.012·f`; a pivot change clears the pan
+  (spec-v0.2 §5.4 "眼睛移到新的軸線上"; the demo keeps it); equation strings round as Python (exact ties to even; the
+  demo's `toFixed` rounds ties away from zero); the initial state comes from the scene camera (§5.7.7); the focal slider
+  keeps the M7 range; the equation field also rejects `g + D < 0.8`; the lock checkbox is `up === null` (the demo keeps
+  a separate flag).
+
+### Implementation notes
+None yet.
