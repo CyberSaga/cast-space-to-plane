@@ -2,27 +2,33 @@
  * The castplane web UI (contract §5.4.10): load a scene JSON (file picker, page-wide drag and drop, bundled
  * examples), show it with three.js, drag the camera, and overlay the SVG the ported core writes for that camera —
  * re-rendered per animation frame with stage A cached. No server, no network access at runtime.
+ *
+ * This module owns the state, loading and the render loop, and wires the others: `stage.ts` (one three.js view),
+ * `input.ts` (pointer / wheel / file-drop gestures), `ui.ts` (controls and panels), `overlay.ts` (the SVG overlay).
  */
 
 import "./style.css";
 
 import * as THREE from "three";
 
-import { LAYER_IDS, SceneError, compose, dumps, load_scene, load_scene_text, project_scene, shadow_geometry, write_svg } from "castplane";
+import { LAYER_IDS, compose, dumps, load_scene, load_scene_text, project_scene, shadow_geometry, write_svg } from "castplane";
 import type { GeometryDocument, Scene, StageA } from "castplane";
 
 import { EXAMPLES } from "./examples.js";
 import { camera_block_text, json_blob, ordered_layers, scene_blob, svg_blob } from "./download.js";
-import type { DownloadFile } from "./download.js";
+import { attach_drag_input, attach_file_drop } from "./input.js";
 import {
-  camera_from_orbit, focal_from_slider, orbit_from_camera, pan_orbit, rotate_orbit, set_focal, set_roll, slider_from_focal,
-  zoom_orbit,
+  camera_from_orbit, focal_from_slider, orbit_from_camera, pan_orbit, rotate_orbit, set_focal, set_roll, zoom_orbit,
 } from "./orbit.js";
 import type { OrbitState } from "./orbit.js";
 import { IMG_MODE_THRESHOLD, Overlay } from "./overlay.js";
 import type { OverlayMode } from "./overlay.js";
-import { build_scene3d, dispose_scene3d } from "./scene3d.js";
-import { apply_camera_block } from "./threeCamera.js";
+import { build_scene3d } from "./scene3d.js";
+import { Stage3D, letterbox } from "./stage.js";
+import {
+  $, WarningsTable, build_layer_boxes, controls, describe_error, fill_examples, focal_text, roll_text, save,
+  set_error_panel, set_lens_sliders, status_text, umbra_count,
+} from "./ui.js";
 
 THREE.Object3D.DEFAULT_UP.set(0, 0, 1);
 
@@ -64,68 +70,24 @@ const state: State = {
   frames: [],
 };
 
-const $ = <T extends HTMLElement>(id: string): T => {
-  const el = document.getElementById(id);
-  if (el === null) throw new Error(`missing #${id}`);
-  return el as T;
-};
+const ui = controls();
+const { viewport, stage, canvas, examplesSelect, fileInput, focalInput, focalOut, rollInput, rollOut, view3d, hiddenLines, hiddenStyle } = ui;
 
-const viewport = $<HTMLElement>("viewport");
-const stage = $<HTMLDivElement>("stage");
-const canvas = $<HTMLCanvasElement>("gl");
-const examplesSelect = $<HTMLSelectElement>("examples");
-const fileInput = $<HTMLInputElement>("file");
-const focalInput = $<HTMLInputElement>("focal");
-const focalOut = $<HTMLOutputElement>("focal-out");
-const rollInput = $<HTMLInputElement>("roll");
-const rollOut = $<HTMLOutputElement>("roll-out");
-const layersBox = $<HTMLSpanElement>("layers");
-const view3d = $<HTMLInputElement>("view3d");
-const hiddenLines = $<HTMLInputElement>("hidden-lines");
-const hiddenStyle = $<HTMLSelectElement>("hidden-style");
-const statusLine = $<HTMLDivElement>("status");
-const errorPanel = $<HTMLDivElement>("error");
-const warningsBody = $<HTMLTableElement>("warnings").tBodies[0]!;
-
-// ---------------------------------------------------------------------------- three.js
-const renderer = new THREE.WebGLRenderer({ canvas, antialias: true, preserveDrawingBuffer: true });
-renderer.shadowMap.enabled = false; // normative (§5.4.0): shadows come only from the ported core
-renderer.setPixelRatio(window.devicePixelRatio || 1);
-const scene3 = new THREE.Scene();
-scene3.background = new THREE.Color(0xffffff);
-const camera3 = new THREE.PerspectiveCamera();
-let group3: THREE.Group | null = null;
-
+// ---------------------------------------------------------------------------- three.js and overlay
+const view = new Stage3D(canvas);
 const overlay = new Overlay(stage);
+const warnings = new WarningsTable(ui.warningsBody);
 
 // ---------------------------------------------------------------------------- layer checkboxes
-const layerBoxes = new Map<string, HTMLInputElement>();
-for (const id of LAYER_IDS) {
-  const label = document.createElement("label");
-  const box = document.createElement("input");
-  box.type = "checkbox";
-  box.checked = true;
-  box.dataset["layer"] = id;
-  box.addEventListener("change", () => {
-    if (box.checked) state.layersChecked.add(id);
-    else state.layersChecked.delete(id);
-    overlay.set_hidden_layers(state.layersChecked);
-    if (overlay.mode === "img") request_render();
-  });
-  label.append(box, document.createTextNode(id));
-  layersBox.append(label);
-  layerBoxes.set(id, box);
-}
+const layerBoxes = build_layer_boxes(ui.layersBox, LAYER_IDS, (id, checked) => {
+  if (checked) state.layersChecked.add(id);
+  else state.layersChecked.delete(id);
+  overlay.set_hidden_layers(state.layersChecked);
+  if (overlay.mode === "img") request_render();
+});
 
-// ---------------------------------------------------------------------------- errors
 function show_error(message: string | null): void {
-  errorPanel.hidden = message === null;
-  errorPanel.textContent = message ?? "";
-}
-
-function describe_error(e: unknown): string {
-  if (e instanceof SceneError) return `SceneError\nfield: ${e.field === "" ? "(document)" : e.field}\n${e.detail}`;
-  return e instanceof Error ? `${e.name}: ${e.message}` : String(e);
+  set_error_panel(ui.errorPanel, message);
 }
 
 // ---------------------------------------------------------------------------- loading
@@ -150,12 +112,7 @@ function load(name: string, make: () => Scene): boolean {
   state.orbit = orbit_from_camera(scene.camera, scene);
   state.full_svg_length = 0;
   state.frames = [];
-  if (group3 !== null) {
-    scene3.remove(group3);
-    dispose_scene3d(group3);
-  }
-  group3 = build_scene3d(scene, A);
-  scene3.add(group3);
+  view.replace_group(() => build_scene3d(scene, A));
   state.layersChecked = new Set(scene.output.layers);
   for (const [id, box] of layerBoxes) box.checked = state.layersChecked.has(id);
   overlay.set_hidden_layers(state.layersChecked);
@@ -187,12 +144,7 @@ function load_file(file: File): void {
   );
 }
 
-for (const ex of EXAMPLES) {
-  const opt = document.createElement("option");
-  opt.value = ex.name;
-  opt.textContent = ex.name;
-  examplesSelect.append(opt);
-}
+fill_examples(examplesSelect, EXAMPLES.map((e) => e.name));
 examplesSelect.addEventListener("change", () => {
   const ex = EXAMPLES.find((e) => e.name === examplesSelect.value);
   if (ex !== undefined) load(ex.name, () => load_scene(ex.data));
@@ -202,39 +154,24 @@ fileInput.addEventListener("change", () => {
   if (f !== undefined) load_file(f);
   fileInput.value = "";
 });
-window.addEventListener("dragover", (ev) => {
-  ev.preventDefault();
-  viewport.classList.add("dragover");
-});
-window.addEventListener("dragleave", (ev) => {
-  if (ev.relatedTarget === null) viewport.classList.remove("dragover");
-});
-window.addEventListener("drop", (ev) => {
-  ev.preventDefault();
-  viewport.classList.remove("dragover");
-  const f = ev.dataTransfer?.files?.[0];
-  if (f !== undefined) load_file(f);
-});
+attach_file_drop(viewport, load_file);
 
 // ---------------------------------------------------------------------------- sliders and buttons
 function sync_sliders(): void {
   if (state.orbit === null) return;
-  focalInput.value = String(slider_from_focal(state.orbit.focal_length_mm));
-  focalOut.value = `${state.orbit.focal_length_mm.toFixed(1)} mm`;
-  rollInput.value = String(state.orbit.roll_deg);
-  rollOut.value = `${state.orbit.roll_deg.toFixed(1)}°`;
+  set_lens_sliders(ui, state.orbit);
 }
 
 focalInput.addEventListener("input", () => {
   if (state.orbit === null) return;
   state.orbit = set_focal(state.orbit, focal_from_slider(Number(focalInput.value)));
-  focalOut.value = `${state.orbit.focal_length_mm.toFixed(1)} mm`;
+  focalOut.value = focal_text(state.orbit);
   request_render();
 });
 rollInput.addEventListener("input", () => {
   if (state.orbit === null) return;
   state.orbit = set_roll(state.orbit, Number(rollInput.value));
-  rollOut.value = `${state.orbit.roll_deg.toFixed(1)}°`;
+  rollOut.value = roll_text(state.orbit);
   request_render();
 });
 $<HTMLButtonElement>("reset").addEventListener("click", () => {
@@ -260,17 +197,6 @@ view3d.addEventListener("change", () => {
   request_render();
 });
 
-function save(file: DownloadFile): void {
-  const url = URL.createObjectURL(new Blob([file.text], { type: file.type }));
-  const a = document.createElement("a");
-  a.href = url;
-  a.download = file.filename;
-  document.body.append(a);
-  a.click();
-  a.remove();
-  setTimeout(() => URL.revokeObjectURL(url), 1000);
-}
-
 $<HTMLButtonElement>("dl-svg").addEventListener("click", () => {
   if (state.doc !== null) save(svg_blob(state.doc, state.layersChecked, state.sceneName, hidden_style()));
 });
@@ -290,57 +216,34 @@ $<HTMLButtonElement>("copy-camera").addEventListener("click", () => {
 });
 
 // ---------------------------------------------------------------------------- pointer input (state only)
-let pointer: { id: number; x: number; y: number; pan: boolean } | null = null;
-
-stage.addEventListener("contextmenu", (ev) => ev.preventDefault());
-stage.addEventListener("pointerdown", (ev) => {
-  if (state.orbit === null || pointer !== null) return;
-  pointer = { id: ev.pointerId, x: ev.clientX, y: ev.clientY, pan: ev.button === 2 || ev.shiftKey };
-  stage.setPointerCapture(ev.pointerId);
-  state.dragging = true;
-  ev.preventDefault();
+attach_drag_input(stage, {
+  ready: () => state.orbit !== null && state.scene !== null,
+  start: () => {
+    state.dragging = true;
+  },
+  drag: (dx, dy, pan, H_px) => {
+    if (state.orbit === null || state.scene === null) return;
+    state.orbit = pan
+      ? pan_orbit(state.orbit, dx, dy, H_px, state.scene.camera, state.scene.output.canvas_mm)
+      : rotate_orbit(state.orbit, dx, dy, H_px);
+    request_render();
+  },
+  end: () => {
+    state.dragging = false;
+    request_render(); // the resting frame (DOM overlay)
+  },
+  wheel: (deltaY) => {
+    if (state.orbit === null) return;
+    state.orbit = zoom_orbit(state.orbit, deltaY);
+    request_render();
+  },
 });
-stage.addEventListener("pointermove", (ev) => {
-  if (pointer === null || ev.pointerId !== pointer.id || state.orbit === null || state.scene === null) return;
-  const dx = ev.clientX - pointer.x, dy = ev.clientY - pointer.y;
-  pointer.x = ev.clientX;
-  pointer.y = ev.clientY;
-  if (dx === 0 && dy === 0) return;
-  const H_px = stage.clientHeight || 1;
-  state.orbit = pointer.pan
-    ? pan_orbit(state.orbit, dx, dy, H_px, state.scene.camera, state.scene.output.canvas_mm)
-    : rotate_orbit(state.orbit, dx, dy, H_px);
-  request_render();
-});
-function end_drag(ev: PointerEvent): void {
-  if (pointer === null || ev.pointerId !== pointer.id) return;
-  pointer = null;
-  state.dragging = false;
-  request_render(); // the resting frame (DOM overlay)
-}
-stage.addEventListener("pointerup", end_drag);
-stage.addEventListener("pointercancel", end_drag);
-stage.addEventListener("wheel", (ev) => {
-  if (state.orbit === null) return;
-  ev.preventDefault();
-  state.orbit = zoom_orbit(state.orbit, ev.deltaY);
-  request_render();
-}, { passive: false });
 
 // ---------------------------------------------------------------------------- layout (letterboxed to canvas_mm)
 function layout(): void {
   const aspect = state.scene ? state.scene.output.canvas_mm[0] / state.scene.output.canvas_mm[1] : 3 / 2;
-  const W = viewport.clientWidth - 16, H = viewport.clientHeight - 16;
-  let w = W, h = W / aspect;
-  if (h > H) {
-    h = H;
-    w = H * aspect;
-  }
-  w = Math.max(1, Math.floor(w));
-  h = Math.max(1, Math.floor(w / aspect));
-  stage.style.width = `${w}px`;
-  stage.style.height = `${h}px`;
-  renderer.setSize(w, h, false);
+  const [w, h] = letterbox(viewport, stage, aspect);
+  view.set_size(w, h);
 }
 new ResizeObserver(() => {
   layout();
@@ -386,61 +289,14 @@ function frame(): void {
   if (!img_mode) state.full_svg_length = svg.length;
   state.doc = doc;
   state.svg = svg;
-  if (view3d.checked) {
-    apply_camera_block(camera3, cam, scene.output.canvas_mm, state.A.scene_scale);
-    renderer.render(scene3, camera3);
-  }
-  update_warnings(doc);
+  if (view3d.checked) view.render(cam, scene.output.canvas_mm, state.A.scene_scale);
+  warnings.update(doc);
   state.timings.core_ms = t1 - t0;
   state.timings.dom_ms = t2 - t1;
   state.timings.mode = overlay.mode;
   state.frames.push({ core_ms: t1 - t0, dom_ms: t2 - t1, mode: overlay.mode, dragging: state.dragging, svg_bytes: svg.length });
   if (state.frames.length > 500) state.frames.shift();
-  statusLine.textContent =
-    `${state.sceneName}: stage A ${state.timings.stage_a_ms.toFixed(1)} ms (cached)\n` +
-    `core ms ${state.timings.core_ms.toFixed(1)} · dom ms ${state.timings.dom_ms.toFixed(1)} · overlay ${overlay.mode}\n` +
-    `points ${Object.keys(doc.points).length} · edges ${doc.edges.length} · rays ${ray_count(doc)}` +
-    (doc.umbra !== undefined ? ` · umbra pieces ${umbra_count(doc)}` : "") + "\n" +
-    `lights ${scene.lights.map((l) => l.id).join(", ")} · receivers ${scene.receivers.map((r) => r.id).join(", ")}\n` +
-    `camera (${cam.position.map((x) => x.toFixed(2)).join(", ")}) → (${cam.target.map((x) => x.toFixed(2)).join(", ")}), ` +
-    `f ${cam.focal_length_mm.toFixed(1)} mm, roll ${cam.roll_deg.toFixed(1)}°`;
-}
-
-/** Construction rays of every light (`constructions` with N ≥ 2 lights, else `construction`). */
-function ray_count(doc: GeometryDocument): number {
-  const blocks = doc.constructions !== undefined ? Object.values(doc.constructions) : [doc.construction];
-  return blocks.reduce((n, b) => n + b.rays.length, 0);
-}
-
-/** Umbra pieces of the frame (`null` polygons — a drag frame, `umbra = false` — count as none). */
-function umbra_count(doc: GeometryDocument): number {
-  return (doc.umbra ?? []).reduce((n, u) => n + (u.polygons?.length ?? 0), 0);
-}
-
-let lastWarnings = "";
-function update_warnings(doc: GeometryDocument): void {
-  const key = JSON.stringify(doc.warnings);
-  if (key === lastWarnings) return;
-  lastWarnings = key;
-  warningsBody.replaceChildren(
-    ...doc.warnings.map((w) => {
-      const tr = document.createElement("tr");
-      for (const text of [w.code, w.ids.join(", "), w.message]) {
-        const td = document.createElement("td");
-        td.textContent = text;
-        tr.append(td);
-      }
-      return tr;
-    }),
-  );
-  if (doc.warnings.length === 0) {
-    const tr = document.createElement("tr");
-    const td = document.createElement("td");
-    td.colSpan = 3;
-    td.textContent = "none";
-    tr.append(td);
-    warningsBody.append(tr);
-  }
+  ui.statusLine.textContent = status_text(state.sceneName, state.timings, overlay.mode, doc, scene, cam);
 }
 
 // ---------------------------------------------------------------------------- start
@@ -471,7 +327,7 @@ function update_warnings(doc: GeometryDocument): void {
     }
   },
   /** The names of the 3D view's objects (`<object id>`, `light:<id>`, `receiver:<id>`, `outline:<id>`, `grid:<id>`). */
-  get scene3d_names() { return group3 === null ? [] : group3.children.map((c) => c.name).filter((n) => n !== ""); },
+  get scene3d_names() { const g = view.group; return g === null ? [] : g.children.map((c) => c.name).filter((n) => n !== ""); },
   get doc_summary() {
     const d = state.doc;
     if (d === null) return null;
