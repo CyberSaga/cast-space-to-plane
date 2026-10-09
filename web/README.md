@@ -1,7 +1,7 @@
 # castplane web UI
 
 The three.js web UI of the castplane TypeScript port (contract `docs/ARCHITECTURE.md` §5.4.10). Load a scene JSON,
-look at it in 3D, drag the camera, and see the perspective shadow construction drawing that the ported core
+look at it in 3D, move the board that defines the camera, and see the perspective shadow construction drawing that the ported core
 (`ts/`) writes for that camera, laid exactly over the 3D view. It is static (no server, no network access at
 runtime). The examples are bundled at build time.
 
@@ -52,8 +52,8 @@ drag):
   `fov`), so the WebGL image and the SVG overlay are two renderings of one castplane camera. Three.js casts no
   shadows (`renderer.shadowMap.enabled = false`). Every shadow you see comes from the core.
 - **Modules**: `src/main.ts` keeps the page state, loading, the wiring and the render loop. `src/plane.ts` is plane
-  mode's session (the rig of `src/rig.ts`, undo, pivot, readouts) and the right pane's gesture state machine (pure,
-  unit-tested). `src/stage.ts` is one three.js view (`Stage3D`, plus `letterbox` for the canvas size), `src/input.ts`
+  mode's session (the rig of `src/rig.ts`, undo, pivot, readouts; pure, unit-tested). The drawing pane has no input
+  handler (below). `src/stage.ts` is one three.js view (`Stage3D`, plus `letterbox` for the canvas size), `src/input.ts`
   handles the page-wide file drop, and `src/ui.ts` drives the controls and the side panel (layer boxes, examples menu,
   sliders, readouts, error panel, warnings table, status line, `save` for downloads). `src/orbit.ts` (the M7 camera)
   is kept with its tests; only its focal-slider mapping is still used.
@@ -62,21 +62,24 @@ drag):
   `D` behind the board and is computed (read-only): `E = P − (g + D)·f + L`, with `L` the pan. On load the scene's
   camera is turned into this state (pivot = scene centre, `D` = the `picture_plane` distance or 4 m). `R = g + D` is
   clamped into 0.8–40 m and `D` into 0.5–12 m, with a notice when a clamp changes the picture.
-  - Drawing pane (right): left drag / one finger orbits the board about the pivot (the orange ring: `−Δx·0.32°` about
-    `z`, the elevation by `−Δy·0.32°`, clamped at ±89.9°; dragging down raises the eye). The wheel or a pinch moves
-    the board and the eye together (the blue arrow: `R ← R·exp(0.001·ΔY)`, **not** the focal length). A right drag, a
-    Shift drag or a two-finger move pans (the pivot stays). Each gesture is one undo step at release, and a wheel
-    burst (events ≤ 400 ms apart) is one step.
-  - Observer pane (left, with *旁觀視角*): drag the orange dashed ring to orbit (lock-horizontal by default, free roll
+  - Drawing pane (right) is **read-only** (D79, spec-v0.2 §5.9): any drag on it (left, right or middle button,
+    Shift, touch with one or two fingers, pen) and the wheel do nothing, quietly: no error, no hint, no undo step, no
+    camera change, no grab cursor. It does not call `preventDefault` on wheel or touch events (the page scrolls
+    natively; `touch-action` is the browser default on `#stage` and `none` only on `#observer`) and does not suppress
+    the context menu. A file drop still works anywhere on the page. The former mappings (left drag = ring, wheel or
+    pinch = arrow, right drag / Shift drag / two-finger move = pan) are removed.
+  - Observer pane (left, with *旁觀視角*) is where the board is moved: drag the orange dashed ring to orbit (lock-horizontal by default, free roll
     with *鎖水平* off), and drag the blue arrow's tip (*板子距離*) to move the board along `f`. Hit radius: 14 px
     for a mouse, 26 px for touch, 0.8× for the ring; the tip wins. The black eye is never a handle. Anywhere else
-    the drag orbits the observer camera.
+    the drag orbits the observer camera; the wheel or a pinch zooms the observer camera. With the switch off no drag or
+    wheel changes the camera: use the sliders, views, equation field, undo and 重設.
   - *吸附* (default on; Alt suspends it): within 5° of an axis the board snaps to it exactly, and an axis-parallel
     board's plane coordinate snaps to 0.1 m while the arrow is dragged.
   - Sliders: focal length (logarithmic, 8–400 mm), `D` (0.5–12 m, the board stays and the eye moves), roll (±180°
     about the line of sight; the eye stays). None of them is an undo step.
   - *旋轉中心*: 場景中心, or 點選物體 then click an object in the observer pane. The eye moves onto its axis (the pan
-    is cleared). This is not an undo step.
+    is cleared). This is not an undo step. The pan `(a, b)` is no longer user-editable: it comes from the load rule
+    (an eye off the pivot's axis) and is cleared by an object pick and by a view.
   - Views 前 後 左 右 上 下 (`f = +y, −y, +x, −x, −z, +z`; pan and roll cleared).
   - The plane-equation field always shows the current plane (`y = 2.00`, `0.707x + 0.707y = 1.200`). Type a linear
     equation in `x`, `y`, `z` and press Enter or 「套用」, or use the quick buttons `x=1`, `y=2`, `y=−3`, `z=3`,
@@ -84,7 +87,7 @@ drag):
   - 復原 (50 steps) and 重設 (the loaded state).
   - Readouts under the panes: the plane, `g` and `R`, `E`, `D`, pan and roll, the frame size in metres, and
     "這次拖動右窗畫面變動" (the largest image displacement of all object vertices since the start of the last drag, in
-    frame mm). A notice appears when the eye is below the ground.
+    frame mm; the drag is a ring or arrow drag in the observer pane). A notice appears when the eye is below the ground.
 
   Until the first change after a load or 重設, the core renders the scene's own camera, so the document and the
   downloads equal the CLI's. From then on it renders the rig's explicit `picture_plane` block (`position` plus
@@ -93,10 +96,13 @@ drag):
   animation frame where something changed, the frame runs `project_scene` → `compose` → `write_svg` (all six
   layers) against the cached stage A. Pointer events only update the state and at most one core render runs per
   frame (the latest camera wins). The layer checkboxes hide groups with CSS (`hide-<layer>` classes). The
-  *3D view* checkbox hides the WebGL canvas. The *Hidden lines* checkbox (contract §5.4.10, phase 2) is
-  initialised from `output.hidden_lines` and passed as `hidden_lines` to `compose`; the *Hidden style* select
-  (`dashed` / `omit`, §5.1.8; disabled while the checkbox is off) is initialised from `output.hidden_style` and passed
-  to `write_svg`. During a drag the frames are composed with hidden lines off and, with two or more lights,
+  *3D view* checkbox hides the WebGL canvas (hidden, it is not rendered). **The toolbar toggles are page-level UI state
+  (D79, spec-v0.2 §2.1):** at page start `horizon`, `objects`, `form_shadow`, `cast_shadow`, `labels` and *Hidden
+  lines* are checked, and `construction` (with its mirror 作圖線) and *3D view* are unchecked (the canvas is hidden
+  from the first frame); a scene or example load keeps whatever you set and no longer reads `output.layers` or
+  `output.hidden_lines`. The *Hidden lines* checkbox (contract §5.4.10, phase 2) is passed as `hidden_lines` to
+  `compose`; the *Hidden style* select (`dashed` / `omit`, §5.1.8; enabled iff *Hidden lines* is checked) is
+  initialised from `output.hidden_style` and passed to `write_svg`. During a drag the frames are composed with hidden lines off and, with two or more lights,
   `project_scene(..., umbra = false)` (§5.4.11 allows both: each switch-off document is a contract document); the
   resting frame recomputes them. Stage A is computed once per loaded scene and cached; every frame is the
   camera-only path `project_scene` → `compose` → `write_svg`.
@@ -117,7 +123,7 @@ drag):
 - **Observer view** (M9, contract §5.6; `src/observer.ts` pure and unit-tested, `src/observer3d.ts` the three.js
   pane). The toolbar switch *旁觀視角* (off by default, remembered per browser in `localStorage`) opens a second
   three.js view left of the drawing pane, at equal width; below 880 px of page width the two panes stack, the
-  observer on top. With the switch off the page is the M7 page: no second WebGL context is created and nothing is
+  observer on top. With the switch off there is only the drawing pane: no second WebGL context is created and nothing is
   computed for it. The observer shows, from outside, the drawing camera's eye **E** (read-only, with its coordinates),
   the board (the picture plane at distance `D` in front of the eye: 4 m, or the `picture_plane` distance of the
   scene's camera clamped into 0.5–12 m), the frame on it (the canvas rectangle unprojected with the core's
@@ -126,7 +132,7 @@ drag):
   equation, and with *視線* (default on) the vertex rays of the first object: sight lines `E → P` with their crossings
   `P′` on the board, the light rays `L → S` of its vertices, the sight lines `E → S` and their crossings `S′`. The
   drawing on the frame follows the layer checkboxes; SVG arcs are drawn with 32 segments, ellipses with 72. Every
-  drawing-camera change (drag, wheel, sliders, example load, 重設) updates it in the same frame. In the
+  drawing-camera change (handle drag, sliders, views, equation, example load, 重設) updates it in the same frame. In the
   observer pane a left drag on blank space orbits the observer camera (0.4°/px around, 0.3°/px up, elevation −5°…85°; the right and
   middle mouse buttons do nothing), the wheel or a two-finger pinch zooms (4–60 m); none of this touches the drawing.
   *旁觀視角取景* frames it (keeps the direction, targets the centroid of E, Q, the scene centre and its ground point,
@@ -242,7 +248,7 @@ The script needs a Playwright installed outside the repository; it is not a depe
 - the three downloads are saved;
 - the error panel appears for a non-JSON file and for an invalid scene;
 - phase 2: an example that fails to load (the path-only `mesh_demo`) is reported and loaded from its Python
-  expansion instead; `wall_and_ground` loads with *Hidden lines* on and `dashed` (from the scene), its overlay has
+  expansion instead; `wall_and_ground` renders with *Hidden lines* on (the default) and `dashed` (from the scene), its overlay has
   the `objects.hidden` sub-groups with the dashed stroke, `omit` empties them, switching off removes them, and the
   3D view has the ground plane with its grid and the wall as a plate with an outline; `mesh_demo` shows the house
   mesh and the tank; `two_lights` has one helper per light, the per-light construction blocks and umbra pieces at
@@ -263,9 +269,9 @@ The script needs a Playwright installed outside the repository; it is not a depe
   - the ring drag changes `f` and keeps `g`, `D`, `|E − P|`;
   - the arrow tip wins the hit test, and its drag changes `g` only (the eye moves along `f`);
   - the hit test never returns the eye, and a drag on it orbits the observer only;
-  - the wheel scales `R` by `exp(0.001·ΔY)` without touching the focal length, and a burst is one undo step;
-  - right and Shift drags pan and keep the pivot, `f`, `g`;
-  - a left drag in the drawing pane turns `f` by `−Δx·κ` about `z`;
+  - any drag (buttons 0, 1, 2, Shift, touch) or wheel on the drawing pane leaves the rig, the observer, the undo
+    stack and the readouts unchanged, and wheel / context-menu events are not default-prevented (D79);
+  - the toolbar defaults hold at page start and survive a scene load (D79);
   - the roll slider keeps the eye, and `up` is written iff needed;
   - the D slider keeps the board;
   - the six views give exact axes;
@@ -276,7 +282,7 @@ The script needs a Playwright installed outside the repository; it is not a depe
   - the drawing is identical with the observer on and off for an edited camera;
   - Download scene writes the `picture_plane` form and reloads to the same SVG;
   - 900 random rig states render finite numbers;
-  - review fixes: a wheel during a right-pane drag is ignored (one undo step); a drag held across a scene load leaves
+  - review fixes: a drag held across a scene load leaves
     the new scene alone; an object id with `:` is pickable; switching to object pivot mode without a pick keeps the
     pan; blurring a rejected equation clears its error; the D slider's thumb shows the clamped value after a drag;
     hovering the arrow tip shows the pointer cursor; the observer labels do not overlap.

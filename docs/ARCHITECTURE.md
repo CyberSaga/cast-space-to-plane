@@ -4210,6 +4210,23 @@ and the hidden-run SVG groups (§5.1.8). Nothing an M4–M6 case needs lies beyo
   (visibly so after loading a smaller scene: `benchmark_100.json`'s drawing over `basic`). `style.css` adds
   `#stage .overlay[hidden] { display: none; }`; `web/scripts/smoke.mjs` checks the computed `display` after loading
   `basic` behind the benchmark drag. No overlay text, document or download changes.
+- **[decision, implementation] (M10, D79) Page-level toolbar defaults amend §5.4.10's load-time toggle behaviour.**
+  §5.4.10 is amended by reference, its text unchanged. It initialises the six layer checkboxes from `scene.output.layers`
+  on every load (`layersChecked = new Set(scene.output.layers)`), and phase 2 sets the *Hidden lines* checkbox from the
+  scene (`scene.output.hidden_lines === true`). Both are replaced: the layer checkboxes, *Hidden lines* and *3D view* are
+  **page-level UI state** (spec-v0.2 §2.1). At page start `horizon`, `objects`, `form_shadow`, `cast_shadow`, `labels`
+  (the boxes of `#layers`) and *Hidden lines* (`#hidden-lines`) are checked; the `construction` layer box and the
+  作圖線 box that mirrors it (`#construction-lines`, §5.7.10 notes) and *3D view* (`#view3d`) are unchecked. A scene or
+  example load changes none of them, and `scene.output.layers` / `scene.output.hidden_lines` no longer drive the
+  checkboxes (they stay scene-file fields, used as before by the CLI). *Download scene* writes the *Hidden lines* box
+  as `output.hidden_lines` and the *Hidden style* select as `output.hidden_style`; `output.layers` is kept as loaded
+  (`scene_blob`, `web/src/download.ts`). *Download SVG* uses the checked layers and *Download JSON* / *Download
+  scene* the *Hidden lines* box, as in §5.4.10. *Hidden style* stays disabled iff *Hidden lines* is unchecked (its initial value from
+  `output.hidden_style` is unchanged). With *3D view* unchecked the WebGL canvas is hidden and not rendered, from the
+  first frame (the initial state is consistent with the toggle: no `Stage3D.render` call while it is off). The M9
+  observer switch keeps its default (off). A default drawing therefore shows the
+  finished construction without the construction layer. Layer visibility is a CSS class on the overlay (or the written
+  subset in `<img>` mode), not a different document, so no document byte and no conformance case changes.
 
 ### 5.5 M8 — STEP import (spec §9 row "STEP", spec §10 M8) — a loader, outside the core
 
@@ -4864,7 +4881,7 @@ LGPL-2.1；確定性只到 OCC 版本；頂點重建誤差 1.4e-9 mm；OCP 8 的
 replaces nothing in it). Every convention of the §5 preface applies unchanged (carried-over constraints, **[decision]**
 markers, renumbered references). In §5.6–§5.7 "spec-v0.2 §N" names a section of `docs/spec/spec-v0.2.md`, "spec §N"
 still names `docs/spec/spec-v0.1.md`, and an unprefixed "§N" is this contract. The plain-language log is
-`docs/DECISIONS.md` D71–D78; the implementation order is `docs/PLAN-v3.md`. The behaviour reference
+`docs/DECISIONS.md` D71–D79 (D79 added in M10); the implementation order is `docs/PLAN-v3.md`. The behaviour reference
 `docs/demo/picture_plane_demo.html` is **not** normative: where it and this contract differ, this contract wins (the
 known differences are listed in §5.7.15); where it and spec-v0.2 differ, spec-v0.2 wins.
 
@@ -5585,3 +5602,41 @@ through the port's `resolve_picture_plane` and draws its readout camera through 
   it (2 px gap). The default state of `basic` no longer draws `D = 4.00 m` over 板子距離 nor 旋轉中心 over the `g`
   label. Tests: `web/test/plane.test.ts` (wheel in a gesture, gesture across a load, pivot mode keeps the pan, tagging,
   page ids, label layout on three examples and two aspects) and the smoke script's review-fix checks.
+- **[decision, implementation] (M10, D79) The drawing pane is read-only; amends §5.7.8 items 2, 5, 6, 13, §5.7.9,
+  §5.7.10, §5.7.13 and D78.** Spec-v0.2 §5.9 and D79 supersede the right-pane input of §5.7.8 and §5.7.9 (in
+  particular the §5.7.9 bullet "Right (drawing) pane in M10" and §5.7.8 items 2, 5 and 6 are superseded); the existing
+  text above is unchanged and is read as follows. (1) **No input on the drawing pane (`#stage`).** No pointer event
+  (any button, Shift, touch with one or two fingers, pen) and no wheel event on `#stage` changes the rig, the observer
+  camera, the undo stack, a readout, a notice or the cursor: §5.7.8 item 2 (right-pane left drag), item 5 (wheel / pinch)
+  and item 6 (pan by right drag, Shift drag, two-finger move) are **removed as user input**; `RightPaneGesture`, the
+  `PlaneSession` wheel burst and the `orbitRightPane`, `twoFinger` and `pan` mappings are not attached to any element
+  (the pure `rig.ts` functions may remain for the load rule and tests; the contract of their arithmetic is unchanged).
+  "Quietly": no error, no hint, no grab cursor, no `preventDefault`, no `stopPropagation` on `#stage` for pointer, wheel
+  or touch events, `touch-action` on `#stage` is the browser default (it stays `none` on `#observer`), so the page scrolls
+  natively, and the context menu on `#stage` is no longer suppressed. The page-wide file drop of §5.4.10 is unaffected.
+  (2) **Where the board is manipulated.** Only in the left pane (ring, arrow, empty-space orbit of the observer camera,
+  wheel / pinch zoom of the observer camera, object pick for the pivot; §5.7.9 left-pane text and the hit order stand)
+  and by the toolbar and panel controls: the focal-length, `D` and roll sliders, the six views, the equation field,
+  undo, reset, lock-horizontal and the pivot selector. With the observer switch off no drag or wheel can change the
+  camera; the controls above still can. The M9 "switch-off identity" (§5.6.0, the §5.4 M9 / M10 note and the §5.6
+  notes: "with it off the page is (exactly) the §5.4.10 page") is read as concerning layout, render loop and outputs
+  (the drawing, `doc`, `svg` and the downloads) only, not input: the §5.4.10 drag / wheel mapping on the drawing pane
+  is gone with the switch on or off. (3) **Pan `(a, b)` is no longer user-editable.** It comes from the load rule
+  (§5.7.7) and is kept by ring, arrow, `D`, roll and equation changes, and cleared by a view button and by an explicit
+  object pick (§5.7.8 items 10, 11), as before; D78's three distinctions (the wheel is not the focal length; panning is
+  not a pivot change; roll is not free roll) still hold, but the wheel and pan halves now describe only the arrow and the
+  load-rule pan. (4) **Undo (item 13).** The steps are: a ring or arrow drag that changed the state (settled at release;
+  a press without change records nothing), a view button, an equation apply, reset, and switching lock-horizontal from
+  off to on. "Right-pane left / right drag", "a two-finger gesture" and "one wheel burst" are no longer steps. (5)
+  **Readouts (§5.7.10).** "這次拖動右窗畫面變動" is measured over the current or last ring / arrow drag (the former "a
+  drag in either pane, a two-finger gesture, or a wheel burst" is reduced to that); the label text is unchanged.
+  (6) **Tests (§5.7.13).** The rows "right-pane left drag", "right-pane wheel", "right drag and Shift drag" and
+  "right-pane two fingers" are replaced by one row: any drag (buttons 0, 1, 2, Shift, touch with one and two fingers, pen)
+  or wheel on `#stage` leaves the rig, the observer camera, the undo stack and the readouts unchanged and throws no
+  error, shows no notice, and `defaultPrevented` is false for wheel and touch events and for the context menu. The row
+  "orbit after pan" starts from a pan produced by the load rule. A further row pins the toolbar defaults of the §5.4
+  note above (state at page start; unchanged by a load; *3D view* off means a hidden, un-rendered canvas). The smoke
+  script's right-pane checks (wheel scales `R`, right and Shift drags pan, left drag turns `f`) become the negative
+  check of the new row. (7) **D78** keeps its distinctions; its mapping "右窗左拖＝圓環、滾輪＝箭頭、右拖＝平移" is
+  withdrawn (docs/DECISIONS.md D79 amends it by reference). §5.4.10's input mapping for the drawing pane was already
+  superseded by §5.7.9, and now has no replacement on that pane.

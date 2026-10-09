@@ -1,5 +1,5 @@
 /** Tests of the plane-mode rig (`web/src/rig.ts`; spec-v0.2 §7.1 web rows, contract §5.7.13): invariants, ring,
- * arrow, wheel, pan, roll, sliders, views, pivot, undo, the load rule and random frames. Picture checks go through the
+ * arrow, the pan state, roll, sliders, views, pivot, undo, the load rule and random frames. Picture checks go through the
  * port's `camera_matrix` with `toTargetCameraBlock` (the equivalent target form) or `toCameraBlock` (the
  * `picture_plane` form the port resolves). */
 
@@ -17,10 +17,10 @@ import type { LensBase } from "../src/orbit.js";
 import {
   D_MAX_M, D_MIN_M, KAPPA_DEG_PER_PX, PITCH_LIMIT_DEG, R_MAX_M, R_MIN_M, UNDO_MAX, VIEWS, UndoStack, applyPlane,
   arrowDrag, arrowLength, arrowScreenVector, arrowTip, basis, bboxCentre, deltaText, equation, eye, fixed, foot,
-  frameMetres, frameOf, fromCamera, fromOrbitState, measureRef, orbitFree, orbitLockLevel, orbitRightPane, orbitRing,
-  pan, pictureDelta, pinch, planeConst, planeToRig, plane_equation, readouts, resolvePicturePlane, ringPoint, ringRadius,
-  ringSign, rollOfFrame, setD, setFocal, setLockLevel, setPivot, setR, setRoll, sixView, snapToAxis, sync,
-  toCameraBlock, toTargetCameraBlock, twoFinger, wheel, wrap_deg,
+  frameMetres, frameOf, fromCamera, fromOrbitState, measureRef, orbitFree, orbitLockLevel, orbitRing,
+  pictureDelta, planeConst, planeToRig, plane_equation, readouts, resolvePicturePlane, ringPoint, ringRadius,
+  ringSign, rollOfFrame, setD, setFocal, setLockLevel, setPivot, setRoll, sixView, snapToAxis, sync,
+  toCameraBlock, toTargetCameraBlock, wrap_deg,
 } from "../src/rig.js";
 import type { RigState, RingGrab, ViewName } from "../src/rig.js";
 
@@ -32,12 +32,12 @@ const scene_file = (...parts: string[]): Scene => load_scene(JSON.parse(readFile
 
 const BASE: LensBase = { frame_mm: [36, 24], shift_mm: [0, 0], near_m: 0.05 };
 const CANVAS: Vec2 = [360, 240]; // s = 10 canvas mm per frame mm
-const H_PX = 480; // right-pane height: 2 px per canvas mm
 const P0: Vec3 = [0.15, 5.9, 0.9];
-const KAPPA = (KAPPA_DEG_PER_PX * Math.PI) / 180;
 
 /** The demo's initial state: plane y = 2, eye straight behind the pivot, D = 4, focal 20 mm. */
 const initial = (P: Vec3 = P0): RigState => ({ f: [0, 1, 0], up: null, g: P[1] - 2, D: 4, a: 0, b: 0, roll_deg: 0, focal: 20, P });
+/** `rig` with the pan `(a, b)` (m, pre-roll basis): the state the load rule gives an off-axis scene camera. */
+const withPan = (rig: RigState, a: number, b: number): RigState => ({ ...rig, a, b });
 
 const add = (p: readonly number[], q: readonly number[]): Vec3 => [p[0]! + q[0]!, p[1]! + q[1]!, p[2]! + q[2]!];
 const sub = (p: readonly number[], q: readonly number[]): Vec3 => [p[0]! - q[0]!, p[1]! - q[1]!, p[2]! - q[2]!];
@@ -346,12 +346,13 @@ test("ring snapping: within 5° of an axis f becomes that axis exactly; Alt / sw
   assert.equal(snapToAxis(unit([1, 1, 0]), null).snapped, false);
 });
 
-test("top view reachable: dragging down in the right pane clamps at 89.9°, then snaps to exactly −z", () => {
+test("top view reachable: a ring drag clamps the elevation at 89.9°, then snaps to exactly −z", () => {
   const rig0 = initial();
-  const noSnap = orbitRightPane(rig0, 0, 1e5, false);
+  const grab0 = grabAt(rig0, Math.PI / 2, observer());
+  const noSnap = [orbitLockLevel(rig0, 0, 1e5, grab0, false), orbitLockLevel(rig0, 0, -1e5, grab0, false)].find((r) => r.f[2] < 0)!;
   close(Math.asin(-noSnap.f[2]), (PITCH_LIMIT_DEG * Math.PI) / 180, 1e-12, "clamped at 89.9°");
   assert.equal(PITCH_LIMIT_DEG, 89.9);
-  const top = orbitRightPane(rig0, 0, 1e5, true);
+  const top = [orbitLockLevel(rig0, 0, 1e5, grab0, true), orbitLockLevel(rig0, 0, -1e5, grab0, true)].find((r) => r.f[2] < 0)!;
   assert.deepEqual(top.f, [0, 0, -1]);
   pivotCentred(top, 1e-7, "top view");
   close3(sync(top).E, add(rig0.P, [0, 0, sync(rig0).R]), 1e-9, "the eye above the pivot");
@@ -390,7 +391,7 @@ test("ring, free roll: up stays ⟂ f, g and |E − P| unchanged, the pivot cent
   assert.equal(orbitRing(rig, 5, 5, grabAt(rig, 0, obs)).up !== null, true);
 });
 
-// ------------------------------------------------------------------------------------------------ arrow, wheel, pinch
+// ------------------------------------------------------------------------------------------------ arrow
 
 /** Image height (canvas mm) of a vertical column of height 1.8 m one metre beyond the pivot. */
 function columnHeight(rig: RigState): number {
@@ -460,140 +461,33 @@ test("arrow snapping and clamping: the plane coordinate on the 0.1 m grid (not w
   close(arrowDrag(tilted, v, 0, -10, true).g, tilted.g - 0.25, 1e-12, "tilted: no snap");
 });
 
-test("right-pane wheel: R scales by exp(0.001·ΔY), f and the plane normal unchanged, clamped; a burst is one undo step", () => {
-  const rig0 = initial();
-  const R0 = rig0.g + rig0.D;
-  const r1 = wheel(rig0, 100);
-  close(r1.g + r1.D, R0 * Math.exp(0.1), 1e-12, "R");
-  assert.deepEqual(r1.f, rig0.f);
-  assert.equal(r1.D, rig0.D);
-  assert.deepEqual(toCameraBlock(r1, BASE).picture_plane.normal, [0, 1, 0]);
-  pivotCentred(r1, 1e-7, "wheel");
-  close(wheel(rig0, 1e6).g + rig0.D, R_MAX_M, 1e-12, "clamp max");
-  close(wheel(rig0, -1e6).g + rig0.D, R_MIN_M, 1e-12, "clamp min");
-  close(setR(rig0, 3).g, 3 - rig0.D, 1e-15, "setR");
-  // one burst = one step; a pause > 400 ms opens another
-  const undo = new UndoStack();
-  let rig = rig0;
-  for (const t of [0, 100, 200, 350, 700]) {
-    const next = wheel(rig, -50);
-    undo.wheel(rig, next, t);
-    rig = next;
-  }
-  assert.equal(undo.size, 1);
-  const next = wheel(rig, -50);
-  undo.wheel(rig, next, 1101);
-  assert.equal(undo.size, 2);
-  // a wheel at the clamp changes nothing and records nothing
-  const atMin = setR(rig0, R_MIN_M);
-  undo.wheel(atMin, wheel(atMin, -100), 5000);
-  assert.equal(undo.size, 2);
-  const back = undo.undo(next)!;
-  assert.deepEqual(back, rig);
-  close(undo.undo(back)!.g, rig0.g, 0, "undo restores the burst start");
-});
+// ------------------------------------------------------------------------------------------------ the pan state (a, b)
 
-test("wheel burst: a press without movement or a no-op view inside the burst does not split it", () => {
-  const rig0 = initial();
-  for (const interrupt of ["press", "view"] as const) {
-    const undo = new UndoStack();
-    const r1 = wheel(rig0, -50);
-    undo.wheel(rig0, r1, 0);
-    if (interrupt === "press") {
-      undo.begin(r1);
-      assert.equal(undo.end(r1), false, "press without movement records nothing");
-    } else {
-      assert.equal(undo.record(r1, { ...r1 }), false, "a view that changes nothing records nothing");
-    }
-    const r2 = wheel(r1, -50);
-    assert.equal(undo.wheel(r1, r2, 100), false, `${interrupt}: still the same burst`);
-    assert.equal(undo.size, 1, `${interrupt}: one step`);
-    // a recorded step does close the burst
-    const r3 = setR(r2, 5);
-    assert.equal(undo.record(r2, r3), true);
-    assert.equal(undo.wheel(r3, wheel(r3, -50), 200), true, `${interrupt}: a new burst after a recorded step`);
-    assert.equal(undo.size, 3);
-  }
-});
-
-test("right-pane two fingers: pinch scales R by d₀/d and the move pans; the gesture is one undo step", () => {
-  const rig0 = initial();
-  const R0 = rig0.g + rig0.D;
-  const p = pinch(rig0, 100, 200);
-  close(p.g + p.D, R0 / 2, 1e-12, "pinch out halves R");
-  close(pinch(rig0, 5, 5).g, rig0.g, 1e-15, "finger distances below 10 px");
-  const undo = new UndoStack();
-  undo.begin(rig0);
-  let rig = rig0;
-  for (const [d, cx, cy] of [[120, 3, 1], [150, 8, 4], [200, 20, -10]] as const) {
-    rig = twoFinger(rig0, 100, d, [300, 200], [300 + cx, 200 + cy], H_PX, BASE.frame_mm[1]);
-  }
-  close(rig.g + rig.D, R0 / 2, 1e-12, "R");
-  // the midpoint moved (20, −10) px: the pivot's image moves by (10, 5) canvas mm (2 px per mm, v up)
-  const pc = image(rig, rig.P)!;
-  close(pc[0], 10, 1e-9, "pivot u");
-  close(pc[1], 5, 1e-9, "pivot v");
-  assert.ok(undo.end(rig));
-  assert.equal(undo.size, 1);
-});
-
-// ------------------------------------------------------------------------------------------------ right-pane drag and pan
-
-test("right-pane left drag: f turns about z by −Δx·κ; dragging down raises the eye; g, R unchanged; horizon level", () => {
-  const rig0 = initial();
-  const r1 = orbitRightPane(rig0, 50, 0, false);
-  const ang = -50 * KAPPA;
-  close3(r1.f, [-Math.sin(ang), Math.cos(ang), 0], 1e-12, "f");
-  // the scene follows the finger: the image of a point right of the pivot moves right
-  const X = add(rig0.P, [0, -1, 0]); // nearer than the pivot: it moves with the finger
-  assert.ok(image(r1, X)![0] > image(rig0, X)![0]);
-  const down = orbitRightPane(rig0, 0, 30, false);
-  assert.ok(sync(down).E[2] > sync(rig0).E[2], "dragging down raises the eye");
-  close(Math.asin(down.f[2]), -30 * KAPPA, 1e-12, "pitch");
-  for (const r of [r1, down, orbitRightPane(rig0, 40, -25, false)]) {
-    assert.equal(r.g, rig0.g);
-    close(dist(sync(r).E, r.P), sync(rig0).R, 1e-9, "R");
-    close(sync(r).r[2], 0, 1e-12, "horizon level (right vector horizontal)");
-    pivotCentred(r, 1e-7, "right-pane orbit");
-  }
-  assert.deepEqual(orbitRightPane(rig0, 0, 0), rig0, "a press without movement changes nothing");
-  // free roll: about the frame's u and r of the pointer-down state
-  const free = setLockLevel(setRoll(rig0, 30), false);
-  const rf = orbitRightPane(free, 10, 0, false);
-  const fr = frameOf(free);
-  const want = add(add(mul(free.f, Math.cos(-10 * KAPPA)), mul(cross(fr.u, free.f), Math.sin(-10 * KAPPA))), mul(fr.u, dot(fr.u, free.f) * (1 - Math.cos(-10 * KAPPA))));
-  close3(rf.f, want, 1e-12, "free: about the frame up");
-  close(dot(rf.up!, rf.f), 0, 1e-12, "free: up ⟂ f");
-});
-
-test("right drag and Shift drag (pan): f, g, c, P unchanged; the eye moves in the board's plane; the scene follows the finger", () => {
+test("pan state (a, b): E = P − R·f + a·r₀ + b·u₀; the eye moves in the board's plane; the pivot's image moves by −L·focal/R", () => {
   for (const roll of [0, 35]) {
     const rig0 = setRoll(initial(), roll);
-    const r1 = pan(rig0, 24, -16, H_PX, BASE.frame_mm[1]);
-    assert.deepEqual(r1.f, rig0.f);
-    assert.equal(r1.g, rig0.g);
-    assert.deepEqual(r1.P, rig0.P);
+    const R = rig0.g + rig0.D;
+    const r1 = withPan(rig0, -0.474, -0.316);
+    const fr = frameOf(rig0);
+    close3(sub(sync(r1).E, sync(rig0).E), add(mul(fr.r0, -0.474), mul(fr.u0, -0.316)), 1e-12, "eye offset");
     close(planeConst(r1), planeConst(rig0), 0, "c");
     close(dot(sub(sync(r1).E, sync(rig0).E), rig0.f), 0, 1e-12, "eye moves within the board's plane");
-    // the pivot's image moves with the finger: (24, −16) px = (12, 8) canvas mm (v up)
+    // the pivot's image moves by −L·focal/R frame mm (10 canvas mm per frame mm): |L| = √(0.474² + 0.316²) m
     const p = image(r1, r1.P)!;
-    close(p[0], 12, 1e-9, `roll ${roll}: pivot u`);
-    close(p[1], 8, 1e-9, `roll ${roll}: pivot v`);
-    // the pan accumulates from the pointer-down state
-    const r2 = pan(r1, -24, 16, H_PX, BASE.frame_mm[1]);
-    close(r2.a, 0, 1e-12, "a back");
-    close(r2.b, 0, 1e-12, "b back");
+    close(Math.hypot(p[0], p[1]), (Math.hypot(0.474, 0.316) * rig0.focal * 10) / R, 1e-9, `roll ${roll}: pivot image offset`);
+    if (roll === 0) {
+      close(p[0], (0.474 * rig0.focal * 10) / R, 1e-9, "pivot u");
+      close(p[1], (0.316 * rig0.focal * 10) / R, 1e-9, "pivot v");
+    }
   }
 });
 
 test("orbit after pan: both orbit modes are rigid about P and keep (a, b)", () => {
   const obs = observer();
-  const panned = pan(setRoll(initial(), 20), 60, 30, H_PX, BASE.frame_mm[1]);
+  const panned = withPan(setRoll(initial(), 20), -1.2, 0.6);
   const cases: [string, RigState][] = [
     ["ring lock", orbitLockLevel(panned, 40, -20, grabAt(panned, 1, obs), false)],
     ["ring free", orbitFree(setLockLevel(panned, false), 40, -20, grabAt(panned, 1, obs), false)],
-    ["right pane lock", orbitRightPane(panned, -30, 20, false)],
-    ["right pane free", orbitRightPane(setLockLevel(panned, false), -30, 20, false)],
   ];
   for (const [what, r] of cases) {
     assert.equal(r.a, panned.a, `${what} a`);
@@ -621,7 +515,7 @@ test("roll slider: the eye does not move, the horizon tilts by ρ and keeps it w
   close(horizonTilt(rolled), -25, 1e-9, "tilted by ρ");
   pivotCentred(rolled, 1e-7, "rolled");
   const obs = observer();
-  for (const r of [orbitLockLevel(rolled, 80, -30, grabAt(rolled, 2, obs), false), orbitRightPane(rolled, -70, 40, false)]) {
+  for (const r of [orbitLockLevel(rolled, 80, -30, grabAt(rolled, 2, obs), false), orbitLockLevel(rolled, -70, 40, grabAt(rolled, 0.5, obs), false)]) {
     close(horizonTilt(r), -25, 1e-9, "tilt kept while orbiting");
     assert.equal(r.roll_deg, 25);
   }
@@ -660,7 +554,7 @@ test("D slider: the board stays, the eye moves along −f, the frame grows, obje
 // ------------------------------------------------------------------------------------------------ views, pivot, equation
 
 test("six views: f an exact axis, g kept, E = P − (g+D)·f, pan and roll cleared; up recomputed in free mode", () => {
-  const busy = pan(setRoll({ ...initial(), f: unit([0.3, 0.8, -0.4]), g: 1.7 }, 40), 30, 10, H_PX, 24);
+  const busy = withPan(setRoll({ ...initial(), f: unit([0.3, 0.8, -0.4]), g: 1.7 }, 40), -0.4, -0.15);
   for (const name of Object.keys(VIEWS) as ViewName[]) {
     for (const free of [false, true]) {
       const rig = sixView(free ? setLockLevel(busy, false) : busy, name);
@@ -680,7 +574,7 @@ test("six views: f an exact axis, g kept, E = P − (g+D)·f, pan and roll clear
 });
 
 test("views and equation after pan / roll: views clear them, the equation keeps them and the plane is the typed one", () => {
-  const busy = pan(setRoll(initial(), 30), 40, -12, H_PX, 24);
+  const busy = withPan(setRoll(initial(), 30), -0.6, 0.2);
   const v = sixView(busy, "left");
   assert.deepEqual([v.a, v.b, v.roll_deg], [0, 0, 0]);
   const n = unit([1, 1, 0]), d = 3 / Math.SQRT2; // x + y = 3
@@ -699,7 +593,7 @@ test("views and equation after pan / roll: views clear them, the equation keeps 
 test("pivot change: the eye faces the new pivot again (pan cleared), orbiting keeps the radius; not an undo step", () => {
   const obs = observer();
   const undo = new UndoStack();
-  const rig0 = pan(initial(), 40, 0, H_PX, 24);
+  const rig0 = withPan(initial(), -0.6, 0);
   const Pobj: Vec3 = [1.8, 4.2, 0.35];
   const r1 = setPivot(rig0, Pobj);
   assert.equal(undo.size, 0);
@@ -767,13 +661,14 @@ test("plane_equation: contract table — x = 1 from (−1,0,0, 1) and z = 3 from
 test("undo details: a press without movement records nothing, a pivot change records nothing, at most 50 steps", () => {
   const undo = new UndoStack();
   const rig0 = initial();
+  const grab = grabAt(rig0, 0.5, observer());
   undo.begin(rig0);
-  assert.equal(undo.end(orbitRightPane(rig0, 0, 0)), false);
+  assert.equal(undo.end(orbitRing(rig0, 0, 0, grab)), false);
   assert.equal(undo.size, 0);
   undo.begin(rig0);
   assert.equal(undo.end(arrowDrag(rig0, [0, -40], 0, 0)), false, "arrow press");
   undo.begin(rig0);
-  const moved = orbitRightPane(rig0, 30, 0, false);
+  const moved = orbitRing(rig0, 30, 0, grab, false);
   assert.equal(undo.end(moved), true);
   assert.equal(undo.size, 1);
   // sliders and pivot never call the stack; a view that changes nothing is not a step
@@ -828,8 +723,8 @@ test("readouts and the picture-delta measure", () => {
   const ref0 = measureRef(rig0, BASE, CANVAS, pts);
   assert.equal(ref0[2], null, "a point behind the eye is skipped");
   assert.equal(deltaText(pictureDelta(ref0, measureRef(setRoll(rig0, 0), BASE, CANVAS, pts))), "0.00 mm（不變）");
-  // a pan of 10 px in a 480 px pane moves every image by 10 · 24 / 480 = 0.5 frame mm
-  const panned = pan(rig0, 10, 0, H_PX, 24);
+  // moving the eye sideways by 0.5·R/focal m moves every image at the pivot's depth by 0.5 frame mm
+  const panned = withPan(rig0, (0.5 * (rig0.g + rig0.D)) / rig0.focal, 0);
   close(pictureDelta(ref0, measureRef(panned, BASE, CANVAS, pts))!, 0.5, 1e-9, "delta");
   assert.equal(deltaText(0.5), "0.50 mm");
   assert.equal(deltaText(null), "—");
@@ -964,14 +859,12 @@ test("random frames: 600 states (top / bottom views, very near / far, free roll)
     const kind = i % 6;
     if (kind === 0) rig = sixView(rig, views[Math.floor(r() * 6)]!);
     else rig = { ...rig, f: randomUnit(r) };
-    rig = setR(rig, kind === 1 ? R_MIN_M : kind === 2 ? R_MAX_M : R_MIN_M + r() * (R_MAX_M - R_MIN_M));
+    rig = { ...rig, g: (kind === 1 ? R_MIN_M : kind === 2 ? R_MAX_M : R_MIN_M + r() * (R_MAX_M - R_MIN_M)) - rig.D };
     if (kind === 3 || r() < 0.3) rig = setLockLevel(rig, false);
     // a few operations
     rig = orbitRing(rig, r() * 400 - 200, r() * 400 - 200, grabAt(rig, r() * 7, obs), r() < 0.5);
-    rig = orbitRightPane(rig, r() * 400 - 200, r() * 400 - 200, r() < 0.5);
     rig = arrowDrag(rig, arrowScreenVector(rig, (X) => obsPx(obs, X)), r() * 100 - 50, r() * 100 - 50, r() < 0.5);
-    rig = wheel(rig, r() * 600 - 300);
-    if (i >= 600) rig = setRoll(pan(rig, r() * 400 - 200, r() * 400 - 200, H_PX, 24), r() * 360 - 180);
+    if (i >= 600) rig = setRoll(withPan(rig, r() * 6 - 3, r() * 6 - 3), r() * 360 - 180);
     const d = sync(rig);
     assert.ok(d.R >= R_MIN_M - 1e-12 && d.R <= R_MAX_M + 1e-12, `R ${d.R}`);
     const blk = toTargetCameraBlock(rig, BASE);

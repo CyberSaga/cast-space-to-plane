@@ -28,11 +28,11 @@
         <input id="file" type="file" accept=".json,application/json" />
       </label>
       <span class="group" id="layers"></span>
-      <label class="group"><input id="hidden-lines" type="checkbox" /> Hidden lines</label>
+      <label class="group"><input id="hidden-lines" type="checkbox" checked /> Hidden lines</label>
       <label class="group">Hidden style
         <select id="hidden-style"><option value="dashed">dashed</option><option value="omit">omit</option></select>
       </label>
-      <label class="group"><input id="view3d" type="checkbox" checked /> 3D view</label>
+      <label class="group"><input id="view3d" type="checkbox" /> 3D view</label>
       <span class="group">
         <button id="dl-svg" type="button">Download SVG</button>
         <button id="dl-json" type="button">Download JSON</button>
@@ -50,7 +50,7 @@
           </section>
           <section id="viewport" aria-label="viewport">
             <div id="stage">
-              <canvas id="gl"></canvas>
+              <canvas id="gl" class="hidden"></canvas>
             </div>
             <div id="drop-hint">Drop a scene JSON file anywhere, or pick an example.</div>
           </section>
@@ -60,7 +60,7 @@
           <div class="ctl-col">
             <div class="ctl-row">
               <label class="group"><input id="snap" type="checkbox" checked /> 吸附</label>
-              <label class="group"><input id="construction-lines" type="checkbox" checked /> 作圖線</label>
+              <label class="group"><input id="construction-lines" type="checkbox" /> 作圖線</label>
               <label class="group"><input id="observer-rays" type="checkbox" checked /> 視線</label>
               <label class="group"><input id="lock-level" type="checkbox" checked /> 鎖水平</label>
               <label class="group">旋轉中心
@@ -89,7 +89,7 @@
         <div id="error" hidden></div>
         <h2>Warnings</h2>
         <table id="warnings"><thead><tr><th>code</th><th>ids</th><th>message</th></tr></thead><tbody></tbody></table>
-        <p class="help">作圖畫面：左拖＝橘色圓環（環繞旋轉中心）· 滾輪或雙指捏合＝藍色箭頭（板子距離，不是焦距）· 右拖、Shift 拖或雙指移動＝平移（旋轉中心不變）· 按住 Alt 暫停吸附</p>
+        <p class="help">作圖畫面只供檢視，在上面拖動或捲動不會改變任何東西。要移動板子，請打開「旁觀視角」，在左窗拖橘色圓環（方向）或藍色箭頭尖端（板子距離）；拖動時按住 Alt 暫停吸附。</p>
       </aside>
     </main>
     <script type="module" src="./src/main.ts"></script>

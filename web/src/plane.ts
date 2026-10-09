@@ -1,21 +1,19 @@
 /**
  * Plane mode's session (M10; spec-v0.2 §4.2, §5; contract §5.7.7–§5.7.10) — pure, DOM-free and unit-tested
  * (`web/test/plane.test.ts`). It owns the rig of the loaded scene, the undo stack, the pivot selection, the
- * "unedited scene camera" flag and the picture-delta readout, and maps the right pane's pointer gestures onto the rig
- * operations of `rig.ts` (which it never re-implements). `main.ts` wires the DOM to it.
+ * "unedited scene camera" flag and the picture-delta readout, and maps the observer pane's handle drags (ring, arrow)
+ * and the controls onto the rig operations of `rig.ts` (which it never re-implements). The drawing pane is view-only:
+ * no gesture there reaches the session. `main.ts` wires the DOM to it.
  */
 
 import type { Vec2, Vec3 } from "castplane";
 
 import {
-  KAPPA_DEG_PER_PX, UndoStack, arrowDrag, bboxCentre, clone, deltaText, equation, frameMetres,
-  fromCamera, measureRef, orbitRightPane, orbitRing, pan, pictureDelta, readouts, sameState, setD, setFocal, setLockLevel,
-  setPivot, setRoll, sixView, toCameraBlock, twoFinger, wheel,
+  UndoStack, arrowDrag, bboxCentre, clone, deltaText, equation, frameMetres, fromCamera, measureRef, orbitRing,
+  pictureDelta, readouts, sameState, setD, setFocal, setLockLevel, setPivot, setRoll, sixView, toCameraBlock,
 } from "./rig.js";
 import type { AnyCamera, PicturePlaneCamera, RigState, RingGrab, ViewName } from "./rig.js";
 import { EquationError, applyEquation } from "./equation.js";
-
-export { KAPPA_DEG_PER_PX };
 
 /** The pivot selection (§5.7.7): not part of an undo snapshot. */
 export interface PivotSelection {
@@ -49,8 +47,8 @@ export interface ActionResult {
 }
 
 /**
- * The plane-mode session of one loaded scene. Every rig change goes through it: drags (`begin` / `drag` / `end`), the
- * wheel, the sliders, views, the equation, lock-horizontal, pivot, undo and reset. While {@link scene_block} is true
+ * The plane-mode session of one loaded scene. Every rig change goes through it: handle drags in the observer pane
+ * (`begin` / `drag` / `end`), the sliders, views, the equation, lock-horizontal, pivot, undo and reset. While {@link scene_block} is true
  * (since the load or a reset, until the first rig change) the core renders the scene camera itself, so the document,
  * its warnings and the downloads are the CLI's; the rig's `picture_plane` block has the same picture (§5.7.7 load rule,
  * no clamp), and every change switches to it.
@@ -122,7 +120,7 @@ export class PlaneSession {
 
   // ---------------------------------------------------------------------------------------------- gestures
 
-  /** Pointer-down of a drag or a two-finger gesture (ring, arrow, right pane): opens one undo step and the delta. */
+  /** Pointer-down of a handle drag (ring, arrow): opens one undo step and the delta. */
   begin(): void {
     this.undo.begin(this.rig);
     this.gesture0 = { rig: clone(this.rig), scene_block: this.scene_block, delta: this.delta };
@@ -153,20 +151,6 @@ export class PlaneSession {
   end(): boolean {
     this.gesture0 = null;
     return this.undo.end(this.rig);
-  }
-
-  /** Wheel in the right pane (the arrow's twin, §5.7.8 item 5): a burst (≤ 400 ms apart) is one undo step and one
-   * delta measurement. Ignored while a drag gesture is open: the gesture computes every move from its pointer-down
-   * state, so a wheel step inside it would be overwritten by the next move and split the gesture's undo step. */
-  wheel(deltaY: number, t_ms: number): boolean {
-    if (this.gesture0 !== null) return false;
-    const before = this.rig;
-    const after = wheel(before, deltaY);
-    if (this.undo.wheel(before, after, t_ms) || this.ref0 === null) {
-      this.ref0 = this.measure(before);
-      this.delta = 0;
-    }
-    return this.assign(after);
   }
 
   // ---------------------------------------------------------------------------------------------- discrete actions
@@ -334,116 +318,4 @@ export function ring_drag(rig0: RigState, grab: RingGrab, dx: number, dy: number
 /** An arrow drag in the observer pane from the pointer-down state with the screen vector `v`. */
 export function arrow_drag(rig0: RigState, v: Vec2, dx: number, dy: number, snap: boolean): RigState {
   return arrowDrag(rig0, v, dx, dy, snap);
-}
-
-// ------------------------------------------------------------------------------------------------ right pane (§5.7.8 items 2, 5, 6)
-
-/** One pointer of a right-pane gesture. */
-export interface PointerInfo {
-  id: number;
-  x: number;
-  y: number;
-  /** `PointerEvent.button` at pointer-down (0 left, 2 right). */
-  button?: number;
-  shift?: boolean;
-  /** `PointerEvent.pointerType`. */
-  type?: string;
-}
-
-/** Context of a right-pane move. */
-export interface RightPaneContext {
-  /** The drawing pane's height in CSS px. */
-  H_px: number;
-  /** The frame height (mm) of the scene camera. */
-  frame_h: number;
-  /** Snapping on ("吸附" checked and Alt not held). */
-  snap: boolean;
-}
-
-export type RightPaneMode = "orbit" | "pan" | "two";
-
-/**
- * The right pane's pointer gesture (spec-v0.2 §5.9; contract §5.7.8 items 2, 5, 6) as a state machine: one pointer
- * drags (left button / one finger: the ring mapping `−Δx·κ, −Δy·κ`; right button or Shift: pan), a second touch pointer
- * turns the gesture into a two-finger one (pinch scales `R` by `d₀/d`, the midpoint's move pans), re-based on the state
- * at that moment. Every move is computed from the gesture's base state and the **total** displacement, never
- * incrementally. The whole gesture, from the first pointer-down to the last pointer-up, is one undo step (the caller
- * calls `PlaneSession.begin` / `end` when {@link down} returns `"start"` and {@link up} returns true).
- */
-export class RightPaneGesture {
-  private readonly pointers = new Map<number, Vec2>();
-  private mode: RightPaneMode | null = null;
-  private rig0: RigState | null = null;
-  private origin: Vec2 = [0, 0];
-  private d0 = 1;
-  private c0: Vec2 = [0, 0];
-  /** Pointers that were lifted out of a two-finger gesture: the remaining finger does nothing until all are up. */
-  private frozen = false;
-
-  get active(): RightPaneMode | null {
-    return this.mode;
-  }
-
-  /** Drop the gesture and its pointers (a scene load while a drag is held): later moves and releases of those
-   * pointers are ignored. */
-  reset(): void {
-    this.pointers.clear();
-    this.mode = null;
-    this.rig0 = null;
-    this.frozen = false;
-  }
-
-  /** A pointer goes down; `rig` is the current state. `"start"` opens a gesture, `"two"` turns it into a two-finger
-   * gesture, `"ignored"` otherwise (a middle button, a third pointer, a mouse button during a gesture). */
-  down(p: PointerInfo, rig: RigState): "start" | "two" | "ignored" {
-    if (this.pointers.size === 0) {
-      const button = p.button ?? 0;
-      if (button !== 0 && button !== 2) return "ignored";
-      this.pointers.set(p.id, [p.x, p.y]);
-      this.mode = button === 2 || p.shift === true ? "pan" : "orbit";
-      this.rig0 = clone(rig);
-      this.origin = [p.x, p.y];
-      this.frozen = false;
-      return "start";
-    }
-    if (this.pointers.size === 1 && (p.type ?? "mouse") !== "mouse" && !this.frozen) {
-      this.pointers.set(p.id, [p.x, p.y]);
-      this.mode = "two";
-      this.rig0 = clone(rig);
-      [this.d0, this.c0] = this.spread();
-      return "two";
-    }
-    return "ignored";
-  }
-
-  private spread(): [number, Vec2] {
-    const [a, b] = [...this.pointers.values()];
-    return [Math.hypot(a![0] - b![0], a![1] - b![1]), [(a![0] + b![0]) / 2, (a![1] + b![1]) / 2]];
-  }
-
-  /** A pointer moves: the new state from the gesture's base state, or null (not part of the gesture, no move). */
-  move(p: PointerInfo, ctx: RightPaneContext): RigState | null {
-    if (!this.pointers.has(p.id) || this.rig0 === null || this.mode === null || this.frozen) return null;
-    this.pointers.set(p.id, [p.x, p.y]);
-    if (this.mode === "two") {
-      if (this.pointers.size < 2) return null;
-      const [d, c] = this.spread();
-      return twoFinger(this.rig0, this.d0, d, this.c0, c, ctx.H_px, ctx.frame_h);
-    }
-    const dx = p.x - this.origin[0], dy = p.y - this.origin[1];
-    return this.mode === "pan" ? pan(this.rig0, dx, dy, ctx.H_px, ctx.frame_h) : orbitRightPane(this.rig0, dx, dy, ctx.snap);
-  }
-
-  /** A pointer goes up (or is cancelled): true when it was the gesture's last pointer (the gesture ends). */
-  up(id: number): boolean {
-    if (!this.pointers.delete(id)) return false;
-    if (this.pointers.size > 0) {
-      this.frozen = true; // lifting one finger of two ends the gesture's motion; the step settles at the last release
-      return false;
-    }
-    this.mode = null;
-    this.rig0 = null;
-    this.frozen = false;
-    return true;
-  }
 }

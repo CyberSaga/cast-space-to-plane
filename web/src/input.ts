@@ -1,6 +1,6 @@
 /**
- * File-drop input (contract §5.4.10). The M7 pointer and wheel handler of the drawing pane is superseded in M10 by the
- * right pane's plane-mode gestures (`plane.ts` `RightPaneGesture`, wired in `main.ts`; contract §5.7.9).
+ * File-drop input (contract §5.4.10), page-wide. The drawing pane itself takes no pointer or wheel input: it is
+ * view-only, and the board is moved only in the observer pane (`observer3d.ts` handles) and with the controls.
  */
 
 /** Page-wide drag and drop of a file: `highlight` gets class `dragover` while a drag is over the page; the first

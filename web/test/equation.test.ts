@@ -7,7 +7,7 @@ import { test } from "node:test";
 import type { Vec3 } from "castplane";
 
 import { EquationError, QUICK_EQUATIONS, applyEquation, normalizeEquationText, parseEquation } from "../src/equation.js";
-import { equation, pan, planeConst, setLockLevel, setRoll, sync } from "../src/rig.js";
+import { equation, planeConst, setLockLevel, setRoll, sync } from "../src/rig.js";
 import type { RigState } from "../src/rig.js";
 
 const P0: Vec3 = [0.15, 5.9, 0.9];
@@ -115,7 +115,7 @@ test("g + D outside [0.8, 40] is rejected and the plane is kept", () => {
 });
 
 test("pan and roll are kept; up = null under lock, the new u₀ in free mode", () => {
-  const busy = setRoll(pan(initial(), 30, -12, 480, 24), 25);
+  const busy = setRoll({ ...initial(), a: -0.45, b: 0.18 }, 25); // a panned state (the load rule of an off-axis camera)
   const r = applyEquation(busy, "x + y = 3");
   assert.equal(r.a, busy.a);
   assert.equal(r.b, busy.b);

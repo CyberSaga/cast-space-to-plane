@@ -5,9 +5,12 @@
  * runtime.
  *
  * This module owns the page state, loading and the render loop, and wires the others: `plane.ts` (the plane-mode
- * session: the rig of `rig.ts`, undo, pivot, readouts, and the right pane's gestures), `stage.ts` (one three.js view),
- * `input.ts` (file drop), `ui.ts` (controls and panels), `overlay.ts` (the SVG overlay), and, behind the "旁觀視角"
- * switch (M9, contract §5.6), `observer.ts` / `observer3d.ts` (the observer pane with the ring and arrow handles).
+ * session: the rig of `rig.ts`, undo, pivot, readouts), `stage.ts` (one three.js view), `input.ts` (file drop),
+ * `ui.ts` (controls and panels), `toggles.ts` (the page-level view toggles and their defaults), `overlay.ts` (the SVG
+ * overlay), and, behind the "旁觀視角" switch (M9, contract §5.6), `observer.ts` / `observer3d.ts` (the observer pane
+ * with the ring and arrow handles). The drawing pane (`#stage`) is view-only: no pointer or wheel listener is
+ * registered on it, so drags and wheel there do nothing (the page scrolls natively); the board is moved only in the
+ * observer pane and with the controls.
  */
 
 import "./style.css";
@@ -31,17 +34,21 @@ import { ObserverPane } from "./observer3d.js";
 import type { HandleInput } from "./observer3d.js";
 import { IMG_MODE_THRESHOLD, Overlay } from "./overlay.js";
 import type { OverlayMode } from "./overlay.js";
-import { PlaneSession, RightPaneGesture, arrow_drag, object_centres, ring_drag, ring_grab } from "./plane.js";
+import { PlaneSession, arrow_drag, object_centres, ring_drag, ring_grab } from "./plane.js";
 import { arrowScreenVector, clone, equation, sync } from "./rig.js";
 import type { RigState, RingGrab, ViewName } from "./rig.js";
 import { build_scene3d } from "./scene3d.js";
 import { Stage3D, letterbox } from "./stage.js";
+import { initial_toggles } from "./toggles.js";
 import {
   $, WarningsTable, build_layer_boxes, controls, describe_error, fill_examples, fill_quick_equations, save, set_error_panel,
   set_lines, set_rig_controls, status_text, umbra_count,
 } from "./ui.js";
 
 THREE.Object3D.DEFAULT_UP.set(0, 0, 1);
+
+/** The page's view toggles at start (layers, hidden lines, 3D view); scene loads never reset them. */
+const TOGGLES = initial_toggles(LAYER_IDS);
 
 interface FrameRecord {
   core_ms: number;
@@ -59,6 +66,7 @@ interface State {
   A: StageA | null;
   /** The plane-mode session of the loaded scene (M10, §5.7.7): the rig, undo, pivot, readouts. */
   plane: PlaneSession | null;
+  /** The checked layer checkboxes: page-level, kept across scene loads (`toggles.ts`). */
   layersChecked: Set<string>;
   doc: GeometryDocument | null;
   svg: string;
@@ -82,7 +90,7 @@ const state: State = {
   sceneName: "",
   A: null,
   plane: null,
-  layersChecked: new Set(LAYER_IDS),
+  layersChecked: new Set(TOGGLES.layers),
   doc: null,
   svg: "",
   timings: { stage_a_ms: 0, core_ms: 0, dom_ms: 0, mode: "dom" },
@@ -103,11 +111,19 @@ const { viewport, stage, canvas, examplesSelect, fileInput, focalInput, distInpu
 const view = new Stage3D(canvas);
 const overlay = new Overlay(stage);
 const warnings = new WarningsTable(ui.warningsBody);
-/** The observer pane, created on the first switch-on (with the switch off the page is the §5.4.10 page). */
+/** The observer pane, created on the first switch-on (with the switch off the layout and outputs are the §5.4.10 page's;
+ *  the drawing pane takes no input either way, D79). */
 let observer: ObserverPane | null = null;
 
-// ---------------------------------------------------------------------------- layer checkboxes
-const layerBoxes = build_layer_boxes(ui.layersBox, LAYER_IDS, (id, checked) => {
+// ---------------------------------------------------------------------------- layer checkboxes and view toggles
+// page-level state (toggles.ts): set once here, kept across scene loads
+hiddenLines.checked = TOGGLES.hidden_lines;
+hiddenStyle.disabled = !hiddenLines.checked;
+view3d.checked = TOGGLES.view3d;
+canvas.classList.toggle("hidden", !view3d.checked); // hidden from the first frame; `frame` renders it only when checked
+ui.construction.checked = state.layersChecked.has("construction");
+overlay.set_hidden_layers(state.layersChecked);
+const layerBoxes = build_layer_boxes(ui.layersBox, LAYER_IDS, state.layersChecked, (id, checked) => {
   if (checked) state.layersChecked.add(id);
   else state.layersChecked.delete(id);
   overlay.set_hidden_layers(state.layersChecked);
@@ -153,7 +169,6 @@ function load(name: string, make: () => Scene): boolean {
   state.obs.needs_framing = true;
   // a drag held across the load (keyboard on the examples menu, a drop) belongs to the old scene: drop it
   state.handle = null;
-  gesture.reset();
   state.dragging = false;
   set_equation_error(null);
   ui.pivotMode.value = "scene";
@@ -162,13 +177,9 @@ function load(name: string, make: () => Scene): boolean {
   state.frames = [];
   view.replace_group(() => build_scene3d(scene, A));
   observer?.set_scene(scene, A);
-  state.layersChecked = new Set(scene.output.layers);
-  for (const [id, box] of layerBoxes) box.checked = state.layersChecked.has(id);
-  overlay.set_hidden_layers(state.layersChecked);
-  hiddenLines.checked = scene.output.hidden_lines === true;
+  // the layer, "Hidden lines" and "3D view" checkboxes are page-level (toggles.ts): the scene's output.layers and
+  // output.hidden_lines do not reset them; the hidden style still comes from the scene
   hiddenStyle.value = scene.output.hidden_style ?? "dashed";
-  hiddenStyle.disabled = !hiddenLines.checked;
-  ui.construction.checked = state.layersChecked.has("construction");
   sync_controls();
   layout();
   document.title = `${name} — castplane web`;
@@ -307,8 +318,8 @@ ui.reset.addEventListener("click", () => {
   after_action({ ...r, framing: true });
 });
 
-// phase 2 of §5.4.10: the hidden-line switch, passed as `hidden_lines` to `compose`, and the hidden style, passed as
-// `hidden_style` to `write_svg` ("dashed" | "omit", §5.1.8); both initialised from the scene's `output`
+// phase 2 of §5.4.10: the hidden-line switch, passed as `hidden_lines` to `compose` (page-level, on at start), and the
+// hidden style, passed as `hidden_style` to `write_svg` ("dashed" | "omit", §5.1.8; set from the scene's `output` on load)
 hiddenLines.addEventListener("change", () => {
   hiddenStyle.disabled = !hiddenLines.checked;
   request_render();
@@ -341,44 +352,6 @@ $<HTMLButtonElement>("copy-camera").addEventListener("click", () => {
     (e) => show_error(`clipboard unavailable (${describe_error(e)}); camera block:\n${text}`),
   );
 });
-
-// ---------------------------------------------------------------------------- right-pane input (§5.7.8 items 2, 5, 6)
-const gesture = new RightPaneGesture();
-stage.addEventListener("contextmenu", (ev) => ev.preventDefault());
-stage.addEventListener("pointerdown", (ev) => {
-  const pl = state.plane;
-  if (pl === null || state.handle !== null) return;
-  const r = gesture.down({ id: ev.pointerId, x: ev.clientX, y: ev.clientY, button: ev.button, shift: ev.shiftKey, type: ev.pointerType }, pl.rig);
-  if (r === "ignored") return;
-  stage.setPointerCapture(ev.pointerId);
-  ev.preventDefault();
-  if (r === "start") {
-    pl.begin();
-    state.dragging = true;
-  }
-});
-stage.addEventListener("pointermove", (ev) => {
-  const pl = state.plane, sc = state.scene;
-  if (pl === null || sc === null || gesture.active === null) return;
-  const next = gesture.move({ id: ev.pointerId, x: ev.clientX, y: ev.clientY },
-    { H_px: stage.clientHeight || 1, frame_h: sc.camera.frame_mm[1], snap: ui.snap.checked && !ev.altKey });
-  if (next !== null && pl.drag(next)) request_render(); // the controls follow in the frame
-});
-const right_end = (ev: PointerEvent): void => {
-  if (!gesture.up(ev.pointerId)) return;
-  state.plane?.end();
-  state.dragging = false;
-  sync_controls();
-  request_render(); // the resting frame (DOM overlay, hidden lines, umbra)
-};
-stage.addEventListener("pointerup", right_end);
-stage.addEventListener("pointercancel", right_end);
-stage.addEventListener("wheel", (ev) => {
-  const pl = state.plane;
-  if (pl === null) return;
-  ev.preventDefault();
-  if (pl.wheel(ev.deltaY, performance.now())) request_render();
-}, { passive: false });
 
 // ---------------------------------------------------------------------------- observer handles (§5.7.8 items 1, 4, 10; §5.7.9)
 /** The observer pane's size and basis for the hit test and the drag mappings (the projection of `observer3d`). */

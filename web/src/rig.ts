@@ -34,12 +34,8 @@ export const D_MAX_M = 12;
 export const D_STEP_M = 0.1;
 export const ROLL_LIMIT_DEG = 180;
 export const UNDO_MAX = 50;
-export const WHEEL_BURST_MS = 400;
-export const WHEEL_K = 0.001;
 /** `D` of the initial demo state and of M9's derivation from the M7 orbit (`OBSERVER_D_M`). */
 export const DEFAULT_D_M = 4;
-/** Minimum finger distance of a pinch (px). */
-export const PINCH_MIN_PX = 10;
 /** Arrow drag: lower bound of `|v|²` (px²/m²) and the screen vector used when the tip is behind the observer. */
 export const ARROW_MIN_V2 = 64;
 export const ARROW_FALLBACK_V: Vec2 = [0, -40];
@@ -64,7 +60,8 @@ const AXIS_TOL = 1e-9;
 /**
  * The rig (spec-v0.2 §4.2): direction `f` (unit, eye → board), free-roll up `up` (`null` ⇔ lock-horizontal), board
  * distance from the pivot `g` (may be negative), eye-to-board `D`, pan `(a, b)` in the pre-roll basis, roll about the
- * line of sight `roll_deg`, focal length `focal` (mm) and the pivot `P`. `P` is not part of an undo snapshot.
+ * line of sight `roll_deg`, focal length `focal` (mm) and the pivot `P`. `P` is not part of an undo snapshot. The pan
+ * is not user-editable: it comes from the load rule ({@link fromCamera}) and is cleared by a view or a pivot change.
  */
 export interface RigState {
   f: Vec3;
@@ -478,23 +475,7 @@ export function orbitRing(rig0: RigState, dx: number, dy: number, grab: RingGrab
   return rig0.up === null ? orbitLockLevel(rig0, dx, dy, grab, snap) : orbitFree(rig0, dx, dy, grab, snap);
 }
 
-/**
- * Right-pane left drag (spec-v0.2 §5.9): lock-horizontal turns about `z` by `−dx·κ` and sets the elevation to
- * `clamp(p₀ − dy·κ, ±89.9°)`; free roll turns about the frame's `u`, then `r` (of the pointer-down state, roll
- * included) by `−dx·κ`, `−dy·κ`. The scene follows the finger; dragging down raises the eye.
- */
-export function orbitRightPane(rig0: RigState, dx: number, dy: number, snap = true): RigState {
-  if (dx === 0 && dy === 0) return clone(rig0);
-  if (rig0.up === null) {
-    const t = turnLevel(copy3(rig0.f), null, -dx * KAPPA, -dy * KAPPA);
-    return finishOrbit(rig0, t.f, null, snap);
-  }
-  const fr = frameOf(rig0);
-  const t = turnFree(copy3(rig0.f), copy3(rig0.up), fr.u, -dx * KAPPA, fr.r, -dy * KAPPA);
-  return finishOrbit(rig0, t.f, t.up, snap);
-}
-
-// ------------------------------------------------------------------------------------------------ distance (arrow, wheel, pinch)
+// ------------------------------------------------------------------------------------------------ distance (arrow)
 
 function clampG(g: number, D: number): number {
   return clamp(g, R_MIN_M - D, R_MAX_M - D);
@@ -529,43 +510,7 @@ export function arrowDrag(rig0: RigState, v: readonly number[], dx: number, dy: 
   return { ...clone(rig0), g };
 }
 
-/** Set the pivot depth `R` (the wheel / pinch twin of the arrow): `g = clamp(R − D, 0.8 − D, 40 − D)`. No snapping. */
-export function setR(rig: RigState, R: number): RigState {
-  return { ...clone(rig), g: clampG(R - rig.D, rig.D) };
-}
-
-/** Wheel (spec-v0.2 §5.9): `R ← R·exp(0.001·deltaY)`. Never the focal length (D78). */
-export function wheel(rig: RigState, deltaY: number): RigState {
-  return setR(rig, (rig.g + rig.D) * Math.exp(WHEEL_K * deltaY));
-}
-
-/** Pinch: `R ← R₀·d₀ / d` with both finger distances at least 10 px. */
-export function pinch(rig0: RigState, d0: number, d: number): RigState {
-  return setR(rig0, ((rig0.g + rig0.D) * Math.max(d0, PINCH_MIN_PX)) / Math.max(d, PINCH_MIN_PX));
-}
-
-// ------------------------------------------------------------------------------------------------ pan, roll, sliders
-
-/**
- * Pan (right drag, Shift drag, two-finger move; spec-v0.2 §5.9): `k = R·(frame_h / focal) / H_px` with `R` of
- * `rig0` (or the given `R`); `ΔL = −dx·k·r + dy·k·u`; `a += ΔL·r₀`, `b += ΔL·u₀`. `f`, `g`, `c`, `P` unchanged; the
- * scene follows the finger. Never a pivot change (D78).
- */
-export function pan(rig0: RigState, dx: number, dy: number, H_px: number, frame_h: number, R?: number): RigState {
-  const k = ((R ?? rig0.g + rig0.D) * (frame_h / rig0.focal)) / H_px;
-  const fr = frameOf(rig0);
-  const dL = add(mul(fr.r, -dx * k), mul(fr.u, dy * k));
-  return { ...clone(rig0), a: rig0.a + dot(dL, fr.r0), b: rig0.b + dot(dL, fr.u0) };
-}
-
-/**
- * Two-finger gesture in the right pane from the gesture-start state: pinch (finger distance `d0 → d`) then pan by the
- * midpoint's displacement `c − c0` with the new `R`.
- */
-export function twoFinger(rig0: RigState, d0: number, d: number, c0: readonly number[], c: readonly number[], H_px: number, frame_h: number): RigState {
-  const p = pinch(rig0, d0, d);
-  return pan(p, c[0]! - c0[0]!, c[1]! - c0[1]!, H_px, frame_h, p.g + p.D);
-}
+// ------------------------------------------------------------------------------------------------ roll, sliders
 
 /** Roll slider `[−180°, 180°]` about the line of sight: the eye and the board do not move. Not an undo step. */
 export function setRoll(rig: RigState, roll_deg: number): RigState {
@@ -719,16 +664,13 @@ export function sameState(p: RigState, q: RigState): boolean {
 
 /**
  * The undo stack (spec-v0.2 §5.7): at most 50 snapshots (the pivot excluded: undo keeps the current pivot). One step
- * each: a drag that changed the board ({@link begin} / {@link end}; a press without change records nothing), one
- * wheel burst (events ≤ 400 ms apart, {@link wheel}), a view, an equation apply, reset, lock-horizontal off → on
- * ({@link record}). The observer camera, focal length, `D`, roll and pivot changes are never recorded (callers do not
+ * each: a handle drag that changed the board ({@link begin} / {@link end}; a press without change records nothing),
+ * a view, an equation apply, reset, lock-horizontal off → on ({@link record}). The observer camera, focal length, `D`, roll and pivot changes are never recorded (callers do not
  * call the stack for them).
  */
 export class UndoStack {
   private readonly steps: RigState[] = [];
   private gesture: RigState | null = null;
-  private wheelOpen = false;
-  private lastWheelMs = -Infinity;
 
   constructor(readonly max = UNDO_MAX) {}
 
@@ -740,9 +682,7 @@ export class UndoStack {
     return this.steps.length > 0;
   }
 
-  /** Every pushed step closes the current wheel burst; actions that record nothing leave it open (spec-v0.2 §5.7). */
   private push(rig: RigState): void {
-    this.wheelOpen = false;
     this.steps.push(clone(rig));
     if (this.steps.length > this.max) this.steps.shift();
   }
@@ -754,7 +694,7 @@ export class UndoStack {
     return true;
   }
 
-  /** Pointer-down of a drag or a two-finger gesture. */
+  /** Pointer-down of a handle drag. */
   begin(rig: RigState): void {
     this.gesture = clone(rig);
   }
@@ -773,20 +713,8 @@ export class UndoStack {
     this.gesture = null;
   }
 
-  /** One wheel event at `t_ms`: opens a step when the last one is more than 400 ms ago; no-op events record nothing. */
-  wheel(before: RigState, after: RigState, t_ms: number): boolean {
-    const burst = this.wheelOpen && t_ms - this.lastWheelMs <= WHEEL_BURST_MS;
-    this.lastWheelMs = t_ms;
-    if (sameBoard(before, after)) return false;
-    if (burst) return false;
-    this.push(before);
-    this.wheelOpen = true;
-    return true;
-  }
-
   /** Pop the last snapshot, keeping the current pivot; `null` when empty. */
   undo(current: RigState): RigState | null {
-    this.wheelOpen = false;
     this.gesture = null;
     const s = this.steps.pop();
     return s === undefined ? null : { ...s, P: copy3(current.P) };
@@ -795,6 +723,5 @@ export class UndoStack {
   clear(): void {
     this.steps.length = 0;
     this.gesture = null;
-    this.wheelOpen = false;
   }
 }

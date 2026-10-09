@@ -1,6 +1,7 @@
 # PLAN v3 — implementation order for M9–M10 (spec-v0.2)
 
-Companion to `docs/ARCHITECTURE.md` §5.6–§5.7 (the binding contract for spec-v0.2) and `docs/DECISIONS.md` D71–D78.
+Companion to `docs/ARCHITECTURE.md` §5.6–§5.7 (the binding contract for spec-v0.2) and `docs/DECISIONS.md` D71–D79
+(D79 added in M10).
 Everything here is derived from §5.6–§5.7; where this file and the contract disagree, the contract wins. Base: conformance
 set v7 / 60 cases, 18 warning codes, Python reference + TypeScript port at parity (`compare_svg.py` 0 mismatches).
 
@@ -131,3 +132,11 @@ npm run -w web build
 Steps 4, 4' and 5 change no core output, so for them the Python gates are a no-change check; `npm test` and the web build
 are the deciding gates, plus the recorded `obs ms` / acceptance numbers in `web/README.md`. Benchmark gate limits are
 never loosened; a camera-only regression from the resolve hook (constant time) is a bug.
+
+## 5. Amendment after step 5 (D79, spec-v0.2 §2.1, §5.9)
+Step 5's "right-pane mapping (left drag, wheel, pan, pinch)" and the right-pane parts of step 3's `rig.ts` list were
+superseded by D79: the drawing pane is read-only (no input, native scroll, context menu kept), the board is moved only
+in the observer pane and with the toolbar, the pan comes from the load rule alone, and the toolbar toggles start at
+fixed page-level defaults (horizon, objects, form_shadow, cast_shadow, labels, Hidden lines checked; construction and
+3D view unchecked). The contract text is amended by reference in the §5.4 and §5.7 implementation notes; no core
+output, conformance case or gate limit changes. The step texts above are kept as the historical plan.

@@ -110,16 +110,17 @@ export function controls(): Controls {
   };
 }
 
-/** One checked checkbox per layer id in `box` (`data-layer` = id); `on_change(id, checked)` on each toggle. */
+/** One checkbox per layer id in `box` (`data-layer` = id), checked iff the id is in `checked` (the page's initial
+ * toggles, `toggles.ts`); `on_change(id, checked)` on each toggle. */
 export function build_layer_boxes(
-  box: HTMLElement, ids: readonly string[], on_change: (id: string, checked: boolean) => void,
+  box: HTMLElement, ids: readonly string[], checked: ReadonlySet<string>, on_change: (id: string, checked: boolean) => void,
 ): Map<string, HTMLInputElement> {
   const boxes = new Map<string, HTMLInputElement>();
   for (const id of ids) {
     const label = document.createElement("label");
     const input = document.createElement("input");
     input.type = "checkbox";
-    input.checked = true;
+    input.checked = checked.has(id);
     input.dataset["layer"] = id;
     input.addEventListener("change", () => on_change(id, input.checked));
     label.append(input, document.createTextNode(id));

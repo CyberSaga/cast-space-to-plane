@@ -5,10 +5,13 @@
 //   node web/scripts/smoke.mjs http://localhost:4173/ out/ [screenshot.png] [benchmarks/scenes/benchmark_100.json]
 //   node web/scripts/smoke.mjs http://localhost:4173/ out/ --shots docs/images      # + the phase-2 screenshots
 //
-// Checks: the page loads the default example and renders the six overlay groups; every example's scene-camera
-// SVG / JSON through the bundled core is written to out/<name>.svg / .json (compare them with the Python
-// reference); a 30-step drag per example records the drag frames' `core ms` / `dom ms` and overlay mode
-// (web/README.md); the optional scene file is loaded through the file picker and dragged likewise; a page-wide
+// Checks: the page loads the default example and renders the six overlay groups; the view toggles start at their
+// defaults (horizon, objects, form_shadow, cast_shadow, labels and Hidden lines checked; construction / 作圖線 and
+// 3D view unchecked, the three.js canvas hidden and never drawn) and keep the user's choices across example loads;
+// every example's scene-camera SVG / JSON through the bundled core is written to out/<name>.svg / .json (compare them
+// with the Python reference); a 30-step drag per example (a ring drag in the observer pane: the drawing pane is
+// view-only) records the drag frames' `core ms` / `dom ms` and overlay mode (web/README.md); the optional scene file
+// is loaded through the file picker and dragged likewise; a page-wide
 // drop loads a scene; the three downloads are saved to out/; a non-JSON file and an invalid scene show the error
 // panel. Phase 2 (contract §5.4.10): an example that fails to load (the path-only `mesh_demo`, the core has no loader)
 // is reported and loaded instead from its Python expansion (`ts/test/fixtures/<name>.expanded.json`) through the file
@@ -17,14 +20,16 @@
 // per-light construction blocks, umbra pieces at rest and none during a drag), and with `--shots DIR` save
 // DIR/web_ui_<name>.png for each. M9 (contract §5.6.9): for the five phase-1 examples (and the optional scene file)
 // the "旁觀視角" switch is turned on and off: the writer's SVG text, the overlay markup and the SVG / JSON downloads
-// must be identical with the switch on and off for the same camera; a 30-step drag of the drawing camera with the
-// switch on records `core ms` + `dom ms` + `obs ms` per frame (< 100 ms for the five examples); an observer drag must
+// must be identical with the switch on and off for the same camera; a 30-step ring drag of the drawing camera with
+// the switch on records `core ms` + `dom ms` + `obs ms` per frame (< 100 ms for the five examples); an observer drag must
 // not change the drawing; the narrow (< 880 px) layout stacks the panes; switching off restores the drawing pane's
 // size; framing keeps the eye and the frame in the pane; a right or middle drag does not move the observer; the three
-// v8 `picture_plane` cases render the scene camera's document until a drag (and again after "重設"); a frame
+// v8 `picture_plane` cases render the scene camera's document until an arrow drag (and again after "重設"); a frame
 // below the ground is drawn. With `--shots DIR` it also saves DIR/web_ui_observer.png. M10 (contract §5.7.13, plane
-// mode): the ring drag changes f and keeps g, D and |E − P|; the arrow drag changes g only; the wheel changes R, not
-// the focal length, a burst being one undo step; a right drag and a Shift drag pan and keep the pivot; the roll slider
+// mode): the ring drag changes f and keeps g, D and |E − P|; the arrow drag changes g only; the drawing pane is
+// view-only (a left, right, middle and Shift drag and the wheel there change neither the camera block, the readouts,
+// the undo availability nor the drawing, show no error, and leave the wheel / pointer events' default actions to the
+// browser: no preventDefault, default touch-action and cursor); the roll slider
 // keeps the eye; the six views give exact axes; y=2 with D = 4 puts the eye at y = −2; a bad equation turns the field
 // red and keeps the plane; undo and reset restore f, g, up (and the sliders); the eye is not draggable; the D slider
 // keeps the board; an object click sets the pivot; Download scene writes the picture_plane form and reloads to the
@@ -78,10 +83,18 @@ async function observer_blank() {
   });
 }
 
-async function drag(steps, selector = "#stage", step = [3, 0.7]) {
+const failures = [];
+const check = (ok, what) => { if (!ok) failures.push(what); };
+
+/** A mouse drag of `steps` steps of `step` px from pane px `p` of `selector` (the observer: its centre region off the
+ * handles when `p` is omitted, i.e. an observer orbit); `mid` runs after the first step with the button held. */
+async function drag(steps, selector = "#observer", step = [3, 0.7], p = null, mid = null) {
   const box = await page.locator(selector).boundingBox();
   let x0 = box.x + box.width / 2, y0 = box.y + box.height / 2;
-  if (selector === "#observer") {
+  if (p !== null) {
+    x0 = box.x + p[0];
+    y0 = box.y + p[1];
+  } else if (selector === "#observer") {
     const [bx, by] = await observer_blank();
     x0 = box.x + bx;
     y0 = box.y + by;
@@ -91,13 +104,71 @@ async function drag(steps, selector = "#stage", step = [3, 0.7]) {
   for (let i = 1; i <= steps; i++) {
     await page.mouse.move(x0 + i * step[0], y0 + i * step[1]);
     await frames2();
+    if (i === 1 && mid !== null) await mid();
   }
   await page.mouse.up();
   await frames2();
 }
 
+/** Observer-pane px of a hit-testable ring point with room for a `room` px drag to the right (null when none). */
+async function ring_px(room = 100) {
+  return page.evaluate((room) => {
+    const h = window.castplane_web.handles_px;
+    if (h === null) return null;
+    const [W, H] = h.size;
+    for (const q of h.ring) {
+      if (q === null || q[0] < 60 || q[0] > W - room - 20 || q[1] < 60 || q[1] > H - 60) continue;
+      if (Math.hypot(q[0] - h.tip[0], q[1] - h.tip[1]) < 40) continue;
+      const hit = window.castplane_web.hit_at(q[0], q[1]);
+      if (hit !== null && hit.kind === "ring") return q;
+    }
+    return null;
+  }, room);
+}
+
+/** Switch the observer on (when off) for `body`, then back to the previous state. */
+async function with_observer(body) {
+  const was_on = await page.evaluate(() => window.castplane_web.observer?.on === true);
+  if (!was_on) {
+    await page.evaluate(() => window.castplane_web.set_observer(true));
+    await frames2();
+    await frames2();
+  }
+  try {
+    return await body();
+  } finally {
+    if (!was_on) {
+      await page.evaluate(() => window.castplane_web.set_observer(false));
+      await frames2();
+    }
+  }
+}
+
+/** A drag of the drawing camera: the orange ring in the observer pane (the drawing pane is view-only), `steps` steps
+ * of `step` px; `mid` runs after the first step with the button held. */
+async function camera_drag(steps, step = [3, 0.7], mid = null) {
+  await with_observer(async () => {
+    const q = await ring_px(Math.abs(steps * step[0]));
+    check(q !== null, "a ring point is hit-testable for a camera drag");
+    if (q !== null) await drag(steps, "#observer", step, q, mid);
+  });
+}
+
+/** An arrow drag in the observer pane: from the tip by `k` arrow lengths towards Q (k > 0: the board towards the
+ * scene, g decreases), at least 30 px, in `n` steps. */
+async function arrow_push(k, n = 8) {
+  const h = await page.evaluate(() => window.castplane_web.handles_px);
+  let dx = (h.Q[0] - h.tip[0]) * k, dy = (h.Q[1] - h.tip[1]) * k;
+  const l = Math.hypot(dx, dy);
+  if (l < 30) {
+    const s = 30 / Math.max(l, 1e-9);
+    [dx, dy] = l < 1e-9 ? [0, 30 * Math.sign(k)] : [dx * s, dy * s];
+  }
+  await drag(n, "#observer", [dx / n, dy / n], h.tip);
+}
+
 async function drag_stats() {
-  await drag(30);
+  await camera_drag(30);
   const frames = await page.evaluate(() => window.castplane_web.frames);
   const d = frames.filter((f) => f.dragging), rest = frames.filter((f) => !f.dragging);
   return {
@@ -121,6 +192,64 @@ const first = await page.evaluate(() => ({
 if (shot) {
   await page.waitForTimeout(300);
   await page.screenshot({ path: shot });
+}
+
+// the view toggles are page-level: their defaults at page load, kept (not reset from the scene) across loads
+const toggles = () => page.evaluate(() => {
+  const gl = document.getElementById("gl");
+  // the three.js canvas was never drawn while "3D view" is off: its buffer is still fully transparent
+  const c = document.createElement("canvas");
+  c.width = gl.width;
+  c.height = gl.height;
+  const g = c.getContext("2d");
+  g.drawImage(gl, 0, 0);
+  const d = g.getImageData(0, 0, c.width, c.height).data;
+  let blank = true;
+  for (let i = 3; i < d.length; i += 4 * 61) if (d[i] !== 0) { blank = false; break; }
+  const constr = document.querySelector('svg.overlay g[id="construction"]');
+  return {
+    layers: Object.fromEntries([...document.querySelectorAll("#layers input[data-layer]")].map((b) => [b.dataset.layer, b.checked])),
+    construction_lines: document.getElementById("construction-lines").checked,
+    hidden_lines: document.getElementById("hidden-lines").checked,
+    hidden_style_enabled: !document.getElementById("hidden-style").disabled,
+    view3d: document.getElementById("view3d").checked,
+    canvas_hidden: gl.classList.contains("hidden") && getComputedStyle(gl).visibility === "hidden",
+    gl_blank: blank,
+    doc_hidden_lines: window.castplane_web.doc_summary?.hidden_lines ?? null,
+    construction_shown: constr !== null && getComputedStyle(constr).display !== "none",
+  };
+});
+const DEFAULT_LAYERS = { horizon: true, objects: true, form_shadow: true, cast_shadow: true, construction: false, labels: true };
+const is_default = (t) => JSON.stringify(t.layers) === JSON.stringify(DEFAULT_LAYERS) && !t.construction_lines && t.hidden_lines
+  && t.hidden_style_enabled && !t.view3d && t.canvas_hidden && !t.construction_shown && t.doc_hidden_lines === true;
+const toggle_checks = {};
+{
+  toggle_checks.page_load = await toggles();
+  check(is_default(toggle_checks.page_load), `toggles: the page-load defaults (${JSON.stringify(toggle_checks.page_load)})`);
+  check(toggle_checks.page_load.gl_blank, "toggles: with 3D view off the three.js canvas is never drawn");
+  // the user's choices survive a load: labels off, construction on (through 作圖線), hidden lines off, 3D view on;
+  // wall_and_ground's own output has hidden_lines true and all six layers
+  await page.click('#layers input[data-layer="labels"]');
+  await page.click("#construction-lines");
+  await page.click("#hidden-lines");
+  await page.click("#view3d");
+  await page.evaluate(() => window.castplane_web.load_example("wall_and_ground"));
+  await frames2();
+  await frames2();
+  const kept = toggle_checks.user_choice_after_load = await toggles();
+  check(!kept.layers.labels && kept.layers.construction && kept.construction_lines && kept.construction_shown && !kept.hidden_lines
+    && !kept.hidden_style_enabled && kept.view3d && !kept.canvas_hidden && !kept.gl_blank && kept.doc_hidden_lines === false,
+  `toggles: a load keeps the user's choices (${JSON.stringify(kept)})`);
+  // back to the defaults, then a scene whose output differs (basic: no hidden_lines) does not reset them either
+  await page.click('#layers input[data-layer="labels"]');
+  await page.click("#construction-lines");
+  await page.click("#hidden-lines");
+  await page.click("#view3d");
+  await page.evaluate(() => window.castplane_web.load_example("basic"));
+  await frames2();
+  await frames2();
+  const back = toggle_checks.after_another_example = await toggles();
+  check(is_default(back), `toggles: the defaults after loading another example (${JSON.stringify(back)})`);
 }
 
 /** Load a scene file through the file picker under the name `<name>.json` and wait for its first frame. */
@@ -148,10 +277,10 @@ for (const name of first.examples) {
   writeFileSync(join(outdir, `${name}.json`), ref.json + "\n");
   rows[name] = await drag_stats();
 }
+toggle_checks.after_every_example = await toggles();
+check(is_default(toggle_checks.after_every_example), "toggles: still the defaults after loading every example");
 
 // phase 2 (§5.4.10): receivers, mesh objects, several lights, the hidden-line switch and style
-const failures = [];
-const check = (ok, what) => { if (!ok) failures.push(what); };
 const overlay_ids = () => page.evaluate(() => [...document.querySelectorAll("svg.overlay g[id]")].map((g) => g.id));
 const ui = () => page.evaluate(() => ({ names: window.castplane_web.scene3d_names, doc: window.castplane_web.doc_summary,
   hidden: window.castplane_web.hidden, status: document.getElementById("status").textContent }));
@@ -169,7 +298,7 @@ const phase2 = {};
   await frames2();
   const s = await ui();
   const ids = await overlay_ids();
-  check(s.hidden.lines === true && s.hidden.style === "dashed", "wall_and_ground: hidden lines on, dashed (from the scene)");
+  check(s.hidden.lines === true && s.hidden.style === "dashed", "wall_and_ground: hidden lines on (page default), dashed (from the scene)");
   check(s.doc.hidden_lines === true && s.doc.hidden_edge_runs > 0, "wall_and_ground: hidden runs in the document");
   check(ids.includes("objects.hidden") && ids.includes("objects.hidden.crate"), "wall_and_ground: objects.hidden sub-groups");
   check(s.names.includes("receiver:ground") && s.names.includes("grid:ground"), "wall_and_ground: the ground plane and grid");
@@ -199,6 +328,9 @@ const phase2 = {};
   check(!ok, "mesh_demo: the path-only example is the expand-first error");
   await load_file_as("mesh_demo", join(ROOT, "ts", "test", "fixtures", "mesh_demo.expanded.json"));
   const s = await ui();
+  check(s.hidden.lines === false && s.doc.hidden_lines === false, "mesh_demo: hidden lines stay off after the user switched them off");
+  await page.evaluate(() => window.castplane_web.set_hidden(true)); // back to the page default
+  await frames2();
   check(s.names.includes("house") && s.names.includes("tank"), "mesh_demo: the house mesh and the tank in the 3D view");
   const house_edges = await page.evaluate(() => document.querySelectorAll('svg.overlay [id="objects.house"] > *').length);
   check(house_edges > 0, "mesh_demo: the house's edges in the overlay");
@@ -213,15 +345,9 @@ const phase2 = {};
   check(JSON.stringify(s.doc.constructions) === '["left","right"]', "two_lights: per-light construction blocks");
   check(s.doc.umbra_pieces > 0 && ids.includes("cast_shadow.umbra"), "two_lights: umbra at rest");
   const shot_path = await shoot("two_lights");
-  // during a drag the umbra is skipped (§5.4.11), the resting frame recomputes it
-  const box = await page.locator("#stage").boundingBox();
-  await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
-  await page.mouse.down();
-  await page.mouse.move(box.x + box.width / 2 + 20, box.y + box.height / 2 + 4);
-  await frames2();
-  const during = await ui();
-  await page.mouse.up();
-  await frames2();
+  // during a drag (the ring in the observer pane) the umbra is skipped (§5.4.11), the resting frame recomputes it
+  let during = null;
+  await camera_drag(2, [10, 2], async () => { during = await ui(); });
   const after = await ui();
   check(during.doc.umbra_pieces === 0 && after.doc.umbra_pieces > 0, "two_lights: umbra skipped during a drag only");
   phase2.two_lights = { names: s.names, umbra_pieces: s.doc.umbra_pieces, umbra_pieces_drag: during.doc.umbra_pieces,
@@ -267,9 +393,9 @@ async function observer_check(name, load) {
     const inside = (p) => p !== null && p[0] >= 0 && p[0] <= W && p[1] >= 0 && p[1] <= H;
     check(obs.px !== null && inside(obs.px.E) && obs.px.corners.every(inside), `${name}: framing keeps E and the frame in the ${W}x${H} pane`);
   }
-  // a drag of the drawing camera with the observer on: per-frame core + dom + obs
+  // a drag of the drawing camera (the ring) with the observer on: per-frame core + dom + obs
   await page.evaluate(() => { window.castplane_web.frames.length = 0; });
-  await drag(30);
+  await camera_drag(30);
   const frames = (await page.evaluate(() => window.castplane_web.frames)).filter((f) => f.dragging);
   const totals = frames.map((f) => f.core_ms + f.dom_ms + (f.obs_ms ?? 0));
   const row = {
@@ -344,6 +470,9 @@ if (sceneFile) {
   check(img === "none", "the <img> overlay of a drag frame is not displayed at rest");
 }
 {
+  // the comparisons with the scene camera's document below use the scenes' own hidden_lines (off): the page-level
+  // "Hidden lines" checkbox (on by default) is switched off for them and back on at the end
+  await page.evaluate(() => window.castplane_web.set_hidden(false));
   // a picture_plane scene camera (spec-v0.2 §4.1): loads through the M7 orbit with the picture kept
   const data = JSON.parse(readFileSync(join(ROOT, "examples", "basic.json"), "utf-8"));
   data.camera = { position: [0.37, -2, 0.9], picture_plane: { normal: [0, 1, 0], offset: -2 }, focal_length_mm: 20,
@@ -376,7 +505,7 @@ if (sceneFile) {
     check(JSON.stringify(doc.warnings) === JSON.stringify(expected.warnings) && doc.camera.picture_plane !== undefined
       && a.camera.picture_plane !== undefined && !a.rows.some((r) => r.includes("CAMERA_LOOKING_ALONG_UP")),
     `${name}: warnings and camera.picture_plane as in the expected file`);
-    await drag(6, "#stage", [3, -3]); // upwards: from the top view a level drag downwards stays at the pole (snap)
+    await arrow_push(0.5); // the arrow (g changes, so the eye moves whatever the board's direction)
     const b = await snap();
     check(b.camera.target === undefined && b.camera.picture_plane !== undefined
       && JSON.stringify(b.camera.position) !== JSON.stringify(a.camera.position), `${name}: a drag switches to the rig's picture_plane block`);
@@ -412,6 +541,7 @@ if (sceneFile) {
   observer.below_ground = { frame_bottom_mid_blue_minus_red: blue };
   check(blue > 50, `frame below the ground: the frame's bottom edge is drawn (blue − red ${blue})`);
   await page.evaluate(() => window.castplane_web.set_observer(false));
+  await page.evaluate(() => window.castplane_web.set_hidden(true));
 }
 {
   // the narrow layout: below 880 px the panes stack, observer on top
@@ -469,6 +599,7 @@ const plane = {};
     await frames2();
   }
   const sbox = await page.locator("#stage").boundingBox();
+  /** A mouse drag on the drawing pane (view-only) by `(dx, dy)` in 8 steps. */
   async function stage_drag(dx, dy, opts = {}, shift = false) {
     const x0 = sbox.x + sbox.width / 2, y0 = sbox.y + sbox.height / 2;
     if (shift) await page.keyboard.down("Shift");
@@ -527,34 +658,56 @@ const plane = {};
     check(JSON.stringify(r3) === JSON.stringify(r2) && v1.az_deg !== v0.az_deg, "plane: a drag on the eye orbits the observer only");
   }
   {
-    // right pane: wheel = arrow (R, not focal), a burst = one step
-    const a = await rig();
-    const sx = sbox.x + sbox.width / 2, sy = sbox.y + sbox.height / 2;
-    await page.mouse.move(sx, sy);
-    await page.mouse.wheel(0, 100);
-    await frames2();
-    const b = await rig();
-    await page.mouse.wheel(0, 100);
-    await frames2();
-    const c = await rig();
-    plane.wheel = { R: [a.R, b.R, c.R], focal: [a.focal, c.focal], undo: [a.undo, c.undo] };
-    check(near(b.R, a.R * Math.exp(0.1), 1e-9) && near(c.R, a.R * Math.exp(0.2), 1e-9) && c.focal === a.focal
-      && near3(c.f, a.f, 0) && c.undo === a.undo + 1, "plane: the wheel scales R by exp(0.001·ΔY), not the focal length; one burst one step");
-    // right drag and Shift drag pan; the pivot stays
-    await stage_drag(40, -20, { button: "right" });
-    const d = await rig();
-    check((d.a !== c.a || d.b !== c.b) && near3(d.P, c.P, 0) && near3(d.f, c.f, 0) && d.g === c.g && d.undo === c.undo + 1,
-      "plane: a right drag pans (a, b) and keeps P, f, g");
-    await stage_drag(-30, 15, {}, true);
-    const e = await rig();
-    check((e.a !== d.a || e.b !== d.b) && near3(e.P, d.P, 0) && near3(e.f, d.f, 0) && e.g === d.g, "plane: a Shift drag pans");
-    // left drag: the ring mapping, −Δx·κ about z
-    await stage_drag(50, 0);
-    const f1 = await rig();
-    const yaw = (Math.atan2(f1.f[1], f1.f[0]) - Math.atan2(e.f[1], e.f[0])) * 180 / Math.PI;
-    plane.right_drag = { yaw_deg: yaw };
-    check(near(((yaw + 540) % 360) - 180, -50 * 0.32, 1e-6) && f1.g === e.g && near(f1.R, e.R, 1e-12),
-      "plane: a right-pane left drag turns f about z by −Δx·κ, keeps g and R");
+    // the drawing pane is view-only: a left, right, middle and Shift drag and the wheel there change nothing (camera
+    // block, rig, readouts, undo availability, drawing), show no error or notice, and do not take the browser's default
+    // actions (no preventDefault on wheel / pointer / contextmenu; default touch-action and cursor)
+    const view_state = () => page.evaluate(() => ({
+      camera: JSON.stringify(window.castplane_web.camera), rig: JSON.stringify(window.castplane_web.rig),
+      readouts: document.getElementById("readouts").textContent, notices: document.getElementById("notices").textContent,
+      undo_disabled: document.getElementById("undo").disabled, svg: window.castplane_web.svg,
+      error_hidden: document.getElementById("error").hidden, error: document.getElementById("error").textContent,
+      frames: window.castplane_web.frames.length,
+    }));
+    const a = await view_state();
+    check(!a.undo_disabled, "plane: undo is available before the drawing-pane checks (the ring and arrow drags)");
+    const n_logs = logs.length;
+    const gestures = [["left drag", () => stage_drag(50, 20)], ["right drag", () => stage_drag(40, -20, { button: "right" })],
+      ["middle drag", () => stage_drag(-30, 15, { button: "middle" })], ["Shift drag", () => stage_drag(-30, 15, {}, true)],
+      ["wheel", async () => {
+        await page.mouse.move(sbox.x + sbox.width / 2, sbox.y + sbox.height / 2);
+        await page.mouse.wheel(0, 300);
+        await frames2();
+        await page.mouse.wheel(0, -300);
+        await frames2();
+      }]];
+    plane.view_only = {};
+    for (const [what, run] of gestures) {
+      await run();
+      await frames2();
+      const b = await view_state();
+      const same = ["camera", "rig", "readouts", "notices", "undo_disabled", "svg", "error_hidden", "error"].every((k) => a[k] === b[k]);
+      plane.view_only[what] = same;
+      check(same && b.frames === a.frames, `plane: a ${what} on the drawing pane changes nothing`);
+    }
+    check(logs.length === n_logs, `plane: the drawing-pane gestures log nothing (${logs.slice(n_logs).join(" | ")})`);
+    // default actions stay with the browser; the stage keeps the default touch-action and cursor
+    const defaults = await page.evaluate(() => {
+      const st = document.getElementById("stage");
+      const fire = (ev) => { st.dispatchEvent(ev); return ev.defaultPrevented; };
+      return {
+        wheel: fire(new WheelEvent("wheel", { deltaY: 100, bubbles: true, cancelable: true })),
+        pointerdown: fire(new PointerEvent("pointerdown", { bubbles: true, cancelable: true, button: 0 })),
+        contextmenu: fire(new MouseEvent("contextmenu", { bubbles: true, cancelable: true, button: 2 })),
+        touch_action: getComputedStyle(st).touchAction, cursor: getComputedStyle(st).cursor,
+        observer_touch_action: getComputedStyle(document.getElementById("observer")).touchAction,
+      };
+    });
+    plane.view_only.defaults = defaults;
+    check(!defaults.wheel && !defaults.pointerdown && !defaults.contextmenu, `plane: no preventDefault on the drawing pane (${JSON.stringify(defaults)})`);
+    check(defaults.touch_action === "auto" && defaults.cursor === "auto" && defaults.observer_touch_action === "none",
+      `plane: the drawing pane keeps the default touch-action and cursor (${JSON.stringify(defaults)})`);
+    const c = await view_state();
+    check(c.camera === a.camera && c.rig === a.rig, "plane: synthetic events on the drawing pane change nothing");
   }
   {
     // roll slider: the eye does not move; not an undo step
@@ -656,32 +809,17 @@ const plane = {};
     await frames2();
   }
   {
-    // M10 review fixes. A wheel inside a held right-pane drag is ignored: one gesture, one undo step
-    const sx = sbox.x + sbox.width / 2, sy = sbox.y + sbox.height / 2;
-    const a = await rig();
-    await page.mouse.move(sx, sy);
+    // M10 review fixes. A scene loaded while a ring drag is held: the held drag does not reach the new scene
+    const q = await ring_px(60);
+    check(q !== null, "plane: a ring point for the held drag");
+    await page.mouse.move(ob.x + q[0], ob.y + q[1]);
     await page.mouse.down();
-    await page.mouse.move(sx + 20, sy);
-    await frames2();
-    const mid = await rig();
-    await page.mouse.wheel(0, 300);
-    await frames2();
-    const w = await rig();
-    await page.mouse.move(sx + 40, sy);
-    await frames2();
-    await page.mouse.up();
-    await frames2();
-    const b = await rig();
-    check(w.R === mid.R && b.undo === a.undo + 1, "plane: a wheel during a right-pane drag is ignored (one undo step)");
-    // a scene loaded while a right-pane drag is held: the held drag does not reach the new scene
-    await page.mouse.move(sx, sy);
-    await page.mouse.down();
-    await page.mouse.move(sx + 25, sy + 5);
+    await page.mouse.move(ob.x + q[0] + 25, ob.y + q[1] + 5);
     await frames2();
     await page.evaluate(() => window.castplane_web.load_example("curved_demo"));
     await frames2();
     const c0 = await rig();
-    await page.mouse.move(sx + 60, sy + 10);
+    await page.mouse.move(ob.x + q[0] + 60, ob.y + q[1] + 10);
     await frames2();
     await page.mouse.up();
     await frames2();
@@ -699,11 +837,10 @@ const plane = {};
     await page.mouse.click(ob.x + px[0], ob.y + px[1]);
     await frames2();
     check((await rig()).pivot.object_id === "crate:1", "plane: an object id with ':' is pickable");
-    // switching the pivot mode alone keeps the pan (the pivot point did not move)
+    // switching the pivot mode alone keeps the pan (the pivot point did not move); basic's load rule gives a pan
     await page.evaluate(() => window.castplane_web.load_example("basic"));
     await frames2();
     await frames2();
-    await stage_drag(30, 10, { button: "right" });
     const p0 = await rig();
     await page.selectOption("#pivot-mode", "object");
     await frames2();
@@ -722,10 +859,9 @@ const plane = {};
       msg: document.getElementById("equation-error").textContent }));
     check(!fld.bad && fld.error === null && fld.aria === "false" && fld.msg === "" && fld.value === (await rig()).equation,
       "plane: blurring a rejected equation clears its error");
-    // a D slider dragged into its clamped range: the thumb goes to the clamped value at release
-    await page.mouse.move(sx, sy);
-    await page.mouse.wheel(0, -6000);
-    await frames2();
+    // a D slider dragged into its clamped range: the thumb goes to the clamped value at release (the arrow first
+    // pulls the board towards the scene until R hits its 0.8 m clamp)
+    await arrow_push(5, 10);
     const q0 = await rig();
     const dbox = await page.locator("#dist").boundingBox();
     await page.mouse.move(dbox.x + dbox.width / 2, dbox.y + dbox.height / 2);
@@ -879,6 +1015,6 @@ await page.waitForFunction(() => document.getElementById("error").textContent.in
 const scene_error = await page.locator("#error").textContent();
 
 const engine = { chromium: browser.version() };
-console.log(JSON.stringify({ engine, first, rows, load_errors, phase2, observer, plane, failures, downloads, errors: { not_json, scene_error }, logs }, null, 1));
+console.log(JSON.stringify({ engine, first, toggles: toggle_checks, rows, load_errors, phase2, observer, plane, failures, downloads, errors: { not_json, scene_error }, logs }, null, 1));
 await browser.close();
 process.exitCode = logs.some((l) => l.startsWith("pageerror")) || failures.length > 0 ? 1 : 0;
