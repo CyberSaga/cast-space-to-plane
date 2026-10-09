@@ -4152,6 +4152,19 @@ and the hidden-run SVG groups (§5.1.8). Nothing an M4–M6 case needs lies beyo
   lone surrogates; empty and 300-level nested containers; top-level scalars; `-0.0`, numpy values) and a seeded fuzz
   of 3000 random documents, on 3.10 and 3.13; "JSON dumps only" on 3.10 went from 787 to 269 ms (full render 1124 →
   653 ms). CPython >= 3.13 is unchanged: `_C_ENCODER` still writes the indented text and the new path is never taken.
+- **[implementation] (M9/M10 preparation) `web/src/main.ts` split into three DOM modules.** The §5.4.10 module list
+  stands; `main.ts` keeps the state, loading, the event wiring, the layout and the render loop, and three modules take
+  the rest. `src/stage.ts`: `class Stage3D`, one three.js view on a given canvas (its own `WebGLRenderer` with
+  `shadowMap` off, a white-background `THREE.Scene`, a `PerspectiveCamera`; `replace_group`, `set_size`, `render(block,
+  canvas_mm, scene_scale)` through `apply_camera_block`), with no module state so a second view can be a second
+  instance; and `letterbox(viewport, box, aspect)`, the canvas_mm-aspect sizing with the 8 px margin.
+  `src/input.ts`: `attach_drag_input(el, handlers)`, the previous pointer logic unchanged (one pointer, pan = right
+  button or Shift at pointerdown, pointer capture, non-passive wheel), which reports gestures to callbacks and holds no
+  camera math; and `attach_file_drop`, the page-wide drag-and-drop. `src/ui.ts`: element lookup (`$`, `controls`),
+  the layer checkboxes, the examples menu, the slider text, the error panel, `WarningsTable`, `status_text` and
+  `save`; it holds no application state. Behaviour is unchanged (same DOM, ids, listeners, overlay SVG, downloads and
+  WebGL image). The `Blob` wrapping that the M7 step 8 note above assigns to `main.ts` now lives in `ui.ts`'s `save`;
+  `download.ts` stays DOM-free.
 
 ### 5.5 M8 — STEP import (spec §9 row "STEP", spec §10 M8) — a loader, outside the core
 

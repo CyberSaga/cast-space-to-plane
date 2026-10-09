@@ -42,6 +42,10 @@ Phase 2 (contract §5.4.10, the M4–M6 format): `wall_and_ground` with hidden l
   world coordinates) with an outline. The three.js camera is built from the core's `camera_matrix` (no `lookAt` and no
   `fov`), so the WebGL image and the SVG overlay are two renderings of one castplane camera. Three.js casts no
   shadows (`renderer.shadowMap.enabled = false`). Every shadow you see comes from the core.
+- **Modules**: `src/main.ts` keeps the state, loading, the wiring and the render loop. `src/stage.ts` is one
+  three.js view (`Stage3D`, plus `letterbox` for the canvas size), `src/input.ts` turns pointer, wheel and file-drop
+  events into callbacks (`attach_drag_input`, `attach_file_drop`), and `src/ui.ts` drives the side panel (controls,
+  layer boxes, examples menu, slider text, error panel, warnings table, status line, `save` for downloads).
 - **Camera** (`src/orbit.ts`):
   - left drag orbits (yaw / pitch, with pitch clamped to ±89.5°; "grab the world" like OrbitControls, so dragging down lifts the camera);
   - right drag or Shift + drag pans;
