@@ -727,7 +727,8 @@ def test_web_tsconfig_is_the_normative_block():
         if dep != "castplane":
             assert lock["packages"][f"node_modules/{dep}"]["version"] == version, dep
     assert lock["packages"]["node_modules/castplane"].get("link") is True
-    assert "shadowMap.enabled = false" in (WEB / "src" / "main.ts").read_text(encoding="utf-8")
+    # The renderer lives in ``stage.ts`` since the M9 preparation split of ``main.ts`` (§5.4.10 notes).
+    assert "shadowMap.enabled = false" in (WEB / "src" / "stage.ts").read_text(encoding="utf-8")
 
 
 @needs_node
