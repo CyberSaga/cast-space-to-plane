@@ -20,23 +20,29 @@ export { SceneError, WARNING_CODES, make_warning, merge_warnings, warning_codes 
 export type { Warning } from "./errors.js";
 export {
   LAYER_IDS, LIGHT_TYPES, OBJECT_TYPES, load_camera, load_scene, load_scene_text, polygon_is_simple, polygon_signed_area,
-  validate_camera, validate_light, validate_object, validate_output, validate_receiver, validate_scene, validate_transform,
+  validate_camera, validate_picture_plane, PICTURE_PLANE_TOL, PICTURE_PLANE_ZERO_NORMAL, validate_light, validate_object, validate_output, validate_receiver, validate_scene, validate_transform,
   // phase 2 (§5.4.2): the §5.0.1 rows
   LOADER_TYPES, to_z_up, validate_bounds, validate_hidden_output, validate_lights_in_scene, validate_mesh_data,
   validate_mesh_object, validate_receivers_in_scene,
 } from "./scene.js";
-export type { Camera, Light, Output, Receiver, Scene, SceneObject, Transform } from "./scene.js";
+export type { Camera, Light, PicturePlaneBlock, Output, Receiver, Scene, SceneObject, Transform } from "./scene.js";
 export { compose, construction_block, project_scene, render, shadow_geometry } from "./pipeline.js";
 export type { StageA, StageB } from "./pipeline.js";
 export { canonical, dumps, py_repr, INT_KEYS } from "./output/geometry_json.js";
 export { HIDDEN_STROKE, HIDDEN_STYLES, LAYER_ORDER, OUTLINE_STYLE, STYLE, fmt, write_svg } from "./output/svg.js";
-export { cmp_code_points, py_round, pyimod, pymod } from "./pyfloat.js";
+export { cmp_code_points, py_fixed, py_round, pyimod, pymod } from "./pyfloat.js";
 export { apply_rotation, apply_transform, euler_zyx_matrix, rotation_x, rotation_y, rotation_z, transform_frame } from "./transform.js";
 export {
-  FALLBACK_UP, RECT_GROW, UP_WORLD, camera_forward, camera_matrix, clip_line_rect, clip_polygon_near, clip_polygon_rect_h,
+  FALLBACK_UP, RECT_GROW, UP_WORLD, camera_forward, camera_matrix, default_basis, clip_line_rect, clip_polygon_near, clip_polygon_rect_h,
   clip_segment_near, clip_segments_near, clip_segments_rect_h, depth, divide, horizon, nu, project, rect_functionals, vanishing_point,
 } from "./camera.js";
 export type { CameraRecord } from "./camera.js";
+// M10 (contract §5.7.6): the picture_plane camera form
+export {
+  AXIS_TOL as PICTURE_PLANE_AXIS_TOL, DROP_TOL as PICTURE_PLANE_DROP_TOL, fixed, picture_plane_document, plane_equation,
+  resolve_picture_plane, unproject_to_plane,
+} from "./picture_plane.js";
+export type { PicturePlaneInfo, PicturePlaneRecord } from "./picture_plane.js";
 export { face_lit_flags, is_parallel, light_vector, lit, lit_state, silhouette_edges, silhouette_loops } from "./light.js";
 export {
   ARC_STEP_DEG, arc_level, bounds_functionals, clip_loop_to_plane, clip_mesh_to_plane, clip_polygon_bounds, foot, light_plane_level,

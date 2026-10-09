@@ -1,34 +1,60 @@
 /**
- * The castplane web UI (contract §5.4.10): load a scene JSON (file picker, page-wide drag and drop, bundled
- * examples), show it with three.js, drag the camera, and overlay the SVG the ported core writes for that camera —
- * re-rendered per animation frame with stage A cached. No server, no network access at runtime.
+ * The castplane web UI (contract §5.4.10; M10 plane mode §5.7): load a scene JSON (file picker, page-wide drag and
+ * drop, bundled examples), show it with three.js, move the board (the picture plane) and overlay the SVG the ported
+ * core writes for that camera — re-rendered per animation frame with stage A cached. No server, no network access at
+ * runtime.
+ *
+ * This module owns the page state, loading and the render loop, and wires the others: `plane.ts` (the plane-mode
+ * session: the rig of `rig.ts`, undo, pivot, readouts), `stage.ts` (one three.js view), `input.ts` (file drop),
+ * `ui.ts` (controls and panels), `toggles.ts` (the page-level view toggles and their defaults), `overlay.ts` (the SVG
+ * overlay), and, behind the "旁觀視角" switch (M9, contract §5.6), `observer.ts` / `observer3d.ts` (the observer pane
+ * with the ring and arrow handles). The drawing pane (`#stage`) is view-only: no pointer or wheel listener is
+ * registered on it, so drags and wheel there do nothing (the page scrolls natively); the board is moved only in the
+ * observer pane and with the controls.
  */
 
 import "./style.css";
 
 import * as THREE from "three";
 
-import { LAYER_IDS, SceneError, compose, dumps, load_scene, load_scene_text, project_scene, shadow_geometry, write_svg } from "castplane";
-import type { GeometryDocument, Scene, StageA } from "castplane";
+import { LAYER_IDS, compose, dumps, load_scene, load_scene_text, project_scene, shadow_geometry, write_svg } from "castplane";
+import type { CameraRecord, GeometryDocument, Scene, StageA, Vec2 } from "castplane";
 
 import { EXAMPLES } from "./examples.js";
 import { camera_block_text, json_blob, ordered_layers, scene_blob, svg_blob } from "./download.js";
-import type { DownloadFile } from "./download.js";
+import { QUICK_EQUATIONS } from "./equation.js";
+import { attach_file_drop } from "./input.js";
+import { focal_from_slider } from "./orbit.js";
 import {
-  camera_from_orbit, focal_from_slider, orbit_from_camera, pan_orbit, rotate_orbit, set_focal, set_roll, slider_from_focal,
-  zoom_orbit,
-} from "./orbit.js";
-import type { OrbitState } from "./orbit.js";
+  derive_board, framing_points, frame_view, handles_of, hit_handles, initial_view, line_art, observer_basis, observer_project,
+  scene_centre, vertex_rays,
+} from "./observer.js";
+import type { HandleHit } from "./observer.js";
+import { ObserverPane } from "./observer3d.js";
+import type { HandleInput } from "./observer3d.js";
 import { IMG_MODE_THRESHOLD, Overlay } from "./overlay.js";
 import type { OverlayMode } from "./overlay.js";
-import { build_scene3d, dispose_scene3d } from "./scene3d.js";
-import { apply_camera_block } from "./threeCamera.js";
+import { PlaneSession, arrow_drag, object_centres, ring_drag, ring_grab } from "./plane.js";
+import { arrowScreenVector, clone, equation, sync } from "./rig.js";
+import type { RigState, RingGrab, ViewName } from "./rig.js";
+import { build_scene3d } from "./scene3d.js";
+import { Stage3D, letterbox } from "./stage.js";
+import { initial_toggles } from "./toggles.js";
+import {
+  $, WarningsTable, build_layer_boxes, controls, describe_error, fill_examples, fill_quick_equations, save, set_error_panel,
+  set_lines, set_rig_controls, status_text, umbra_count,
+} from "./ui.js";
 
 THREE.Object3D.DEFAULT_UP.set(0, 0, 1);
+
+/** The page's view toggles at start (layers, hidden lines, 3D view); scene loads never reset them. */
+const TOGGLES = initial_toggles(LAYER_IDS);
 
 interface FrameRecord {
   core_ms: number;
   dom_ms: number;
+  /** The observer's own cost (geometry + its render), `null` while 預覽 hides the pane. */
+  obs_ms: number | null;
   mode: OverlayMode;
   dragging: boolean;
   svg_bytes: number;
@@ -38,7 +64,9 @@ interface State {
   scene: Scene | null;
   sceneName: string;
   A: StageA | null;
-  orbit: OrbitState | null;
+  /** The plane-mode session of the loaded scene (M10, §5.7.7): the rig, undo, pivot, readouts. */
+  plane: PlaneSession | null;
+  /** The checked layer checkboxes: page-level, kept across scene loads (`toggles.ts`). */
   layersChecked: Set<string>;
   doc: GeometryDocument | null;
   svg: string;
@@ -47,14 +75,22 @@ interface State {
   dirty: boolean;
   full_svg_length: number;
   frames: FrameRecord[];
+  /** The camera record of the last frame (the observer reads it, §5.6.2). */
+  rec: CameraRecord | null;
+  /** M9 observer (contract §5.6): whether a framing is pending, its last cost. */
+  obs: { on: boolean; needs_framing: boolean; ms: number | null };
+  /** M10: the handle being dragged in the observer pane, with its pointer-down state (§5.7.8 items 1, 4). */
+  handle: { kind: "ring"; rig0: RigState; grab: RingGrab } | { kind: "arrow"; rig0: RigState; v: Vec2 } | null;
+  /** M10: the last equation error (the field turns red with it), null when none. */
+  equation_error: string | null;
 }
 
 const state: State = {
   scene: null,
   sceneName: "",
   A: null,
-  orbit: null,
-  layersChecked: new Set(LAYER_IDS),
+  plane: null,
+  layersChecked: new Set(TOGGLES.layers),
   doc: null,
   svg: "",
   timings: { stage_a_ms: 0, core_ms: 0, dom_ms: 0, mode: "dom" },
@@ -62,70 +98,48 @@ const state: State = {
   dirty: false,
   full_svg_length: 0,
   frames: [],
+  rec: null,
+  obs: { on: false, needs_framing: true, ms: null },
+  handle: null,
+  equation_error: null,
 };
 
-const $ = <T extends HTMLElement>(id: string): T => {
-  const el = document.getElementById(id);
-  if (el === null) throw new Error(`missing #${id}`);
-  return el as T;
-};
+const ui = controls();
+const { viewport, stage, canvas, examplesSelect, fileInput, focalInput, distInput, rollInput, view3d, hiddenLines, hiddenStyle } = ui;
 
-const viewport = $<HTMLElement>("viewport");
-const stage = $<HTMLDivElement>("stage");
-const canvas = $<HTMLCanvasElement>("gl");
-const examplesSelect = $<HTMLSelectElement>("examples");
-const fileInput = $<HTMLInputElement>("file");
-const focalInput = $<HTMLInputElement>("focal");
-const focalOut = $<HTMLOutputElement>("focal-out");
-const rollInput = $<HTMLInputElement>("roll");
-const rollOut = $<HTMLOutputElement>("roll-out");
-const layersBox = $<HTMLSpanElement>("layers");
-const view3d = $<HTMLInputElement>("view3d");
-const hiddenLines = $<HTMLInputElement>("hidden-lines");
-const hiddenStyle = $<HTMLSelectElement>("hidden-style");
-const statusLine = $<HTMLDivElement>("status");
-const errorPanel = $<HTMLDivElement>("error");
-const warningsBody = $<HTMLTableElement>("warnings").tBodies[0]!;
-
-// ---------------------------------------------------------------------------- three.js
-const renderer = new THREE.WebGLRenderer({ canvas, antialias: true, preserveDrawingBuffer: true });
-renderer.shadowMap.enabled = false; // normative (§5.4.0): shadows come only from the ported core
-renderer.setPixelRatio(window.devicePixelRatio || 1);
-const scene3 = new THREE.Scene();
-scene3.background = new THREE.Color(0xffffff);
-const camera3 = new THREE.PerspectiveCamera();
-let group3: THREE.Group | null = null;
-
+// ---------------------------------------------------------------------------- three.js and overlay
+const view = new Stage3D(canvas);
 const overlay = new Overlay(stage);
+const warnings = new WarningsTable(ui.warningsBody);
+/** The observer pane, created at startup (D80; while 預覽 hides it the layout and outputs are the §5.4.10 page's;
+ *  the drawing pane takes no input either way, D79). */
+let observer: ObserverPane | null = null;
 
-// ---------------------------------------------------------------------------- layer checkboxes
-const layerBoxes = new Map<string, HTMLInputElement>();
-for (const id of LAYER_IDS) {
-  const label = document.createElement("label");
-  const box = document.createElement("input");
-  box.type = "checkbox";
-  box.checked = true;
-  box.dataset["layer"] = id;
-  box.addEventListener("change", () => {
-    if (box.checked) state.layersChecked.add(id);
-    else state.layersChecked.delete(id);
-    overlay.set_hidden_layers(state.layersChecked);
-    if (overlay.mode === "img") request_render();
-  });
-  label.append(box, document.createTextNode(id));
-  layersBox.append(label);
-  layerBoxes.set(id, box);
-}
+// ---------------------------------------------------------------------------- layer checkboxes and view toggles
+// page-level state (toggles.ts): set once here, kept across scene loads
+hiddenLines.checked = TOGGLES.hidden_lines;
+hiddenStyle.disabled = !hiddenLines.checked;
+view3d.checked = TOGGLES.view3d;
+canvas.classList.toggle("hidden", !view3d.checked); // hidden from the first frame; `frame` renders it only when checked
+ui.construction.checked = state.layersChecked.has("construction");
+overlay.set_hidden_layers(state.layersChecked);
+const layerBoxes = build_layer_boxes(ui.layersBox, LAYER_IDS, state.layersChecked, (id, checked) => {
+  if (checked) state.layersChecked.add(id);
+  else state.layersChecked.delete(id);
+  overlay.set_hidden_layers(state.layersChecked);
+  if (id === "construction") ui.construction.checked = checked; // "作圖線" mirrors the construction layer
+  if (overlay.mode === "img") request_render();
+  observer_refresh(true); // the drawing on the frame follows the layer checkboxes
+});
+ui.construction.addEventListener("change", () => {
+  const box = layerBoxes.get("construction");
+  if (box === undefined || box.checked === ui.construction.checked) return;
+  box.checked = ui.construction.checked;
+  box.dispatchEvent(new Event("change"));
+});
 
-// ---------------------------------------------------------------------------- errors
 function show_error(message: string | null): void {
-  errorPanel.hidden = message === null;
-  errorPanel.textContent = message ?? "";
-}
-
-function describe_error(e: unknown): string {
-  if (e instanceof SceneError) return `SceneError\nfield: ${e.field === "" ? "(document)" : e.field}\n${e.detail}`;
-  return e instanceof Error ? `${e.name}: ${e.message}` : String(e);
+  set_error_panel(ui.errorPanel, message);
 }
 
 // ---------------------------------------------------------------------------- loading
@@ -147,22 +161,26 @@ function load(name: string, make: () => Scene): boolean {
   state.sceneName = name;
   state.A = A;
   state.timings.stage_a_ms = stage_a_ms;
-  state.orbit = orbit_from_camera(scene.camera, scene);
+  // §5.7.7: the rig of the load rule (scene-centre pivot); the scene camera itself is rendered until the first change
+  state.plane = new PlaneSession({
+    camera: scene.camera, canvas_mm: scene.output.canvas_mm, centre: scene_centre(A), object_centres: object_centres(A.objects),
+    vertices: A.vertices,
+  });
+  state.obs.needs_framing = true;
+  // a drag held across the load (keyboard on the examples menu, a drop) belongs to the old scene: drop it
+  state.handle = null;
+  state.dragging = false;
+  set_equation_error(null);
+  ui.pivotMode.value = "scene";
+  state.rec = null;
   state.full_svg_length = 0;
   state.frames = [];
-  if (group3 !== null) {
-    scene3.remove(group3);
-    dispose_scene3d(group3);
-  }
-  group3 = build_scene3d(scene, A);
-  scene3.add(group3);
-  state.layersChecked = new Set(scene.output.layers);
-  for (const [id, box] of layerBoxes) box.checked = state.layersChecked.has(id);
-  overlay.set_hidden_layers(state.layersChecked);
-  hiddenLines.checked = scene.output.hidden_lines === true;
+  view.replace_group(() => build_scene3d(scene, A));
+  observer?.set_scene(scene, A);
+  // the layer, "Hidden lines" and "3D view" checkboxes are page-level (toggles.ts): the scene's output.layers and
+  // output.hidden_lines do not reset them; the hidden style still comes from the scene
   hiddenStyle.value = scene.output.hidden_style ?? "dashed";
-  hiddenStyle.disabled = !hiddenLines.checked;
-  sync_sliders();
+  sync_controls();
   layout();
   document.title = `${name} — castplane web`;
   request_render();
@@ -187,12 +205,7 @@ function load_file(file: File): void {
   );
 }
 
-for (const ex of EXAMPLES) {
-  const opt = document.createElement("option");
-  opt.value = ex.name;
-  opt.textContent = ex.name;
-  examplesSelect.append(opt);
-}
+fill_examples(examplesSelect, EXAMPLES.map((e) => e.name));
 examplesSelect.addEventListener("change", () => {
   const ex = EXAMPLES.find((e) => e.name === examplesSelect.value);
   if (ex !== undefined) load(ex.name, () => load_scene(ex.data));
@@ -202,49 +215,112 @@ fileInput.addEventListener("change", () => {
   if (f !== undefined) load_file(f);
   fileInput.value = "";
 });
-window.addEventListener("dragover", (ev) => {
-  ev.preventDefault();
-  viewport.classList.add("dragover");
-});
-window.addEventListener("dragleave", (ev) => {
-  if (ev.relatedTarget === null) viewport.classList.remove("dragover");
-});
-window.addEventListener("drop", (ev) => {
-  ev.preventDefault();
-  viewport.classList.remove("dragover");
-  const f = ev.dataTransfer?.files?.[0];
-  if (f !== undefined) load_file(f);
-});
+attach_file_drop(viewport, load_file);
 
-// ---------------------------------------------------------------------------- sliders and buttons
-function sync_sliders(): void {
-  if (state.orbit === null) return;
-  focalInput.value = String(slider_from_focal(state.orbit.focal_length_mm));
-  focalOut.value = `${state.orbit.focal_length_mm.toFixed(1)} mm`;
-  rollInput.value = String(state.orbit.roll_deg);
-  rollOut.value = `${state.orbit.roll_deg.toFixed(1)}°`;
+// ---------------------------------------------------------------------------- plane-mode controls (§5.7.8, §5.7.9)
+/** Re-sync the sliders, the lock checkbox, the equation field (unless focused), the readouts, the notices and undo. */
+function sync_controls(): void {
+  const pl = state.plane;
+  if (pl === null) return;
+  set_rig_controls(ui, pl.rig);
+  if (document.activeElement !== ui.equation) ui.equation.value = equation(pl.rig);
+  set_lines(ui.readouts, pl.readout_lines());
+  const notes = pl.notices();
+  if (pl.pivot.mode === "object" && pl.pivot.object_id === null) {
+    notes.push(state.obs.on ? "請點一下左窗的物體，把它設為旋轉中心（目前暫用場景中心）" : "按「返回編輯」後點一下左窗的物體，把它設為旋轉中心（目前暫用場景中心）");
+  }
+  set_lines(ui.notices, notes);
+  ui.undo.disabled = !pl.undo.canUndo;
+}
+
+/** After a session action: re-frame the observer when asked (never during a drag), then render. */
+function after_action(r: { changed: boolean; framing: boolean }): void {
+  if (r.framing) state.obs.needs_framing = true;
+  sync_controls();
+  request_render();
+}
+
+function set_equation_error(message: string | null): void {
+  state.equation_error = message;
+  ui.equation.classList.toggle("bad", message !== null);
+  ui.equation.setAttribute("aria-invalid", message !== null ? "true" : "false");
+  ui.equationError.textContent = message ?? "";
+}
+
+/** Apply an equation text (the field, or a quick button's own text). */
+function apply_equation(text: string): boolean {
+  const pl = state.plane;
+  if (pl === null) return false;
+  const { error, result } = pl.apply_equation(text);
+  set_equation_error(error);
+  if (error === null) after_action(result);
+  return error === null;
 }
 
 focalInput.addEventListener("input", () => {
-  if (state.orbit === null) return;
-  state.orbit = set_focal(state.orbit, focal_from_slider(Number(focalInput.value)));
-  focalOut.value = `${state.orbit.focal_length_mm.toFixed(1)} mm`;
-  request_render();
+  if (state.plane?.set_focal(focal_from_slider(Number(focalInput.value)))) after_action({ changed: true, framing: false });
+});
+distInput.addEventListener("input", () => {
+  if (state.plane?.set_D(Number(distInput.value))) after_action({ changed: true, framing: false });
 });
 rollInput.addEventListener("input", () => {
-  if (state.orbit === null) return;
-  state.orbit = set_roll(state.orbit, Number(rollInput.value));
-  rollOut.value = `${state.orbit.roll_deg.toFixed(1)}°`;
-  request_render();
+  if (state.plane?.set_roll(Number(rollInput.value))) after_action({ changed: true, framing: false });
 });
-$<HTMLButtonElement>("reset").addEventListener("click", () => {
-  if (state.scene === null) return;
-  state.orbit = orbit_from_camera(state.scene.camera, state.scene);
-  sync_sliders();
-  request_render();
+// at the end of a slider drag the thumb goes to the clamped value (the focused slider is not re-synced while it moves)
+for (const el of [focalInput, distInput, rollInput]) {
+  el.addEventListener("change", () => {
+    if (state.plane !== null) set_rig_controls(ui, state.plane.rig, true);
+  });
+}
+ui.lockLevel.addEventListener("change", () => {
+  if (state.plane !== null) after_action(state.plane.set_lock_level(ui.lockLevel.checked));
 });
-// phase 2 of §5.4.10: the hidden-line switch, passed as `hidden_lines` to `compose`, and the hidden style, passed as
-// `hidden_style` to `write_svg` ("dashed" | "omit", §5.1.8); both initialised from the scene's `output`
+ui.pivotMode.addEventListener("change", () => {
+  if (state.plane !== null) after_action(state.plane.set_pivot_mode(ui.pivotMode.value === "object" ? "object" : "scene"));
+});
+for (const b of ui.views.querySelectorAll<HTMLButtonElement>("button[data-view]")) {
+  b.addEventListener("click", () => {
+    if (state.plane !== null) after_action(state.plane.view(b.dataset["view"] as ViewName));
+  });
+}
+fill_quick_equations(ui.quickEquations, QUICK_EQUATIONS);
+for (const b of ui.quickEquations.querySelectorAll<HTMLButtonElement>("button[data-eq]")) {
+  b.addEventListener("click", () => apply_equation(b.dataset["eq"]!));
+}
+// 「套用」 must not take the focus first: the field's blur would re-sync it to the current plane before the click
+ui.equationApply.addEventListener("mousedown", (ev) => ev.preventDefault());
+ui.equationApply.addEventListener("click", () => {
+  if (apply_equation(ui.equation.value)) ui.equation.blur();
+});
+ui.equation.addEventListener("keydown", (ev) => {
+  if (ev.key === "Enter") {
+    ev.preventDefault();
+    if (apply_equation(ui.equation.value)) ui.equation.blur();
+  } else if (ev.key === "Escape") {
+    ev.stopPropagation(); // the field's Esc cancels the typed text only; it does not also leave 預覽
+    set_equation_error(null);
+    ui.equation.blur();
+  }
+});
+// leaving the field discards the typed text, and with it the text's error
+ui.equation.addEventListener("blur", () => {
+  set_equation_error(null);
+  sync_controls();
+});
+ui.undo.addEventListener("click", () => {
+  if (state.plane !== null) after_action(state.plane.undo_step());
+});
+ui.reset.addEventListener("click", () => {
+  if (state.plane === null) return;
+  const r = state.plane.reset();
+  ui.pivotMode.value = "scene";
+  set_equation_error(null);
+  if (observer !== null) observer.view = { ...initial_view(), target: observer.view.target, dist: observer.view.dist };
+  after_action({ ...r, framing: true });
+});
+
+// phase 2 of §5.4.10: the hidden-line switch, passed as `hidden_lines` to `compose` (page-level, on at start), and the
+// hidden style, passed as `hidden_style` to `write_svg` ("dashed" | "omit", §5.1.8; set from the scene's `output` on load)
 hiddenLines.addEventListener("change", () => {
   hiddenStyle.disabled = !hiddenLines.checked;
   request_render();
@@ -260,17 +336,6 @@ view3d.addEventListener("change", () => {
   request_render();
 });
 
-function save(file: DownloadFile): void {
-  const url = URL.createObjectURL(new Blob([file.text], { type: file.type }));
-  const a = document.createElement("a");
-  a.href = url;
-  a.download = file.filename;
-  document.body.append(a);
-  a.click();
-  a.remove();
-  setTimeout(() => URL.revokeObjectURL(url), 1000);
-}
-
 $<HTMLButtonElement>("dl-svg").addEventListener("click", () => {
   if (state.doc !== null) save(svg_blob(state.doc, state.layersChecked, state.sceneName, hidden_style()));
 });
@@ -278,74 +343,165 @@ $<HTMLButtonElement>("dl-json").addEventListener("click", () => {
   if (state.doc !== null) save(json_blob(state.doc, state.sceneName));
 });
 $<HTMLButtonElement>("dl-scene").addEventListener("click", () => {
-  if (state.scene !== null && state.orbit !== null) save(scene_blob(state.scene, camera_from_orbit(state.orbit, state.scene.camera), state.sceneName, hiddenLines.checked, hidden_style()));
+  if (state.scene !== null && state.plane !== null) save(scene_blob(state.scene, state.plane.block(), state.sceneName, hiddenLines.checked, hidden_style()));
 });
 $<HTMLButtonElement>("copy-camera").addEventListener("click", () => {
-  if (state.scene === null || state.orbit === null) return;
-  const text = camera_block_text(camera_from_orbit(state.orbit, state.scene.camera));
+  if (state.scene === null || state.plane === null) return;
+  const text = camera_block_text(state.plane.block());
   navigator.clipboard.writeText(text).then(
     () => show_error(null),
     (e) => show_error(`clipboard unavailable (${describe_error(e)}); camera block:\n${text}`),
   );
 });
 
-// ---------------------------------------------------------------------------- pointer input (state only)
-let pointer: { id: number; x: number; y: number; pan: boolean } | null = null;
-
-stage.addEventListener("contextmenu", (ev) => ev.preventDefault());
-stage.addEventListener("pointerdown", (ev) => {
-  if (state.orbit === null || pointer !== null) return;
-  pointer = { id: ev.pointerId, x: ev.clientX, y: ev.clientY, pan: ev.button === 2 || ev.shiftKey };
-  stage.setPointerCapture(ev.pointerId);
-  state.dragging = true;
-  ev.preventDefault();
-});
-stage.addEventListener("pointermove", (ev) => {
-  if (pointer === null || ev.pointerId !== pointer.id || state.orbit === null || state.scene === null) return;
-  const dx = ev.clientX - pointer.x, dy = ev.clientY - pointer.y;
-  pointer.x = ev.clientX;
-  pointer.y = ev.clientY;
-  if (dx === 0 && dy === 0) return;
-  const H_px = stage.clientHeight || 1;
-  state.orbit = pointer.pan
-    ? pan_orbit(state.orbit, dx, dy, H_px, state.scene.camera, state.scene.output.canvas_mm)
-    : rotate_orbit(state.orbit, dx, dy, H_px);
-  request_render();
-});
-function end_drag(ev: PointerEvent): void {
-  if (pointer === null || ev.pointerId !== pointer.id) return;
-  pointer = null;
-  state.dragging = false;
-  request_render(); // the resting frame (DOM overlay)
+// ---------------------------------------------------------------------------- observer handles (§5.7.8 items 1, 4, 10; §5.7.9)
+/** The observer pane's size and basis for the hit test and the drag mappings (the projection of `observer3d`). */
+function obs_frame(): { W: number; H: number; basis: ReturnType<typeof observer_basis> } | null {
+  if (observer === null) return null;
+  const [W, H] = observer.size;
+  return { W, H, basis: observer_basis(observer.view) };
 }
-stage.addEventListener("pointerup", end_drag);
-stage.addEventListener("pointercancel", end_drag);
-stage.addEventListener("wheel", (ev) => {
-  if (state.orbit === null) return;
-  ev.preventDefault();
-  state.orbit = zoom_orbit(state.orbit, ev.deltaY);
-  request_render();
-}, { passive: false });
+
+const handle_input: HandleInput = {
+  hit: (p, touch): HandleHit => {
+    const o = obs_frame(), h = observer?.last_handles ?? null;
+    if (o === null || h === null || state.plane === null || state.dragging) return null;
+    return hit_handles(o.basis, o.W, o.H, p, touch, h);
+  },
+  begin: (hit) => {
+    const pl = state.plane, o = obs_frame(), h = observer?.last_handles ?? null;
+    if (pl === null || o === null || h === null || observer === null) return;
+    const rig0 = clone(pl.rig);
+    if (hit.kind === "ring") {
+      state.handle = { kind: "ring", rig0, grab: ring_grab(h.ring[hit.index]!, rig0.P, o.basis.r, o.basis.u) };
+    } else {
+      const view = observer.view;
+      state.handle = { kind: "arrow", rig0, v: arrowScreenVector(rig0, (X) => observer_project(view, o.W, o.H, X)) };
+    }
+    pl.begin();
+    state.dragging = true;
+    request_render();
+  },
+  move: (dx, dy, alt) => {
+    const pl = state.plane, hd = state.handle;
+    if (pl === null || hd === null) return;
+    const snap = ui.snap.checked && !alt;
+    const next = hd.kind === "ring" ? ring_drag(hd.rig0, hd.grab, dx, dy, snap) : arrow_drag(hd.rig0, hd.v, dx, dy, snap);
+    if (pl.drag(next)) request_render();
+  },
+  end: () => {
+    state.plane?.end();
+    state.handle = null;
+    state.dragging = false;
+    sync_controls();
+    request_render();
+  },
+  cancel: () => {
+    state.plane?.cancel();
+    state.handle = null;
+    state.dragging = false;
+    sync_controls();
+    request_render();
+  },
+  click: (p) => {
+    const pl = state.plane;
+    if (pl === null || observer === null || pl.pivot.mode !== "object") return;
+    const id = observer.pick_object(p);
+    if (id !== null) after_action(pl.pick_object(id));
+  },
+};
 
 // ---------------------------------------------------------------------------- layout (letterboxed to canvas_mm)
 function layout(): void {
   const aspect = state.scene ? state.scene.output.canvas_mm[0] / state.scene.output.canvas_mm[1] : 3 / 2;
-  const W = viewport.clientWidth - 16, H = viewport.clientHeight - 16;
-  let w = W, h = W / aspect;
-  if (h > H) {
-    h = H;
-    w = H * aspect;
-  }
-  w = Math.max(1, Math.floor(w));
-  h = Math.max(1, Math.floor(w / aspect));
-  stage.style.width = `${w}px`;
-  stage.style.height = `${h}px`;
-  renderer.setSize(w, h, false);
+  const [w, h] = letterbox(viewport, stage, aspect);
+  view.set_size(w, h);
+  if (state.obs.on && observer !== null) observer.set_size(ui.observerPane.clientWidth, ui.observerPane.clientHeight);
 }
-new ResizeObserver(() => {
+const resize = new ResizeObserver(() => {
   layout();
   request_render();
-}).observe(viewport);
+});
+resize.observe(viewport);
+resize.observe(ui.observerPane);
+
+// ---------------------------------------------------------------------------- observer (M9, contract §5.6)
+
+/** Update the observer from the drawing camera's record and document (§5.6.2, §5.6.5): board, drawing on the frame
+ * (checked layers), vertex rays; frame it when a framing is pending and no drag is running (§5.6.4); then draw it.
+ * Returns the observer's own cost in ms. Reads `rec` and `doc` only. */
+function update_observer(rec: CameraRecord, doc: GeometryDocument): number {
+  const pl = state.plane;
+  if (observer === null || state.scene === null || pl === null) return 0;
+  const t0 = performance.now();
+  const rig = pl.rig, d = sync(rig);
+  // M10: the board of the rig (§5.6.5): pivot P, R = g + D, D of the rig; the frame from the rendered record
+  const board = derive_board(rec, { target: rig.P, distance: d.R }, rig.D);
+  const art = line_art(doc, rec, rig.D, state.layersChecked);
+  const rays = ui.observerRays.checked ? vertex_rays(doc, state.scene, board, rec.near) : null;
+  if (state.obs.needs_framing && !state.dragging) {
+    observer.view = frame_view(observer.view, framing_points(board, state.scene, pl.scene.centre), observer.aspect);
+    state.obs.needs_framing = false;
+  }
+  observer.update({ board, art, rays, handles: handles_of(rig, state.scene.camera.frame_mm),
+    pivot_id: pl.pivot.mode === "object" ? pl.pivot.object_id : null, active: state.handle?.kind ?? null });
+  observer.render();
+  return performance.now() - t0;
+}
+
+/** Re-draw the observer without a core frame: `rebuild` re-derives its geometry from the last frame (layer or ray
+ * checkboxes), else only its camera changed. */
+function observer_refresh(rebuild: boolean): void {
+  if (!state.obs.on || observer === null) return;
+  if (rebuild && state.rec !== null && state.doc !== null) update_observer(state.rec, state.doc);
+  else observer.render();
+}
+
+let obsRafPending = false;
+function request_observer_render(): void {
+  if (obsRafPending) return;
+  obsRafPending = true;
+  requestAnimationFrame(() => {
+    obsRafPending = false;
+    observer_refresh(false);
+  });
+}
+
+/** Show or hide the observer pane (D80: shown at page start; hidden only while "預覽" is pressed, which is the M9
+ * switch-off state: the drawing pane takes the full width and the outputs are unchanged). */
+function set_observer(on: boolean): void {
+  state.obs.on = on;
+  ui.preview.setAttribute("aria-pressed", on ? "false" : "true");
+  ui.preview.textContent = on ? "預覽" : "返回編輯";
+  ui.preview.title = on ? "只看作圖畫面（Esc 返回）" : "回到旁觀視角";
+  ui.observerPane.hidden = !on;
+  ui.observerControls.hidden = !on;
+  ui.panes.classList.toggle("observer-on", on);
+  if (on && observer === null) {
+    observer = new ObserverPane(ui.observerCanvas, ui.observerLabels);
+    observer.attach_input(ui.observerPane, request_observer_render, handle_input);
+    if (state.scene !== null && state.A !== null) observer.set_scene(state.scene, state.A);
+  }
+  layout();
+  sync_controls();
+  request_render(); // the resting frame: the observer is built from it (and the drawing pane re-letterboxed)
+}
+
+/** "預覽" (D80): the drawing pane alone; pressed again ("返回編輯") or Esc returns to the edit view. */
+function set_preview(preview: boolean): void {
+  // a held drag (observer handle or orbit) keeps the pane: hiding it mid-gesture would move the board unseen
+  if (preview === !state.obs.on || state.dragging || state.handle !== null) return;
+  set_observer(!preview);
+}
+ui.preview.addEventListener("click", () => set_preview(state.obs.on));
+window.addEventListener("keydown", (ev) => {
+  if (ev.key === "Escape" && !state.obs.on) set_preview(false);
+});
+ui.observerFrame.addEventListener("click", () => {
+  state.obs.needs_framing = true;
+  observer_refresh(true);
+});
+ui.observerRays.addEventListener("change", () => observer_refresh(true));
 
 // ---------------------------------------------------------------------------- render loop
 let rafPending = false;
@@ -361,15 +517,17 @@ function request_render(): void {
 
 function frame(): void {
   rafPending = false;
-  if (!state.dirty || state.scene === null || state.A === null || state.orbit === null) return;
+  const pl = state.plane;
+  if (!state.dirty || state.scene === null || state.A === null || pl === null) return;
   state.dirty = false;
   const scene = state.scene;
-  const cam = camera_from_orbit(state.orbit, scene.camera);
+  const block = pl.block(); // what the core renders: the scene camera until the first change, then the rig's (§5.7.7)
   const img_mode = state.dragging && state.full_svg_length > IMG_MODE_THRESHOLD;
-  let doc: GeometryDocument, svg: string;
+  let doc: GeometryDocument, svg: string, rec: CameraRecord;
   const t0 = performance.now();
   try {
-    const B = project_scene(scene, state.A, cam, !state.dragging);
+    const B = project_scene(scene, state.A, block, !state.dragging);
+    rec = B.camera;
     // hidden lines are skipped during a drag (§5.4.11: a documented switch whose off state is a contract document);
     // the resting frame recomputes them
     doc = compose(scene, B, hiddenLines.checked && !state.dragging);
@@ -386,61 +544,19 @@ function frame(): void {
   if (!img_mode) state.full_svg_length = svg.length;
   state.doc = doc;
   state.svg = svg;
-  if (view3d.checked) {
-    apply_camera_block(camera3, cam, scene.output.canvas_mm, state.A.scene_scale);
-    renderer.render(scene3, camera3);
-  }
-  update_warnings(doc);
+  state.rec = rec;
+  if (view3d.checked) view.render(block, scene.output.canvas_mm, state.A.scene_scale);
+  warnings.update(doc);
+  const obs_ms = state.obs.on ? update_observer(rec, doc) : null;
+  state.obs.ms = obs_ms;
   state.timings.core_ms = t1 - t0;
   state.timings.dom_ms = t2 - t1;
   state.timings.mode = overlay.mode;
-  state.frames.push({ core_ms: t1 - t0, dom_ms: t2 - t1, mode: overlay.mode, dragging: state.dragging, svg_bytes: svg.length });
+  state.frames.push({ core_ms: t1 - t0, dom_ms: t2 - t1, obs_ms, mode: overlay.mode, dragging: state.dragging, svg_bytes: svg.length });
   if (state.frames.length > 500) state.frames.shift();
-  statusLine.textContent =
-    `${state.sceneName}: stage A ${state.timings.stage_a_ms.toFixed(1)} ms (cached)\n` +
-    `core ms ${state.timings.core_ms.toFixed(1)} · dom ms ${state.timings.dom_ms.toFixed(1)} · overlay ${overlay.mode}\n` +
-    `points ${Object.keys(doc.points).length} · edges ${doc.edges.length} · rays ${ray_count(doc)}` +
-    (doc.umbra !== undefined ? ` · umbra pieces ${umbra_count(doc)}` : "") + "\n" +
-    `lights ${scene.lights.map((l) => l.id).join(", ")} · receivers ${scene.receivers.map((r) => r.id).join(", ")}\n` +
-    `camera (${cam.position.map((x) => x.toFixed(2)).join(", ")}) → (${cam.target.map((x) => x.toFixed(2)).join(", ")}), ` +
-    `f ${cam.focal_length_mm.toFixed(1)} mm, roll ${cam.roll_deg.toFixed(1)}°`;
-}
-
-/** Construction rays of every light (`constructions` with N ≥ 2 lights, else `construction`). */
-function ray_count(doc: GeometryDocument): number {
-  const blocks = doc.constructions !== undefined ? Object.values(doc.constructions) : [doc.construction];
-  return blocks.reduce((n, b) => n + b.rays.length, 0);
-}
-
-/** Umbra pieces of the frame (`null` polygons — a drag frame, `umbra = false` — count as none). */
-function umbra_count(doc: GeometryDocument): number {
-  return (doc.umbra ?? []).reduce((n, u) => n + (u.polygons?.length ?? 0), 0);
-}
-
-let lastWarnings = "";
-function update_warnings(doc: GeometryDocument): void {
-  const key = JSON.stringify(doc.warnings);
-  if (key === lastWarnings) return;
-  lastWarnings = key;
-  warningsBody.replaceChildren(
-    ...doc.warnings.map((w) => {
-      const tr = document.createElement("tr");
-      for (const text of [w.code, w.ids.join(", "), w.message]) {
-        const td = document.createElement("td");
-        td.textContent = text;
-        tr.append(td);
-      }
-      return tr;
-    }),
-  );
-  if (doc.warnings.length === 0) {
-    const tr = document.createElement("tr");
-    const td = document.createElement("td");
-    td.colSpan = 3;
-    td.textContent = "none";
-    tr.append(td);
-    warningsBody.append(tr);
-  }
+  sync_controls(); // sliders, equation, readouts (the picture delta is measured here, once per frame), notices, undo
+  const form = pl.scene_block ? "scene camera" : "picture_plane";
+  ui.statusLine.textContent = status_text(state.sceneName, state.timings, overlay.mode, doc, scene, rec, block.focal_length_mm, form, obs_ms);
 }
 
 // ---------------------------------------------------------------------------- start
@@ -457,8 +573,90 @@ function update_warnings(doc: GeometryDocument): void {
   load_text,
   get frames() { return state.frames.slice(); },
   get timings() { return { ...state.timings }; },
-  get camera() { return state.orbit && state.scene ? camera_from_orbit(state.orbit, state.scene.camera) : null; },
+  get camera() { return state.plane === null ? null : state.plane.block(); },
+  /** M10: the rig and what is derived from it (read-only), the pivot selection, the undo depth, the readouts. */
+  get rig() {
+    const pl = state.plane;
+    if (pl === null) return null;
+    const d = sync(pl.rig);
+    return { ...clone(pl.rig), E: d.E, Q: d.Q, R: d.R, c: d.c, r: d.r, u: d.u, equation: equation(pl.rig),
+      scene_block: pl.scene_block, pivot: { ...pl.pivot }, undo: pl.undo.size, delta: pl.delta,
+      readouts: pl.readout_lines(), notices: pl.notices() };
+  },
+  /** M10: the observer-pane px of the handles, the eye and the pivot (`null` entries behind the observer). */
+  get handles_px() {
+    const o = obs_frame(), h = observer?.last_handles ?? null, b = observer?.last_board ?? null;
+    if (o === null || h === null || b === null || observer === null) return null;
+    const pr = (X: readonly number[]) => observer_project(observer!.view, o.W, o.H, X);
+    return { tip: pr(h.tip), Q: pr(h.Q), ring: h.ring.map(pr), E: pr(b.E), P: pr(b.P), size: [o.W, o.H] };
+  },
+  /** M10: the observer-pane px of each object's pivot (its stage-A bounding-box centre). */
+  get objects_px() {
+    const o = obs_frame(), pl = state.plane;
+    if (o === null || pl === null || observer === null) return null;
+    const view = observer.view;
+    return Object.fromEntries([...pl.scene.object_centres].map(([id, c]) => [id, observer_project(view, o.W, o.H, c)]));
+  },
+  /** M10 random-frame check (§5.7.13 last row): put `rig` (a full state; its `P` is kept as given) into the session as a
+   * one-move drag would (cancelled afterwards), render one frame synchronously, and report whether every number handed
+   * to drawing calls is finite: the camera block, the camera record, the observer's board, drawing, rays and handles,
+   * and the SVG text. */
+  probe_rig: (rig: RigState) => {
+    const pl = state.plane;
+    if (pl === null) return null;
+    pl.begin(); // a one-move gesture, cancelled after the checks: no undo step, the state comes back
+    pl.drag(clone(rig));
+    state.dirty = true;
+    frame();
+    const finite = (x: unknown): boolean => typeof x === "number" ? Number.isFinite(x)
+      : Array.isArray(x) ? x.every(finite) : x !== null && typeof x === "object" ? Object.values(x).every(finite) : true;
+    const bad: string[] = [];
+    if (!finite(pl.block())) bad.push("camera block");
+    if (state.rec === null || !finite({ P: state.rec.P, C: state.rec.C, R: state.rec.R })) bad.push("camera record");
+    if (/NaN|Infinity/.test(state.svg)) bad.push("svg");
+    if (observer !== null && state.obs.on) {
+      if (!finite(observer.last_board)) bad.push("board");
+      if (!finite(observer.last_handles)) bad.push("handles");
+      if (!finite(observer.view)) bad.push("observer view");
+    }
+    pl.cancel();
+    state.dirty = true;
+    return bad;
+  },
+  /** M10: the observer's handle hit test at pane px `(x, y)` (mouse radius). */
+  hit_at: (x: number, y: number) => handle_input.hit([x, y], false),
+  /** M10: the equation field's state. */
+  get equation_field() { return { value: ui.equation.value, error: state.equation_error, bad: ui.equation.classList.contains("bad") }; },
   get svg_length() { return state.svg.length; },
+  /** The writer's SVG text of the last frame (the overlay's source). */
+  get svg() { return state.svg; },
+  /** The texts "Download SVG" / "Download JSON" would save now. */
+  download_texts: () => state.doc === null ? null : {
+    svg: svg_blob(state.doc, state.layersChecked, state.sceneName, hidden_style()).text,
+    json: json_blob(state.doc, state.sceneName).text,
+  },
+  /** D80: press / release "預覽" (the observer pane hidden / shown) as a user would. */
+  set_preview: (preview: boolean) => {
+    if (preview === state.obs.on) ui.preview.click();
+  },
+  /** M9: show / hide the observer pane (`set_preview(!on)`). */
+  set_observer: (on: boolean) => {
+    if (on !== state.obs.on) ui.preview.click();
+  },
+  /** M9: the observer's state (`null` only before startup creates it). */
+  get observer() {
+    if (observer === null) return null;
+    const names = observer.names;
+    const count = (prefix: string) => names.filter((n) => n.startsWith(prefix)).length;
+    const [W, H] = observer.size, b = observer.last_board;
+    /** The frame corners and the eye in observer-pane px (`null` behind the observer). */
+    const px = b === null ? null : { corners: b.corners.map((c) => observer_project(observer!.view, W, H, c)),
+      E: observer_project(observer.view, W, H, b.E) };
+    return { on: state.obs.on, D: state.plane?.rig.D ?? null, view: observer.view, labels: observer.label_texts, names,
+      art_objects: count("art"), ms: state.obs.ms, size: [W, H], px };
+  },
+  /** M9: the "整體顯示" button. */
+  frame_observer: () => ui.observerFrame.click(),
   /** The UI's hidden-line state: the checkbox and the style select. */
   get hidden() { return { lines: hiddenLines.checked, style: hidden_style() }; },
   /** Set the hidden-line checkbox and style as a user would (fires their change handlers). */
@@ -471,7 +669,7 @@ function update_warnings(doc: GeometryDocument): void {
     }
   },
   /** The names of the 3D view's objects (`<object id>`, `light:<id>`, `receiver:<id>`, `outline:<id>`, `grid:<id>`). */
-  get scene3d_names() { return group3 === null ? [] : group3.children.map((c) => c.name).filter((n) => n !== ""); },
+  get scene3d_names() { const g = view.group; return g === null ? [] : g.children.map((c) => c.name).filter((n) => n !== ""); },
   get doc_summary() {
     const d = state.doc;
     if (d === null) return null;
@@ -492,6 +690,8 @@ function update_warnings(doc: GeometryDocument): void {
   },
 };
 
+// D80: the page always opens in the edit view (observer pane shown); the old "castplane.observer" storage key is ignored
+set_preview(TOGGLES.preview);
 layout();
 const first = EXAMPLES.find((e) => e.name === "basic") ?? EXAMPLES[0];
 if (first !== undefined) {

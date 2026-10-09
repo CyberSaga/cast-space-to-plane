@@ -81,12 +81,22 @@ export interface Receiver {
   offset: number;
 }
 
+/** `camera.picture_plane` of the third camera form (M10; spec-v0.2 §4.1): the plane `normal·X + offset = 0` and the
+ * optional frame up, as given (not normalised; `resolve_picture_plane` normalises once). */
+export interface PicturePlaneBlock {
+  normal: Vec3;
+  offset: number;
+  up?: Vec3;
+}
+
 export interface Camera {
   position: Vec3;
   target?: Vec3;
   yaw_deg?: number;
   pitch_deg?: number;
-  roll_deg: number;
+  /** Absent in the `picture_plane` form (the roll is carried by `picture_plane.up`); every reader defaults it to 0. */
+  roll_deg?: number;
+  picture_plane?: PicturePlaneBlock;
   focal_length_mm: number;
   frame_mm: Vec2;
   shift_mm: Vec2;
@@ -331,7 +341,69 @@ export function validate_receiver(value: unknown, field: string): Receiver {
   return { id: rid, type: "plane", bounds, normal: n, offset };
 }
 
-/** `camera` block (contract §2.0): target form or yaw/pitch form, exactly one. */
+/**
+ * Tolerances of the `picture_plane` camera form (spec-v0.2 §4.1): a normal no longer than this is zero; a plane whose
+ * signed distance from `position` is within `PICTURE_PLANE_TOL` passes through the eye; an `up` whose unit vector's
+ * component across the normal (`|û × n̂|`) is within it is parallel to the normal.
+ */
+export const PICTURE_PLANE_ZERO_NORMAL = 1e-12;
+export const PICTURE_PLANE_TOL = 1e-9;
+
+/** `sqrt(x·x + y·y + z·z)` summed left to right (Python `scene._norm3`). */
+function norm3(v: readonly number[]): number {
+  return Math.sqrt((v[0] as number) * (v[0] as number) + (v[1] as number) * (v[1] as number) + (v[2] as number) * (v[2] as number));
+}
+
+/**
+ * `camera.picture_plane` = `{normal, offset, up?}` of the third camera form (spec-v0.2 §4.1, M10; port of
+ * `castplane.scene.validate_picture_plane`). The plane is `normal·X + offset = 0`. Returns `{normal, offset}` and, when
+ * given, `up` exactly as given: the unit copies serve the checks only, so validating a validated block changes no
+ * bit. Errors: a zero normal (`.normal`), a plane through `position` (`.offset`), an `up` that is zero or parallel to
+ * the normal (`.up`).
+ */
+export function validate_picture_plane(value: unknown, position: readonly number[], field = "camera.picture_plane"): PicturePlaneBlock {
+  const pp = dict(value, field);
+  const n = vector(require_key(pp, "normal", field), `${field}.normal`, 3) as Vec3;
+  const offset = number(require_key(pp, "offset", field), `${field}.offset`);
+  const nn = norm3(n);
+  if (!(nn > PICTURE_PLANE_ZERO_NORMAL)) throw new SceneError(`${field}.normal`, "must be a nonzero vector (|normal| > 1e-12)");
+  const n_hat = [n[0] / nn, n[1] / nn, n[2] / nn];
+  const off_hat = offset / nn;
+  const out: PicturePlaneBlock = { normal: n, offset };
+  if (has(pp, "up")) {
+    const up = vector(pp["up"], `${field}.up`, 3) as Vec3;
+    const un = norm3(up);
+    if (!(un > 0.0)) throw new SceneError(`${field}.up`, "must be a nonzero vector");
+    const u = [up[0] / un, up[1] / un, up[2] / un] as Vec3;
+    const cross = [
+      u[1] * (n_hat[2] as number) - u[2] * (n_hat[1] as number),
+      u[2] * (n_hat[0] as number) - u[0] * (n_hat[2] as number),
+      u[0] * (n_hat[1] as number) - u[1] * (n_hat[0] as number),
+    ];
+    if (norm3(cross) <= PICTURE_PLANE_TOL) {
+      throw new SceneError(`${field}.up`, "must not be parallel to picture_plane.normal (its projection onto the plane is zero)");
+    }
+    out.up = up;
+  }
+  const s = (n_hat[0] as number) * (position[0] as number) + (n_hat[1] as number) * (position[1] as number)
+    + (n_hat[2] as number) * (position[2] as number) + off_hat;
+  if (Math.abs(s) <= PICTURE_PLANE_TOL) {
+    throw new SceneError(`${field}.offset`, "the plane passes through camera.position (|n̂·position + offset| <= 1e-09 after normalising the normal)");
+  }
+  return out;
+}
+
+/** The lens keys shared by the three camera forms, in this order (contract §2.0; Python `scene._validate_lens`). */
+function validate_lens(c: Dict, field: string): Pick<Camera, "focal_length_mm" | "frame_mm" | "shift_mm" | "near_m"> {
+  const focal_length_mm = number(require_key(c, "focal_length_mm", field), `${field}.focal_length_mm`, true);
+  const frame_mm = vector(require_key(c, "frame_mm", field), `${field}.frame_mm`, 2, true) as Vec2;
+  const shift_mm = vector(get(c, "shift_mm", [0.0, 0.0]), `${field}.shift_mm`, 2) as Vec2;
+  const near_m = number(get(c, "near_m", 0.05), `${field}.near_m`, true);
+  return { focal_length_mm, frame_mm, shift_mm, near_m };
+}
+
+/** `camera` block (contract §2.0): target form, yaw/pitch form or (M10, spec-v0.2 §4.1) `picture_plane` form,
+ * exactly one. The `picture_plane` form carries no `roll_deg` (`picture_plane.up` sets the frame). */
 export function validate_camera(value: unknown, field = "camera"): Camera {
   const c = dict(value, field);
   const position = vector(require_key(c, "position", field), `${field}.position`, 3) as Vec3;
@@ -339,6 +411,15 @@ export function validate_camera(value: unknown, field = "camera"): Camera {
   const has_target = has(c, "target");
   const has_yp = has(c, "yaw_deg") || has(c, "pitch_deg");
   if (has_target && has_yp) throw new SceneError(field, "give either target or yaw_deg + pitch_deg, not both");
+  if (has(c, "picture_plane")) {
+    if (has_target || has_yp) throw new SceneError(field, "give exactly one of target, yaw_deg + pitch_deg or picture_plane");
+    if (has(c, "roll_deg")) {
+      throw new SceneError(`${field}.roll_deg`, "must not be given with picture_plane (the roll is carried by picture_plane.up)");
+    }
+    out.picture_plane = validate_picture_plane(c["picture_plane"], position, `${field}.picture_plane`);
+    Object.assign(out, validate_lens(c, field));
+    return out as Camera;
+  }
   if (has_target) {
     const t = vector(c["target"], `${field}.target`, 3) as Vec3;
     if (norm([t[0] - position[0], t[1] - position[1], t[2] - position[2]]) <= 1e-12) {
@@ -350,13 +431,10 @@ export function validate_camera(value: unknown, field = "camera"): Camera {
     out.yaw_deg = number(c["yaw_deg"], `${field}.yaw_deg`);
     out.pitch_deg = number(c["pitch_deg"], `${field}.pitch_deg`);
   } else {
-    throw new SceneError(field, "needs target or yaw_deg + pitch_deg");
+    throw new SceneError(field, "needs target, yaw_deg + pitch_deg or picture_plane");
   }
   out.roll_deg = number(get(c, "roll_deg", 0.0), `${field}.roll_deg`);
-  out.focal_length_mm = number(require_key(c, "focal_length_mm", field), `${field}.focal_length_mm`, true);
-  out.frame_mm = vector(require_key(c, "frame_mm", field), `${field}.frame_mm`, 2, true) as Vec2;
-  out.shift_mm = vector(get(c, "shift_mm", [0.0, 0.0]), `${field}.shift_mm`, 2) as Vec2;
-  out.near_m = number(get(c, "near_m", 0.05), `${field}.near_m`, true);
+  Object.assign(out, validate_lens(c, field));
   return out as Camera;
 }
 

@@ -1,0 +1,96 @@
+{
+ "description": "picture_plane camera form (spec-v0.2 4.1): horizontal plane z = 3 seen from above (eye at z = 7, D = 4 m), no up: the frame up falls back to +y without CAMERA_LOOKING_ALONG_UP; the ground horizon is the line at infinity; boxes only",
+ "version": "0.1",
+ "units": "m",
+ "up": "z",
+ "objects": [
+  {
+   "id": "crate",
+   "type": "box",
+   "size": [
+    1.0,
+    0.8,
+    0.6
+   ],
+   "transform": {
+    "position": [
+     1.0,
+     5.0,
+     0.0
+    ],
+    "rotation_deg": [
+     0,
+     0,
+     30
+    ]
+   }
+  },
+  {
+   "id": "tower",
+   "type": "box",
+   "size": [
+    0.5,
+    0.5,
+    1.5
+   ],
+   "transform": {
+    "position": [
+     -1.0,
+     5.5,
+     0.0
+    ]
+   }
+  }
+ ],
+ "lights": [
+  {
+   "id": "lamp",
+   "type": "point",
+   "position": [
+    0.5,
+    3.5,
+    2.5
+   ]
+  }
+ ],
+ "receivers": [
+  {
+   "id": "ground",
+   "type": "plane",
+   "normal": [
+    0,
+    0,
+    1
+   ],
+   "offset": 0.0
+  }
+ ],
+ "camera": {
+  "position": [
+   0.2,
+   5.0,
+   7.0
+  ],
+  "picture_plane": {
+   "normal": [
+    0,
+    0,
+    1
+   ],
+   "offset": -3.0
+  },
+  "focal_length_mm": 24,
+  "frame_mm": [
+   36,
+   24
+  ],
+  "near_m": 0.05
+ },
+ "output": {
+  "canvas_mm": [
+   360,
+   240
+  ],
+  "png_dpi": 150
+ }
+}

@@ -253,7 +253,8 @@ def test_expected_files_are_canonical_and_small():
 
 
 def test_set_covers_the_required_sources():
-    """Spec §7.5 sources: every §5.7 row, all five primitive types, both light types, both camera forms."""
+    """Spec §7.5 sources: every §5.7 row, all five primitive types, both light types, all three camera forms (the
+    ``picture_plane`` form since v8, contract §5.7.14)."""
     codes, kinds, lights, forms = set(), set(), set(), set()
     n_lights = set()   # M6 (contract §5.0.8, §5.3.10): a case with N >= 2 and one with N >= 3
     for name in case_names():
@@ -261,11 +262,12 @@ def test_set_covers_the_required_sources():
         n_lights.add(len(scene["lights"]))
         kinds.update(o["type"] for o in scene["objects"])
         lights.update(lt["type"] for lt in scene["lights"])
-        forms.add("target" if "target" in scene["camera"] else "yaw_pitch")
+        cam = scene["camera"]
+        forms.add("picture_plane" if "picture_plane" in cam else "target" if "target" in cam else "yaw_pitch")
         codes.update(w["code"] for w in load_expected(name)["warnings"])
     assert set(_DEGENERATE_ROW_CODES) <= codes, sorted(set(_DEGENERATE_ROW_CODES) - codes)
     # every object kind incl. ``mesh`` (the three M5 cases, contract §5.0.8, §5.2.11)
-    assert kinds == set(OBJECT_TYPES) and lights == set(LIGHT_TYPES) and forms == {"target", "yaw_pitch"}
+    assert kinds == set(OBJECT_TYPES) and lights == set(LIGHT_TYPES) and forms == {"target", "yaw_pitch", "picture_plane"}
     assert max(n_lights) >= 3 and any(n >= 2 for n in n_lights - {max(n_lights)}), sorted(n_lights)
 
 

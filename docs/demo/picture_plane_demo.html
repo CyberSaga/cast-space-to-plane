@@ -1,0 +1,996 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>投影平面的三個把手 Demo</title>
+<style>
+:root{
+  box-sizing:border-box;
+  padding-top:env(safe-area-inset-top,0px);
+  padding-bottom:env(safe-area-inset-bottom,0px);
+  --bg:#f6f5f1; --panel:#ffffff; --ink:#1f1f1c; --muted:#66665f; --line:#d8d6cd;
+  --accent:#2563d9; --orange:#e8821e; --ok:#2a8a4a; --bad:#c9372c; --chip:#ecebe4; --warnbg:#fff4e0;
+}
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]){
+    --bg:#16161a; --panel:#212126; --ink:#ecebe6; --muted:#a4a49c; --line:#3a3a41;
+    --accent:#6aa0ff; --orange:#ffa24a; --ok:#58c486; --bad:#ff7a6c; --chip:#2c2c33; --warnbg:#3a3022;
+  }
+}
+:root[data-theme="dark"]{
+  --bg:#16161a; --panel:#212126; --ink:#ecebe6; --muted:#a4a49c; --line:#3a3a41;
+  --accent:#6aa0ff; --orange:#ffa24a; --ok:#58c486; --bad:#ff7a6c; --chip:#2c2c33; --warnbg:#3a3022;
+}
+*,*::before,*::after{box-sizing:inherit}
+html{scroll-padding-top:env(safe-area-inset-top,0px)}
+body{margin:0;background:var(--bg);color:var(--ink);
+  font:15px/1.55 system-ui,-apple-system,"Segoe UI","Noto Sans TC","PingFang TC","Microsoft JhengHei",sans-serif;
+  -webkit-text-size-adjust:100%}
+main{max-width:1180px;margin:0 auto;padding:12px 12px 28px}
+h1{font-size:19px;margin:4px 0 2px}
+.lead{margin:0 0 10px;color:var(--muted);font-size:14px}
+.card{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:10px 12px;margin:10px 0}
+.bar{display:flex;flex-wrap:wrap;gap:8px 12px;align-items:center}
+.eq{display:flex;gap:6px;align-items:center;flex:1 1 300px;min-width:0}
+.eq label{white-space:nowrap;color:var(--muted);font-size:13px}
+.eq input{flex:1 1 120px;min-width:0;font:inherit;padding:6px 8px;border:1px solid var(--line);border-radius:8px;background:var(--bg);color:var(--ink)}
+.eq input.bad{border-color:var(--bad)}
+button{font:inherit;font-size:14px;padding:6px 11px;border:1px solid var(--line);border-radius:8px;background:var(--chip);color:var(--ink);cursor:pointer}
+button:disabled{opacity:.45;cursor:default}
+button.on{background:var(--accent);color:#fff;border-color:var(--accent)}
+.chips{display:flex;flex-wrap:wrap;gap:6px;align-items:center;width:100%}
+.chips span{color:var(--muted);font-size:13px}
+.eqerr{width:100%;color:var(--bad);font-size:13px;min-height:0}
+.eqerr:empty{display:none}
+.panes{display:grid;grid-template-columns:1fr;gap:10px}
+@media (min-width:880px){.panes.two{grid-template-columns:1fr 1fr}}
+.pane{position:relative;background:var(--panel);border:1px solid var(--line);border-radius:10px;overflow:hidden}
+.pane canvas{display:block;width:100%;touch-action:none;-webkit-user-select:none;user-select:none}
+.tag{position:absolute;left:9px;top:6px;font-size:12px;color:var(--muted);pointer-events:none}
+.status .hint{margin:0 0 8px;font-size:14px}
+.status .warn{background:var(--warnbg);border-radius:8px;padding:6px 9px;margin:0 0 8px;font-size:13px}
+.status .warn:empty{display:none}
+.kv{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:6px 12px}
+@media (min-width:700px){.kv{grid-template-columns:repeat(4,minmax(0,1fr))}}
+.kv div{display:flex;flex-direction:column;font-size:12px;color:var(--muted)}
+.kv b{font-size:15px;color:var(--ink);font-weight:600;font-variant-numeric:tabular-nums}
+.opts{display:flex;flex-wrap:wrap;gap:8px 16px;align-items:center}
+.opts label{display:inline-flex;gap:6px;align-items:center;font-size:14px}
+.opts input[type=checkbox]{width:18px;height:18px}
+.seg{display:inline-flex;gap:0}
+.seg button{border-radius:0;font-size:13px}
+.seg button:first-child{border-radius:8px 0 0 8px}
+.seg button+button{border-left:0}
+.seg button:last-child{border-radius:0 8px 8px 0}
+.slider{display:flex;gap:10px;align-items:center;margin-top:8px;min-width:0}
+.sliders{display:grid;grid-template-columns:1fr;gap:0 18px}
+@media (min-width:700px){.sliders{grid-template-columns:repeat(3,1fr)}}
+.slider input{flex:1}
+.legend{display:grid;grid-template-columns:1fr;gap:8px}
+@media (min-width:760px){.legend{grid-template-columns:repeat(3,1fr)}}
+.legend div{font-size:13.5px}
+.legend b{display:block;margin-bottom:2px}
+.dot{display:inline-block;width:11px;height:11px;border-radius:50%;margin-right:5px;vertical-align:-1px}
+.insight{font-size:13.5px;color:var(--muted);margin:6px 0 0}
+</style>
+</head>
+<body>
+<main>
+  <h1>投影平面的三個把手</h1>
+  <p class="lead">拖左窗的 <b style="color:var(--orange)">橘色圓環</b>決定從哪個方向看，拖 <b style="color:var(--accent)">藍色箭頭</b>決定板子放多遠，看右窗（就是畫框裡的那張圖）怎麼變。黑點 E 只是算出來的讀數。拖空白處只是轉動旁觀視角。</p>
+
+  <section class="card bar" aria-label="控制">
+    <label class="opts"><input type="checkbox" id="optObs" checked> 旁觀視角</label>
+    <div class="eq">
+      <label for="eqIn">平面方程式</label>
+      <input id="eqIn" type="text" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="例如 x=1、y=2、z=3、x+y=3">
+      <button id="eqGo" type="button">套用</button>
+    </div>
+    <button id="undo" type="button" disabled>復原</button>
+    <button id="reset" type="button">重設</button>
+    <button id="fitObs" type="button">旁觀視角取景</button>
+    <div class="chips"><span>快速切換：</span>
+      <button type="button" data-eq="x=1">x = 1</button>
+      <button type="button" data-eq="y=2">y = 2</button>
+      <button type="button" data-eq="y=-3">y = −3</button>
+      <button type="button" data-eq="z=3">z = 3</button>
+      <button type="button" data-eq="x+y=3">x + y = 3</button>
+    </div>
+    <div class="eqerr" id="eqErr" role="alert"></div>
+  </section>
+
+  <section class="panes two" id="panes">
+    <div class="pane" id="paneL"><canvas id="obs" aria-label="旁觀視角"></canvas><div class="tag">左：旁觀視角（拖把手）</div></div>
+    <div class="pane" id="paneR"><canvas id="drw" aria-label="作圖畫面"></canvas><div class="tag">右：作圖畫面（左拖環繞・滾輪距離・右拖平移）</div></div>
+  </section>
+
+  <section class="card status" id="status">
+    <p class="hint" id="hint"></p>
+    <p class="warn" id="warn"></p>
+    <div class="kv">
+      <div><span>投影平面</span><b id="rEq">—</b></div>
+      <div><span>板子離場景 g</span><b id="rG">—</b></div>
+      <div><span>眼睛 E（讀數）</span><b id="rE">—</b></div>
+      <div><span>眼睛到板子 D</span><b id="rD">—</b></div>
+      <div><span>平移 · 滾轉</span><b id="rLat">—</b></div>
+      <div><span>畫框大小</span><b id="rFrame">—</b></div>
+      <div><span>這次拖動，右窗畫面變動</span><b id="rDelta">—</b></div>
+    </div>
+  </section>
+
+  <section class="card">
+    <div class="opts">
+      <label><input type="checkbox" id="optSnap" checked> 吸附（轉到 5° 內貼齊座標軸；平面位置貼 0.1 m 格）</label>
+      <label><input type="checkbox" id="optCons"> 作圖線（L′P′ 紅、F′Q′ 藍）</label>
+      <label><input type="checkbox" id="optRays" checked> 視線與光線（高柱）</label>
+    </div>
+    <div class="sliders">
+      <div class="slider"><label for="focal">焦距</label><input id="focal" type="range" min="12" max="80" step="1" value="20"><b id="focalV">20 mm</b></div>
+      <div class="slider"><label for="dist">眼睛到板子 D</label><input id="dist" type="range" min="0.5" max="12" step="0.1" value="4"><b id="distV">4.0 m</b></div>
+      <div class="slider"><label for="roll">滾轉</label><input id="roll" type="range" min="-180" max="180" step="1" value="0"><b id="rollV">0°</b></div>
+    </div>
+    <p class="insight">焦距：等比放大，眼睛與板子都不動，遠近比例不變。D：板子不動、眼睛前後移，物體大小、透視強弱與畫框實際大小都跟著變。滾轉：沿視線那一條軸轉動畫面，眼睛不動。三者都不進復原。</p>
+  </section>
+
+  <section class="card">
+    <div class="opts">
+      <span>旋轉中心</span>
+      <span class="seg" id="pivotMode" role="group" aria-label="旋轉中心"><button type="button" data-p="scene" class="on">場景中心</button><button type="button" data-p="obj">點選物體</button></span>
+      <label><input type="checkbox" id="optLevel" checked> 鎖水平（地平線保持水平；取消＝可自由滾轉）</label>
+    </div>
+    <div class="opts" style="margin-top:8px">
+      <span>一鍵視圖</span>
+      <span class="seg" id="views" role="group" aria-label="一鍵視圖"><button type="button" data-v="front">前</button><button type="button" data-v="back">後</button><button type="button" data-v="left">左</button><button type="button" data-v="right">右</button><button type="button" data-v="top">上</button><button type="button" data-v="bottom">下</button></span>
+    </div>
+    <p class="insight">一鍵視圖：把平面放到物體的那一側，眼睛正對場景，保持目前的視點高度與距離。前＝從 −y 看向 +y，左＝從 −x 看向 +x，上＝從上往下。</p>
+  </section>
+
+  <section class="card legend">
+    <div><b><span class="dot" style="background:var(--orange)"></span>橘色圓環：從哪個方向看</b>整組（板子＋眼睛）繞旋轉中心（預設場景中心）轉動，板子能轉到物體的上下左右前後。抓住的點跟著手指走。</div>
+    <div><b><span class="dot" style="background:var(--accent)"></span>藍色箭頭：板子放多遠</b>拖尖端，板子（連同眼睛）前後移。靠近場景，右窗的物體變大、透視變強；拉遠變小、變平。</div>
+    <div><b><span class="dot" style="background:var(--ink)"></span>黑點 E：讀數</b>由方向、板子距離與平移算出，不能拖。眼睛永遠在板子後方 D；沒有平移時正對旋轉中心。</div>
+    <div><b>右窗也能操作</b>左拖＝橘色圓環；滾輪或雙指捏合＝藍色箭頭；右拖、Shift 拖或雙指平移＝整組平移（旋轉中心不變）。</div>
+  </section>
+</main>
+
+<script>
+(()=>{
+'use strict';
+
+/* ================= 向量工具 ================= */
+const V={
+  add:(a,b)=>[a[0]+b[0],a[1]+b[1],a[2]+b[2]],
+  sub:(a,b)=>[a[0]-b[0],a[1]-b[1],a[2]-b[2]],
+  mul:(a,s)=>[a[0]*s,a[1]*s,a[2]*s],
+  dot:(a,b)=>a[0]*b[0]+a[1]*b[1]+a[2]*b[2],
+  cross:(a,b)=>[a[1]*b[2]-a[2]*b[1],a[2]*b[0]-a[0]*b[2],a[0]*b[1]-a[1]*b[0]],
+  len:a=>Math.hypot(a[0],a[1],a[2]),
+  norm:a=>{const l=Math.hypot(a[0],a[1],a[2])||1;return [a[0]/l,a[1]/l,a[2]/l];},
+};
+const rad=d=>d*Math.PI/180, deg=r=>r*180/Math.PI;
+const clamp=(x,a,b)=>Math.min(b,Math.max(a,x));
+const clone=o=>JSON.parse(JSON.stringify(o));
+
+/* ================= 場景 ================= */
+const NEAR=0.05, RMIN=0.8, RMAX=40;
+const LIGHT=[-3.5,5.0,4.0];
+const FACE_IDX=[[0,1,2,3],[4,5,6,7],[0,1,5,4],[1,2,6,5],[2,3,7,6],[3,0,4,7]];
+
+function boxVerts(size,pos,rotDeg){
+  const [sx,sy,sz]=size, a=rad(rotDeg), ca=Math.cos(a), sa=Math.sin(a);
+  const base=[[-sx/2,-sy/2],[sx/2,-sy/2],[sx/2,sy/2],[-sx/2,sy/2]];
+  const out=[];
+  for(const z of [0,sz]) for(const [x,y] of base) out.push([pos[0]+x*ca-y*sa,pos[1]+x*sa+y*ca,z]);
+  return out;
+}
+function hullIdx(pts){
+  const idx=pts.map((_,i)=>i).sort((i,j)=>pts[i][0]-pts[j][0]||pts[i][1]-pts[j][1]);
+  const cr=(o,a,b)=>(pts[a][0]-pts[o][0])*(pts[b][1]-pts[o][1])-(pts[a][1]-pts[o][1])*(pts[b][0]-pts[o][0]);
+  const lo=[]; for(const i of idx){ while(lo.length>=2&&cr(lo[lo.length-2],lo[lo.length-1],i)<=1e-12) lo.pop(); lo.push(i); }
+  const up=[]; for(const i of idx.slice().reverse()){ while(up.length>=2&&cr(up[up.length-2],up[up.length-1],i)<=1e-12) up.pop(); up.push(i); }
+  lo.pop(); up.pop(); return lo.concat(up);
+}
+function mkBox(id,size,pos,rot){
+  const P8=boxVerts(size,pos,rot);
+  const center=V.mul(P8.reduce((a,p)=>V.add(a,p),[0,0,0]),1/8);
+  const faces=FACE_IDX.map(ix=>{
+    const pts=ix.map(i=>P8[i]);
+    const c=V.mul(pts.reduce((a,p)=>V.add(a,p),[0,0,0]),1/4);
+    let n=V.norm(V.cross(V.sub(pts[1],pts[0]),V.sub(pts[2],pts[1])));
+    if(V.dot(n,V.sub(c,center))<0) n=V.mul(n,-1);
+    return {pts,c,n,lit:V.dot(n,V.sub(LIGHT,c))>0};
+  });
+  // 點光源 L 經頂點 P 投到地面 z=0：S = L + t(P-L)，t = Lz/(Lz-Pz)
+  const sh=P8.map(P=>{const t=LIGHT[2]/(LIGHT[2]-P[2]);return [LIGHT[0]+(P[0]-LIGHT[0])*t,LIGHT[1]+(P[1]-LIGHT[1])*t,0];});
+  const hull=hullIdx(sh.map(p=>[p[0],p[1]]));
+  return {id,V:P8,center,faces,sh,hull,shadow:hull.map(i=>sh[i])};
+}
+const OBJS=[
+  mkBox('block',[0.6,0.6,1.8],[-1.5,6.0,0],0),
+  mkBox('crate',[1.2,0.9,0.7],[1.8,4.2,0],30),
+  mkBox('cube',[0.6,0.6,0.6],[0.4,7.8,0],15),
+];
+const FOCUS=OBJS[0];
+const CENTER=(()=>{const all=OBJS.flatMap(o=>o.V);const lo=[1e9,1e9,1e9],hi=[-1e9,-1e9,-1e9];
+  for(const p of all)for(let i=0;i<3;i++){lo[i]=Math.min(lo[i],p[i]);hi[i]=Math.max(hi[i],p[i]);}
+  return [(lo[0]+hi[0])/2,(lo[1]+hi[1])/2,(lo[2]+hi[2])/2];})();
+const GRID=[];
+for(let x=-10;x<=10;x++) GRID.push([[x,-6,0],[x,20,0]]);
+for(let y=-6;y<=20;y++) GRID.push([[-10,y,0],[10,y,0]]);
+
+/* ================= 狀態：E、平面 f·X = c、焦距 ================= */
+const INIT={f:[0,1,0],up:null,g:CENTER[1]-2,D:4,focal:20,lat:[0,0],roll:0};
+let S=clone(INIT);
+const undoStack=[];
+const OB0={az:55,el:28,dist:15,target:[0,3,1]};
+let OB=clone(OB0);
+const opt={obs:true,snap:true,cons:false,rays:true,pivot:'scene',level:true};
+let pivotObj=null;
+const NAMES={block:'高柱',crate:'木箱',cube:'小方塊'};
+sync(S);
+
+function basis(f,upHint){
+  let u=upHint?V.sub(upHint,V.mul(f,V.dot(upHint,f))):V.sub([0,0,1],V.mul(f,f[2]));
+  if(V.len(u)<1e-6) u=V.sub([0,1,0],V.mul(f,f[1]));
+  u=V.norm(u);
+  const r=V.norm(V.cross(f,u));
+  return {r,u:V.cross(r,f)};
+}
+/* 狀態：方向 f（＋滾轉 up）、板子離旋轉中心的距離 g、眼睛到板子的固定距離 D。
+   眼睛 E 與平面常數 c 都是算出來的：Q = P − g·f，E = Q − D·f，c = f·Q */
+/* 平移 L 以「滾轉前」的基底 (r0,u0) 記成 (a,b)：環繞時跟著整組轉，滾轉時不動 */
+function sync(s){
+  const P=pivotPoint(), b0=basis(s.f,s.up), L=V.add(V.mul(b0.r,s.lat[0]),V.mul(b0.u,s.lat[1]));
+  s.E=V.add(V.sub(P,V.mul(s.f,s.g+s.D)),L);
+  s.c=V.dot(s.f,P)-s.g;
+  return s;
+}
+/* 相機最終基底：基底 (r0,u0) 繞 f 滾轉 ρ（同 camera_matrix 的 roll 慣例） */
+function frameOf(s){
+  const b0=basis(s.f,s.up), q=rad(s.roll||0), cq=Math.cos(q), sq=Math.sin(q);
+  return {r0:b0.r,u0:b0.u,r:V.add(V.mul(b0.r,cq),V.mul(b0.u,sq)),u:V.add(V.mul(b0.r,-sq),V.mul(b0.u,cq))};
+}
+function derive(s){
+  const f=s.f, D=s.D, {r,u}=frameOf(s);
+  const Q=V.add(s.E,V.mul(f,D));
+  return {E:s.E,f,D,g:s.g,r,u,Q,focal:s.focal,Wm:36/s.focal*D,Hm:24/s.focal*D};
+}
+
+/* ================= 方程式 ================= */
+function fmt2(v){const t=v.toFixed(2);return t==='-0.00'?'0.00':t;}
+function eqText(s){
+  let n=s.f.slice(), c=s.c;
+  const ax=[0,1,2].find(i=>Math.abs(Math.abs(n[i])-1)<1e-9);
+  if(ax!==undefined){const sg=n[ax]>0?1:-1;return 'xyz'[ax]+' = '+fmt2(sg*c);}
+  const first=n.findIndex(v=>Math.abs(v)>1e-9);
+  if(n[first]<0){n=n.map(v=>-v);c=-c;}
+  let out='';
+  n.forEach((v,i)=>{
+    if(Math.abs(v)<5e-4) return;
+    const a=Math.abs(v).toFixed(3)+'xyz'[i];
+    if(!out) out=(v<0?'-':'')+a; else out+=(v<0?' - ':' + ')+a;
+  });
+  return out+' = '+(Math.abs(c)<5e-4?'0.000':c.toFixed(3));
+}
+function parseSide(s){
+  const out=[0,0,0,0];
+  s=s.replace(/\s+/g,'').replace(/[−–—－]/g,'-').replace(/＋/g,'+');
+  if(!s) throw new Error('等號兩邊都要有內容');
+  const terms=s.match(/[+-]?[^+-]+/g);
+  if(!terms||terms.join('')!==s) throw new Error('看不懂這個式子');
+  for(const t of terms){
+    const sg=t[0]==='-'?-1:1, body=t.replace(/^[+-]/,'');
+    const m=body.match(/^(\d*\.?\d*)\*?([xyzXYZ])$/);
+    if(m){const k=(m[1]===''||m[1]==='.')?1:parseFloat(m[1]);out['xyz'.indexOf(m[2].toLowerCase())]+=sg*k;continue;}
+    if(/^(\d+\.?\d*|\.\d+)$/.test(body)){out[3]+=sg*parseFloat(body);continue;}
+    throw new Error('只接受 x、y、z 的一次式，例如 x=1、2x-y+3=0');
+  }
+  return out;
+}
+function parseEquation(str){
+  const parts=str.split('=');
+  if(parts.length!==2) throw new Error('需要一個等號，例如 y=2');
+  const L=parseSide(parts[0]), R=parseSide(parts[1]);
+  const a=[L[0]-R[0],L[1]-R[1],L[2]-R[2]], k=L[3]-R[3];
+  const nl=Math.hypot(a[0],a[1],a[2]);
+  if(nl<1e-9) throw new Error('式子裡要有 x、y 或 z');
+  const n=[a[0]/nl,a[1]/nl,a[2]/nl].map(v=>v===0?0:v);
+  return {n,d:-k/nl};
+}
+function planeToRig(n,d,P){
+  const sd=d-V.dot(n,P);
+  const f=(sd>=0?V.mul(n,-1):n.slice()).map(v=>v===0?0:v);
+  return {f,g:Math.abs(sd)};
+}
+
+/* ================= 旋轉：整組（E＋平面）繞旋轉中心 ================= */
+function rot(v,a,ang){ const c=Math.cos(ang), s_=Math.sin(ang);
+  return V.add(V.add(V.mul(v,c),V.mul(V.cross(a,v),s_)),V.mul(a,V.dot(a,v)*(1-c))); }
+function pivotPoint(){
+  if(opt.pivot==='obj'&&pivotObj!==null) return OBJS[pivotObj].center;
+  return CENTER;
+}
+
+/* ================= 投影與裁切 ================= */
+function clipSegNear(a,b,near){
+  const da=a[2]-near, db=b[2]-near;
+  if(da<0&&db<0) return null;
+  if(da>=0&&db>=0) return [a,b];
+  const t=da/(da-db);
+  const m=[a[0]+(b[0]-a[0])*t,a[1]+(b[1]-a[1])*t,a[2]+(b[2]-a[2])*t];
+  return da<0?[m,b]:[a,m];
+}
+function clipPolyNear(poly,near){
+  const out=[];
+  for(let i=0;i<poly.length;i++){
+    const a=poly[i], b=poly[(i+1)%poly.length];
+    const ia=a[2]>=near, ib=b[2]>=near;
+    if(ia) out.push(a);
+    if(ia!==ib){const t=(near-a[2])/(b[2]-a[2]);out.push([a[0]+(b[0]-a[0])*t,a[1]+(b[1]-a[1])*t,near]);}
+  }
+  return out;
+}
+function clipLineRect(a,b,hx,hy){
+  let t0=0,t1=1; const dx=b[0]-a[0], dy=b[1]-a[1];
+  const p=[-dx,dx,-dy,dy], q=[a[0]+hx,hx-a[0],a[1]+hy,hy-a[1]];
+  for(let i=0;i<4;i++){
+    if(p[i]===0){ if(q[i]<0) return null; }
+    else{
+      const t=q[i]/p[i];
+      if(p[i]<0){ if(t>t1) return null; if(t>t0) t0=t; }
+      else{ if(t<t0) return null; if(t<t1) t1=t; }
+    }
+  }
+  return [[a[0]+t0*dx,a[1]+t0*dy],[a[0]+t1*dx,a[1]+t1*dy]];
+}
+function clipPolyRect(pts,hx,hy){
+  let out=pts;
+  const fs=[p=>p[0]+hx,p=>hx-p[0],p=>p[1]+hy,p=>hy-p[1]];
+  for(const f of fs){
+    const inp=out; out=[];
+    for(let i=0;i<inp.length;i++){
+      const a=inp[i], b=inp[(i+1)%inp.length], fa=f(a), fb=f(b);
+      if(fa>=0) out.push(a);
+      if((fa>=0)!==(fb>=0)){const t=fa/(fa-fb);out.push([a[0]+(b[0]-a[0])*t,a[1]+(b[1]-a[1])*t]);}
+    }
+    if(!out.length) break;
+  }
+  return out;
+}
+
+/* 作圖相機：把世界點變成相機座標 (x右, y上, z前)，再除以 z、乘焦距得到畫框 mm */
+const camSpace=(st,P)=>{const d=V.sub(P,st.E);return [V.dot(d,st.r),V.dot(d,st.u),V.dot(d,st.f)];};
+const toMM=(st,pc)=>[pc[0]/pc[2]*st.focal,pc[1]/pc[2]*st.focal];
+function projUV(st,P){const pc=camSpace(st,P);return pc[2]<NEAR?null:toMM(st,pc);}
+/* 畫框 mm → 平面上的世界點（規格 §4 的反投影） */
+const planeP=(st,u,v)=>V.add(V.add(V.add(st.Q,V.mul(st.r,u/st.focal*st.D)),V.mul(st.u,v/st.focal*st.D)),V.mul(st.f,-0.012));
+
+/* ================= 右窗內容：一份 ops，右窗與左窗畫框共用 ================= */
+function buildOps(st){
+  const ops=[];
+  const seg=(A,B,style)=>{const c=clipSegNear(camSpace(st,A),camSpace(st,B),NEAR);if(c)ops.push({t:'line',a:toMM(st,c[0]),b:toMM(st,c[1]),...style});};
+  const poly=(P3,style)=>{const c=clipPolyNear(P3.map(P=>camSpace(st,P)),NEAR);if(c.length>=3)ops.push({t:'poly',pts:c.map(p=>toMM(st,p)),...style});};
+  for(const [a,b] of GRID) seg(a,b,{col:'gridImg',w:0.7});
+  // 地平線：所有水平面的消失線  Nc·(u,v,focal)=0，Nc=(r.z,u.z,f.z)
+  const nx=st.r[2], ny=st.u[2], nz=st.f[2], nn=nx*nx+ny*ny;
+  if(Math.sqrt(nn)>1e-6){
+    const p0=[-nz*st.focal*nx/nn,-nz*st.focal*ny/nn], dir=[-ny/Math.sqrt(nn),nx/Math.sqrt(nn)];
+    ops.push({t:'line',a:[p0[0]-dir[0]*400,p0[1]-dir[1]*400],b:[p0[0]+dir[0]*400,p0[1]+dir[1]*400],col:'horizon',w:1.3,dash:[6,4]});
+    st.horizon=true;
+  }else st.horizon=false;
+  for(const o of OBJS) poly(o.shadow,{fill:'shadow'});
+  const order=OBJS.slice().sort((a,b)=>V.len(V.sub(b.center,st.E))-V.len(V.sub(a.center,st.E)));
+  for(const o of order)
+    for(const fc of o.faces)
+      if(V.dot(fc.n,V.sub(st.E,fc.c))>0) poly(fc.pts,{fill:fc.lit?'lit':'unlit',stroke:'ink',w:1.1});
+  if(opt.cons){
+    const Fp=[LIGHT[0],LIGHT[1],0];
+    for(const i of FOCUS.hull){
+      const P=FOCUS.V[i], Sp=FOCUS.sh[i];
+      seg(P,[P[0],P[1],0],{col:'green',w:0.8});
+      seg(LIGHT,Sp,{col:'red',w:1});
+      seg(Fp,Sp,{col:'blue',w:1});
+    }
+    const lc=camSpace(st,LIGHT); if(lc[2]>=NEAR) ops.push({t:'dot',p:toMM(st,lc),col:'red',r:4,label:"L′"});
+    const fc=camSpace(st,Fp); if(fc[2]>=NEAR) ops.push({t:'dot',p:toMM(st,fc),col:'blue',r:4,label:"F′"});
+  }
+  return ops;
+}
+
+/* ================= 調色盤 ================= */
+const PAL_L={paper:'#ffffff',obsBg:'#f3f2ec',grid:'#d6d4ca',gridImg:'#dedcd2',ink:'#23231f',lit:'#f6f1e1',unlit:'#cdd5e6',
+  shadow:'rgba(40,44,70,.32)',horizon:'#2f9a5e',red:'#d63a2f',blue:'#2f63d6',green:'#2e9a4d',yellow:'#d9a000',gray:'#8d8b83',
+  accent:'#2563d9',orange:'#e8821e',patch:'rgba(37,99,217,.08)',frameBack:'rgba(255,255,255,.62)',text:'#47463f',E:'#111111',pend:'#c9372c',pivot:'#a233c4'};
+const PAL_D={paper:'#1c1c20',obsBg:'#15151a',grid:'#34343b',gridImg:'#303037',ink:'#e6e5df',lit:'#4c4939',unlit:'#2f3548',
+  shadow:'rgba(0,0,0,.50)',horizon:'#58c486',red:'#ff6a5c',blue:'#6a9cff',green:'#58c486',yellow:'#ffc940',gray:'#8e8e96',
+  accent:'#6aa0ff',orange:'#ffa24a',patch:'rgba(106,160,255,.11)',frameBack:'rgba(28,28,32,.62)',text:'#c9c8c0',E:'#f2f1ec',pend:'#ff7a6c',pivot:'#d58cff'};
+function isDark(){
+  const t=document.documentElement.dataset.theme;
+  if(t==='dark') return true; if(t==='light') return false;
+  return !!(window.matchMedia&&window.matchMedia('(prefers-color-scheme: dark)').matches);
+}
+
+/* ================= DOM ================= */
+const $=id=>document.getElementById(id);
+const obs=$('obs'), drw=$('drw');
+let dpr=1;
+function setupCanvas(c){
+  const w=c.clientWidth||300, h=parseFloat(c.style.height)||200;
+  c.width=Math.round(w*dpr); c.height=Math.round(h*dpr);
+  return [w,h];
+}
+function layout(){
+  dpr=Math.min(window.devicePixelRatio||1,3);
+  const wrap=$('panes'), total=wrap.clientWidth||360;
+  const two=opt.obs, wide=total>=880;
+  $('paneL').style.display=two?'':'none';
+  wrap.classList.toggle('two',two&&wide);
+  const w=(two&&wide)?(total-10)/2:total;
+  obs.style.height=Math.round(clamp(w*0.86,270,540))+'px';
+  drw.style.height=Math.round(w*2/3)+'px';
+  setupCanvas(obs); setupCanvas(drw);
+  request();
+}
+
+/* ================= 右窗繪製 ================= */
+function drawOpsCanvas(ctx,ops,W,H,pal){
+  const k=W/36, X=u=>W/2+u*k, Y=v=>H/2-v*k;
+  ctx.save(); ctx.beginPath(); ctx.rect(0,0,W,H); ctx.clip();
+  for(const o of ops){
+    if(o.t==='poly'){
+      ctx.beginPath(); o.pts.forEach(([u,v],i)=>i?ctx.lineTo(X(u),Y(v)):ctx.moveTo(X(u),Y(v))); ctx.closePath();
+      if(o.fill){ctx.fillStyle=pal[o.fill];ctx.fill();}
+      if(o.stroke){ctx.strokeStyle=pal[o.stroke];ctx.lineWidth=o.w||1;ctx.setLineDash([]);ctx.stroke();}
+    }else if(o.t==='line'){
+      ctx.beginPath(); ctx.moveTo(X(o.a[0]),Y(o.a[1])); ctx.lineTo(X(o.b[0]),Y(o.b[1]));
+      ctx.strokeStyle=pal[o.col]; ctx.lineWidth=o.w||1; ctx.setLineDash(o.dash||[]); ctx.stroke(); ctx.setLineDash([]);
+    }else if(o.t==='dot'){
+      ctx.beginPath(); ctx.arc(X(o.p[0]),Y(o.p[1]),o.r||3,0,Math.PI*2); ctx.fillStyle=pal[o.col]; ctx.fill();
+      if(o.label){ctx.font='12px system-ui,sans-serif';ctx.fillStyle=pal[o.col];ctx.fillText(o.label,X(o.p[0])+6,Y(o.p[1])-6);}
+    }
+  }
+  ctx.restore();
+}
+function drawDrawing(st,ops,pal){
+  const [W,H]=[drw.clientWidth||300,parseFloat(drw.style.height)||200];
+  const ctx=drw.getContext('2d');
+  ctx.setTransform(dpr,0,0,dpr,0,0);
+  ctx.fillStyle=pal.paper; ctx.fillRect(0,0,W,H);
+  drawOpsCanvas(ctx,ops,W,H,pal);
+  // 主點
+  ctx.strokeStyle=pal.gray; ctx.lineWidth=1; ctx.setLineDash([]);
+  ctx.beginPath(); ctx.moveTo(W/2-6,H/2); ctx.lineTo(W/2+6,H/2); ctx.moveTo(W/2,H/2-6); ctx.lineTo(W/2,H/2+6); ctx.stroke();
+}
+
+/* ================= 左窗（旁觀視角） ================= */
+function fitObserver(){
+  const st=derive(S);
+  const corners=[[-1,-1],[1,-1],[1,1],[-1,1]].map(([a,b])=>V.add(V.add(st.Q,V.mul(st.r,a*st.Wm/2)),V.mul(st.u,b*st.Hm/2)));
+  const pts=[st.E,st.Q,CENTER,LIGHT,[CENTER[0],CENTER[1],0],...corners];
+  const c=V.mul(pts.reduce((a,p)=>V.add(a,p),[0,0,0]),1/pts.length);
+  const rad_=Math.max(...pts.map(p=>V.len(V.sub(p,c))));
+  OB.target=c; OB.dist=clamp(rad_*2.3,6,60);
+}
+function obsCam(W,H){
+  const az=rad(OB.az), el=rad(OB.el);
+  const dir=[Math.sin(az)*Math.cos(el),-Math.cos(az)*Math.cos(el),Math.sin(el)];
+  const pos=V.add(OB.target,V.mul(dir,OB.dist));
+  const f=V.norm(V.sub(OB.target,pos));
+  const r=V.norm(V.cross(f,[0,0,1]));
+  const u=V.cross(r,f);
+  return {pos,r,u,f,W,H,fpx:(H/2)/Math.tan(rad(20))};
+}
+const oSpace=(cam,P)=>{const d=V.sub(P,cam.pos);return [V.dot(d,cam.r),V.dot(d,cam.u),V.dot(d,cam.f)];};
+const oPx=(cam,pc)=>[cam.W/2+pc[0]/pc[2]*cam.fpx,cam.H/2-pc[1]/pc[2]*cam.fpx];
+const ONEAR=0.1;
+function oPolyPx(cam,P3){return clipPolyNear(P3.map(P=>oSpace(cam,P)),ONEAR).map(p=>oPx(cam,p));}
+function oSegPx(cam,A,B){const c=clipSegNear(oSpace(cam,A),oSpace(cam,B),ONEAR);return c?[oPx(cam,c[0]),oPx(cam,c[1])]:null;}
+function oPointPx(cam,P){const pc=oSpace(cam,P);return pc[2]<ONEAR?null:oPx(cam,pc);}
+
+const hits={E:null,tip:null,ring:[],ring3:[],ringHit:0,objPolys:[],cam:null};
+let hover=null, active=null, pending=null;
+
+function strokeSeg(ctx,s,col,w,dash){
+  if(!s) return;
+  ctx.beginPath(); ctx.moveTo(s[0][0],s[0][1]); ctx.lineTo(s[1][0],s[1][1]);
+  ctx.strokeStyle=col; ctx.lineWidth=w; ctx.setLineDash(dash||[]); ctx.stroke(); ctx.setLineDash([]);
+}
+function fillPoly(ctx,px,fill,stroke,w){
+  if(px.length<3) return;
+  ctx.beginPath(); px.forEach((p,i)=>i?ctx.lineTo(p[0],p[1]):ctx.moveTo(p[0],p[1])); ctx.closePath();
+  if(fill){ctx.fillStyle=fill;ctx.fill();}
+  if(stroke){ctx.strokeStyle=stroke;ctx.lineWidth=w||1;ctx.setLineDash([]);ctx.stroke();}
+}
+function label(ctx,text,p,col,dx,dy,bold){
+  if(!p) return;
+  ctx.font=(bold?'600 ':'')+'13px system-ui,sans-serif'; ctx.fillStyle=col; ctx.fillText(text,p[0]+(dx||0),p[1]+(dy||0));
+}
+
+function drawObserver(st,ops,pal){
+  const W=obs.clientWidth||300, H=parseFloat(obs.style.height)||300;
+  const ctx=obs.getContext('2d'); ctx.setTransform(dpr,0,0,dpr,0,0);
+  const cam=obsCam(W,H); hits.cam=cam; hits.objPolys=OBJS.map(()=>[]);
+  ctx.fillStyle=pal.obsBg; ctx.fillRect(0,0,W,H);
+  // 地面格線
+  for(let x=-8;x<=10;x++) strokeSeg(ctx,oSegPx(cam,[x,-5,0],[x,14,0]),pal.grid,1);
+  for(let y=-5;y<=14;y++) strokeSeg(ctx,oSegPx(cam,[-8,y,0],[10,y,0]),pal.grid,1);
+  for(const o of OBJS) fillPoly(ctx,oPolyPx(cam,o.shadow),pal.shadow);
+
+  const items=[];
+  items.push({d:oSpace(cam,st.Q)[2],fn:()=>drawPlaneGroup(ctx,cam,st,ops,pal)});
+  for(const o of OBJS) items.push({d:oSpace(cam,o.center)[2],fn:()=>drawObject3D(ctx,cam,o,pal)});
+  items.sort((a,b)=>b.d-a.d).forEach(it=>it.fn());
+
+  // 視錐與 D
+  const corners=[[-1,-1],[1,-1],[1,1],[-1,1]].map(([a,b])=>V.add(V.add(st.Q,V.mul(st.r,a*st.Wm/2)),V.mul(st.u,b*st.Hm/2)));
+  for(const C of corners){
+    strokeSeg(ctx,oSegPx(cam,st.E,C),pal.gray,1);
+    const far=V.add(st.E,V.mul(V.sub(C,st.E),1.9));
+    strokeSeg(ctx,oSegPx(cam,C,far),pal.gray,1,[2,4]);
+  }
+  strokeSeg(ctx,oSegPx(cam,st.E,st.Q),pal.text,1,[5,4]);
+  label(ctx,'D = '+st.D.toFixed(2)+' m',oPointPx(cam,V.mul(V.add(st.E,st.Q),0.5)),pal.text,6,-4);
+  strokeSeg(ctx,oSegPx(cam,st.Q,pivotPoint()),pal.pivot,1.2,[3,4]);
+  label(ctx,'板子離場景 g = '+st.g.toFixed(2)+' m',oPointPx(cam,V.mul(V.add(st.Q,pivotPoint()),0.5)),pal.pivot,6,14);
+  const qpx=oPointPx(cam,st.Q); if(qpx){ctx.beginPath();ctx.arc(qpx[0],qpx[1],2.5,0,7);ctx.fillStyle=pal.text;ctx.fill();}
+
+  if(opt.rays) drawRays(ctx,cam,st,pal);
+
+  // 光源
+  const lp=oPointPx(cam,LIGHT);
+  if(lp){ctx.beginPath();ctx.arc(lp[0],lp[1],6,0,Math.PI*2);ctx.fillStyle=pal.yellow;ctx.fill();label(ctx,'L',lp,pal.text,9,-7);}
+
+  // 旋轉環
+  const R=Math.max(0.5*Math.hypot(st.Wm,st.Hm)*1.03,0.45), ringPx=[], N=72;
+  const ringPts=[];
+  for(let i=0;i<=N;i++){const th=i/N*Math.PI*2;ringPts.push(V.add(st.Q,V.add(V.mul(st.r,Math.cos(th)*R),V.mul(st.u,Math.sin(th)*R))));}
+  const ringOn=(active==='ring')||(!active&&hover==='ring');
+  for(let i=0;i<N;i++){
+    const sg=oSegPx(cam,ringPts[i],ringPts[i+1]);
+    if(sg){ringPx.push({s:sg,i});strokeSeg(ctx,sg,pal.orange,ringOn?4:2.6,[7,5]);}
+  }
+  hits.ring=ringPx; hits.ring3=ringPts;
+  // 法線箭頭（由平面指向 E）
+  const len=clamp(st.D*0.55,0.3,1.4), tipW=V.add(st.Q,V.mul(st.f,-len));
+  const base=oPointPx(cam,st.Q), tip=oPointPx(cam,tipW);
+  const arrOn=(active==='arrow')||(!active&&hover==='arrow');
+  if(base&&tip){
+    strokeSeg(ctx,[base,tip],pal.accent,arrOn?4:3);
+    const a=Math.atan2(tip[1]-base[1],tip[0]-base[0]);
+    ctx.beginPath(); ctx.moveTo(tip[0],tip[1]);
+    ctx.lineTo(tip[0]-10*Math.cos(a-0.45),tip[1]-10*Math.sin(a-0.45));
+    ctx.lineTo(tip[0]-10*Math.cos(a+0.45),tip[1]-10*Math.sin(a+0.45)); ctx.closePath();
+    ctx.fillStyle=pal.accent; ctx.fill();
+    ctx.beginPath(); ctx.arc(tip[0],tip[1],arrOn?13:10,0,7); ctx.strokeStyle=pal.accent; ctx.lineWidth=2; ctx.stroke();
+    label(ctx,'板子距離',tip,pal.accent,12,-8,true);
+  }
+  hits.tip=tip;
+  // 視點 E（唯讀）
+  const ep=oPointPx(cam,st.E); hits.E=ep;
+  if(ep){
+    ctx.beginPath(); ctx.arc(ep[0],ep[1],8,0,Math.PI*2); ctx.fillStyle=pal.E; ctx.fill();
+    ctx.strokeStyle=pal.paper; ctx.lineWidth=2; ctx.stroke();
+    label(ctx,'E（讀數）',ep,pal.text,12,-10,true);
+  }
+  // 旋轉中心
+  if(opt.pivot!=='E'){
+    const pp=oPointPx(cam,pivotPoint());
+    if(pp){
+      ctx.beginPath(); ctx.moveTo(pp[0],pp[1]-8); ctx.lineTo(pp[0]+8,pp[1]); ctx.lineTo(pp[0],pp[1]+8); ctx.lineTo(pp[0]-8,pp[1]); ctx.closePath();
+      ctx.strokeStyle=pal.pivot; ctx.lineWidth=2; ctx.stroke();
+      label(ctx,'旋轉中心'+(opt.pivot==='obj'&&pivotObj!==null?'：'+NAMES[OBJS[pivotObj].id]:''),pp,pal.pivot,11,-9,true);
+    }
+  }
+  // 方程式標示
+  const patch=patchCorners(st);
+  label(ctx,eqText(S),oPointPx(cam,patch[3]),pal.accent,4,16,true);
+}
+function patchCorners(st){
+  const pw=Math.max(st.Wm*0.62,3.2), ph=Math.max(st.Hm*0.62,2.4);
+  return [[-1,-1],[1,-1],[1,1],[-1,1]].map(([a,b])=>V.add(V.add(st.Q,V.mul(st.r,a*pw)),V.mul(st.u,b*ph)));
+}
+function drawObject3D(ctx,cam,o,pal){
+  ctx.globalAlpha=0.93;
+  for(const fc of o.faces){
+    if(V.dot(fc.n,V.sub(cam.pos,fc.c))<=0) continue;
+    const px=oPolyPx(cam,fc.pts);
+    hits.objPolys[OBJS.indexOf(o)].push(px);
+    fillPoly(ctx,px,fc.lit?pal.lit:pal.unlit,pal.ink,1);
+  }
+  ctx.globalAlpha=1;
+}
+function drawPlaneGroup(ctx,cam,st,ops,pal){
+  const hx=18, hy=12;
+  fillPoly(ctx,oPolyPx(cam,patchCorners(st)),pal.patch,pal.accent,1);
+  const fr=[[-hx,-hy],[hx,-hy],[hx,hy],[-hx,hy]].map(([u,v])=>planeP(st,u,v));
+  fillPoly(ctx,oPolyPx(cam,fr),pal.frameBack);
+  for(const o of ops){
+    if(o.t==='poly'){
+      const c=clipPolyRect(o.pts,hx,hy); if(c.length<3) continue;
+      fillPoly(ctx,oPolyPx(cam,c.map(([u,v])=>planeP(st,u,v))),o.fill?pal[o.fill]:null,o.stroke?pal[o.stroke]:null,Math.max(0.8,(o.w||1)*0.9));
+    }else if(o.t==='line'){
+      const c=clipLineRect(o.a,o.b,hx,hy); if(!c) continue;
+      strokeSeg(ctx,oSegPx(cam,planeP(st,c[0][0],c[0][1]),planeP(st,c[1][0],c[1][1])),pal[o.col],Math.max(0.7,(o.w||1)),o.dash?[5,4]:[]);
+    }else if(o.t==='dot'){
+      if(Math.abs(o.p[0])>hx||Math.abs(o.p[1])>hy) continue;
+      const p=oPointPx(cam,planeP(st,o.p[0],o.p[1]));
+      if(p){ctx.beginPath();ctx.arc(p[0],p[1],3,0,7);ctx.fillStyle=pal[o.col];ctx.fill();if(o.label)label(ctx,o.label,p,pal[o.col],5,-5);}
+    }
+  }
+  fillPoly(ctx,oPolyPx(cam,fr),null,pal.accent,2.4);
+}
+function drawRays(ctx,cam,st,pal){
+  // 眼睛看頂點 P：視線 E→P 穿過平面的點就是 P′
+  for(const P of FOCUS.V){
+    strokeSeg(ctx,oSegPx(cam,st.E,P),pal.gray,1);
+    const dep=V.dot(st.f,V.sub(P,st.E));
+    if(dep>NEAR){
+      const Pp=V.add(st.E,V.mul(V.sub(P,st.E),st.D/dep)), px=oPointPx(cam,Pp);
+      if(px){ctx.beginPath();ctx.arc(px[0],px[1],3,0,7);ctx.fillStyle=pal.ink;ctx.fill();}
+    }
+  }
+  // 光線 L→P→S，眼睛再看影子點 S
+  for(const i of FOCUS.hull){
+    const Sp=FOCUS.sh[i];
+    strokeSeg(ctx,oSegPx(cam,LIGHT,Sp),pal.yellow,1.4,[5,3]);
+    strokeSeg(ctx,oSegPx(cam,st.E,Sp),pal.shadow.replace(/[\d.]+\)$/,'.55)'),1,[2,3]);
+    const sp=oPointPx(cam,Sp); if(sp){ctx.beginPath();ctx.arc(sp[0],sp[1],2.6,0,7);ctx.fillStyle=pal.yellow;ctx.fill();}
+    const dep=V.dot(st.f,V.sub(Sp,st.E));
+    if(dep>NEAR){
+      const Spp=V.add(st.E,V.mul(V.sub(Sp,st.E),st.D/dep)), px=oPointPx(cam,Spp);
+      if(px){ctx.beginPath();ctx.arc(px[0],px[1],3,0,7);ctx.fillStyle=pal.yellow;ctx.fill();}
+    }
+  }
+}
+
+/* ================= 重繪 ================= */
+let raf=0;
+function request(){ if(!raf) raf=requestAnimationFrame(draw); }
+function draw(){
+  raf=0;
+  const st=derive(S), pal=isDark()?PAL_D:PAL_L;
+  const ops=buildOps(st);
+  drawDrawing(st,ops,pal);
+  if(opt.obs) drawObserver(st,ops,pal);
+}
+
+/* ================= 讀數與提示 ================= */
+const HINTS={
+  arrow:'藍色箭頭：決定板子放多遠。板子與眼睛一起前後移（眼睛固定在板子後方 D），靠近場景時物體變大、透視變強；拉遠則變小、變平。黑點 E 只是跟著算出來的讀數。',
+  orbit:'拖空白處：只轉動旁觀視角，不影響右窗。',
+  rorbit:'右窗左拖：等同橘色圓環，整組繞旋轉中心環繞。往右拖景物跟著往右轉；往下拖視點升高、往下看。',
+  rpan:'右窗右拖（或 Shift 拖、雙指平移）：整組（板子＋眼睛）沿板子平面平移，旋轉中心不變，所以場景中心會離開畫框正中央。',
+  rwheel:'右窗滾輪（或雙指捏合）：等同藍色箭頭，板子與眼睛一起前後移。和焦距不同：焦距是等比放大，這裡會改變遠近比例。',
+  rtwo:'右窗雙指：捏合＝板子距離（等同藍色箭頭），一起平移＝平移。',
+  idle:'拖橘色圓環決定從哪個方向看，拖藍色箭頭決定板子放多遠。黑點 E 是算出來的讀數，不能拖。拖空白處＝轉動旁觀視角。'
+};
+let lastDelta='—', flash='';
+function ringHint(){
+  const tail=opt.level?'（鎖水平：左右＝繞垂直軸，上下＝仰俯）':'（自由模式：任意方向，可滾轉）';
+  if(opt.pivot==='obj') return '橘色圓環：決定從哪個方向看。整組（板子＋眼睛）繞所選物體環繞'+(pivotObj===null?'（尚未選物體：先點一下左窗的物體，目前暫用場景中心）':'')+'，板子離物體的距離不變。'+tail;
+  return '橘色圓環：決定從哪個方向看。整組（板子＋眼睛）繞場景中心環繞，板子可以轉到物體的任何一側，離場景的距離不變。抓住的點會跟著手指走；也可用下方「前後左右上下」一鍵到位。'+tail;
+}
+function setHint(k){ $('hint').textContent=(k==='ring')?ringHint():(HINTS[k]||HINTS.idle); }
+function readout(){
+  const st=derive(S);
+  $('rEq').textContent=eqText(S);
+  $('rG').textContent=st.g.toFixed(2)+' m（眼睛到場景 '+(st.g+st.D).toFixed(2)+' m）';
+  $('rE').textContent='('+S.E.map(v=>v.toFixed(2)).join(', ')+')';
+  $('rD').textContent=st.D.toFixed(2)+' m';
+  $('distV').textContent=S.D.toFixed(1)+' m';
+  $('rollV').textContent=Math.round(S.roll)+'°';
+  $('rLat').textContent='('+S.lat.map(v=>fmt2(v)).join(', ')+') m · '+Math.round(S.roll)+'°';
+  $('rFrame').textContent=st.Wm.toFixed(2)+' × '+st.Hm.toFixed(2)+' m';
+  $('rDelta').textContent=lastDelta;
+  $('focalV').textContent=S.focal+' mm';
+  const eq=$('eqIn'); if(document.activeElement!==eq) eq.value=eqText(S);
+  $('undo').disabled=undoStack.length===0;
+  const w=[];
+  if(S.E[2]<0) w.push('眼睛在地面下方。');
+  if(flash) w.push(flash);
+  $('warn').textContent=w.join(' ');
+}
+function measureRef(st){ return OBJS.flatMap(o=>o.V).map(P=>projUV(st,P)); }
+function deltaText(ref0,ref1){
+  let m=-1;
+  for(let i=0;i<ref0.length;i++){ if(!ref0[i]||!ref1[i]) continue; m=Math.max(m,Math.hypot(ref0[i][0]-ref1[i][0],ref0[i][1]-ref1[i][1])); }
+  if(m<0) return '—';
+  return m<0.005?'0.00 mm（不變）':m.toFixed(1)+' mm';
+}
+function update(){
+  if(drag&&drag.ref0) lastDelta=deltaText(drag.ref0,measureRef(derive(S)));
+  readout(); request();
+}
+
+/* ================= 復原 / 套用 ================= */
+function pushUndo(){ undoStack.push(clone(S)); if(undoStack.length>50) undoStack.shift(); }
+$('undo').addEventListener('click',()=>{ if(!undoStack.length) return; S=undoStack.pop(); sync(S); $('focal').value=S.focal; $('dist').value=S.D; $('roll').value=S.roll; flash=''; lastDelta='—'; fitObserver(); readout(); request(); });
+$('fitObs').addEventListener('click',()=>{ fitObserver(); request(); });
+function setPivotMode(m){
+  opt.pivot=m; document.querySelectorAll('#pivotMode button').forEach(x=>x.classList.toggle('on',x.dataset.p===m));
+}
+$('reset').addEventListener('click',()=>{ pushUndo(); setPivotMode('scene'); pivotObj=null; S=sync(clone(INIT)); OB=clone(OB0); $('focal').value=S.focal; $('dist').value=S.D; $('roll').value=S.roll; flash=''; lastDelta='—'; setHint('idle'); $('eqErr').textContent=''; fitObserver(); readout(); request(); });
+function applyEquation(text){
+  const err=$('eqErr'), inp=$('eqIn');
+  try{
+    const q=parseEquation(text), r=planeToRig(q.n,q.d,pivotPoint());
+    if(r.g+S.D>RMAX) throw new Error('平面離場景太遠（眼睛到場景需 ≤ '+RMAX+' m）');
+    pushUndo(); S.f=r.f; S.g=r.g; S.up=opt.level?null:basis(r.f,null).u.slice(); sync(S);
+    err.textContent=''; inp.classList.remove('bad'); flash='方程式把平面放在 '+eqText(S)+'，眼睛在板子後方 '+S.D.toFixed(0)+' m。'; lastDelta='—';
+    fitObserver(); setHint('idle'); readout(); request();
+  }catch(e){ err.textContent=e.message; inp.classList.add('bad'); }
+}
+$('eqGo').addEventListener('click',()=>applyEquation($('eqIn').value));
+$('eqIn').addEventListener('keydown',e=>{ if(e.key==='Enter'){e.preventDefault();applyEquation($('eqIn').value);} });
+$('eqIn').addEventListener('input',()=>{ $('eqIn').classList.remove('bad'); $('eqErr').textContent=''; });
+$('eqIn').addEventListener('blur',()=>readout());
+document.querySelectorAll('[data-eq]').forEach(b=>b.addEventListener('click',()=>{ $('eqIn').value=b.dataset.eq; applyEquation(b.dataset.eq); }));
+
+/* ================= 選項 ================= */
+$('optObs').addEventListener('change',e=>{opt.obs=e.target.checked;layout();});
+$('optSnap').addEventListener('change',e=>{opt.snap=e.target.checked;});
+$('optCons').addEventListener('change',e=>{opt.cons=e.target.checked;request();});
+$('optRays').addEventListener('change',e=>{opt.rays=e.target.checked;request();});
+$('focal').addEventListener('input',e=>{ S.focal=+e.target.value; lastDelta='—'; readout(); request(); });
+$('roll').addEventListener('input',e=>{ S.roll=+e.target.value; sync(S); lastDelta='—'; readout(); request(); });
+$('dist').addEventListener('input',e=>{
+  const lo=Math.max(0.5,RMIN-S.g), hi=Math.min(12,RMAX-S.g);
+  S.D=clamp(+e.target.value,lo,hi); if(S.D!==+e.target.value) e.target.value=S.D;
+  sync(S); lastDelta='—'; readout(); request();
+});
+document.querySelectorAll('#pivotMode button').forEach(b=>b.addEventListener('click',()=>{
+  setPivotMode(b.dataset.p); sync(S); fitObserver();
+  flash=(opt.pivot==='obj'&&pivotObj===null)?'請點一下左窗的物體，把它設為旋轉中心。':''; setHint('ring'); readout(); request();
+}));
+$('optLevel').addEventListener('change',e=>{
+  opt.level=e.target.checked;
+  if(opt.level){ if(S.up){ pushUndo(); S.up=null; lastDelta='—'; } } else { S.up=basis(S.f,null).u.slice(); }
+  setHint('ring'); readout(); request();
+});
+const VIEWS={front:[0,1,0],back:[0,-1,0],left:[1,0,0],right:[-1,0,0],top:[0,0,-1],bottom:[0,0,1]};
+function viewFrom(name){
+  const dirF=VIEWS[name]; if(!dirF) return;
+  pushUndo();
+  S.f=dirF.slice(); S.up=opt.level?null:basis(S.f,null).u.slice(); S.lat=[0,0]; S.roll=0; $('roll').value=0; sync(S);
+  flash=''; lastDelta='—'; fitObserver(); readout(); request();
+}
+document.querySelectorAll('#views button').forEach(b=>b.addEventListener('click',()=>viewFrom(b.dataset.v)));
+
+/* ================= 指標互動（左窗） ================= */
+const ptrs=new Map(); let drag=null;
+const pos=e=>{const r=obs.getBoundingClientRect();return [e.clientX-r.left,e.clientY-r.top];};
+function distSeg(p,a,b){
+  const dx=b[0]-a[0], dy=b[1]-a[1], l2=dx*dx+dy*dy;
+  const t=l2?clamp(((p[0]-a[0])*dx+(p[1]-a[1])*dy)/l2,0,1):0;
+  return Math.hypot(p[0]-a[0]-t*dx,p[1]-a[1]-t*dy);
+}
+function hitTest(p,tol){
+  if(hits.tip&&Math.hypot(p[0]-hits.tip[0],p[1]-hits.tip[1])<=tol) return 'arrow';
+  for(const it of hits.ring) if(distSeg(p,it.s[0],it.s[1])<=tol*0.8){hits.ringHit=it.i;return 'ring';}
+  return 'orbit';
+}
+function pixelRay(cam,p){
+  const dx=(p[0]-cam.W/2)/cam.fpx, dy=-(p[1]-cam.H/2)/cam.fpx;
+  return {o:cam.pos,d:V.norm(V.add(V.add(V.mul(cam.r,dx),V.mul(cam.u,dy)),cam.f))};
+}
+function rayPlane(ray,P0,n){
+  const den=V.dot(n,ray.d); if(Math.abs(den)<1e-6) return null;
+  return V.add(ray.o,V.mul(ray.d,V.dot(n,V.sub(P0,ray.o))/den));
+}
+function lineParam(ray,P0,dir){   // ray 與直線 P0+s·dir 最近點的 s
+  const w0=V.sub(P0,ray.o), b=V.dot(dir,ray.d), d_=V.dot(dir,w0), e=V.dot(ray.d,w0), den=1-b*b;
+  if(Math.abs(den)<1e-6) return null;
+  return (b*e-d_)/den;
+}
+const AXES=[[1,0,0],[-1,0,0],[0,1,0],[0,-1,0],[0,0,1],[0,0,-1]];
+function snapDir(f){
+  for(const a of AXES) if(V.dot(f,a)>Math.cos(rad(5))) return a.slice();
+  return f;
+}
+function snapRig(E,f,up,P){
+  const t=snapDir(f); if(t===f) return {E,f,up};
+  const ax=V.cross(f,t), al=V.len(ax);
+  if(al<1e-12) return {E,f:t.slice(),up};
+  const a=V.mul(ax,1/al), ang=Math.acos(clamp(V.dot(f,t),-1,1));
+  return {E:V.add(P,rot(V.sub(E,P),a,ang)),f:t.slice(),up:up?rot(up,a,ang):null};
+}
+function axisAligned(f){ return [0,1,2].find(i=>Math.abs(Math.abs(f[i])-1)<1e-9); }
+
+function inPoly(p,poly){ let c=false; for(let i=0,j=poly.length-1;i<poly.length;j=i++){
+  const a=poly[i],b=poly[j]; if((a[1]>p[1])!==(b[1]>p[1])&&p[0]<(b[0]-a[0])*(p[1]-a[1])/(b[1]-a[1])+a[0]) c=!c; } return c; }
+function pickObject(p){
+  let best=null,bd=1e9;
+  OBJS.forEach((o,i)=>{ if(hits.objPolys[i]&&hits.objPolys[i].some(poly=>inPoly(p,poly))){ const d=V.len(V.sub(o.center,hits.cam.pos)); if(d<bd){bd=d;best=i;} } });
+  return best;
+}
+function startDrag(kind,p,e){
+  drag={kind,p0:p,last:p,S0:clone(S),ref0:null};
+  active=kind;
+  if(kind!=='orbit'){
+    pushUndo(); flash=''; drag.ref0=measureRef(derive(S)); lastDelta='0.00 mm（不變）';
+    const cam=hits.cam;
+    if(kind==='arrow'){
+      const st=derive(S), len=clamp(st.D*0.55,0.3,1.4), tipW=V.add(st.Q,V.mul(st.f,-len));
+      const a=oPointPx(cam,tipW), b=oPointPx(cam,V.add(tipW,st.f));
+      drag.sv=(a&&b)?[b[0]-a[0],b[1]-a[1]]:[0,-40]; drag.g0=S.g;
+      setHint('arrow');
+    }else if(kind==='ring'){
+      drag.P0=pivotPoint().slice(); drag.cam=cam;
+      drag.w=V.sub(hits.ring3[hits.ringHit]||S.E,drag.P0);
+      setHint('ring');
+    }
+  }else setHint('orbit');
+  obs.style.cursor='grabbing';
+  update();
+}
+function moveDrag(p,e){
+  const k=0.32;
+  if(drag.kind==='orbit'){
+    OB.az-=(p[0]-drag.last[0])*0.4; OB.el=clamp(OB.el+(p[1]-drag.last[1])*0.3,-5,85);
+  }else if(drag.kind==='arrow'){
+    const dx=p[0]-drag.p0[0], dy=p[1]-drag.p0[1], sv=drag.sv, l2=Math.max(sv[0]*sv[0]+sv[1]*sv[1],64);
+    const t=(dx*sv[0]+dy*sv[1])/l2;
+    const gLo=RMIN-S.D, gHi=RMAX-S.D;
+    let g=clamp(drag.g0-t,gLo,gHi);
+    const ax=axisAligned(S.f), Pp=pivotPoint();
+    if(opt.snap&&!e.altKey&&ax!==undefined){
+      const sg=S.f[ax]>0?1:-1, c=V.dot(S.f,Pp)-g, c2=sg*Math.round(sg*c*10)/10;
+      g=clamp(V.dot(S.f,Pp)-c2,gLo,gHi);
+    }
+    S.g=g; sync(S);
+  }else if(drag.kind==='ring'){
+    const P=drag.P0, S0=drag.S0, dx=p[0]-drag.p0[0], dy=p[1]-drag.p0[1], kk=rad(k), cm=drag.cam, w=drag.w;
+    let f=S0.f.slice(), up=S0.up?S0.up.slice():null;
+    const apply=(axis,ang)=>{f=rot(f,axis,ang);if(up)up=rot(up,axis,ang);};
+    const sgn=(axis,dirv,flip)=>{const m=V.dot(dirv,V.cross(axis,w))*(flip?-1:1);return Math.abs(m)<1e-6?1:Math.sign(m);};
+    if(opt.level){
+      const z=[0,0,1];
+      apply(z,sgn(z,cm.r,false)*dx*kk);
+      const r1=basis(f,null).r;
+      const p0=Math.asin(clamp(f[2],-1,1));
+      const p1=clamp(p0+sgn(r1,cm.u,true)*dy*kk,-rad(89.9),rad(89.9));
+      apply(r1,p1-p0);
+    }else{
+      apply(cm.u,sgn(cm.u,cm.r,false)*dx*kk);
+      apply(cm.r,sgn(cm.r,cm.u,true)*dy*kk);
+    }
+    if(opt.snap&&!e.altKey){ const q=snapRig([0,0,0],f,up,P); f=q.f; up=q.up; }
+    f=V.norm(f).map(v=>Math.abs(v)<1e-12?0:v);
+    S.f=f; S.up=up; sync(S);
+  }
+  drag.last=p; update();
+}
+function endDrag(){
+  if(!drag) return;
+  const d=drag; drag=null; active=null;
+  obs.style.cursor='default';
+  if(d.kind==='orbit'&&opt.pivot==='obj'&&Math.hypot(d.last[0]-d.p0[0],d.last[1]-d.p0[1])<5){
+    const i=pickObject(d.p0);
+    if(i!==null){ pivotObj=i; sync(S); fitObserver(); flash='旋轉中心已設為「'+NAMES[OBJS[i].id]+'」，板子與眼睛跟著移到它前方。'; setHint('ring'); }
+  }
+  if(d.kind!=='orbit'){
+    const key=o=>JSON.stringify([o.f,o.g,o.up,o.lat]);
+    if(key(S)===key(d.S0)) undoStack.pop();
+    lastDelta=d.ref0?deltaText(d.ref0,measureRef(derive(S))):lastDelta;
+  }
+  readout(); request();
+}
+obs.addEventListener('pointerdown',e=>{
+  e.preventDefault();
+  const p=pos(e); ptrs.set(e.pointerId,p);
+  try{obs.setPointerCapture(e.pointerId);}catch(_){}
+  if(ptrs.size===2){
+    if(drag&&drag.kind!=='pinch'&&drag.kind!=='orbit'){ S=drag.S0; undoStack.pop(); }
+    const [a,b]=[...ptrs.values()];
+    drag={kind:'pinch',d0:Math.hypot(a[0]-b[0],a[1]-b[1]),dist0:OB.dist}; active='orbit'; return;
+  }
+  if(drag) return;
+  startDrag(hitTest(p,e.pointerType==='touch'?26:14),p,e);
+});
+obs.addEventListener('pointermove',e=>{
+  const p=pos(e);
+  if(ptrs.has(e.pointerId)) ptrs.set(e.pointerId,p);
+  if(drag&&drag.kind==='pinch'){
+    if(ptrs.size>=2){const [a,b]=[...ptrs.values()];const d=Math.hypot(a[0]-b[0],a[1]-b[1]);OB.dist=clamp(drag.dist0*drag.d0/Math.max(d,10),4,60);request();}
+    return;
+  }
+  if(drag){ moveDrag(p,e); return; }
+  if(e.pointerType==='mouse'){
+    const h=hitTest(p,14), hv=h==='orbit'?null:h;
+    if(hv!==hover){hover=hv;obs.style.cursor=hv?'grab':'default';request();}
+  }
+});
+function up(e){
+  ptrs.delete(e.pointerId);
+  if(drag&&drag.kind==='pinch'){ if(ptrs.size<2){drag=null;active=null;} return; }
+  endDrag();
+}
+obs.addEventListener('pointerup',up);
+obs.addEventListener('pointercancel',up);
+obs.addEventListener('wheel',e=>{e.preventDefault();OB.dist=clamp(OB.dist*Math.exp(e.deltaY*0.001),4,60);request();},{passive:false});
+
+/* ================= 指標互動（右窗）：對應現行 M7 的相機操作 ================= */
+const rptrs=new Map(); let rdrag=null, wheelT=-1e9, wheelRef=null;
+const nowMs=()=>(typeof performance!=='undefined'&&performance.now)?performance.now():Date.now();
+const rpos=e=>{const r=drw.getBoundingClientRect();return [e.clientX-r.left,e.clientY-r.top];};
+const rkey=o=>JSON.stringify([o.f,o.g,o.up,o.lat]);
+function setR(R){ S.g=clamp(R-S.D,RMIN-S.D,RMAX-S.D); sync(S); }
+function panTo(lat0,dx,dy,R){   // 景物跟著手指走：整組朝反方向平移
+  const fr=frameOf(S), H=parseFloat(drw.style.height)||200, k=R*(24/S.focal)/H;
+  const dL=V.add(V.mul(fr.r,-dx*k),V.mul(fr.u,dy*k));
+  S.lat=[lat0[0]+V.dot(dL,fr.r0),lat0[1]+V.dot(dL,fr.u0)]; sync(S);
+}
+function rOrbit(S0,dx,dy,altKey){
+  const kk=rad(0.32), P=pivotPoint();
+  let f=S0.f.slice(), up=S0.up?S0.up.slice():null;
+  const apply=(axis,ang)=>{f=rot(f,axis,ang);if(up)up=rot(up,axis,ang);};
+  if(opt.level){
+    apply([0,0,1],-dx*kk);
+    const r1=basis(f,null).r, p0=Math.asin(clamp(f[2],-1,1)), p1=clamp(p0-dy*kk,-rad(89.9),rad(89.9));
+    apply(r1,p1-p0);
+  }else{
+    const fr=frameOf(S0); apply(fr.u,-dx*kk); apply(fr.r,-dy*kk);
+  }
+  if(opt.snap&&!altKey){ const q=snapRig([0,0,0],f,up,P); f=q.f; up=q.up; }
+  S.f=V.norm(f).map(v=>Math.abs(v)<1e-12?0:v); S.up=up; sync(S);
+}
+function rEnd(){
+  if(!rdrag) return;
+  if(rkey(S)===rkey(rdrag.S0)) undoStack.pop();
+  lastDelta=deltaText(rdrag.ref0,measureRef(derive(S)));
+  rdrag=null; drw.style.cursor='default'; readout(); request();
+}
+drw.addEventListener('contextmenu',e=>e.preventDefault());
+drw.addEventListener('pointerdown',e=>{
+  e.preventDefault(); const p=rpos(e); rptrs.set(e.pointerId,p);
+  try{drw.setPointerCapture(e.pointerId);}catch(_){}
+  if(rptrs.size===2){
+    const [a,b]=[...rptrs.values()];
+    if(!rdrag){ pushUndo(); rdrag={S0:clone(S),ref0:measureRef(derive(S))}; }
+    Object.assign(rdrag,{kind:'two',d0:Math.max(Math.hypot(a[0]-b[0],a[1]-b[1]),10),c0:[(a[0]+b[0])/2,(a[1]+b[1])/2],R0:S.g+S.D,lat0:S.lat.slice()});
+    setHint('rtwo'); update(); return;
+  }
+  if(rdrag) return;
+  const pan=e.button===2||e.shiftKey;
+  pushUndo(); flash='';
+  rdrag={kind:pan?'pan':'orbit',p0:p,S0:clone(S),lat0:S.lat.slice(),R0:S.g+S.D,ref0:measureRef(derive(S))};
+  setHint(pan?'rpan':'rorbit'); drw.style.cursor='grabbing'; update();
+});
+drw.addEventListener('pointermove',e=>{
+  const p=rpos(e); if(rptrs.has(e.pointerId)) rptrs.set(e.pointerId,p);
+  if(!rdrag) return;
+  if(rdrag.kind==='two'){
+    if(rptrs.size<2) return;
+    const [a,b]=[...rptrs.values()], d=Math.max(Math.hypot(a[0]-b[0],a[1]-b[1]),10), c=[(a[0]+b[0])/2,(a[1]+b[1])/2];
+    setR(rdrag.R0*rdrag.d0/d); panTo(rdrag.lat0,c[0]-rdrag.c0[0],c[1]-rdrag.c0[1],S.g+S.D);
+  }else if(rdrag.kind==='pan') panTo(rdrag.lat0,p[0]-rdrag.p0[0],p[1]-rdrag.p0[1],rdrag.R0);
+  else rOrbit(rdrag.S0,p[0]-rdrag.p0[0],p[1]-rdrag.p0[1],e.altKey);
+  lastDelta=deltaText(rdrag.ref0,measureRef(derive(S))); readout(); request();
+});
+function rUp(e){ rptrs.delete(e.pointerId); if(rdrag&&(rdrag.kind!=='two'||rptrs.size<2)) rEnd(); }
+drw.addEventListener('pointerup',rUp);
+drw.addEventListener('pointercancel',rUp);
+drw.addEventListener('wheel',e=>{
+  e.preventDefault();
+  const t=nowMs();
+  if(t-wheelT>400){ pushUndo(); wheelRef=measureRef(derive(S)); }   // 連續滾動合成一步復原
+  wheelT=t;
+  setR((S.g+S.D)*Math.exp(e.deltaY*0.001));
+  lastDelta=deltaText(wheelRef,measureRef(derive(S))); flash=''; setHint('rwheel'); readout(); request();
+},{passive:false});
+
+/* ================= 啟動 ================= */
+setHint('idle'); readout();
+if(typeof ResizeObserver!=='undefined') new ResizeObserver(()=>layout()).observe($('panes'));
+window.addEventListener('resize',layout);
+if(window.matchMedia) try{window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change',request);}catch(_){}
+new MutationObserver(request).observe(document.documentElement,{attributes:true,attributeFilter:['data-theme']});
+layout();
+window.__demo={get S(){return S;},set S(v){S=v;},derive,eqText,parseEquation,planeToRig,buildOps,hits,draw,projUV,planeP,CENTER,OBJS,undoStack,
+  get drag(){return drag;},startDrag,moveDrag,endDrag,applyEquation,opt,obsCam,pixelRay,hitTest,clipLineRect,clipPolyRect,layout,fitObserver,getOB:()=>OB,
+  pivotPoint,viewFrom,rot,snapRig,frameOf,_resetWheel:()=>{wheelT=-1e9;},get rdrag(){return rdrag;},setPivotObj:i=>{pivotObj=i;sync(S);},pickObject,sync,basis,INIT,RMIN,RMAX,setPivotMode};
+})();
+</script>
+</body>
+</html>

@@ -33,7 +33,7 @@
 
 **逐案例放寬（`rules.json` 的 `case_overrides`，v3）。** 一筆放寬只對一個案例、只對路徑符合其 `paths`（`*` 代表任一個串列索引或鍵，比對路徑前綴）之下的**數值**改用絕對容差 `abs_tol`；非數值、串列長度、鍵集合與警告一律不放寬。目前只有一筆：`degenerate_cylinder_cap_at_light_height` 的 `shadows[*].loops[*][*].direction` 與 `shadows[*].outline[*].direction`（四個葉節點）以 1e-6 絕對容差比對——頂蓋恰在光源高度，`w_S = 0` 的交點是重根，方向頂點對 `M`、`L` 一個 ulp 的擾動以平方根放大（實測每 ulp 1.5e-9），這是案例的目的而非實作錯誤（合約 §5.4.4 (1)、D60）。`compare_documents(expected, actual, case_name)` 依案例名稱套用。
 
-## 來源（目前版本 v7，見 `CHANGELOG.md`；共 60 個案例：34 個 v2 案例，M4 的 9 個見下方 `### M4 受影面與隱藏線`，M5 的 3 個見 `### M5 網格`，M6 的 4 個見 `### M6 多光源`，最終審查修正的 10 個見 `### v7 最終審查修正`）
+## 來源（目前版本 v8，見 `CHANGELOG.md`；共 63 個案例：34 個 v2 案例，M4 的 9 個見下方 `### M4 受影面與隱藏線`，M5 的 3 個見 `### M5 網格`，M6 的 4 個見 `### M6 多光源`，最終審查修正的 10 個見 `### v7 最終審查修正`，M10 的 3 個見 `### M10 投影平面`）
 
 | 類別 | 案例 | 依據 |
 | --- | --- | --- |
@@ -42,7 +42,7 @@
 | 範例場景 | `example_basic`（spec §4 範例）、`example_construction_demo`、`example_curved_demo`、`example_three_point`、`example_directional` | `examples/*.json` |
 | 凹多邊形 | `concave_prism_light_foot_in_notch`（光源垂足在 U 形稜柱的凹口內，由 `tests.reference.random_scenes.make_concavity_scene(1)` 凍結） | spec §7.3 |
 | 部分埋入地面 | `buried_box_tilted`、`buried_cylinder_tilted`（曲面物件的地面截面鏈） | contract §2.3 / §2.6 |
-| 相機 | `camera_roll_and_shift`、`camera_yaw_pitch_form` | contract §2.1 / §2.2 |
+| 相機 | `camera_roll_and_shift`、`camera_yaw_pitch_form`；第三種相機形式 `picture_plane` 的 3 個案例見 `### M10 投影平面` | contract §2.1 / §2.2、§5.7 |
 | 亂數場景 | `random_seed{0,3,9,14,23,38}_*objects`：`tests.reference.random_scenes.make_scene(seed, n_objects)` 產生、通過 §7.3 光線投射對照（IoU ≥ 0.99，含逐物件比對）後凍結；五種基元與兩種光源都有涵蓋 | spec §7.3 |
 
 ### M4 受影面與隱藏線
@@ -98,6 +98,16 @@ M4–M8 合併後的最終審查修正（分支 `wt/fix-arc`、`wt/fix-loaders`�
 | `arc_base_level_spiral_floor` | 直立螺旋加 `z = 0.25` 的有界水平板：受影面座標框上的基準層修正，加上超過 2π 的弧經邊界裁切 | 同上 |
 | `mesh_noisy_l_ground_contact` | 凹 L 形網格（內嵌 `data`），底面頂點 v3、v5 在地面下 1e-7 m（在 1e-6 的焊接容差內）：網格的受影面接觸容差 `max(tol, weld_tolerance)` 保持乾淨的 L 形輪廓，沒有 `OBJECT_BELOW_RECEIVER` | 審查 m5-mesh#0、合約 §5.2 實作筆記 |
 | `multilight_mesh_fallback_shared_edges` | 開口的 UV 球殼（144 面，走 M5 逐面備援）在兩盞點光源下：本影核心第 5 步橋接零寬區間，共用邊不再切開分割，本影 14 片（修正前 514 片） | 審查 m6-umbra#0、合約 §5.3.4 |
+
+### M10 投影平面
+
+合約 §5.7.14 的 3 個案例：相機以第三種形式 `position` + `picture_plane {normal, offset, up?}` 給出（spec-v0.2 §4.1），在 B 段之前換算成 target 形式；只有這種文件帶 `camera.picture_plane {normal, offset, up, distance, foot, frame_m, equation}`。場景先由 Python 核心放在 `tests/fixtures/v8_candidates/`，TypeScript 移植合併後以 `regen_conformance.py --case`（三個案例一次）加入，收成一筆 v8 條目；既有的 expected 檔一個都沒變（加入前 `--dry-run`：60 個 v7 案例 0 個會變），`rules.json` 不變（`equation` 字串完全比對，其餘數值走 1e-9 相對容差）。每個案例的影像座標都等於手寫的等價 target 相機（`tests/test_picture_plane.py`、`ts/test/picture_plane.test.ts` 檢查），方程式字串的每個數字離捨入邊界都超過 1e-6。
+
+| 案例 | 內容 | 依據 |
+| --- | --- | --- |
+| `camera_picture_plane_vertical` | spec-v0.2 §4.1 的板子：平面 `y = 2`（法線 (0, 1, 0)、offset −2）、眼睛在 y = −2，`D = 4`、`frame_m = [7.2, 4.8]`、方程式 `"y = 2.00"`；方塊與圓柱、點光源 | 合約 §5.7.2、§5.7.4、§5.7.14 |
+| `camera_picture_plane_tilted` | 斜板：未正規化、法線指回眼睛的平面 −0.35x − y + 0.25z + 1.4 = 0（f = −n̂），給定 `up = (0.15, 0, 1)` 使畫框滾轉（ρ ≠ 0）；方程式 `"0.322x + 0.919y - 0.230z = 1.286"`；方塊與圓錐 | 合約 §5.7.3、§5.7.5 |
+| `camera_picture_plane_horizontal` | 水平板 `z = 3` 由正上方往下看：`f = (0, 0, −1)`、畫框 up 取 +y 退路，**不發** `CAMERA_LOOKING_ALONG_UP`，地平線 `null`；只用多面體（正上方看到的水平圓會成為正圓，其 `rotation_deg` 落在 ulp 放大邊界），光源離相機軸夠遠 | 合約 §5.7.3、§5.7.14 |
 
 **M8（STEP 匯入）不新增、不改動任何案例或 expected 檔**（合約 §5.0.8、§5.5.10）：案例永遠不含只存在於載入器層的物件（`type: "step"`、帶 `path` 的 `mesh`），它們都是展開後的場景；STEP 的驗收（`cylinder.step` 展開後渲染與 `expected/example_basic.json` 逐位元相同、`cylinder_tilted.step` 通過 `expected/buried_cylinder_tilted.json` 的比對）在 `tests/test_step.py` 裡以既有的 expected 檔做。
 

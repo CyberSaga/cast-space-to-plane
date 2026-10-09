@@ -12,7 +12,7 @@ castplane [--version] <command> ...
 | --- | --- |
 | `castplane render SCENE -o OUTDIR [選項]` | 渲染場景，寫出 `OUTDIR/<場景檔名>.svg` / `.json` / `.png` |
 | `castplane validate SCENE [-q]` | 只驗證場景檔，印出物件、光源、受影面數量 |
-| `castplane info SCENE [--camera JSON]` | 印出物件清單、畫布、主點、地平線 v_mm、三個消失點（軸平行畫面時印 `at infinity (axis parallel to the picture plane)`，表示該方向的線在畫面上仍平行）、L′、F′（在無窮遠時印 `at infinity, direction (…)`）、點／邊／影子／作圖線數量、自我驗證最大誤差、受影面清單（M4：有界／無界、平面、各光源的 `lit` / `casts`）與警告表；M6：列出每個光源（id、種類、位置／方向、在各受影面上是否有效） |
+| `castplane info SCENE [--camera JSON]` | 印出物件清單、畫布、主點、地平線 v_mm、三個消失點（軸平行畫面時印 `at infinity (axis parallel to the picture plane)`，表示該方向的線在畫面上仍平行）、L′、F′（在無窮遠時印 `at infinity, direction (…)`）、點／邊／影子／作圖線數量、自我驗證最大誤差、受影面清單（M4：有界／無界、平面、各光源的 `lit` / `casts`）與警告表；M6：列出每個光源（id、種類、位置／方向、在各受影面上是否有效）；M10：相機是 `picture_plane` 形式時，在主點之後多印平面方程式、眼睛到板子的距離 D 與畫框在平面上的公尺尺寸（見「場景 JSON 的 `camera.picture_plane`」） |
 | `castplane stages SCENE [--camera JSON] [-o FILE] [-q]` | 把 A 段與 B 段的中間結果以標準 JSON（`{"A": …, "B": …}`）寫到 FILE 或 stdout，除錯與移植對照用 |
 | `castplane import FILE [-o OUT.json] [--into SCENE] [--id ID] [-q] [網格選項]` | 把網格檔（OBJ、glTF / GLB、STL、PLY）匯入成場景檔（M5，見下方「`castplane import`」） |
 | `castplane import FILE [-o OUT.json] [--into SCENE] [--id ID] [--solid K] [--fallback error\|mesh] [-q]` | FILE 為 STEP 檔（`.step` / `.stp`）時：把實體辨識成圓柱、球、圓錐、方塊物件，寫成場景檔（M8，見下方「`castplane import` 的 STEP 檔」） |
@@ -179,6 +179,51 @@ castplane import tests/fixtures/step/two_solids.step --solid 1 -o sphere.json
 
 `mesh` 物件的 `edges[]` 多兩個鍵：`smooth`（與相機無關）與 `camera_silhouette`（與相機有關）。非流形網格（例如缺一個面）發 `MESH_NON_MANIFOLD` 並改用逐面影子（第 3 節）。
 
+### 場景 JSON 的 `camera.picture_plane`（M10，spec-v0.2 §4.1）
+
+相機區塊的第三種寫法：`position`（眼睛 E）加 `picture_plane`（投影平面，也就是「板子」），與 `target` 形式、`yaw_deg` + `pitch_deg` 形式三擇一。平面沿用受影面的慣例 `normal·X + offset = 0`。
+
+```json
+"camera": {
+  "position": [0.37, -2.0, 0.9],
+  "picture_plane": {"normal": [0, 1, 0], "offset": -2.0},
+  "focal_length_mm": 20, "frame_mm": [36, 24], "near_m": 0.05
+}
+```
+
+| 鍵 | 規則 |
+| --- | --- |
+| `picture_plane.normal` | 必填：非零 3 向量（長度 > 1e-12），讀入時正規化；正負號與長度不影響結果。否則 `camera.picture_plane.normal` |
+| `picture_plane.offset` | 必填：有限數值（隨法線一起除以 \|normal\|）。平面通過 `position`（\|n̂·E + offset/\|n\|\| ≤ 1e-9）是輸入錯誤：`camera.picture_plane.offset` |
+| `picture_plane.up` | 選填：畫框的「上」，投影到平面上使用。省略時取世界 +z 的投影，平面水平（\|f × z\| ≤ 1e-9）時改取 +y。零向量或與法線平行（單位化後 \|û × n̂\| ≤ 1e-9）是輸入錯誤：`camera.picture_plane.up` |
+| `roll_deg` | **不可**與 `picture_plane` 同時給（`camera.roll_deg`）：滾轉由 `up` 決定 |
+| `target`、`yaw_deg`、`pitch_deg` | 與 `picture_plane` 同時給是輸入錯誤（`camera`：「give exactly one of target, yaw_deg + pitch_deg or picture_plane」） |
+| `focal_length_mm`、`frame_mm`、`shift_mm`、`near_m` | 意義不變 |
+
+換算在 B 段之前（`castplane.picture_plane.resolve_picture_plane`）：先把平面正規化一次（`n̂ = n/|n|`、`offset/|n|`，驗證不改寫原值，所以場景檔、`--camera` 與 `render(camera=...)` 三條路畫出的位元組相同），`s = n̂·E + offset/|n|`、`D = |s|`（眼睛到板子）、`f = −sign(s)·n̂`（由眼睛指向板子；相機的 forward 列逐位元就是 f，不是 `normalize(target − E)`，所以 \|f × z\| ≤ 1e-9 的 +y 退路直接在 f 上判定）、`Q = E − s·n̂`（眼睛在平面上的垂足，`shift_mm` 為 0 時就是主點）、`target = E + f`；`roll_deg` 是 `camera_matrix` 的預設 up 到畫框 up 的有號角（沒有 `up` 時為 0）。之後完全走既有的 `camera_matrix`，A 段與相機慣例都不變。由上往下看的水平平面**不會**發 `CAMERA_LOOKING_ALONG_UP`（畫框的 up 已明確決定）。
+
+幾何文件只有這種形式才多一個鍵 `camera.picture_plane`，其他形式的文件逐位元組不變：
+
+| 鍵 | 內容 |
+| --- | --- |
+| `normal` | f：單位法線，由眼睛指向平面 |
+| `offset` | 同一個平面寫成 `f·X + offset = 0` 的常數（= −f·Q） |
+| `up` | 相機最終的上方向（R 的第二列，單位向量，在平面內） |
+| `distance` | D（公尺） |
+| `foot` | Q（世界座標） |
+| `frame_m` | 畫框在平面上的大小 `[frame_w·D/focal, frame_h·D/focal]`（公尺） |
+| `equation` | 方程式字串：法線平行座標軸時寫成 `y = 2.00`（取正向座標軸，兩位小數），否則寫成 `0.322x + 0.919y - 0.230z = 1.286`（省略絕對值小於 5e-4 的係數，**印出的**第一個係數取正，係數與常數三位小數；負零寫成 0） |
+
+`castplane info` 對這種相機在主點之後多印三行：
+
+```text
+picture plane: y = 2.00
+eye to picture plane D: 4.0000 m
+frame on the picture plane: 7.2000 x 4.8000 m
+```
+
+`--camera` 覆寫也可以是 `picture_plane` 形式。網頁的「板子為主」狀態（方向、板子距離 g、D、平移、滾轉）只在網頁；核心只看到眼睛與平面。
+
 ## 2. Python API
 
 所有函式都是純函式：輸入是驗證過的場景 dict 與 numpy 陣列，輸出是可 JSON 序列化的資料（文件）或 numpy 陣列（中間結果）。公開進入點在 `castplane` 套件頂層；其餘模組依規格 §5 的符號命名，供測試、移植與進階使用。
@@ -209,7 +254,8 @@ castplane import tests/fixtures/step/two_solids.step --solid 1 -o sphere.json
 | `validate_transform(value, field) -> dict` | `transform` 區塊：選填、`scale` 不允許、補預設值 |
 | `validate_light(value, field) -> dict` | 一個 `lights[i]` 項目（`id` 不含 `.`；平行光方向長度須為 1） |
 | `validate_receiver(value, field) -> dict` | 一個 `receivers[i]` 項目（M4：任意平面、選填凸多邊形 `bounds`；無 bounds 的只能是 `receivers[0]` 的地面，由 `validate_scene` 檢查） |
-| `validate_camera(value, field="camera") -> dict` | `camera` 區塊：target 形式或 yaw/pitch 形式，二擇一 |
+| `validate_camera(value, field="camera") -> dict` | `camera` 區塊：target 形式、yaw/pitch 形式或（M10）`picture_plane` 形式，三擇一；`picture_plane` 形式不帶 `roll_deg` |
+| `validate_picture_plane(value, position, field="camera.picture_plane") -> dict` | M10：`{normal, offset, up?}` → 原樣（轉成 float）的 `{"normal", "offset"}`，給了 `up` 時另有 `"up"`；單位化的副本只用於檢查，所以再驗證一次不改任何位元，正規化留給 `resolve_picture_plane`；零法線、平面通過 `position`、`up` 為零或平行法線各報對應欄位（見第 1 節「場景 JSON 的 `camera.picture_plane`」） |
 | `validate_output(value, frame_mm, field="output") -> dict` | `output` 區塊：畫布長寬比須等於片幅長寬比（錯誤訊息列出兩個比值與可用的替代值）；`layers` 不得是空串列 |
 | `polygon_signed_area(poly) -> float` | 鞋帶公式的有向面積，逆時針為正 |
 | `polygon_is_simple(poly, eps_area, eps_len=None) -> bool` | 多邊形無自交（非相鄰邊不相觸） |
@@ -250,8 +296,8 @@ castplane import tests/fixtures/step/two_solids.step --solid 1 -o sphere.json
 
 | 函式 | 說明 |
 | --- | --- |
-| `camera_forward(cam)` | 驗證過的相機 dict 的 `forward` 向量（target 形式或 yaw/pitch 形式） |
-| `camera_matrix(cam, canvas) -> dict` | 相機紀錄 `{K, R, t, P (3×4), C, forward, near, s, u0, v0, canvas_mm, frame_mm, rect, warnings}`；`rect` 是外擴 25% 的畫布矩形 |
+| `camera_forward(cam)` | 驗證過的相機 dict 的 `forward` 向量（target 形式或 yaw/pitch 形式；M10 的 `picture_plane` 形式回傳 `resolve_picture_plane` 的 f，逐位元等於文件的 `normal`） |
+| `camera_matrix(cam, canvas) -> dict` | 相機紀錄 `{K, R, t, P (3×4), C, forward, near, s, u0, v0, canvas_mm, frame_mm, rect, warnings}`；`rect` 是外擴 25% 的畫布矩形；M10：`picture_plane` 形式先 `resolve_picture_plane`、不發 `CAMERA_LOOKING_ALONG_UP`，紀錄多一個 `picture_plane`（文件的 `camera.picture_plane` 區塊） |
 | `project(cam, X)` | x̃ = P·X，一個 4 向量或 (n, 4) 陣列 → 齊次 2D 3 向量 |
 | `divide(x)` | (u, v) = (x̃₁/x̃₃, x̃₂/x̃₃)；繪圖管線的最後一步 |
 | `nu(cam, X)` | 近平面泛函 ν(X) = forward·(x − C·w) − near·w |
@@ -604,6 +650,18 @@ B 段在多光源場景呼叫；純 numpy、確定性；只讀畫出的 `shadows
 | `IMPORT_NOTE_CODES` | M8 接上 `STEP_UNIT_ASSUMED_MM`、`STEP_ANGLE_UNIT_ASSUMED_RAD`、`STEP_SOLID_TESSELLATED`（即 `step.STEP_WARNING_CODES`） |
 | `scene.LOADER_TYPES` | `("step",)`：`validate_scene` 遇到未展開的 `step` 物件時報 `SceneError(objects[i].type, "loader object type 'step' must be expanded first (castplane.io.expand_scene or 'castplane import')")` |
 
+### 2.23 `castplane.picture_plane` — 投影平面相機（M10，spec-v0.2 §4.1、§4.3）
+
+只依賴 numpy；每個純量算式都由左到右寫明，TypeScript 移植（`ts/src/picture_plane.ts`）逐位元重現。
+
+| 函式 | 說明 |
+| --- | --- |
+| `resolve_picture_plane(cam) -> (target_cam, roll_deg, info)` | 驗證過的 `picture_plane` 相機 → target 形式相機區塊（`target = E + f`、`roll_deg`、鏡頭鍵）、滾轉角（度；沒有 `up` 時恰為 0）與 `info = {normal: f, offset, distance: D, foot: Q}`（平面寫成 `f·X + offset = 0`）；平面在這裡正規化一次，滾轉角的預設 up 由 f 本身決定 |
+| `picture_plane_document(info, rec, focal_length_mm) -> dict` | 文件的 `camera.picture_plane` 區塊 `{normal, offset, up, distance, foot, frame_m, equation}`；`up` 取相機紀錄 `R` 的第二列 |
+| `plane_equation(normal, offset) -> str` | 平面 `normal·X + offset = 0` 的方程式字串（先正規化；格式見第 1 節） |
+| `unproject_to_plane(rec, uv, D)` | 畫面點 (u, v)（mm）反投影回距離 D 的投影平面：`X = E + D·[((u − u0)/(focal·s))·r′ + ((v − v0)/(focal·s))·u′ + f]`；一點回傳 (3,)，(n, 2) 回傳 (n, 3)；再投影誤差 < 1e-9 mm。旁觀視角用它畫畫框、主點與線稿 |
+| `AXIS_TOL`、`DROP_TOL` | 方程式字串的門檻：座標軸判定 1e-9、省略係數 5e-4（印出的第一個係數，即第一個 \|n̂_i\| ≥ 5e-4 者，取正） |
+
 ## 3. 警告代碼（合約 §2.9）
 
 | 代碼 | 條件 | ids | 效果 |
@@ -633,7 +691,7 @@ M4 改變的適用範圍（合約 §5.1.9）：`LIGHT_BELOW_RECEIVER`、`DIRECTI
 
 ## 4. TypeScript API 與網頁 UI（合約 §5.4）
 
-核心有一份 TypeScript 移植（`ts/`，npm 套件名 `castplane`，版本與 Python 相同為 `0.1.0`，不發佈）。另有一個 three.js 網頁 UI（`web/`）建在移植之上。Python 仍是**參考實作**：移植以一致性測試集驗收，對測試集沒有任何權限（`tests/conformance/README.md` 規則 3）。第一階段以 v3 的 34 個案例驗收；第二階段（合約 §5.4.0 / §5.4.14，M7 第 11 步）把 M4–M6 的格式（有界受影面、取樣式消隱、網格、多光源與本影）移植完成，v6 的 50 個案例兩個執行器都全部通過，記錄在 `tests/conformance/CHANGELOG.md` 的 v6 條目。
+核心有一份 TypeScript 移植（`ts/`，npm 套件名 `castplane`，版本與 Python 相同為 `0.1.0`，不發佈）。另有一個 three.js 網頁 UI（`web/`）建在移植之上。Python 仍是**參考實作**：移植以一致性測試集驗收，對測試集沒有任何權限（`tests/conformance/README.md` 規則 3）。第一階段以 v3 的 34 個案例驗收；第二階段（合約 §5.4.0 / §5.4.14，M7 第 11 步）把 M4–M6 的格式（有界受影面、取樣式消隱、網格、多光源與本影）移植完成，v6 的 50 個案例兩個執行器都全部通過，記錄在 `tests/conformance/CHANGELOG.md` 的 v6 條目。M10 的 `picture_plane` 相機形式移植後，一致性測試集 v8 的 63 個案例兩個執行器都全部通過，記錄在 v8 條目。
 
 ### 4.1 建置、測試、基準
 
@@ -647,7 +705,7 @@ node ts/build/bench/camera_only.js --gate both --reps 20   # 規格 §8 基準�
 node ts/scripts/render.mjs examples/basic.json out/        # 開發工具：out/basic.svg 與 out/basic.json
 python3 tools/compare_svg.py                               # 開發工具：逐案例比對兩個實作的 SVG 文字
 npm run -w web build && npm run -w web preview             # 網頁 UI（靜態檔，web/dist）
-npm run -w web test                                        # orbit / download 單元測試
+npm run -w web test                                        # orbit / download / rig / equation / observer / plane 單元測試
 ```
 
 `npm test` 與 `npm run build` 會依 ts → web 的順序執行兩個 workspace。Python 的 `tests/test_ts_port.py` 檢查兩邊共用的檔案：版本、`rules.json` 與比對常數、`INT_KEYS`、核心不碰 node API、npm 版本釘選。PATH 上有 node 時，它也會建置並執行移植的整套測試；單獨執行 TypeScript 一致性執行器，要求每個案例各有一個通過的測試、沒有失敗、略過或 todo；比對全部八個範例（含 M4–M6 的 `wall_and_ground`、`mesh_demo`、`two_lights`）的 SVG（逐位元組）與 JSON；並跑網頁的單元測試。
@@ -673,6 +731,8 @@ const out   = render(scene, camera, hidden_lines, hidden_style); // {geometry: d
 網格前處理（合約 §5.2.3–§5.2.5）由 `src/meshprep.ts` 移植，公開名稱與 `castplane.meshprep` 相同（`import { meshprep } from "castplane"`：`weld_map`、`weld_vertices`、`drop_degenerate_faces`、`build_adjacency`、`fix_orientation`、`merge_coplanar`、`classify_edges`、`fallback_mesh`、`inherit_edge_smooth`、`point_inside_mesh`、`preprocess_mesh` 等），另有 `mesh.triangulate_faces` 與 `primitives.prepared_mesh`。`mesh` 物件必須帶內嵌的 `data`：核心不讀檔，只有 `path` 的物件會拋 `SceneError("objects[i].path", "mesh file must be expanded first …")`；先用 `castplane import FILE -o scene.json --inline` 或 `castplane.io.expand_scene` 展開。
 
 多光源（合約 §5.3）由 `src/umbra.ts`（本影掃描線核心：`tolerances`、`scan_pieces`、`record_pieces`、`umbra_pieces`、`umbra_from_document`；`import { umbra } from "castplane"`）與 `src/multilight.ts`（`silhouette_lights`、`unlit_union`、`form_table`、`split_form`、`plate_form_lights`、`assemble_form_shadow`、`construction_block`、`construction_blocks`、`construction_doc`、`active_lights`、`umbra_entries`、`multi_light_name` 等；`import { multilight } from "castplane"`）移植；兩盞以上光源時文件與 SVG 帶 `constructions`、`umbra`、`form_shadow_core`、`form_shadow.<光源>`、`cast_shadow.umbra` 等（見第 1 節「多光源場景」）。`project_scene(scene, A, camera, umbra)` 與 `render(scene, camera, hidden_lines, hidden_style, umbra)` 的 `umbra = false` 讓 `umbra[].polygons` 為 `null`（網頁 UI 拖曳中即如此），其餘不變。本影由畫出的 `shadows[].polygons` 計算：兩個實作的這些多邊形可差幾個 ulp，因此本影碎片在比較器容差內相同，若物體立在受影面上（不同光源的接地頂點與共線邊在捨入範圍內），碎片的切分方式可能不同而區域相同（合約 §5.4 實作附註）。
+
+`picture_plane` 相機形式（M10，合約 §5.7）由 `src/picture_plane.ts` 移植，名稱與 `castplane.picture_plane` 相同：`resolve_picture_plane(cam)` 回傳 `[target_cam, roll_deg, info]`（Python 的三元組）、`picture_plane_document`、`plane_equation(normal, offset)`（數字依 Python `format` 捨入，恰好落在中間時取偶數：`fixed(x, d)`、`py_fixed`）、`unproject_to_plane(rec, uv, D)`（一個 `[u, v]` 或一串）。`validate_camera` / `validate_picture_plane` 的錯誤欄位與訊息和 Python 相同；`camera_forward` / `camera_matrix` 先解析這個形式（forward 逐位元就是 f、不發 `CAMERA_LOOKING_ALONG_UP`，相機紀錄多一個 `picture_plane`），文件只有這個形式才有 `camera.picture_plane`。
 
 與 Python 的差異：
 
@@ -715,23 +775,63 @@ vite + three.js（版本釘選：three 0.186.1、vite 8.3.3）。`vite build` �
   - 無界的地面畫成大平面加格線；每個有界受影面（例如 `wall_and_ground` 的牆）依它的 `bounds` 畫成一塊板子（凸多邊形的三角扇形）並描出邊框；
   - three.js 相機直接由核心的 `camera_matrix` 建出，所以 WebGL 畫面與 SVG 疊圖是同一台 castplane 相機的兩種渲染；
   - three.js 不產生任何陰影，畫面上的影子全部來自移植的核心。
-- **相機**：
-  - 左鍵拖曳環繞（俯仰限制 ±89.5°；與 OrbitControls 相同，往下拖相機升高），右鍵或 Shift + 拖曳平移，滾輪縮放；
-  - 焦距滑桿為對數刻度 8–400 mm，滾轉滑桿 ±180°；
-  - 「Reset camera」回到場景相機。
+- **相機**：M10 起由平面模式驅動（見 §4.5）：**右窗（作圖畫面）唯讀，在它上面拖動或滾輪都不做事**；板子只在左窗（旁觀視角）拖橘色圓環與藍色箭頭，以及用工具列與面板的控制調整（焦距、D、滾轉三個滑桿在兩窗下方，另有六個一鍵視圖、平面方程式、復原、重設）；「重設」回到場景相機換算出的初始狀態。M7 的環繞相機（`web/src/orbit.ts`）與它的測試保留，不再驅動介面。
 - **SVG 疊圖**：
   - 每個動畫影格最多重算一次（最新的相機為準）：沿用快取的 A 段，執行 `project_scene` → `compose` → `write_svg`；
-  - 圖層勾選框以 CSS 隱藏圖層；「3D view」勾選框隱藏 WebGL 畫面；
-  - 「Hidden lines」勾選框（第二階段）：初值取場景的 `output.hidden_lines`，以 `hidden_lines` 傳給 `compose`；「Hidden style」選單（`dashed` / `omit`，勾選框關閉時停用）初值取場景的 `output.hidden_style`，傳給 `write_svg`；
+  - 圖層勾選框以 CSS 隱藏圖層；「3D view」勾選框隱藏 WebGL 畫面（隱藏時不繪製）；
+  - **勾選框的預設是頁面層級的狀態**（M10，D79）：頁面開啟時 horizon、objects、form_shadow、cast_shadow、labels 與「Hidden lines」為勾選，construction（兩窗下方的「作圖線」勾選框與它同步）與「3D view」為不勾選（3D 畫面從第一格起就隱藏）。之後只由你改變，載入場景或範例不會重設，也不再取場景的 `output.layers`、`output.hidden_lines`（這兩個欄位仍是場景檔的一部分，命令列照舊使用）。預設畫面是完成的線稿（被遮住的線依 Hidden style 畫出，預設為虛線），不含作圖線；要看作圖過程就勾選 construction；
+  - 「Hidden lines」勾選框（第二階段）：以 `hidden_lines` 傳給 `compose`；「Hidden style」選單（`dashed` / `omit`，只在「Hidden lines」勾選時可用）初值取場景的 `output.hidden_style`，傳給 `write_svg`；
   - 拖曳中的影格不做消隱，兩盞以上光源時也不算本影（`project_scene(..., umbra = false)`；合約 §5.4.11 允許），放開後的靜止影格重算；A 段在載入場景時算一次並快取，每個影格只走換相機的路徑；
   - SVG 超過 250 000 字元的場景（例如 `benchmark_100.json`）在拖曳時改用 `<img src="blob:…">` 顯示同一份寫出器文字，放開滑鼠後恢復 DOM 疊圖。
 - **下載**：
-  - 「Download SVG」：勾選的圖層，`<名稱>.svg`；
+  - 「Download SVG」：目前勾選的圖層，`<名稱>.svg`；
   - 「Download JSON」：§6.2 文件，`<名稱>.json`；
-  - 「Download scene (current camera)」：場景加上目前的相機區塊、「Hidden lines」的狀態（寫成 `output.hidden_lines`）與「Hidden style」（寫成 `output.hidden_style`），`<名稱>.scene.json`。用 Python 命令列的 `render` 指令渲染這個檔案會重現同一張 SVG（已驗證逐位元組相同）；
+  - 「Download scene (current camera)」：場景加上目前的相機區塊、「Hidden lines」目前的勾選狀態（寫成 `output.hidden_lines`）與「Hidden style」（寫成 `output.hidden_style`），`<名稱>.scene.json`。用 Python 命令列的 `render` 指令渲染這個檔案會重現同一張 SVG（已驗證逐位元組相同）；
   - 「Copy camera block」：把目前的相機區塊複製到剪貼簿。
 - **面板**：
   - 狀態列顯示 A 段 ms（快取）、`core ms`（B + C + SVG）、`dom ms`（疊圖更新）、疊圖模式、點／邊／作圖線數量（所有光源的作圖線）、本影碎片數（兩盞以上光源），以及光源與受影面的 id；
   - 警告表列出目前文件的 `code`、`ids` 與 `message`。
+- **旁觀視角**（M9，合約 §5.6；唯讀）：
+  - 頁面一律以**編輯畫面**開啟（D80）：左窗是旁觀視角、右窗是原本的作圖畫面，兩窗等寬並排；頁面寬度小於 880 px 時改為上下堆疊，旁觀視角在上。作圖畫面右上角的「預覽」按鈕（切換鈕）按下後，旁觀視角、「整體顯示」與狀態列的 `obs ms` 都隱藏，作圖畫面佔滿全寬，按鈕變成「返回編輯」；再按一次或按 Esc 回到編輯畫面。預覽時右窗唯讀、板子不能拖曳，但滑桿、六個一鍵視圖、方程式欄位、復原、重設照常可用；要拖曳圓環與箭頭請「返回編輯」。這個選擇不會被記住（不讀寫 `localStorage`），每次開頁都從編輯畫面開始；
+  - 左窗從外面看作圖相機：眼睛 E（黑點，標出座標，不能拖）、投影平面（淡藍色半透明片）與粗框畫框、畫框上的線稿（就是右窗的圖，以核心的 `unproject_to_plane` 反投影到眼前 D − 0.012 m 處，跟隨右窗的圖層勾選）、視錐（經過畫框四角，虛點延伸到 1.9 倍）、主點 Q、D 線、旋轉中心（菱形）與 g 線（「板子離場景 g = x m」）、平面方程式（例如 `y = 2.00`），以及場景與光源；
+  - 「視線」勾選框（預設開）：第一個物體每個頂點的視線 E→P 與穿過畫框的點 P′，光線 L→P→S（平行光從 S 沿光的方向畫），眼睛看影子點 S 的視線與穿過點 S′；
+  - M10 起 D、旋轉中心與 g 都來自板子狀態（§4.5）：D 由滑桿調整，旋轉中心預設為場景中心，`g = R − D`；左窗另有橘色圓環與藍色箭頭兩個把手；
+  - 每次改相機（拖曳把手、滑桿、一鍵視圖、方程式、載入範例、「重設」、「復原」）左窗都在同一格更新。左窗裡在空白處左拖繞轉、滾輪或雙指縮放，只動旁觀相機，不影響作圖（滑鼠右鍵與中鍵拖曳沒有作用）；「整體顯示」把所有重點（E、Q、場景中心與它的地面點、點光源、畫框四角）放進畫面，距離至少是 2.3 倍最大半徑，若有點會落在窗格內側 90% 之外就再拉遠（並排時左窗是直的，常需要拉遠），載入場景、「重設」、「復原」、一鍵視圖、套用方程式與更換旋轉中心後也會自動取景，拖曳中不取景；
+  - 左窗的受影面（地面、牆）畫成半透明，畫框落到地面以下時仍看得到；
+  - 編輯畫面與預覽之間，同一台相機下載的 SVG 與 JSON 逐位元組相同（`web/scripts/smoke.mjs` 檢查）。狀態列另外顯示 `obs ms`（旁觀視角每格的成本），五個範例拖曳時每格總計約 4–24 ms；
+  - 載入後第一次移動板子之前，直接用場景自己的相機區塊算圖（任何形式），所以文件、警告與下載都和 CLI 相同（水平板子不會出現 `CAMERA_LOOKING_ALONG_UP`）；移動之後改畫板子的 `picture_plane` 區塊，畫面不變，「Download scene」此後寫出 `picture_plane` 形式；「重設」回到場景的區塊。
 
-範例與 `benchmark_100.json` 拖曳時的 `core ms` / `dom ms` 實測見 `web/README.md`：八個範例每格約 1–3 ms，`benchmark_100.json` 約 66–78 ms（`<img>` 模式，第二階段量測）。截圖見 `docs/images/web_ui.png`，第二階段的三張是 `docs/images/web_ui_wall_and_ground.png`（開啟消隱：箱子背面的邊畫成虛線，牆畫成有界的板子）、`docs/images/web_ui_mesh_demo.png`（網格房子與圓柱，房子由展開後的場景載入）與 `docs/images/web_ui_two_lights.png`（兩盞點光源各有一個輔助小球，兩組影子與較深的本影）。
+範例與 `benchmark_100.json` 拖曳時的 `core ms` / `dom ms` 實測見 `web/README.md`：八個範例每格約 1–3 ms，`benchmark_100.json` 約 66–78 ms（`<img>` 模式，第二階段量測）。截圖見 `docs/images/web_ui.png`，第二階段的三張是 `docs/images/web_ui_wall_and_ground.png`（開啟消隱：箱子背面的邊畫成虛線，牆畫成有界的板子）、`docs/images/web_ui_mesh_demo.png`（網格房子與圓柱，房子由展開後的場景載入）與 `docs/images/web_ui_two_lights.png`（兩盞點光源各有一個輔助小球，兩組影子與較深的本影）。旁觀視角的截圖是 `docs/images/web_ui_observer.png`，平面模式（輸入 `y=2` 後拖過圓環）的截圖是 `docs/images/web_ui_plane_mode.png`。
+
+### 4.5 網頁 UI：平面模式（M10，合約 §5.7、spec-v0.2 §4.2、§5）
+
+網頁的作圖相機改由「板子」（投影平面）決定：使用者只操作板子的方向 `f` 與板子離旋轉中心的距離 `g`，眼睛 E 在板子後方 D 處，由這兩者算出，**唯讀、不能拖**：`E = P − (g + D)·f + L`（`L` 為平移，`R = g + D` 為旋轉中心沿 `f` 的深度）。核心不知道這件事：每個影格網頁把狀態換成 `picture_plane` 相機區塊（`position` 加 `picture_plane {normal, offset[, up]}`，見第 1 節）再交給移植的核心。
+
+**載入與重設。** 載入場景時，以場景相機換算初始狀態：旋轉中心為場景中心（A 段 `bbox` 的中心），D 取 `picture_plane` 的距離（其他形式為 4 m），`R` 夾在 0.8–40 m、D 夾在 0.5–12 m；夾限改變了畫面時，讀數區會提示。換算後、第一次改動前，核心直接畫場景自己的相機，文件、警告與下載都與命令列相同；一旦移動板子，就改畫板子的 `picture_plane` 區塊（畫面與場景相機相差 < 1e-7 mm）。「重設」回到這個載入狀態（含焦距、D、旋轉中心回場景中心），旁觀相機回到初始方向並重新取景。
+
+**右窗（作圖畫面）唯讀。** 在右窗上的任何拖動（左、右、中鍵、Shift、觸控單指或雙指、手寫筆）與滾輪都安靜地不做事：不報錯、不跳提示、不進復原堆疊、不改相機、也沒有抓取游標；右窗不攔截滾輪、觸控與右鍵選單，頁面照常捲動，右鍵還是瀏覽器的選單。檔案拖放在整個頁面照舊有效。M10 初稿的右窗手勢（左拖＝圓環、滾輪或捏合＝箭頭、右拖或 Shift 拖或雙指＝平移）已取消（D79）。
+
+板子只在兩個地方改：
+
+- 左窗（編輯畫面，預覽時收起）：拖橘色圓環、拖藍色箭頭、空白處左拖繞轉旁觀相機、滾輪或雙指縮放旁觀相機、「點選物體」模式下點一下物體；
+- 工具列與面板：焦距、D、滾轉三個滑桿、六個一鍵視圖、平面方程式欄位、復原、重設、鎖水平、旋轉中心選擇。
+
+**平移 (a, b) 不再能手動編輯**：它只來自載入規則（相機的眼睛不在通過旋轉中心的軸線上時，偏差成為平移，畫面不變），點選物體當旋轉中心與一鍵視圖會把它歸零，環繞、箭頭、D、滾轉與方程式都保留它。滾輪（左窗只縮放旁觀相機）與箭頭都不是焦距：焦距是等比放大，拉近則透視變強。
+
+一次圓環或箭頭拖動在放開時記一步復原。
+
+**左窗（旁觀視角）的把手**：編輯畫面（頁面預設）中，板子上有橘色虛線圓環（半徑為畫框半對角線的 1.03 倍，至少 0.45 m）與藍色箭頭（由 Q 指向眼睛，長度 `clamp(0.55·D, 0.3, 1.4)` m，尖端標「板子距離」）。拖圓環＝整組繞旋轉中心環繞（g、D、`|E − P|` 不變）；拖箭頭尖端＝板子連同眼睛沿 `f` 前後移（只改 g）。命中半徑滑鼠 14 px、觸控 26 px（圓環為 0.8 倍），優先序為箭頭尖端 > 圓環 > 物體（旋轉中心為「點選物體」時，點一下）> 空白處（繞轉旁觀相機）。黑點 E 永遠不是把手。
+
+**吸附**：「吸附」勾選框預設開，按住 Alt 暫停。`f` 與 ±x、±y、±z 夾角小於 5° 時貼齊該軸（因此到得了正上、正下的視圖）；板子平行座標平面時，拖箭頭會讓平面座標貼 0.1 m 格。
+
+**兩窗下方的控制列**：
+
+- 勾選框：吸附、作圖線（與 `construction` 圖層勾選框同步）、視線（頂點射線）、鎖水平（預設開；關閉時為自由滾轉，環繞時 up 跟著整組轉）。
+- 旋轉中心：「場景中心」或「點選物體」（再到左窗點一下物體；眼睛移到該物體的軸線上，平移歸零）。更換不記復原。
+- 三個並排滑桿：焦距（對數刻度 8–400 mm，只改視野與畫框）、D（0.5–12 m，板子不動、眼睛沿 `−f` 移動，畫框實際大小按比例變；夾限使 `R` 留在 0.8–40 m）、滾轉（−180°～180°，沿視線轉動畫面，眼睛不動；與自由滾轉不同）。三者都不記復原，復原與重設時同步顯示。
+- 六個一鍵視圖：前（`f = +y`）、後（`−y`）、左（`+x`）、右（`−x`）、上（`−z`，平面視圖）、下（`+z`）；清除平移與滾轉，g、D 不變。
+- 讀數：投影平面方程式、板子離場景 g 與觀看距離 R、眼睛 E（唯讀）、D、平移 (a, b) 與滾轉、畫框公尺大小、「這次拖動右窗畫面變動」（拖動指左窗的圓環或箭頭；所有物體頂點從這次（或上次）拖動開始到現在的最大畫面位移，畫框 mm；小於 0.005 mm 顯示「0.00 mm（不變）」）。眼睛低於地面時提示「眼睛在地面下方」。
+
+**上方列**：平面方程式欄位平時即時顯示目前平面（例如 `y = 2.00`、`0.707x + 0.707y = 1.200`）；輸入 `x`、`y`、`z` 的一次式（兩邊都可有項，例如 `2x - y + 3 = 0`）後按 Enter 或「套用」，或按快速按鈕 `x=1`、`y=2`、`y=−3`、`z=3`、`x+y=3`。板子永遠放在眼睛與旋轉中心之間；平移與滾轉保留。語法錯誤、沒有 x/y/z、或 `g + D` 超出 0.8–40 m 時欄位變紅並說明原因，平面不變。在 D = 4 m、旋轉中心為場景中心時輸入 `y=2`，眼睛在 `y = −2`。另有「復原」（最多 50 步）、「重設」與「整體顯示」（預覽時隨旁觀視角一起隱藏）；工具列另有「預覽」按鈕（見本節上方的旁觀視角段）。
+
+**下載**：「Download scene」與「Copy camera block」寫出目前畫的那個區塊：移動過板子後為 `picture_plane` 形式（鎖水平且滾轉 0 時省略 `up`），`castplane render` 可重現同一張圖。

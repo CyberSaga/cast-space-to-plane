@@ -82,10 +82,13 @@ B = castplane.project_scene(scene, A, camera=camera, umbra=False)   # umbra[].po
 核心另有一份 TypeScript 移植（`ts/`，零執行期相依，函式名稱與 Python 相同），涵蓋 M4–M6 的全部格式：有界受影面、取樣式消隱、網格物件（吃展開後的內嵌 `data`）、多光源與本影。它以同一個一致性測試集驗收：v6 的 50/50，兩個執行器都通過。SVG 輸出在全部案例與範例上都與 Python 逐位元組相同。只換相機的重算在 node 上約 55–72 ms，達到規格 §8 的 < 100 ms。`web/` 是建在移植上的 three.js 網頁 UI，功能包括：
 
 - 開啟或拖放場景 JSON，也可以從範例選單載入；
-- 以 3D 顯示物件（含網格）、每盞光源、地面與有界受影面（板子），用滑鼠拖曳相機，用滑桿調整焦距與滾轉；
+- 以 3D 顯示物件（含網格）、每盞光源、地面與有界受影面（板子），在左窗拖曳板子來改變相機（右窗唯讀），用滑桿調整焦距與滾轉；
+- 工具列預設：horizon、objects、form_shadow、cast_shadow、labels 與「Hidden lines」勾選，construction（作圖線）與「3D view」不勾選；這是頁面層級的狀態，載入場景不會改變它；
 - 消隱開關與虛線／省略樣式選單；
 - 作圖線稿每個影格由移植的核心重新寫出 SVG，疊在 3D 畫面上；
 - 可下載 SVG、JSON，以及帶目前相機的場景檔（Python 命令列可重現同一張圖）。
+- 旁觀視角（M9，唯讀）：頁面預設就顯示旁觀視角（D80），左窗從外面看作圖相機的眼睛 E、投影平面與畫框（畫框上就是右窗的線稿）、視錐、主點、D 與 g、旋轉中心、平面方程式，以及第一個物體頂點的視線與光線；右窗的作圖與下載完全不變；作圖畫面右上角的「預覽」按鈕可暫時收起旁觀視角、讓作圖畫面佔滿全寬（按鈕變「返回編輯」，再按或按 Esc 回來），下載的檔案在兩種畫面之間逐位元組相同。
+- 平面模式（M10，板子為主）：拖左窗的橘色圓環決定從哪個方向看、拖藍色箭頭決定板子離場景多遠，眼睛 E 由板子算出、唯讀；右窗（作圖畫面）唯讀，在上面拖動或滾輪都不做事，板子只在左窗與工具列操作；箭頭拉近不是焦距；焦距、D、滾轉三個滑桿，旋轉中心（場景中心或點選物體）、鎖水平、六個一鍵視圖、平面方程式欄位（如 `y=2`）、復原與重設，以及讀數；「Download scene」寫出 `picture_plane` 相機。
 
 它是純靜態網頁，不需要伺服器。
 
@@ -95,7 +98,9 @@ npm run -w web preview           # 本機開啟 web/dist
 npm test                         # TypeScript 與網頁的測試
 ```
 
-說明見 [`docs/USAGE.md`](docs/USAGE.md) §4、[`ts/README.md`](ts/README.md) 與 [`web/README.md`](web/README.md)。截圖：[`docs/images/web_ui.png`](docs/images/web_ui.png)，以及第二階段的 [`web_ui_wall_and_ground.png`](docs/images/web_ui_wall_and_ground.png)（開啟消隱）、[`web_ui_mesh_demo.png`](docs/images/web_ui_mesh_demo.png)、[`web_ui_two_lights.png`](docs/images/web_ui_two_lights.png)。
+說明見 [`docs/USAGE.md`](docs/USAGE.md) §4、[`ts/README.md`](ts/README.md) 與 [`web/README.md`](web/README.md)。截圖：[`docs/images/web_ui.png`](docs/images/web_ui.png)，以及第二階段的 [`web_ui_wall_and_ground.png`](docs/images/web_ui_wall_and_ground.png)（開啟消隱）、[`web_ui_mesh_demo.png`](docs/images/web_ui_mesh_demo.png)、[`web_ui_two_lights.png`](docs/images/web_ui_two_lights.png)，M9 的旁觀視角 [`web_ui_observer.png`](docs/images/web_ui_observer.png)，以及 M10 的平面模式 [`web_ui_plane_mode.png`](docs/images/web_ui_plane_mode.png)：
+
+![平面模式](docs/images/web_ui_plane_mode.png)
 
 ## 作圖線是什麼
 
@@ -212,7 +217,7 @@ npm test                         # TypeScript 與網頁的測試
 | 退化情況（§5.7） | 每列至少一個測試，檢查警告代碼與輸出有限 | `python3 -m pytest tests/test_degenerate.py -q` |
 | 光線投射對照組（§7.3） | 亂數場景（1–10 個基元，含凹稜柱與光源垂足在凹口內的案例），地面取樣網格逐點射線測試，影子多邊形柵格化後 IoU ≥ 0.99（另逐物件比對）；與幾何法零程式碼共用 | `python3 -m pytest tests/test_raycast.py -q`（較慢） |
 | 屬性測試（§7.4） | hypothesis 生成隨機場景與相機，驗證全部不變量，並針對退化情況生成專門分佈 | `python3 -m pytest tests/test_property.py -q`（較慢） |
-| 一致性測試集（§7.5） | 60 個案例（v2 的 34 個 + M4 的 9 個 + M5 的 3 個內嵌網格案例 + M6 的 4 個多光源案例 + v7 最終審查修正的 10 個）的輸入與 §6.2 輸出，畫面座標容差 1e-6 mm、警告代碼集合相同；TypeScript 移植的合約。比對常數的單一來源是 `tests/conformance/rules.json`（Python 與 TypeScript 執行器共用，含逐案例的 `case_overrides`） | `python3 -m pytest tests/test_conformance.py -q`；重新產生：`python3 tools/regen_conformance.py --reason "…"`；比對規則變更：`python3 tools/regen_conformance.py --rules-only --reason "…"` |
+| 一致性測試集（§7.5） | 63 個案例（v2 的 34 個 + M4 的 9 個 + M5 的 3 個內嵌網格案例 + M6 的 4 個多光源案例 + v7 最終審查修正的 10 個 + M10 的 3 個 `picture_plane` 相機案例，v8）的輸入與 §6.2 輸出，畫面座標容差 1e-6 mm、警告代碼集合相同；TypeScript 移植的合約。比對常數的單一來源是 `tests/conformance/rules.json`（Python 與 TypeScript 執行器共用，含逐案例的 `case_overrides`） | `python3 -m pytest tests/test_conformance.py -q`；重新產生：`python3 tools/regen_conformance.py --reason "…"`；比對規則變更：`python3 tools/regen_conformance.py --rules-only --reason "…"` |
 | 消隱參考（M4） | `tests/reference/zbuffer.py` 逐像素光線投射深度緩衝（0.1 mm/px，三值判定加輪廓防護），與 castplane 零程式碼共用；29 個場景的每段 run 每 0.5 mm 取樣與其比對（≥ 99%，方塊／稜柱邊 100%），run 邊界與逐點光線投射在 ±0.15 mm 內一致 | `python3 -m pytest tests/test_hidden.py tests/test_receivers.py -q` |
 | 網格（M5） | 前處理表（焊接、退化面、方向、共面合併、邊分類）、匯入方塊 = 參數化方塊（逐位元）、非流形逐面退路、載入器（OBJ、glTF `.gltf` + `.bin` / data URI、GLB、跨距存取器、鏡像節點、精確 Y-up → Z-up、STL / PLY）、`castplane import` | `python3 -m pytest tests/test_meshprep.py tests/test_mesh_pipeline.py tests/test_loaders.py -q`；夾具：`python3 tools/make_mesh_fixtures.py` |
 | 多光源（M6） | 手算驗收案例（兩盞對稱點光源下的單位方塊：本影 3 片、地面面積 7/6）、每個光源的紀錄與其單光源文件逐位元相同、本影掃描線核心（`record_pieces` 表、隨機輸入對柵格 AND）、三盞光的本影對柵格 AND（IoU ≥ 0.995）與光源順序不變、對光線投射「被所有光源遮住」的遮罩 IoU ≥ 0.99、`umbra_from_document` 逐位元重算 | `python3 -m pytest tests/test_umbra.py tests/test_multilight.py -q` |
@@ -226,7 +231,7 @@ npm test                         # TypeScript 與網頁的測試
 | M0 骨架與相機 | 場景 JSON 讀取與驗證、相機矩陣、近平面裁切、方塊線框 SVG、地平線與消失點 | 完成 |
 | M1 多面體投射陰影與作圖線 | 平面投影矩陣、受光判定、光輪廓邊、影子多邊形、L′ F′ 與作圖線、六個 SVG 圖層、JSON 輸出 | 完成 |
 | M2 曲面基元與形體陰影 | 圓柱、球、圓錐的圓錐曲線影子、明暗交界線、SVG ellipse 輸出 | 完成 |
-| M3 核心穩定（閘門） | 光線投射對照組、屬性測試、一致性測試集 v1、效能基準 | **通過（D17 豁免）**：光線投射對照（IoU ≥ 0.99）、屬性測試、一致性測試集（目前 v7）與效能基準皆已交付並通過；§8 的「完整渲染 < 1 s」已達標（約 0.35–0.45 s），「只換相機 < 100 ms」**尚未達標**（約 110–130 ms，關閉循環 GC 約 90 ms；量測結果見 `benchmarks/README.md`）。規格 §8 將數字定為目標值，閘門審查依合約 §4 / D17 豁免這一項：CI 以 `python3 benchmarks/bench.py --gate full` 為閘門（`.github/workflows/ci.yml`），只換相機列為已知未達標、留待 M7 互動介面時收斂 |
+| M3 核心穩定（閘門） | 光線投射對照組、屬性測試、一致性測試集 v1、效能基準 | **通過（D17 豁免）**：光線投射對照（IoU ≥ 0.99）、屬性測試、一致性測試集（目前 v8）與效能基準皆已交付並通過；§8 的「完整渲染 < 1 s」已達標（約 0.35–0.45 s），「只換相機 < 100 ms」**尚未達標**（約 110–130 ms，關閉循環 GC 約 90 ms；量測結果見 `benchmarks/README.md`）。規格 §8 將數字定為目標值，閘門審查依合約 §4 / D17 豁免這一項：CI 以 `python3 benchmarks/bench.py --gate full` 為閘門（`.github/workflows/ci.yml`），只換相機列為已知未達標、留待 M7 互動介面時收斂 |
 | M4 多受影面與隱藏線 | 有界受影面、逐面裁切、轉折影、取樣式隱藏線、visibility 欄位 | 完成（已合併到主分支，一致性測試集 v4）：任意平面的有界凸受影面、bounds 裁切與錨點規則、轉折影、`RECEIVER_UNLIT`、逐受影面作圖線、取樣式消隱（`hidden_lines` 預設關閉，`--hidden-lines`）、9 個一致性案例；34 個既有案例在合併時做了一次鍵新增重產（一致性 v4，合約 §5.0.8） |
 | M5 網格匯入 | OBJ、glTF/GLB 載入、前處理管線 | 完成（已合併到主分支，一致性測試集 v5）：`mesh` 物件（`path` / 內嵌 `data`）、`castplane.meshprep` 前處理（焊接 → 退化面 → 流形與方向 → 共面合併 → 平滑／特徵邊）、非流形逐面退路、`castplane.io` 載入器（OBJ、glTF / GLB、STL / PLY 經選用的 trimesh）與 `castplane import`；3 個網格一致性案例；`benchmarks/bench.py --scene mesh10k` |
 | M6 多光源 | 多光源影子分組、疊影規則、SVG 子圖層 | 完成（已合併到主分支，一致性測試集 v6）：任意數量的光源、每個光源單獨以 v1 / M4 公式計算（與單光源文件逐位元相同）、本影（`castplane.umbra` 純 numpy 掃描線核心，只讀畫出的影子多邊形）、半影由各光源子群組的較淡填色呈現、`form_shadow_core`、`constructions`、曲面作圖點帶光源 id、SVG 每光源子群組與 `cast_shadow.umbra` / `form_shadow.core`、`castplane info` 列出每個光源；4 個多光源一致性案例；`benchmarks/bench.py --lights 2\|3`、`--no-umbra`；單光源文件與 SVG 完全不變 |

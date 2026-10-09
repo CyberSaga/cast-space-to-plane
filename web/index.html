@@ -8,21 +8,30 @@
   <body>
     <header id="toolbar">
       <span class="brand">castplane</span>
+      <span class="group" id="observer-controls">
+        <button id="observer-frame" type="button">整體顯示</button>
+      </span>
+      <span class="group" id="equation-group">
+        <label class="group" for="equation">平面</label>
+        <input id="equation" type="text" spellcheck="false" autocomplete="off" size="32" aria-describedby="equation-error" />
+        <button id="equation-apply" type="button">套用</button>
+        <span class="group" id="quick-equations"></span>
+        <span id="equation-error" role="status"></span>
+      </span>
+      <button id="undo" type="button">復原</button>
+      <button id="reset" type="button">重設</button>
       <label class="group">Example
         <select id="examples"><option value="">—</option></select>
       </label>
       <label class="group file">Open scene JSON
         <input id="file" type="file" accept=".json,application/json" />
       </label>
-      <button id="reset" type="button">Reset camera</button>
-      <label class="group">Focal <input id="focal" type="range" min="0" max="1" step="0.001" /> <output id="focal-out"></output></label>
-      <label class="group">Roll <input id="roll" type="range" min="-180" max="180" step="0.5" /> <output id="roll-out"></output></label>
       <span class="group" id="layers"></span>
-      <label class="group"><input id="hidden-lines" type="checkbox" /> Hidden lines</label>
+      <label class="group"><input id="hidden-lines" type="checkbox" checked /> Hidden lines</label>
       <label class="group">Hidden style
         <select id="hidden-style"><option value="dashed">dashed</option><option value="omit">omit</option></select>
       </label>
-      <label class="group"><input id="view3d" type="checkbox" checked /> 3D view</label>
+      <label class="group"><input id="view3d" type="checkbox" /> 3D view</label>
       <span class="group">
         <button id="dl-svg" type="button">Download SVG</button>
         <button id="dl-json" type="button">Download JSON</button>
@@ -31,18 +40,56 @@
       </span>
     </header>
     <main id="main">
-      <section id="viewport" aria-label="viewport">
-        <div id="stage">
-          <canvas id="gl"></canvas>
+      <div id="work">
+        <div id="panes" class="observer-on">
+          <section id="observer" aria-label="observer view">
+            <canvas id="obs-gl"></canvas>
+            <div id="obs-labels"></div>
+            <div class="obs-hint">旁觀視角 · 拖橘色圓環＝方向 · 拖藍色箭頭尖端＝板子距離 · 拖空白處繞轉 · 滾輪或雙指縮放</div>
+          </section>
+          <section id="viewport" aria-label="viewport">
+            <button id="preview" type="button" aria-pressed="false" title="只看作圖畫面（Esc 返回）">預覽</button>
+            <div id="stage">
+              <canvas id="gl" class="hidden"></canvas>
+            </div>
+            <div id="drop-hint">Drop a scene JSON file anywhere, or pick an example.</div>
+          </section>
         </div>
-        <div id="drop-hint">Drop a scene JSON file anywhere, or pick an example.</div>
-      </section>
+        <section id="controls" aria-label="plane mode controls">
+          <div id="readouts"></div>
+          <div class="ctl-col">
+            <div class="ctl-row">
+              <label class="group"><input id="snap" type="checkbox" checked /> 吸附</label>
+              <label class="group"><input id="construction-lines" type="checkbox" /> 作圖線</label>
+              <label class="group"><input id="observer-rays" type="checkbox" checked /> 視線</label>
+              <label class="group"><input id="lock-level" type="checkbox" checked /> 鎖水平</label>
+              <label class="group">旋轉中心
+                <select id="pivot-mode"><option value="scene">場景中心</option><option value="object">點選物體</option></select>
+              </label>
+            </div>
+            <div class="ctl-row sliders">
+              <label class="group">焦距 <input id="focal" type="range" min="0" max="1" step="0.001" /> <output id="focal-out"></output></label>
+              <label class="group">D <input id="dist" type="range" min="0.5" max="12" step="0.1" /> <output id="dist-out"></output></label>
+              <label class="group">滾轉 <input id="roll" type="range" min="-180" max="180" step="1" /> <output id="roll-out"></output></label>
+            </div>
+            <div class="ctl-row" id="views">
+              <button type="button" data-view="front" title="f = +y">前</button>
+              <button type="button" data-view="back" title="f = −y">後</button>
+              <button type="button" data-view="left" title="f = +x">左</button>
+              <button type="button" data-view="right" title="f = −x">右</button>
+              <button type="button" data-view="top" title="f = −z">上</button>
+              <button type="button" data-view="bottom" title="f = +z">下</button>
+            </div>
+            <div id="notices" role="status"></div>
+          </div>
+        </section>
+      </div>
       <aside id="side">
         <div id="status">no scene</div>
         <div id="error" hidden></div>
         <h2>Warnings</h2>
         <table id="warnings"><thead><tr><th>code</th><th>ids</th><th>message</th></tr></thead><tbody></tbody></table>
-        <p class="help">Left drag: orbit · right drag or Shift + drag: pan · wheel: zoom</p>
+        <p class="help">作圖畫面只供檢視，在上面拖動或捲動不會改變任何東西。要移動板子，在左側旁觀視角拖橘色圓環（方向）或藍色箭頭尖端（板子距離）；拖動時按住 Alt 暫停吸附。按「預覽」只看作圖畫面，再按「返回編輯」或 Esc 回來。</p>
       </aside>
     </main>
     <script type="module" src="./src/main.ts"></script>

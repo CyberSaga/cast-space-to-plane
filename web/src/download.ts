@@ -7,7 +7,7 @@
  */
 
 import { LAYER_ORDER, dumps, write_svg } from "castplane";
-import type { GeometryDocument, Scene } from "castplane";
+import type { Camera, GeometryDocument, Scene } from "castplane";
 
 import type { TargetCamera } from "./orbit.js";
 
@@ -40,11 +40,11 @@ export function json_blob(doc: GeometryDocument, sceneName: string): DownloadFil
 
 /**
  * `dumps({...scene, camera: cam}) + "\n"` → `<sceneName>.scene.json`: the loaded scene with the explicit target-form
- * block of `camera_from_orbit`, so the result never carries both camera forms and the Python CLI reproduces the
+ * block of `camera_from_orbit` (or, in M9, an unedited `picture_plane` scene camera as it is, §5.6 notes), so the result never carries both camera forms and the Python CLI reproduces the
  * picture (`castplane render x.scene.json -o out`). `hidden_lines` (the UI checkbox) and `hidden_style` (the UI select,
  * phase 2 of §5.4.10), when given, are written as `output.hidden_lines` / `output.hidden_style` for the same reason.
  */
-export function scene_blob(scene: Scene, cam: TargetCamera, sceneName: string, hidden_lines?: boolean,
+export function scene_blob(scene: Scene, cam: TargetCamera | Camera, sceneName: string, hidden_lines?: boolean,
   hidden_style?: "dashed" | "omit"): DownloadFile {
   const output = { ...scene.output };
   if (hidden_lines !== undefined) output.hidden_lines = hidden_lines;
@@ -53,6 +53,6 @@ export function scene_blob(scene: Scene, cam: TargetCamera, sceneName: string, h
 }
 
 /** The text of "Copy camera block": the current block as deterministic JSON. */
-export function camera_block_text(cam: TargetCamera): string {
+export function camera_block_text(cam: TargetCamera | Camera): string {
   return dumps(cam) + "\n";
 }

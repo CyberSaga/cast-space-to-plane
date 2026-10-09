@@ -1730,6 +1730,9 @@ export function compose(scene: Scene, B: StageB, hidden_lines?: boolean | null):
     },
     warnings: B.warnings.map((w) => ({ code: w.code, ids: [...w.ids], message: w.message })),
   });
+  if (cam.picture_plane !== undefined) { // M10 (spec-v0.2 §4.1, appendix A.3): the key of picture_plane cameras only
+    (head.camera as Record<string, unknown>)["picture_plane"] = canonical(cam.picture_plane);
+  }
   const per_receiver: Record<string, unknown> = {};
   for (const [rid, blk] of construction.per_receiver) {
     per_receiver[rid] = {
