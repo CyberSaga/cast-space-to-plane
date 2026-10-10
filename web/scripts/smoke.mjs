@@ -27,7 +27,7 @@
 // the pane shown records `core ms` + `dom ms` + `obs ms` per frame (< 100 ms for the five examples); an observer drag must
 // not change the drawing; the narrow (< 880 px) layout stacks the panes; switching off restores the drawing pane's
 // size; framing keeps the eye and the frame in the pane; a right or middle drag does not move the observer; the three
-// v8 `picture_plane` cases render the scene camera's document until an arrow drag (and again after "重設"); a frame
+// v8 `picture_plane` cases render the scene camera's document until an arrow drag (and again after "重設視角"); a frame
 // below the ground is drawn. With `--shots DIR` it also saves DIR/web_ui_observer.png. M10 (contract §5.7.13, plane
 // mode): the ring drag changes f and keeps g, D and |E − P|; the arrow drag changes g only; the drawing pane is
 // view-only (a left, right, middle and Shift drag and the wheel there change neither the camera block, the readouts,
@@ -37,7 +37,12 @@
 // red and keeps the plane; undo and reset restore f, g, up (and the sliders); the eye is not draggable; the D slider
 // keeps the board; an object click sets the pivot; Download scene writes the picture_plane form and reloads to the
 // same SVG; the overlay is identical with the observer pane shown and hidden (預覽) for the same edited camera; 900 random rig
-// states render finite. With `--shots DIR` it also saves DIR/web_ui_plane_mode.png. Prints one JSON record. Exit 1 on
+// states render finite. M11 step 1 (contract §5.8.5, §5.8.6, §5.8.11): the 重設視角 / 重做 / 重新取中心 buttons; undo and
+// redo by button and by Ctrl / ⌘+Z and Ctrl / ⌘+Shift+Z (not in the equation field, not while previewing, Ctrl+Y unbound);
+// a click selects an object and Esc clears it, Esc in 預覽 leaves it and keeps the selection; an object move (the
+// `move_object` hook) and its undo / redo move neither P, E nor the observer and restore the same SVG; 整體顯示 frames
+// the edited box; 重新取中心 per mode; 重設視角 takes the current centre, keeps the selection, and its undo restores P and the
+// selector; a load clears the selection and the history. With `--shots DIR` it also saves DIR/web_ui_plane_mode.png. Prints one JSON record. Exit 1 on
 // a page error or a failed check.
 import { execSync } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
@@ -546,7 +551,7 @@ if (sceneFile) {
   check(observer.picture_plane.same_as_scene_camera, "picture_plane: the scene camera's SVG");
   // the three v8 cases: until the drawing camera is edited the scene's own block is rendered, so the document and the
   // warnings are the CLI's (no CAMERA_LOOKING_ALONG_UP for the horizontal board); after a drag the rig's
-  // picture_plane block (M10); 重設 returns to the scene's block (§5.6, §5.7 implementation notes)
+  // picture_plane block (M10); 重設視角 returns to the scene's block (§5.6, §5.7 implementation notes)
   observer.picture_plane_cases = {};
   for (const name of ["camera_picture_plane_horizontal", "camera_picture_plane_vertical", "camera_picture_plane_tilted"]) {
     const text = readFileSync(join(ROOT, "tests", "conformance", "cases", `${name}.json`), "utf-8");
@@ -571,7 +576,7 @@ if (sceneFile) {
     await frames2();
     await frames2();
     const c = await snap();
-    check(c.dl.json === a.dl.json && c.camera.picture_plane !== undefined, `${name}: 重設 returns to the scene's block`);
+    check(c.dl.json === a.dl.json && c.camera.picture_plane !== undefined, `${name}: 重設視角 returns to the scene's block`);
     observer.picture_plane_cases[name] = { warnings: doc.warnings.map((w) => w.code), after_drag: JSON.parse(b.dl.json).warnings.map((w) => w.code) };
   }
   // a frame below the ground (E at z = 0.3 looking down): the receiver plates do not hide the board (§5.6.5)
@@ -953,6 +958,164 @@ const plane = {};
     });
     plane.label_overlaps = overlaps;
     check(overlaps.length === 0, `plane: the observer labels do not overlap (${JSON.stringify(overlaps)})`);
+  }
+  {
+    // M11 step 1 (contract §5.8.5, §5.8.6, §5.8.11): 重設視角, 重新取中心, redo and the shortcuts, Esc and the
+    // selection, the pivot as a value (an object edit moves neither P nor the observer)
+    await page.evaluate(() => window.castplane_web.load_example("basic"));
+    await frames2();
+    await frames2();
+    const m11 = {};
+    plane.m11 = m11;
+    const btn = () => page.evaluate(() => Object.fromEntries(["undo", "redo", "reset", "recenter"].map((id) => {
+      const el = document.getElementById(id);
+      return [id, { text: el.textContent, disabled: el.disabled }];
+    })));
+    const ui0 = await btn();
+    const beside = await page.evaluate(() => document.getElementById("recenter").previousElementSibling.contains(document.getElementById("pivot-mode")));
+    m11.buttons = ui0;
+    check(ui0.reset.text === "重設視角" && ui0.redo.text === "重做" && ui0.recenter.text === "重新取中心" && beside,
+      "m11: the buttons 重設視角 (id reset), 重做 and 重新取中心 beside the pivot selector");
+    check(ui0.undo.disabled && ui0.redo.disabled && !ui0.reset.disabled && !ui0.recenter.disabled, "m11: undo and redo disabled on load");
+    // a board step; undo and redo by button
+    const s0 = await rig();
+    await page.click('#views button[data-view="top"]');
+    await frames2();
+    const s1 = await rig();
+    await page.click("#undo");
+    await frames2();
+    const s2 = await rig(), ui2 = await btn();
+    check(s2.f.join() === s0.f.join() && s2.undo === 0 && s2.redo === 1 && !ui2.redo.disabled && ui2.undo.disabled, "m11: undo moves the step to redo");
+    await page.click("#redo");
+    await frames2();
+    const s3 = await rig();
+    check(s3.f.join() === s1.f.join() && s3.undo === 1 && s3.redo === 0, "m11: redo re-applies the board step");
+    // the shortcuts: Ctrl+Z, Ctrl+Shift+Z and their ⌘ forms; not with the focus in the equation field
+    const keyed = [];
+    for (const [combo, want] of [["Control+z", [0, 1]], ["Control+Shift+Z", [1, 0]], ["Meta+z", [0, 1]], ["Meta+Shift+Z", [1, 0]]]) {
+      await page.keyboard.press(combo);
+      await frames2();
+      const r = await rig();
+      keyed.push([combo, r.undo, r.redo]);
+      check(r.undo === want[0] && r.redo === want[1], `m11: ${combo} (${r.undo}/${r.redo})`);
+    }
+    m11.keys = keyed;
+    await page.focus("#equation");
+    await page.keyboard.press("Control+z");
+    await frames2();
+    const s4 = await rig();
+    check(s4.undo === 1 && s4.redo === 0 && s4.f.join() === s1.f.join(), "m11: Ctrl+Z in the equation field is the field's (no undo)");
+    await page.evaluate(() => document.getElementById("equation").blur());
+    await page.keyboard.press("Control+y");
+    await frames2();
+    check((await rig()).undo === 1, "m11: Ctrl+Y is not bound");
+    // the selection: a click on an object selects it (P not taken in 場景中心); Esc clears it
+    const objs = await page.evaluate(() => window.castplane_web.objects_px);
+    const click_obj = async (id) => {
+      const p = (await page.evaluate(() => window.castplane_web.objects_px))[id];
+      await page.mouse.click(ob.x + p[0], ob.y + p[1]);
+      await frames2();
+    };
+    check(objs["crate"] !== null && objs["pillar"] !== null, "m11: the objects are in the observer pane");
+    const pa = await rig();
+    await click_obj("crate");
+    const pb = await rig();
+    check(await page.evaluate(() => window.castplane_web.selected) === "crate" && near3(pb.P, pa.P, 0) && pb.undo === pa.undo,
+      "m11: a click selects the object; P is not taken in 場景中心; not an undo step");
+    await page.keyboard.press("Escape");
+    await frames2();
+    check(await page.evaluate(() => window.castplane_web.selected) === null, "m11: Esc clears the selection");
+    // 預覽: undo and redo disabled, the shortcuts do nothing; Esc leaves 預覽 and keeps the selection
+    await click_obj("crate");
+    await page.click("#undo");
+    await frames2();
+    await page.click("#preview");
+    await frames2();
+    const pv0 = await rig(), uip = await btn();
+    check(uip.undo.disabled && uip.redo.disabled && !uip.reset.disabled && !uip.recenter.disabled,
+      "m11: undo and redo are disabled while previewing (重設視角 and 重新取中心 are not)");
+    for (const combo of ["Control+z", "Control+Shift+Z", "Meta+z", "Meta+Shift+Z"]) await page.keyboard.press(combo);
+    await frames2();
+    const pv1 = await rig();
+    check(pv1.undo === pv0.undo && pv1.redo === pv0.redo && pv1.f.join() === pv0.f.join(), "m11: the shortcuts do nothing while previewing");
+    await page.keyboard.press("Escape");
+    await frames2();
+    await frames2();
+    const back = await page.evaluate(() => ({ on: window.castplane_web.observer.on, sel: window.castplane_web.selected }));
+    check(back.on && back.sel === "crate", "m11: Esc in 預覽 returns to the edit view and keeps the selection");
+    // the pivot is a value: moving the selected object (the drag's release, through the test hook) moves neither P, E nor
+    // the observer camera; its undo and redo neither; the selection follows the moved object
+    const before = await rig();
+    const view0 = JSON.stringify((await page.evaluate(() => window.castplane_web.observer)).view);
+    const geo0 = await page.evaluate(() => window.castplane_web.scene_geometry);
+    const svg0 = await page.evaluate(() => window.castplane_web.svg);
+    check(await page.evaluate(() => window.castplane_web.move_object("crate", [9, 1, 0])), "m11: the move hook moved the crate");
+    await frames2();
+    await frames2();
+    const mv = await rig(), geo1 = await page.evaluate(() => window.castplane_web.scene_geometry);
+    const view1 = JSON.stringify((await page.evaluate(() => window.castplane_web.observer)).view);
+    m11.move = { bbox: [geo0.bbox, geo1.bbox], P: mv.P };
+    check(near3(mv.P, before.P, 0) && near3(mv.E, before.E, 0) && mv.undo === before.undo + 1 && mv.redo === 0,
+      "m11: an object move moves neither P nor E; one undo step; redo cleared");
+    check(view1 === view0, "m11: an object edit does not re-frame the observer");
+    check(geo1.bbox[1][0] > geo0.bbox[1][0] && svg0 !== await page.evaluate(() => window.castplane_web.svg), "m11: the scene and the drawing changed");
+    await page.keyboard.press("Control+z");
+    await frames2();
+    await frames2();
+    const un = await rig(), geo2 = await page.evaluate(() => window.castplane_web.scene_geometry);
+    check(JSON.stringify(geo2.bbox) === JSON.stringify(geo0.bbox) && svg0 === await page.evaluate(() => window.castplane_web.svg)
+      && near3(un.P, before.P, 0) && JSON.stringify((await page.evaluate(() => window.castplane_web.observer)).view) === view0
+      && await page.evaluate(() => window.castplane_web.selected) === "crate",
+    "m11: undoing the move restores the scene and the drawing (same SVG), keeps P and the observer, selects the object");
+    await page.keyboard.press("Control+Shift+Z");
+    await frames2();
+    await frames2();
+    check(JSON.stringify((await page.evaluate(() => window.castplane_web.scene_geometry)).bbox) === JSON.stringify(geo1.bbox)
+      && near3((await rig()).P, before.P, 0), "m11: redoing the move");
+    // 整體顯示 frames on the eight corners of the current box: the moved crate comes into view
+    await page.evaluate(() => window.castplane_web.frame_observer());
+    await frames2();
+    const fr = await page.evaluate(() => ({ px: window.castplane_web.objects_px, size: window.castplane_web.observer.size }));
+    const inside = (q) => q !== null && q[0] >= 0 && q[0] <= fr.size[0] && q[1] >= 0 && q[1] <= fr.size[1];
+    check(inside(fr.px["crate"]) && inside(fr.px["pillar"]), "m11: 整體顯示 frames the edited scene's box");
+    // 重新取中心 (場景中心): P becomes the current box centre; not an undo step
+    const rc0 = await rig();
+    await page.click("#recenter");
+    await frames2();
+    const rc1 = await rig(), b1 = geo1.bbox;
+    const c1 = [0, 1, 2].map((i) => (b1[0][i] + b1[1][i]) / 2);
+    check(near3(rc1.P, c1, 0) && !near3(rc1.P, before.P, 1e-9) && rc1.undo === rc0.undo && rc1.a === 0 && rc1.b === 0,
+      "m11: 重新取中心 takes the current scene centre (pan cleared), not an undo step");
+    // 點選物體 keeps P; 重新取中心 there takes the selected object's centre
+    await page.selectOption("#pivot-mode", "object");
+    await frames2();
+    check(near3((await rig()).P, rc1.P, 0), "m11: switching to 點選物體 keeps P");
+    await page.click("#recenter");
+    await frames2();
+    const rc2 = await rig();
+    check(rc2.pivot.object_id === "crate" && !near3(rc2.P, rc1.P, 1e-9), "m11: 重新取中心 in 點選物體 takes the selected object");
+    // 重設視角: the load rule at the current centre, the selection kept, one undo step that restores P and the selector
+    const rs0 = await rig();
+    await page.click("#reset");
+    await frames2();
+    const rs1 = await rig();
+    const sel1 = await page.evaluate(() => ({ sel: window.castplane_web.selected, mode: document.getElementById("pivot-mode").value }));
+    check(near3(rs1.P, c1, 0) && rs1.pivot.mode === "scene" && sel1.mode === "scene" && sel1.sel === "crate" && rs1.scene_block
+      && rs1.undo === rs0.undo + 1, "m11: 重設視角 takes the current centre, keeps the selection, one undo step");
+    await page.click("#undo");
+    await frames2();
+    const rs2 = await rig();
+    check(near3(rs2.P, rs0.P, 0) && rs2.pivot.object_id === "crate" && await page.evaluate(() => document.getElementById("pivot-mode").value) === "object",
+      "m11: undoing 重設視角 restores P and the pivot selector");
+    await page.click("#redo");
+    await frames2();
+    check(near3((await rig()).P, c1, 0) && await page.evaluate(() => document.getElementById("pivot-mode").value) === "scene",
+      "m11: redoing 重設視角 re-applies its P");
+    // a load clears the selection and both stacks
+    await page.evaluate(() => window.castplane_web.load_example("basic"));
+    await frames2();
+    const ld = await rig();
+    check(ld.undo === 0 && ld.redo === 0 && await page.evaluate(() => window.castplane_web.selected) === null, "m11: a load clears the selection and the history");
   }
   {
     // the overlay is the same with the observer pane shown and hidden (預覽) for the same (edited) camera; Download scene writes

@@ -6457,3 +6457,25 @@ already verified (the demo has no preview mode and no core output).
   rule against the core, §5.8.9), Q11 (entry shapes, the 50-entry cap, LIFO, byte-identical restore, §5.8.11), Q12 (the
   presets pass the core, §5.8.7), Q23 (hit testing and rays, §5.8.2), Q31 (citations, notes above) and Q32 (demo features
   not carried over, the "Differences from `scene_edit_demo.html`" note).
+- **[decision, implementation] (M11 step 1) Choices the contract leaves open in the M10 revisions.** (1) **Where the
+  history lives.** `plane.ts` holds the `History` class (undo and redo stacks, cap `UNDO_MAX`), the entry union
+  `BoardEntry | ResetEntry | AddEntry | DeleteEntry | MoveEntry` and `apply_object_entry(objects, entry, dir)` (the LIFO
+  check returns `null`); M10's `UndoStack` is removed from `rig.ts`, which keeps the snapshot keys `sameBoard` /
+  `sameState`. `PlaneSession.undo_step(objects)` / `redo_step(objects)` return the new `objects` array and the selection
+  that follows an object entry; the page re-runs stage A and calls `set_geometry`. (2) **A reset entry also records
+  `scene_block`** before and after (`block_before`, `block_after`), so undoing a reset returns to the block in use before it
+  and redoing an unclamped reset renders `scene.camera` again; board entries keep M10's rule (any change leaves the
+  scene block). (3) **`set_geometry`** keeps the picture-delta measurement going when the vertex count is unchanged (an
+  object drag re-projects the same indices, §5.8.12) and ends it otherwise (the last value stays); it drops the name of a
+  pivot object that no longer exists, and an undo of that delete does not bring the name back (the pivot selection is
+  recorded only by a reset entry). (4) **重新取中心 and the selector re-frame the observer only when `P` moves**, the
+  rule of the (M11, D81, D82) note ("A take that moves `P` … re-frames the observer"); the "yes" in the "observer
+  re-framed" column of §5.8.5 for those rows is read as "when `P` moves". (5) **Pure key helpers.** `is_typing_target`, the undo / redo part of
+  `shortcut_action` and `escape_action` are in `web/src/keys.ts` (tested by `web/test/keys.test.ts`) until the selection
+  module of §5.8.0 takes the Delete, Backspace and Ctrl / ⌘+Shift+L rows; an `<input>` is text-like unless its type is
+  `range`, `checkbox`, `radio`, `button`, `submit`, `reset`, `file`, `color`, `image` or `hidden`, and Ctrl+⌘+Z (both
+  held) is not a shortcut. (6) **Selection before the object drag exists.** A click in the observer pane selects the
+  object under it in both selector modes (and in 點選物體 also takes `P`), a blank click clears it; the press-selects and
+  drag rows of §5.8.2 come with the object drag. The smoke script drives an object move through the test hook
+  `castplane_web.move_object(id, position)`, which does what a drag's release does (one `move` entry, `set_geometry`,
+  no re-framing) until the drag is wired.

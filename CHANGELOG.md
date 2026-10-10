@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased — M11: scene editing in the web UI (spec-v0.3; contract §5.8)
+
+- m11-web step 1 (M10 revisions; D81, D82, D86): the pivot `P` is a value taken when set (load, 重設視角, the selector → 場景中心, a click in 點選物體, the new 重新取中心 button `#recenter`) and `PlaneSession.set_geometry` refreshes the scene geometry after an edit without moving it or rebuilding the session; the history is one 50-entry stack of board, reset and (typed, not yet emitted by the UI) add / delete / move entries with a redo stack, the 重做 button `#redo` and Ctrl / ⌘+Z, Ctrl / ⌘+Shift+Z (not in text fields, not while previewing, inert during a drag); 重設 is now 重設視角 (id `reset`): the load rule at the current scene centre, the selection kept, its undo restoring `P` and the selector; the observer frames the eight corners of stage A's box and object edits do not re-frame it; the vertex rays follow the selection (a click in the observer pane; Esc clears it, after leaving 預覽 first). No output byte or conformance case changes.
+
 ## Unreleased — M9: the read-only observer view (spec-v0.2 §2, §3; contract §5.6)
 
 - m9-observer: the web UI's "旁觀視角" switch (off by default; off = the M7 page) opens an observer pane left of the drawing pane (stacked below 880 px) showing the eye E, the board and frame with the current drawing on it (`unproject_to_plane`, D − 0.012 m, following the layer checkboxes), the frustum, Q, the D and g lines, the pivot, the plane equation and the first object's vertex rays; `web/src/observer.ts` (pure, `web/test/observer.test.ts`) and `web/src/observer3d.ts`; a `picture_plane` scene camera loads into the M7 orbit with its picture kept; SVG / JSON downloads are byte-identical with the switch on and off; `web/scripts/smoke.mjs` checks it and records `obs ms`; the `<img>` drag overlay is no longer displayed at rest (`#stage .overlay[hidden]`; it stayed over a smaller scene after `benchmark_100.json`'s drag).

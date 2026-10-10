@@ -438,12 +438,15 @@ function crossing(board: Pick<Board, "E" | "f" | "D">, X: Vec3, near_m: number):
 }
 
 /**
- * The vertex rays (§5.6.5, checkbox "視線"): focus object `scene.objects[0]`, its vertices `<obj>.v<k>` (document
- * `points[*].world`, `k` ascending); light rays from `construction.rays` (`lights[0]`) entries `["L", <vertex>]`.
+ * The vertex rays (§5.6.5, checkbox "視線"; the focus amended by the (M11, D81) note and §5.8.6): the focus object is
+ * the object `focus_id` (the selection) when it exists, else `scene.objects[0]`; its vertices `<obj>.v<k>` (document
+ * `points[*].world`, `k` ascending); light rays from `construction.rays` (`lights[0]`) entries `["L", <vertex>]`. A
+ * curved focus object has no `<obj>.v<k>` points and so draws no rays.
  */
-export function vertex_rays(doc: GeometryDocument, scene: Scene, board: Pick<Board, "E" | "f" | "D">, near_m: number): VertexRays {
+export function vertex_rays(doc: GeometryDocument, scene: Scene, board: Pick<Board, "E" | "f" | "D">, near_m: number,
+  focus_id: string | null = null): VertexRays {
   const out: VertexRays = { sight: [], crossings: [], light: [], shadows: [], shadow_sight: [], shadow_crossings: [] };
-  const focus = scene.objects[0];
+  const focus = (focus_id === null ? undefined : scene.objects.find((o) => o.id === focus_id)) ?? scene.objects[0];
   if (focus === undefined) return out;
   const re = new RegExp(`^${escape_re(focus.id)}\\.v(\\d+)$`);
   const names = Object.keys(doc.points).filter((n) => re.test(n))
@@ -535,12 +538,15 @@ export function pinch_view(view0: ObserverView, d0: number, d: number): Observer
   return { ...view0, dist: clamp((view0.dist * d0) / Math.max(d, OBSERVER_PINCH_MIN_PX), OBSERVER_DIST_MIN_M, OBSERVER_DIST_MAX_M) };
 }
 
-/** The points framing uses (§5.6.4): `E`, `Q`, the scene centre, every point light, the centre's ground point
- * (`z = 0`) and the four frame corners (directional lights contribute nothing). */
-export function framing_points(board: Pick<Board, "E" | "Q" | "corners">, scene: Scene, centre: readonly number[]): Vec3[] {
-  const pts: Vec3[] = [board.E, board.Q, copy3(centre)];
+/** The points framing uses (§5.6.4 as amended by the (M11, D82) note and §5.8.6): `E`, `Q`, the eight corners of stage
+ * A's `bbox` (object vertices and bounded receivers; `lo`/`hi` per axis, x slowest), every point light and the four
+ * frame corners (directional lights contribute nothing): `2 + 8 + (point lights) + 4` points. */
+export function framing_points(board: Pick<Board, "E" | "Q" | "corners">, scene: Scene, bbox: readonly (readonly number[])[]): Vec3[] {
+  const lo = bbox[0]!, hi = bbox[1]!;
+  const pts: Vec3[] = [board.E, board.Q];
+  for (const x of [lo[0]!, hi[0]!]) for (const y of [lo[1]!, hi[1]!]) for (const z of [lo[2]!, hi[2]!]) pts.push([x, y, z]);
   for (const l of scene.lights) if (l.type === "point") pts.push(copy3(l.position as Vec3));
-  pts.push([centre[0]!, centre[1]!, 0], ...board.corners);
+  pts.push(...board.corners);
   return pts;
 }
 
