@@ -5726,7 +5726,7 @@ through the port's `resolve_picture_plane` and draws its readout camera through 
   not steps. Undo and redo of an object entry re-run stage A once (§5.8.12) and do not touch `P`, `scene_block` or the
   observer framing; undo and redo of a board entry keep re-framing the observer, as before. The 復原 button is joined by
   重做 (`#redo`), and Ctrl+Z / ⌘Z and Ctrl+Shift+Z / ⌘⇧Z are new (the first keyboard shortcuts of the page; the focus
-  rule of §5.8.10 applies). See §5.8.11, D86 (pending: Q14, Q15, Q16, Q17 in .claude/scratch/v3_m11_questions.md).
+  rule of §5.8.10 applies). See §5.8.11, D86 (Q14 resolved by the user; pending: Q15, Q16, Q17 in .claude/scratch/v3_m11_questions.md).
 - **[decision, implementation] (M11, D82, D86) 重設 becomes 重設視角; it resets the view, not the objects, and its
   target is the load rule at the current scene centre.** Amends the **Reset** sentence of §5.7.8 item 13 ("the initial
   state (§5.7.7 load rule of `scene.camera`), pivot = scene centre, the observer at its initial direction and framed"),
@@ -5739,7 +5739,7 @@ through the port's `resolve_picture_plane` and draws its readout camera through 
   scene.camera, centre)`, recomputes the `D` and `R` clamps with their notices, and `scene_block = !clamped`, so an
   unclamped reset again renders `scene.camera` as it is. Reset is one undo step (recorded when the rig, `P` or the pivot
   selection changes) and, unlike the other board steps, its undo restores the pivot and the selector as well (§5.8.5).
-  See §5.8.5, D82, D86 (pending: Q8, Q14 in .claude/scratch/v3_m11_questions.md).
+  See §5.8.5, D82, D86 (Q8, Q14 resolved by the user).
 - **[decision, implementation] (M11, D83) The drawing pane stays read-only (D79 is not amended); the scene is read-only
   while previewing; amends the D80 notes.** The user answered Q1 ("drag right pane should do nothing. keep gestures on
   right pane empty-area inert."), Q2 ("make editing unavailable while previewing, since we already can't edit in right
@@ -5764,8 +5764,8 @@ through the port's `resolve_picture_plane` and draws its readout camera through 
   "這次拖動右窗畫面變動" is also measured over an object drag in the observer pane (§5.8.12). (5) **Tests (D79 note
   (6)).** The D79 row stands unchanged and gains an object case: a press, drag or click on an object in `#stage` changes
   neither the selection nor the scene. A new row pins the read-only preview. The M10 "drawing pane is view-only" scan and
-  the smoke `stage_drag` checks stay as they are. See §5.8.14, D83 (pending: Q18 in
-  .claude/scratch/v3_m11_questions.md).
+  the smoke `stage_drag` checks stay as they are. See §5.8.14, D83 (Q18 resolved by the
+  user).
 
 ### 5.8 M11 — scene editing in the web UI (spec-v0.3 §1–§10, §10.2 row M11)
 
@@ -5905,7 +5905,7 @@ answer to Q2). Esc never opens or closes the library (the user's answer to Q3).
   gesture is the observer pinch (§5.6.4: it zooms the observer camera and is not an undo step). Two fingers on the
   drawing pane do nothing at all (D79: no pinch, no pan, no object gesture). Spec-v0.3 §3 describes this gesture as board
   distance and pan "recorded as one undo step"; those mappings were removed by D79, so the step count is **zero**
-  (pending: Q18 in .claude/scratch/v3_m11_questions.md). `pointercancel` cancels like a second finger.
+  (Q18 resolved by the user). `pointercancel` cancels like a second finger.
 - **Overlays (interface only, never in an output).** In both panes the selected object is outlined in the accent colour
   (observer: its mesh edges, 3 px; drawing: its document drawables — edges, outline generators and conics — mapped to
   px, 2.6 px, in the sibling element `#sel-overlay` with `pointer-events: none`, **outside** the writer's overlay markup; display only, the drawing pane takes no input, D79).
@@ -6040,7 +6040,7 @@ fallback: f_px = the pane's focal length in CSS px; k = ((h₀ − e₀)·f_c) /
   `P` or the pivot selection differs from before. Its undo restores the board **and** `P`, the pivot selection and the
   selector; its redo re-applies the `P` that was taken at the reset (the value, not a re-take, consistent with the
   rule above). The observer camera is not recorded: after undoing a reset the observer is re-framed as after any board
-  undo (pending: Q8, Q14 in .claude/scratch/v3_m11_questions.md).
+  undo (Q8, Q14 resolved by the user).
 - **Notice.** In 點選物體 mode with no object picked the notice keeps the M10 meaning (formerly "請點一下左窗的物體 …" and,
   while previewing, "按「返回編輯」後點一下左窗的物體 …"): the click is on an object in the left pane, after 「返回編輯」 while
   previewing, and the pivot stays where it is until then.
@@ -6051,8 +6051,7 @@ fallback: f_px = the pane's focal length in CSS px; k = ((h₀ − e₀)·f_c) /
 - **Framing.** `framing_points(board, scene, bbox)` = `{E, Q}` + the eight corners of `A.bbox` + every point light + the
   four frame corners (`2 + 8 + lights + 4` points); `frame_view` is unchanged. **Object edits (add, drag, vertical drag,
   delete, undo and redo of an object entry) do not re-frame the observer**: the view must not jump under the hand; the
-  button 整體顯示 frames on the current box. The other triggers are those of §5.6.4 and §5.7.8 (pending: Q9 in
-  .claude/scratch/v3_m11_questions.md).
+  button 整體顯示 frames on the current box. The other triggers are those of §5.6.4 and §5.7.8 (Q9 resolved by the user).
 
 #### 5.8.7 Object library: sidebar, tiles and presets (spec-v0.3 §2, §5.1; D84)
 - **Sidebar [decision].** A vertical tab button `#lib-tab` ("物件庫" with a plus icon, `aria-expanded`, `aria-controls="lib"`)
@@ -6177,7 +6176,7 @@ screen the sidebar closes (§5.8.7).
   | entry | recorded by | undo | redo |
   | --- | --- | --- | --- |
   | `board` `{before, after}` | the M10 steps (a ring or arrow drag that changed `(f, g, up, a, b)`, a view, an equation, lock-horizontal off → on) | assign `before` (including `D`, `ρ`, focal and the sliders), keep the current `P` | assign `after`, keep the current `P` |
-  | `reset` `{before, after, pivot_before, pivot_after}` | 重設視角, when the rig, `P` or the pivot selection differs | restore `before` and `pivot_before` (not the observer camera; pending: Q14 in .claude/scratch/v3_m11_questions.md) | restore `after` and `pivot_after` |
+  | `reset` `{before, after, pivot_before, pivot_after}` | 重設視角, when the rig, `P` or the pivot selection differs | restore `before` and `pivot_before` (not the observer camera; Q14 resolved by the user) | restore `after` and `pivot_after` |
   | `add` `{index, obj, name}` | a library tile (`index` = `objects.length` at the time) | remove at `index` | insert `obj` at `index` |
   | `delete` `{index, obj, name}` | a delete | insert the **same record** at the **original** `index` | remove at `index` |
   | `move` `{index, id, before, after}` | an object drag or a vertical-handle drag, **settled at release** | `objects[index] = before` | `objects[index] = after` |
@@ -6439,14 +6438,14 @@ already verified (the demo has no preview mode and no core output).
   | Q2 | resolved (user): the scene is read-only while previewing (no add, delete, undo, redo, handle or selection change); 預覽 refused during a gesture | §5.8.14, §5.7 note (M11, D83) |
   | Q3 | resolved (user): Esc = equation field's own, else leave 預覽, else clear the selection; Esc never touches the library, which folds with `#lib-close` or Ctrl+Shift+L; nothing during a drag | §5.8.7, §5.8.11 |
   | Q4 | resolved (user): D-numbers D81–D86 instead of Appendix A's D79–D84 | §5.8 preface, notes |
-  | Q8 | reset target is the load rule at the current centre; the selection is kept; the label is 重設視角 | §5.8.5, §5.7 note (M11, D82, D86) |
-  | Q9 | object edits do not re-frame the observer | §5.8.6, §5.6 note (M11, D82) |
+  | Q8 | resolved (user): reset target is the load rule at the current centre; the selection is kept; the label is 重設視角 | §5.8.5, §5.7 note (M11, D82, D86) |
+  | Q9 | resolved (user): object edits do not re-frame the observer | §5.8.6, §5.6 note (M11, D82) |
   | Q13 | polygon literals at 1e-4; the triangle's apex on `+x` (consistency with the hexagon; the benign positional warning is not avoided in general) | §5.8.7 |
-  | Q14 | undo of a reset restores `P` and the selector (not the observer camera) | §5.8.5, §5.8.11 |
+  | Q14 | resolved (user): undo of a reset restores `P` and the selector (not the observer camera) | §5.8.5, §5.8.11 |
   | Q15 | after undo / redo the selection follows the object the entry acted on; the pivot label drops the name of a deleted object | §5.8.2, §5.8.5, §5.8.11 |
   | Q16 | redo is cleared by an actual change of rig, pivot or objects, not by selection, library or 預覽 | §5.8.11 |
   | Q17 | undo, redo, delete, add, reset are inert during a gesture; focus rule: select and file inputs are not text-like, IME skipped, no Ctrl+Y | §5.8.10, §5.8.11 |
-  | Q18 | a second finger cancels an object drag moved `< 5 px` (observer pane only), zero undo steps | §5.8.2 |
+  | Q18 | resolved (user): a second finger cancels an object drag moved `< 5 px` (observer pane only), zero undo steps | §5.8.2 |
   | Q19 | resolved, moot after Q1: the drawing pane has no touch handling | §5.8.14 |
   | Q20 | click = maximum excursion `< 5 px`; an object does not move before 5 px; entries are recorded at release | §5.8.2, §5.8.11 |
   | Q21 | resolved, moot after Q1: the drawing pane has no blank click | §5.8.2, §5.8.14 |
