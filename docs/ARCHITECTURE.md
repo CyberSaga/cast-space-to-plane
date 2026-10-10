@@ -5777,7 +5777,7 @@ unprefixed "§N" is this contract. `docs/demo/scene_edit_demo.html` (the "demo")
 which is the core; where it and spec-v0.3 differ spec-v0.3 wins, and where spec-v0.3 and this contract differ this
 contract wins (the known differences are listed in the notes below). The plain-language log is `docs/DECISIONS.md`
 **D81–D86**. Spec-v0.3 Appendix A suggests D79–D84, but D79 and D80 already exist (M10 and its follow-up), so the six
-M11 decisions are numbered D81–D86 in the same order (pending: Q4 in .claude/scratch/v3_m11_questions.md):
+M11 decisions are numbered D81–D86 in the same order (Q4, resolved by the user):
 
 | D | subject | sections |
 | --- | --- | --- |
@@ -6403,8 +6403,8 @@ already verified (the demo has no preview mode and no core output).
   (two fingers: observer pane only), and §11's line "要環繞時從空白處開始拖" are not implemented; the drawing pane stays
   view-only (D79, §5.8.14). Spec-v0.3 does not discuss 預覽; the read-only preview is the user's answer to Q2. (11) Spec-v0.3 §5.3 cites
   "contract §2.0" for the reserved id; the rule is §5.0.1. (12) Spec-v0.3 §10.1's "15 項 … 已在 demo 上通過" are not
-  evidence for M11 (§5.8.17). (13) Spec-v0.3 Appendix A's D79–D84 are D81–D86 (pending: Q4 in
-  .claude/scratch/v3_m11_questions.md). (14) Spec-v0.3 §2 and §3 collapse the library on Esc; that is not adopted (the user's
+  evidence for M11 (§5.8.17). (13) Spec-v0.3 Appendix A's D79–D84 are D81–D86 (Q4, resolved by the
+  user). (14) Spec-v0.3 §2 and §3 collapse the library on Esc; that is not adopted (the user's
   answer to Q3): Esc never opens or closes the library, which is folded by `#lib-close` or Ctrl+Shift+L (§5.8.7, §5.8.11).
 - **[decision, implementation] (M11) Differences from `scene_edit_demo.html`** (this contract wins). Curved primitives, shadows
   and hit tests are the core's and three.js's, not the demo's polygon approximations, convex hulls and convex-face ray test
@@ -6438,7 +6438,7 @@ already verified (the demo has no preview mode and no core output).
   | Q1 | resolved (user): the drawing pane stays fully view-only, objects included; D79 is not amended | §5.8.14, §5.7 note (M11, D83) |
   | Q2 | resolved (user): the scene is read-only while previewing (no add, delete, undo, redo, handle or selection change); 預覽 refused during a gesture | §5.8.14, §5.7 note (M11, D83) |
   | Q3 | resolved (user): Esc = equation field's own, else leave 預覽, else clear the selection; Esc never touches the library, which folds with `#lib-close` or Ctrl+Shift+L; nothing during a drag | §5.8.7, §5.8.11 |
-  | Q4 | D-numbers D81–D86 instead of Appendix A's D79–D84 | §5.8 preface, notes |
+  | Q4 | resolved (user): D-numbers D81–D86 instead of Appendix A's D79–D84 | §5.8 preface, notes |
   | Q8 | reset target is the load rule at the current centre; the selection is kept; the label is 重設視角 | §5.8.5, §5.7 note (M11, D82, D86) |
   | Q9 | object edits do not re-frame the observer | §5.8.6, §5.6 note (M11, D82) |
   | Q13 | polygon literals at 1e-4; the triangle's apex on `+x` (consistency with the hexagon; the benign positional warning is not avoided in general) | §5.8.7 |

@@ -75,7 +75,8 @@
   - D86 物件編輯併入同一個復原堆疊
   並在 `CLAUDE.md` 的決策範圍（目前 D1–D80）、`docs/PLAN-v3.md`、合約 §5.8 引用處一併用 D81–D86。其餘 Q 條目中凡寫「D81–D86」皆指此編號。v0.3 本文不改（它是規範來源，編號對照由本檔與合約實作註記記錄）。
 - **影響範圍**：`docs/DECISIONS.md`（新增 D81–D86）、`docs/ARCHITECTURE.md` §5.8、`CLAUDE.md`（範圍與計數）、`README.md`／`docs/USAGE.md`（若引用決策範圍）。
-- **狀態**：[confirm]（使用者已指示改為 D81–D86）
+- **使用者回覆**：照建議修改（D81–D86）。
+- **狀態**：[resolved]
 
 ---
 
@@ -506,7 +507,7 @@
 | Q1 | 右窗手勢 vs D79 | [resolved] |
 | Q2 | 預覽模式（D80）下的編輯與垂直把手 | [resolved] |
 | Q3 | Esc 的優先序 | [resolved] |
-| Q4 | 決策編號 D79–D84 改為 D81–D86 | [confirm] |
+| Q4 | 決策編號 D79–D84 改為 D81–D86 | [resolved] |
 | Q5 | （a）修訂 1 旋轉中心取值／點選物體由選取決定 | [resolved] |
 | Q6 | （a）修訂 2 頂點射線焦點物件 | [resolved] |
 | Q7 | （a）修訂 3 復原範圍與重做 | [resolved] |
