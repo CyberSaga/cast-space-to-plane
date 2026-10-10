@@ -61,7 +61,9 @@ export interface BoardEntry {
 }
 
 /** 重設視角 (§5.8.5): undo restores `before` (its `P` included) and `pivot_before`, redo `after` and `pivot_after`. The
- * `scene_block` flags around the reset come with them (an unclamped reset renders the scene camera again). */
+ * `scene_block` flags around the reset come with them (an unclamped reset renders the scene camera again), and so do
+ * the load-rule notices the reset re-evaluated (`notices_before` / `notices_after`: an undone reset no longer shows
+ * its own clamp notice). */
 export interface ResetEntry {
   kind: "reset";
   before: RigState;
@@ -70,6 +72,8 @@ export interface ResetEntry {
   pivot_after: PivotSelection;
   block_before: boolean;
   block_after: boolean;
+  notices_before: string[];
+  notices_after: string[];
 }
 
 /** Adding an object (§5.8.7): `index` = `objects.length` at the time; `name` the display name (library objects). */
@@ -237,7 +241,8 @@ export class PlaneSession {
   pivot: PivotSelection = { mode: "scene", object_id: null };
   /** Whether the frame renders the scene camera as it is (unedited since the load or reset, no load clamp). */
   scene_block: boolean;
-  /** The load rule's notices (clamps), re-evaluated at a load and at a reset only (§5.8.5). */
+  /** The load rule's notices (clamps), re-evaluated at a load and at a reset only (§5.8.5); an undo or redo of a reset
+   * restores the notices from before or after it. */
   load_notices: string[];
   private scene_: SessionScene;
   private delta_: number | null = null;
@@ -490,10 +495,12 @@ export class PlaneSession {
       return { changed, framing: true, entry: e.kind, objects: null };
     }
     if (e.kind === "reset") {
-      const [rig, pivot, block] = dir === "undo" ? [e.before, e.pivot_before, e.block_before] : [e.after, e.pivot_after, e.block_after];
+      const [rig, pivot, block, notices] = dir === "undo" ? [e.before, e.pivot_before, e.block_before, e.notices_before]
+        : [e.after, e.pivot_after, e.block_after, e.notices_after];
       this.rig = clone(rig);
       this.pivot = { ...pivot };
       this.scene_block = block;
+      this.load_notices = [...notices];
       if (dir === "redo") this.delta = null;
       return { changed: true, framing: true, entry: e.kind, objects: null };
     }
@@ -515,11 +522,13 @@ export class PlaneSession {
     const before = clone(this.rig), pivot_before = { ...this.pivot }, block_before = this.scene_block;
     const pivot_after: PivotSelection = { mode: "scene", object_id: null };
     const block_after = !(res.clampedD || res.clampedR);
+    const notices_before = [...this.load_notices], notices_after = load_notices(res);
     const changed = !sameState(before, res.rig) || !same3(before.P, res.rig.P) || !same_pivot(pivot_before, pivot_after);
     if (changed) {
-      this.history.push({ kind: "reset", before, after: clone(res.rig), pivot_before, pivot_after, block_before, block_after });
+      this.history.push({ kind: "reset", before, after: clone(res.rig), pivot_before, pivot_after, block_before, block_after,
+        notices_before, notices_after: [...notices_after] });
     }
-    this.load_notices = load_notices(res);
+    this.load_notices = notices_after;
     this.rig = res.rig;
     this.pivot = pivot_after;
     this.scene_block = block_after;

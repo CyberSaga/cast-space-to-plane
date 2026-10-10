@@ -6545,3 +6545,46 @@ already verified (the demo has no preview mode and no core output).
   a 10-primitive scene, 38 drag frames, `core + dom + obs` median 18–22 ms and maximum 30–42 ms over five runs (90th
   percentile 22–32 ms; at most three frames of 38 at ≥ 33 ms in a run; target 33 ms, not gated, recorded in
   `web/README.md`).
+- **[decision, implementation] (M11 review fixes) The chip slot, the preview decision per drag, Esc during a pending
+  press, no selection change in 預覽, layout-safe shortcut letters and the reset notices on undo.** Amends §5.8.2,
+  §5.8.5, §5.8.10, §5.8.11, §5.8.12, §5.8.14 and notes (2), (4), (8) and (10) of the "M11 step 3" note by reference.
+  (1) **The chip never resizes a pane.** Note (10)'s slot had only a `min-height`, and the chip (`inline-flex`, wrapping,
+  4 px margin) was taller than it: the press that selects an object (which shows the chip in the same press) shrank
+  the observer pane by 4 px, and in a one-object scene, where the keep-one text wrapped, by about 104 px, so the drag,
+  which uses pointer-down's observer frame, put the grabbed point 2.6 px (59 px) off the pointer. The slot `.chip-slot`
+  now has a fixed `height: 42px` with `overflow: hidden`; the chip is out of flow (`position: absolute`, one line of
+  24 px, `nowrap`; the name and the anchor shrink with an ellipsis, the delete button does not; the chip's `title`
+  carries the full text), so it adds nothing to the controls row's height or intrinsic width; 「場景至少要有一個物件」
+  stays visible text in the chip (§5.8.10) on the slot's reserved second line (`#sel-hint`, absolute, 15 px), because a
+  300 px line cannot hold it beside the name, the anchor and the button. The slot is 14 px taller than before at
+  every width, a static change: selecting, deselecting and the keep-one text change no box (smoke: the `obs-gl` height
+  is the same through the press, < 0.5 px grab error with several objects and with one). As a defence, an object or
+  vertical press re-reads its frame on every move when the pane's size has changed since pointer-down
+  (`refit_frame`: the same observer camera with the focal length of the new height, a grazing-fallback drag's `k`
+  scaled by the focal ratio; a size the `ResizeObserver` has not delivered yet is applied first), so a pane resized
+  during a drag keeps the grabbed point under the pointer (smoke: the window shortened mid-drag). (2) **The preview
+  decision is taken per drag** (amends note (8) and §5.8.12 "Preview mode", whose 50 ms rule is kept). Note (8)'s cost
+  was reset only at a load and preview frames measure nothing, so one slow drag latched every later drag of the scene
+  into the preview, even after the heavy mesh was deleted. Now every discrete edit that re-runs validate + stage A
+  synchronously (add, delete, an object undo or redo, the release or cancel of a drag, `apply_objects`) re-measures:
+  its validate + A time is a lower bound of a drag-mode frame of the edited scene, so when it alone exceeds 50 ms the
+  next drag is a preview from its first frame (`preview_cost_after_edit`), and otherwise the earlier measurement is
+  dropped and the next drag's first frame runs in full and decides (`preview_at_start`, as with no measurement). A
+  load still resets it; `force_edit_ms` still overrides it. (3) **Esc during a pending press does nothing** (amends
+  §5.8.11's Esc order and note (4)). An object press that has not yet moved `CLICK_PX` is treated as an open gesture
+  for Esc only (`ShortcutContext.press_pending`, read by `escape_action`): Esc there used to clear the selection the
+  press had just made, and the drag that followed then moved an unselected object. Cancelling the press on Esc was the
+  other option and is not taken: the press would then restore the previous selection, unlike Esc during a drag, which
+  does nothing. Delete, undo, redo and add during a pending press are unchanged (they end the press as it is,
+  note (4)). (4) **No selection change in 預覽** (§5.8.14). A blank press held in the observer pane when 預覽 was
+  entered by the keyboard was released as a blank click and cleared the selection (and a moved one orbited the hidden
+  observer). Entering 預覽 now drops the pane's held gesture (`ObserverPane.cancel_gesture()`: the held pointers are
+  forgotten, nothing of `up`, `cancel` or `click` reaches the page, after the page cancelled its own press as before),
+  and the blank click is a no-op while previewing. (5) **Shortcut letters follow the layout** (amends note (2)).
+  `is_key` matched `ev.key` or `ev.code`, so on QWERTZ Ctrl+Y (`key` "y" on `code` "KeyZ") undid. Z of Ctrl / ⌘+Z and
+  Ctrl / ⌘+Shift+Z and L of Ctrl / ⌘+Shift+L are now matched on `ev.key` when it is a single ASCII letter, and on
+  `ev.code` only when `ev.key` is not one (a non-Latin layout such as Cyrillic, or `Unidentified`); Ctrl+Y stays
+  unbound on every layout. (6) **The reset's notices follow its undo and redo** (amends §5.8.5). 重設視角 re-evaluates
+  the load-rule notices (clamps) at the current centre, but the reset entry did not record them, so undoing a reset
+  that clamped left its notice under the restored rig. `ResetEntry` now records `notices_before` and `notices_after`
+  (copies), and undo and redo restore them with the rig, the pivot selection and `scene_block`.

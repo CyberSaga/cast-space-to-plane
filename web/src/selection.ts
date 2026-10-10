@@ -493,6 +493,9 @@ export interface ShortcutContext {
   focus?: FocusKind;
   /** A ring, arrow, handle, vertical or object drag is open (default false). */
   gesture_open?: boolean;
+  /** An object press that has not yet become a drag (before `CLICK_PX` of travel) is held (default false); Esc treats
+   * it as an open gesture. */
+  press_pending?: boolean;
 }
 
 export type ShortcutAction = "delete" | "undo" | "redo" | "toggle_library" | "leave_preview" | "clear_selection";
@@ -501,18 +504,26 @@ export type EscapeAction = "field" | "leave_preview" | "clear_selection";
 
 /**
  * Esc (§5.8.11), one thing per press: focus in the equation field → `field` (its own Esc, no further effect); during
- * a drag → nothing; previewing → `leave_preview`; in the edit view with a selection → `clear_selection`; else nothing.
- * Esc never opens or closes the library.
+ * a drag, or while an object press is held that has not yet become one (`press_pending`: it may still become a drag of
+ * the object it selected) → nothing; previewing → `leave_preview`; in the edit view with a selection →
+ * `clear_selection`; else nothing. Esc never opens or closes the library.
  */
-export function escape_action(st: { focus?: FocusKind; previewing: boolean; has_selection: boolean; gesture_open?: boolean }): EscapeAction | null {
+export function escape_action(st: { focus?: FocusKind; previewing: boolean; has_selection: boolean; gesture_open?: boolean;
+  press_pending?: boolean }): EscapeAction | null {
   if (st.focus === "equation") return "field";
-  if (st.gesture_open === true) return null;
+  if (st.gesture_open === true || st.press_pending === true) return null;
   if (st.previewing) return "leave_preview";
   return st.has_selection ? "clear_selection" : null;
 }
 
-function is_key(ev: KeyLike, letter: string): boolean {
-  return ev.key.toLowerCase() === letter || ev.code === `Key${letter.toUpperCase()}`;
+/**
+ * Whether `ev` is the letter `letter` (lower case): by `ev.key` when it is a single ASCII letter (the layout's own
+ * letter, so QWERTZ's Ctrl+Y — `key` "y" on `code` "KeyZ" — is not Ctrl+Z), and by the physical `ev.code` only when
+ * `ev.key` is not an ASCII letter (a non-Latin layout such as Cyrillic, or an unidentified key).
+ */
+export function is_key(ev: KeyLike, letter: string): boolean {
+  if (/^[A-Za-z]$/.test(ev.key)) return ev.key.toLowerCase() === letter;
+  return ev.code === `Key${letter.toUpperCase()}`;
 }
 
 /**
@@ -525,13 +536,15 @@ function is_key(ev: KeyLike, letter: string): boolean {
  * - Delete / Backspace without Ctrl, Meta or Alt, with a selection: `delete` (not while a gesture is open).
  * - Ctrl+Z / ⌘Z: `undo`; Ctrl+Shift+Z / ⌘⇧Z: `redo` (not while a gesture is open; Alt excluded; Ctrl+Y is not bound).
  * - Ctrl+Shift+L / ⌘⇧L: `toggle_library`.
+ * Z and L are matched by {@link is_key} (the layout's letter first, the physical key only for a non-Latin `key`).
  * Exactly one of Ctrl and ⌘ must be held: Ctrl+⌘+Z or Ctrl+⌘+Shift+L is not a shortcut.
  */
 export function shortcut_action(ev: KeyLike, ctx: ShortcutContext): ShortcutAction | null {
   if (ev.isComposing === true) return null;
   const focus = ctx.focus ?? "other";
   if (ev.key === "Escape") {
-    const a = escape_action({ focus, previewing: ctx.previewing, has_selection: ctx.has_selection, gesture_open: ctx.gesture_open ?? false });
+    const a = escape_action({ focus, previewing: ctx.previewing, has_selection: ctx.has_selection, gesture_open: ctx.gesture_open ?? false,
+      press_pending: ctx.press_pending ?? false });
     return a === "field" ? null : a;
   }
   if (ctx.previewing || focus !== "other") return null;

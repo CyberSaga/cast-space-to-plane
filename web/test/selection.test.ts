@@ -15,7 +15,7 @@ import { CLICK_PX, HIT_PX_MOUSE, HIT_PX_TOUCH, initial_view, observer_basis, obs
 import type { Handles, ObserverView } from "../src/observer.js";
 import {
   NON_TEXT_INPUT_TYPES, PressTracker, after_history, cancel_press, clear_selection, empty_selection, end_press,
-  escape_action, focus_kind, focus_object_id, frame_ray, hit_order, hit_radius, hit_vertical, is_typing_target,
+  escape_action, focus_kind, focus_object_id, frame_ray, hit_order, hit_radius, hit_vertical, is_key, is_typing_target,
   nearest_hit, observer_frame, observer_ray, outline_polylines, press_select, press_target, prune_selection, ray_object_t,
   select_added, shortcut_action, svg_point, wire_segments,
 } from "../src/selection.js";
@@ -490,6 +490,53 @@ test("Esc table: equation field > drag (nothing) > previewing > selection > noth
       }
     }
   }
+});
+
+test("Esc during a held object press that has not become a drag does nothing (review M11-2: it used to clear the selection)", () => {
+  assert.equal(escape_action({ previewing: false, has_selection: true, press_pending: true }), null);
+  assert.equal(escape_action({ previewing: false, has_selection: false, press_pending: true }), null);
+  assert.equal(escape_action({ focus: "equation", previewing: false, has_selection: true, press_pending: true }), "field");
+  assert.equal(escape_action({ previewing: false, has_selection: true, press_pending: false }), "clear_selection");
+  const edit: ShortcutContext = { has_selection: true, previewing: false };
+  assert.equal(shortcut_action(K("Escape"), { ...edit, press_pending: true }), null);
+  assert.equal(shortcut_action(K("Escape"), edit), "clear_selection");
+  // only Esc reads it: a command during a pending press still acts (it ends the press as it is, §5.8 step-3 note (4))
+  assert.equal(shortcut_action(K("Delete"), { ...edit, press_pending: true }), "delete");
+  assert.equal(shortcut_action(K("z", { ctrlKey: true }), { ...edit, press_pending: true }), "undo");
+});
+
+test("layout-safe letters (review M11-2): the layout's ASCII letter wins; the physical key only for a non-Latin key", () => {
+  const edit: ShortcutContext = { has_selection: true, previewing: false };
+  const rows: [KeyLike, string | null][] = [
+    // QWERTZ: the key labelled Y sits at code KeyZ, the key labelled Z at code KeyY
+    [K("y", { ctrlKey: true, code: "KeyZ" }), null],
+    [K("Y", { ctrlKey: true, shiftKey: true, code: "KeyZ" }), null],
+    [K("z", { ctrlKey: true, code: "KeyY" }), "undo"],
+    [K("Z", { ctrlKey: true, shiftKey: true, code: "KeyY" }), "redo"],
+    [K("z", { metaKey: true, code: "KeyY" }), "undo"],
+    // AZERTY: Z is at code KeyW, A at KeyQ
+    [K("z", { ctrlKey: true, code: "KeyW" }), "undo"],
+    [K("w", { ctrlKey: true, code: "KeyZ" }), null],
+    // QWERTY as before
+    [K("z", { ctrlKey: true, code: "KeyZ" }), "undo"],
+    // non-Latin layouts and unidentified keys: the physical key
+    [K("я", { ctrlKey: true, code: "KeyZ" }), "undo"],
+    [K("Я", { ctrlKey: true, shiftKey: true, code: "KeyZ" }), "redo"],
+    [K("ζ", { metaKey: true, code: "KeyZ" }), "undo"],
+    [K("Unidentified", { ctrlKey: true, code: "KeyZ" }), "undo"],
+    [K("я", { ctrlKey: true, code: "KeyY" }), null],
+    // L of Ctrl+Shift+L, the same rule
+    [K("L", { ctrlKey: true, shiftKey: true, code: "KeyL" }), "toggle_library"],
+    [K("K", { ctrlKey: true, shiftKey: true, code: "KeyL" }), null],
+    [K("L", { ctrlKey: true, shiftKey: true, code: "KeyK" }), "toggle_library"],
+    [K("Д", { ctrlKey: true, shiftKey: true, code: "KeyL" }), "toggle_library"],
+    [K("Д", { metaKey: true, shiftKey: true, code: "KeyK" }), null],
+  ];
+  for (const [ev, want] of rows) assert.equal(shortcut_action(ev, edit), want, JSON.stringify(ev));
+  assert.equal(is_key({ key: "y", code: "KeyZ" }, "z"), false);
+  assert.equal(is_key({ key: "y", code: "KeyZ" }, "y"), true);
+  assert.equal(is_key({ key: "я", code: "KeyZ" }, "z"), true);
+  assert.equal(is_key({ key: "я" }, "z"), false, "no code and a non-Latin key: no match");
 });
 
 // the rows of the former web/test/keys.test.ts (M11 step 1), on the single key helpers of selection.ts

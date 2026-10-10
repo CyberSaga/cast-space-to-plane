@@ -12,7 +12,7 @@ import { build_object, dumps, load_scene, render, shadow_geometry } from "castpl
 import type { Scene, SceneObject, Vec2, Vec3 } from "castplane";
 
 import { PRESETS, make_object } from "../src/library.js";
-import { OBSERVER_NEAR_M, initial_view, observer_project_with } from "../src/observer.js";
+import { OBSERVER_NEAR_M, initial_view, observer_project, observer_project_with } from "../src/observer.js";
 import { PLANE_GRID_M as RIG_GRID, UNDO_MAX, basis } from "../src/rig.js";
 import {
   DRAG_MAX_T_M, GRAZE_DEG, GROUND_SNAP_M, HANDLE_LEN_K, HANDLE_LEN_MAX_M, HANDLE_LEN_MIN_M, HANDLE_MAX_M, HANDLE_MIN_PX,
@@ -20,11 +20,11 @@ import {
   ROUND_M, TARGET_MS, XY_LIMIT_M, Z_LIMIT_M, add_object, add_with_entry, apply_entry, box_centre, can_delete,
   candidate_bbox, delete_with_entry, display_name, drag_begin, drag_position, finish_coord, finish_position, finish_z,
   focal_px, footprints_overlap, handle_L36, index_of, insert_object, invert_entry, label_text, line_param, move_entry,
-  move_object, names_after, next_id, place_object, place_target, remove_object, round4, snap_grid, step_direction, undo_entry,
-  used_ids, vertical_begin, vertical_handle, vertical_z, with_position, world_bbox,
+  move_object, names_after, next_id, place_object, place_target, preview_at_start, preview_cost_after_edit, refit_frame,
+  remove_object, round4, snap_grid, step_direction, undo_entry, used_ids, vertical_begin, vertical_handle, vertical_z, with_position, world_bbox,
 } from "../src/scene_edit.js";
 import type { Box, CameraFrame, ObjectEntry, Ray } from "../src/scene_edit.js";
-import { observer_frame } from "../src/selection.js";
+import { frame_ray, observer_frame } from "../src/selection.js";
 
 // web/build/test/scene_edit.test.js -> repository root
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..", "..");
@@ -172,6 +172,50 @@ test("horizontal drag: the grabbed point stays under the pointer within 1e-6 m (
     }
   }
   assert.ok(normal > 300, `only ${normal} normal-mode cases`);
+});
+
+test("a pane resized during a press (review M11-2): refit_frame keeps the grabbed point under the pointer", () => {
+  const view = { target: [0, 0, 0] as Vec3, dist: 12, az_deg: 55, el_deg: 28 };
+  const [W, H0, H1] = [550, 650, 546];
+  const cam0 = observer_frame(view, H0);
+  const p0: Vec3 = [0.1, 0.2, 0];
+  const h0: Vec3 = [0.3, -0.2, 0.5];
+  const st = drag_begin(p0, h0, frame_ray(cam0, W, H0, observer_project(view, W, H0, h0)!), cam0);
+  assert.equal(st.fallback, false);
+  // the pane is now W × H1 (rendered with the focal length of H1): the pointer over the moved grab point
+  const s: Vec3 = [1.2, -0.7, 0];
+  const q = observer_project(view, W, H1, add(h0, s))!;
+  const stale = drag_position(st, frame_ray(cam0, W, H1, q), 0, 0)!;
+  assert.ok(Math.hypot(stale[0] - (p0[0] + s[0]), stale[1] - (p0[1] + s[1])) > 0.01, "pointer-down's frame misses the point");
+  const fit = refit_frame(cam0, st, H1);
+  assert.equal(fit.cam.f_px, focal_px(H1));
+  assert.deepEqual([fit.cam.pos, fit.cam.r, fit.cam.u, fit.cam.f], [cam0.pos, cam0.r, cam0.u, cam0.f]);
+  assert.equal(fit.drag, st, "a normal-mode drag is world-space: unchanged");
+  const xy = drag_position(fit.drag!, frame_ray(fit.cam, W, H1, q), 0, 0)!;
+  assert.ok(Math.hypot(xy[0] - (p0[0] + s[0]), xy[1] - (p0[1] + s[1])) < 1e-9, `${xy}`);
+  // the same height: the inputs themselves
+  const same = refit_frame(cam0, st, H0);
+  assert.equal(same.cam, cam0);
+  assert.equal(same.drag, st);
+  // the grazing fallback: metres per pixel follow the focal length; null drags (the vertical handle) stay null
+  const fb = { ...st, fallback: true };
+  const ff = refit_frame(cam0, fb, H1);
+  assert.ok(Math.abs(ff.drag!.k - (fb.k * focal_px(H0)) / focal_px(H1)) < 1e-15);
+  assert.equal(refit_frame(cam0, null, H1).drag, null);
+});
+
+test("the preview decision is taken per drag (review M11-2): a slow scene does not latch later drags", () => {
+  assert.equal(preview_at_start(null), null, "no measurement: the first frame decides");
+  assert.equal(preview_at_start(PREVIEW_MS), false);
+  assert.equal(preview_at_start(PREVIEW_MS + 0.1), true);
+  assert.equal(preview_at_start(3), false);
+  // after a discrete edit: validate + A alone above 50 ms keeps the preview (a lower bound); below it is re-measured
+  assert.equal(preview_cost_after_edit(624), 624);
+  assert.equal(preview_cost_after_edit(PREVIEW_MS + 0.1), PREVIEW_MS + 0.1);
+  assert.equal(preview_cost_after_edit(PREVIEW_MS), null);
+  assert.equal(preview_cost_after_edit(4), null);
+  assert.equal(preview_at_start(preview_cost_after_edit(4)), null, "the heavy mesh deleted: the next drag measures again");
+  assert.equal(preview_at_start(preview_cost_after_edit(600)), true);
 });
 
 test("horizontal drag: z_b and rotation_deg bit-identical; the record is new and shares the other keys", () => {

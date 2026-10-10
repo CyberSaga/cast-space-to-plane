@@ -271,6 +271,43 @@ test("undo keeps the current pivot; 重設視角 takes the load rule at the CURR
   assert.deepEqual(s.rig.P, c2, "redo re-applies the P taken at the reset (the value, not a re-take)");
 });
 
+test("undo and redo of 重設視角 restore the load-rule notices from before and after it (review M11-2)", () => {
+  const s = session();
+  assert.deepEqual(s.notices(), [], "basic loads unclamped");
+  // both objects 50 m away: the reset's load rule at the new centre clamps R
+  const far = edit(s, BASIC, BASIC.scene.objects.map((o) => moved(o, [-50, -50, 0])));
+  assert.notDeepEqual(far.ss.centre, BASIC.ss.centre);
+  assert.deepEqual(s.notices(), [], "an edit does not re-evaluate the load notices");
+  const r = s.reset();
+  assert.ok(r.changed);
+  assert.deepEqual(s.load_notices, [NOTICE_R_CLAMPED], "the reset re-evaluates the clamps");
+  assert.equal(s.scene_block, false);
+  const u = s.undo_step();
+  assert.equal(u.entry, "reset");
+  assert.deepEqual(s.load_notices, [], "undo of the reset drops its clamp notice");
+  assert.equal(s.scene_block, true);
+  s.redo_step();
+  assert.deepEqual(s.load_notices, [NOTICE_R_CLAMPED], "redo brings it back");
+  assert.equal(s.scene_block, false);
+  // a clamped load: the reset re-evaluates at the current centre (unclamped); undo brings the load's notice back
+  const data = raw("basic");
+  data["camera"] = { position: [0, -20, 1.5], picture_plane: { normal: [0, 1, 0], offset: 0.5 }, focal_length_mm: 35,
+    frame_mm: [36, 24], shift_mm: [0, 0], near_m: 0.05 };
+  const dD = session(load(data));
+  assert.deepEqual(dD.load_notices, [NOTICE_D_CLAMPED]);
+  dD.set_D(4);
+  dD.reset();
+  assert.deepEqual(dD.load_notices, [NOTICE_D_CLAMPED]);
+  dD.undo_step();
+  assert.deepEqual(dD.load_notices, [NOTICE_D_CLAMPED], "the notices from before the reset (the load's)");
+  // the entry's arrays are copies: mutating the session's list does not reach the history
+  dD.load_notices.push("x");
+  dD.redo_step();
+  assert.deepEqual(dD.load_notices, [NOTICE_D_CLAMPED]);
+  dD.undo_step();
+  assert.deepEqual(dD.load_notices, [NOTICE_D_CLAMPED]);
+});
+
 // ------------------------------------------------------------------------------------------------ M11 step 1 (§5.8.5, §5.8.11)
 
 test("the pivot is a value: a scene change moves neither P nor E; the geometry refresh does not rebuild the session", () => {
@@ -851,7 +888,12 @@ test("the page opens in the edit view: no observer checkbox, a 預覽 toggle but
   assert.match(src, /ui\.preview\.textContent = on \? "預覽" : "返回編輯"/);
   // M11 (§5.8.11, Q3): Esc goes through shortcut_action / escape_action (selection.ts) — leave 預覽 while previewing,
   // else clear the selection; the library is toggled by Ctrl / ⌘+Shift+L only
-  assert.match(src, /shortcut_action\(ev, \{ has_selection: state\.selected_id !== null, previewing: !state\.obs\.on, focus,\s+gesture_open: gesture_open\(\) \}\);/);
+  // (review M11-2) a held object press that has not become a drag counts as open for Esc (it neither clears the
+  // selection nor lets the drag then move an unselected object)
+  assert.match(src, /shortcut_action\(ev, \{ has_selection: state\.selected_id !== null, previewing: !state\.obs\.on, focus,\s+gesture_open: gesture_open\(\), press_pending: state\.press !== null && !state\.press\.started \}\);/);
+  // (review M11-2) entering 預覽 drops a held observer gesture, and a blank click never changes the selection in 預覽
+  assert.match(src, /if \(preview\) observer\?\.cancel_gesture\(\);\n  set_observer\(!preview\);/);
+  assert.match(src, /click: \(\) => \{\n    if \(state\.obs\.on\) set_selection\(null\);\n  \},/);
   assert.match(src, /if \(act === "leave_preview"\) set_preview\(false\);\s+else if \(act === "clear_selection"\) set_selection\(null\);\s+else if \(act === "delete"\) delete_selected\(true\);\s+else if \(act === "toggle_library"\) set_library\(!state\.library_open\);/);
   assert.ok(!src.includes("./keys.js"), "one implementation of the key helpers (selection.ts)");
   // Esc in the equation field stays there; 預覽 is refused while a drag is held
@@ -924,7 +966,14 @@ test("M11 page wiring: library, chip and #sel-overlay markup; the drawing pane s
   assert.match(css, /^#panes \{ position: relative; \}/m);
   // the chip: hidden in the markup, in a slot of fixed height (selecting never resizes a pane), with the keep-one text
   assert.match(html, /<div id="selection-chip" hidden><span id="sel-name"><\/span><span id="sel-pos"><\/span><button id="sel-delete" type="button"[^>]*>刪除<\/button><span id="sel-hint" hidden>場景至少要有一個物件<\/span><\/div>/);
-  assert.match(css, /^\.chip-slot \{ min-height: 28px; \}/m);
+  // the slot's height is fixed (not a min-height) and the chip is out of flow on one line, so neither the chip nor the
+  // keep-one text can change the controls row's height (the observer pane kept its size during a press, review M11-2)
+  assert.match(css, /^\.chip-slot \{ position: relative; height: 42px; overflow: hidden; \}/m);
+  assert.match(css, /^#selection-chip \{ position: absolute;[^}]*height: 24px;[^}]*flex-wrap: nowrap;[^}]*white-space: nowrap;/m);
+  assert.ok(!/^\.chip-slot \{[^}]*min-height/m.test(css));
+  assert.match(css, /^#sel-name, #sel-pos \{ min-width: 0; overflow: hidden; text-overflow: ellipsis; \}/m);
+  // the keep-one text has its own reserved line inside the slot (out of flow)
+  assert.match(css, /^#sel-hint \{ position: absolute; left: 10px; top: 26px;[^}]*white-space: nowrap;/m);
   // #sel-overlay: a sibling of the writer's overlay (not class "overlay"), display only
   assert.match(src, /selOverlay\.id = "sel-overlay";\s+selOverlay\.setAttribute\("class", "sel-overlay"\);/);
   assert.match(css, /^#sel-overlay \{[^}]*pointer-events: none;/m);

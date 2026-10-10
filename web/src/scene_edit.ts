@@ -56,6 +56,26 @@ export const PLACE_TRIES = 8;
 /** Wireframe-preview threshold and the drag-update target (§5.8.12; not gated). */
 export const PREVIEW_MS = 50;
 export const TARGET_MS = 33;
+
+/**
+ * The wireframe-preview decision at the start of a drag (§5.8.12) from the cost `c` of the last complete recompute:
+ * `c > PREVIEW_MS`, or `null` (no measurement: the drag's first frame runs in full and its time decides).
+ */
+export function preview_at_start(c: number | null): boolean | null {
+  return c === null ? null : c > PREVIEW_MS;
+}
+
+/**
+ * The cost kept for the next drag after a discrete edit (add, delete, an object undo or redo, a drag's release), which
+ * re-runs validate + stage A synchronously in `a_ms` (§5.8.12, re-decided per drag): that is a lower bound of a
+ * drag-mode frame of the edited scene, so `a_ms > PREVIEW_MS` keeps the next drag in the preview from its first frame;
+ * otherwise the earlier measurement no longer describes the scene and is dropped (`null`), so the next drag measures
+ * its first frame again. A preview drag measures nothing per frame, so without this a slow scene would latch every
+ * later drag into the preview.
+ */
+export function preview_cost_after_edit(a_ms: number): number | null {
+  return a_ms > PREVIEW_MS ? a_ms : null;
+}
 /** The keep-one text (§5.8.10): visible in the chip and shown in `#notices` on a refused Delete. */
 export const NOTICE_KEEP_ONE = "場景至少要有一個物件";
 /** Ids that `next_id` never returns: `hidden` (§5.0.1), and `core` / `umbra` (reserved in multi-light scenes). */
@@ -223,6 +243,19 @@ export interface DragStart {
   up0: Vec3;
   r_g: Vec2;
   f_g: Vec2;
+}
+
+/**
+ * The press's camera frame re-read for an observer pane whose height became `H_px` during the press (the drag maths
+ * otherwise keeps pointer-down's frame): the same observer camera with the focal length of the new height (the pane
+ * renders with it), and a fallback drag's metres per pixel `k` scaled by the ratio of the focal lengths, so the grabbed
+ * point stays under the pointer. Returns the inputs themselves when the height is unchanged.
+ */
+export function refit_frame(cam: CameraFrame, drag: DragStart | null, H_px: number): { cam: CameraFrame; drag: DragStart | null } {
+  const f_px = focal_px(H_px);
+  if (f_px === cam.f_px) return { cam, drag };
+  const k = cam.f_px / f_px;
+  return { cam: { ...cam, f_px }, drag: drag !== null && drag.fallback ? { ...drag, k: drag.k * k } : drag };
 }
 
 /**

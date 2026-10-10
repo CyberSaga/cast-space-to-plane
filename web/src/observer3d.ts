@@ -521,6 +521,17 @@ export class ObserverPane {
     for (const [id, el] of this.labelEls) if (!seen.has(id)) el.hidden = true;
   }
 
+  private drop_gesture: (() => void) | null = null;
+
+  /**
+   * Drop the held gesture of {@link attach_input} without any of its effects (no `up`, `cancel` or `click` reaches the
+   * page, an orbit stays where it is): entering 預覽 hides the pane while a press may still be held (M11 §5.8.14). The
+   * page cancels its own press first.
+   */
+  cancel_gesture(): void {
+    this.drop_gesture?.();
+  }
+
   /**
    * Pointer input of the pane (§5.6.4; M10 §5.7.9; M11 §5.8.2): one pointer either is taken by the page (`input.down`
    * returns true: a handle, the vertical handle or an object) or orbits the observer (a mouse's left button only); the
@@ -533,6 +544,12 @@ export class ObserverPane {
     let pinch: { d0: number; view0: ObserverView } | null = null;
     /** The single-pointer gesture: taken by the page or the observer orbit (with its pointer-down view for a click). */
     let one: { kind: "taken" | "orbit"; x0: number; y0: number; moved: number; view0: ObserverView } | null = null;
+    this.drop_gesture = () => {
+      // the held pointers are forgotten: their moves and releases do nothing until a new press
+      pointers.clear();
+      pinch = null;
+      one = null;
+    };
     const local = (ev: PointerEvent): Vec2 => {
       const b = el.getBoundingClientRect();
       return [ev.clientX - b.left, ev.clientY - b.top];

@@ -180,16 +180,21 @@ screenshots of them; the default view above shows the edge tab).
     ground (else under `P`), stepped aside from existing objects, snapped, selected, with one add entry; ids are
     `box_1`, `cylinder_1`, … (the smallest free number). Below 880 px an add and a tap outside close the sidebar.
   - **Delete**: Delete / Backspace (not with the focus in a text field) or 刪除 in the selection chip (above the
-    readouts: `name（id）`, `底面 (x, y, z) m`). The last object cannot be deleted (the button is disabled and
-    「場景至少要有一個物件」 is shown).
+    readouts: `name（id）`, `底面 (x, y, z) m`, one clipped line with the full text as its tooltip, in a slot of fixed
+    height so selecting never resizes a pane). The last object cannot be deleted (the button is disabled and
+    「場景至少要有一個物件」 is shown on the slot's reserved second line).
   - **History**: one stack (50) of board, 重設視角, add, delete and move entries with redo; undoing a delete puts the
     same record back at its index (byte-identical outputs); the selection follows the entry's object; object entries
-    move neither `P` nor the observer camera. Inert during a drag.
+    move neither `P` nor the observer camera. Inert during a drag. Z and L of the shortcuts are the layout's letters
+    (`KeyboardEvent.key`; QWERTZ's Ctrl+Y does not undo), the physical key (`code`) only on a non-Latin layout.
   - **預覽 is read-only**: the library collapses and its tab hides, the chip hides, 復原 / 重做 are disabled and no
-    edit key acts; the selection survives. **Esc**: the equation field's own Esc, else leave 預覽, else clear the
-    selection — never the library.
-  - **Slow scenes**: if the last drag-mode edit frame took more than 50 ms (a large mesh), the drag draws a wireframe
-    preview (object edges only) in `#sel-overlay` and recomputes completely on release.
+    edit key acts; the selection survives (entering it drops a press held in the observer pane, whose release then
+    does nothing). **Esc**: the equation field's own Esc, else nothing during a drag or a press on an object not yet
+    moved 5 px, else leave 預覽, else clear the selection — never the library.
+  - **Slow scenes**: if the last complete recompute took more than 50 ms (a large mesh), the drag draws a wireframe
+    preview (object edges only) in `#sel-overlay` and recomputes completely on release. It is decided per drag: after
+    an add, delete, undo, redo or release, validate + stage A above 50 ms keeps the next drag in the preview, else the
+    next drag's first frame runs in full and decides (deleting the mesh brings full frames back).
 
 ### Overlay modes during a drag
 
@@ -371,7 +376,11 @@ The script needs a Playwright installed outside the repository; it is not a depe
   tiles, tab, chip and buttons do nothing; the selection survives; Esc returns); the drawing pane is inert on objects
   in both views; the Esc order; two fingers (synthetic touch: before 5 px the press is cancelled with 0 entries and
   the observer pinches, after 5 px the second finger is ignored); the 10-primitive drag budget and the forced
-  wireframe preview (table above). With `--m11-shots DIR` it saves `1_library_open.png`, `2_selected.png`,
+  wireframe preview (table above). The M11 review fixes: a press that selects (several objects, and one object with
+  the keep-one text) keeps the observer pane's size and the grabbed point under the pointer (< 0.5 px), also when the
+  pane is resized mid-drag; with a heavy mesh (9 800 faces) the drags are previews and after deleting it they run full
+  frames; Esc during a pending press keeps the selection; QWERTZ Ctrl+Y does not undo; a blank press held across
+  預覽 changes neither the selection nor the observer. With `--m11-shots DIR` it saves `1_library_open.png`, `2_selected.png`,
   `3_dragging.png` and `4_after_delete.png` at 1440 × 900.
 
 Last run (phase 2, part 5; exit 0, no failed check, no page error):

@@ -50,7 +50,10 @@
 // Backspace / the chip and not in the equation field, the last object kept, undo / redo of add, delete and move (undo
 // of a delete byte-identical), 預覽 read-only, the drawing pane inert on objects, the Esc order, two fingers (synthetic
 // touch), outputs identical with and without a selection, and the drag budget of a 10-primitive scene plus the forced
-// wireframe preview. With `--m11-shots DIR` it saves DIR/1_library_open.png … 4_after_delete.png at 1440 × 900.
+// wireframe preview; the M11 review fixes (a press that selects keeps the observer pane's size and the grab point under
+// the pointer, also with one object and when the pane is resized mid-drag; the preview decision per drag with a heavy
+// mesh deleted; Esc during a pending press; QWERTZ Ctrl+Y; a blank press held across 預覽). With `--m11-shots DIR` it
+// saves DIR/1_library_open.png … 4_after_delete.png at 1440 × 900.
 // Prints one JSON record. Exit 1 on a page error or a failed check.
 import { execSync } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
@@ -1384,6 +1387,195 @@ const plane = {};
       await page.click("#redo");
       await settle();
       check(back !== before && await objs_json() === before && await sel() === "crate", "m11e: undo and redo of a move (the selection follows)");
+    }
+    // review M11-2 (1): a press on an unselected object shows the chip (with one object, also the keep-one text) without
+    // resizing the observer pane, so the drag (pointer-down's frame) keeps the grabbed point under the pointer; a pane
+    // resized during a drag is re-read (snapping off)
+    const basic_json = JSON.parse(readFileSync(join(ROOT, "examples", "basic.json"), "utf-8"));
+    {
+      const obs_h = () => cw(() => +document.getElementById("obs-gl").getBoundingClientRect().height.toFixed(2));
+      /** Drag object `id` by (dx, dy) in `n` steps (`mid(i)` after step i): the grab error in px and the pane heights. */
+      const grab_drag = async (id, dx, dy, n = 10, mid = null) => {
+        const box = await page.locator("#observer").boundingBox();
+        const p = await cw((i) => window.castplane_web.object_px(i), id);
+        const h0 = await cw(([x, y]) => window.castplane_web.hit_point(x, y), p);
+        const a0 = (await objs()).find((o) => o.id === id).position;
+        const hs = new Set([await obs_h()]);
+        await page.mouse.move(box.x + p[0], box.y + p[1]);
+        await page.mouse.down();
+        await frames2();
+        hs.add(await obs_h());
+        for (let i = 1; i <= n; i++) {
+          await page.mouse.move(box.x + p[0] + (dx * i) / n, box.y + p[1] + (dy * i) / n);
+          await frames2();
+          if (mid !== null) await mid(i);
+          hs.add(await obs_h());
+        }
+        await frames2();
+        const a1 = (await objs()).find((o) => o.id === id).position;
+        const box2 = await page.locator("#observer").boundingBox();
+        const q = await cw((X) => window.castplane_web.project_observer(X), [h0.point[0] + a1[0] - a0[0], h0.point[1] + a1[1] - a0[1], h0.point[2]]);
+        const err = Math.hypot(box2.x + q[0] - (box.x + p[0] + dx), box2.y + q[1] - (box.y + p[1] + dy));
+        await page.mouse.up();
+        await settle();
+        return { hit: h0?.id ?? null, err, heights: [...hs] };
+      };
+      await page.uncheck("#snap");
+      const id = basic_json.objects[0].id;
+      const one = { ...basic_json, objects: basic_json.objects.slice(0, 1) };
+      const rows = {};
+      for (const [name, load] of [["several objects", () => cw(() => window.castplane_web.load_example("basic"))],
+        ["one object", () => cw((t) => window.castplane_web.load_text("one_object", t), JSON.stringify(one))]]) {
+        await load();
+        await settle();
+        const sel0 = await sel();
+        const r = await grab_drag(id, 60, -25);
+        const chip = await cw(() => window.castplane_web.chip);
+        rows[name] = { ...r, hint_shown: !chip.hint_hidden };
+        check(sel0 === null && r.hit === id && await sel() === id && r.heights.length === 1 && r.err < 0.5
+          && chip.hint_hidden === (name !== "one object"),
+          `m11e: ${name}: a press that selects keeps the observer pane's size and the grabbed point under the pointer (${r.err.toFixed(3)} px, heights ${r.heights.join("/")})`);
+      }
+      // the pane shrinks in the middle of a drag (the window is resized): the frame is re-read
+      await cw(() => window.castplane_web.load_example("basic"));
+      await settle();
+      const r = await grab_drag(id, -70, 20, 10, async (i) => {
+        if (i === 4) {
+          await page.setViewportSize({ width: 1500, height: 820 });
+          await frames2();
+        }
+      });
+      await page.setViewportSize({ width: 1500, height: 900 });
+      await settle();
+      rows["resized mid-drag"] = r;
+      s3.grab_on_select = rows;
+      check(r.heights.length === 2 && r.err < 0.5, `m11e: a pane resized during a drag keeps the grabbed point under the pointer (${r.err.toFixed(3)} px, heights ${r.heights.join("/")})`);
+      await page.check("#snap");
+    }
+    // review M11-2 (2): the wireframe-preview decision is taken per drag: with a heavy mesh (a UV sphere of 9 662 vertices,
+    // 9 800 faces) drags are previews, the second from its first frame; after the mesh is deleted drags run complete frames
+    {
+      const NL = 70, NO = 140, R = 0.6, r6 = (x) => Math.round(x * 1e6) / 1e6 + 0;
+      const V = [[0, 0, -R]], F = [];
+      for (let i = 1; i < NL; i++) {
+        const ph = (Math.PI * i) / NL;
+        for (let j = 0; j < NO; j++) {
+          const th = (2 * Math.PI * j) / NO;
+          V.push([r6(R * Math.sin(ph) * Math.cos(th)), r6(R * Math.sin(ph) * Math.sin(th)), r6(-R * Math.cos(ph))]);
+        }
+      }
+      V.push([0, 0, R]);
+      const ring = (i) => 1 + (i - 1) * NO, top = V.length - 1;
+      for (let j = 0; j < NO; j++) F.push([0, 1 + ((j + 1) % NO), 1 + j]);
+      for (let i = 1; i < NL - 1; i++) for (let j = 0; j < NO; j++) F.push([ring(i) + j, ring(i) + ((j + 1) % NO), ring(i + 1) + ((j + 1) % NO), ring(i + 1) + j]);
+      for (let j = 0; j < NO; j++) F.push([top, ring(NL - 1) + j, ring(NL - 1) + ((j + 1) % NO)]);
+      const heavy = { ...basic_json, objects: [...basic_json.objects,
+        { id: "blob", type: "mesh", data: { vertices: V, faces: F }, transform: { position: [-3, 8, 0.6], rotation_deg: [0, 0, 0] } }] };
+      check(await cw((t) => window.castplane_web.load_text("heavy_mesh", t), JSON.stringify(heavy)), "m11e: the heavy mesh scene loads");
+      await settle();
+      const box = await page.locator("#observer").boundingBox();
+      const mode_of = async (id, dx) => {
+        const p = await cw((i) => window.castplane_web.object_px(i), id);
+        const n0 = (await cw(() => window.castplane_web.frames)).length;
+        let at_start = null;
+        await page.mouse.move(box.x + p[0], box.y + p[1]);
+        await page.mouse.down();
+        for (let i = 1; i <= 6; i++) {
+          await page.mouse.move(box.x + p[0] + (dx * i) / 6, box.y + p[1] + 2 * i);
+          await frames2();
+          if (i === 1) at_start = (await cw(() => window.castplane_web.press))?.preview ?? null;
+        }
+        const pv = (await cw(() => window.castplane_web.press))?.preview ?? null;
+        await page.mouse.up();
+        await settle();
+        const fr = (await cw(() => window.castplane_web.frames)).slice(n0).filter((f) => f.edit && f.dragging);
+        return { at_start, preview: pv, frames: fr.map((f) => (f.preview ? "wire" : `${Math.round(f.core_ms)} ms`)) };
+      };
+      const d1 = await mode_of("crate", 60);
+      const d2 = await mode_of("crate", -60);
+      const pb = await cw(() => window.castplane_web.object_px("blob"));
+      await page.mouse.click(box.x + pb[0], box.y + pb[1]);
+      await settle();
+      const picked = await sel();
+      await page.keyboard.press("Delete");
+      await settle();
+      const gone = !(await objs()).some((o) => o.id === "blob");
+      const d3 = await mode_of("crate", 60);
+      const d4 = await mode_of("crate", -60);
+      s3.preview_per_drag = { d1, d2, deleted: picked === "blob" && gone, d3, d4 };
+      check(d1.preview === true && d2.at_start === true && d2.frames.every((f) => f === "wire"),
+        `m11e: heavy mesh: the drags are previews, the second from its first frame (${JSON.stringify([d1, d2])})`);
+      check(picked === "blob" && gone && d3.preview === false && d4.preview === false
+        && [...d3.frames, ...d4.frames].every((f) => f !== "wire") && d3.frames.length > 0,
+        `m11e: after the heavy mesh is deleted the drags run complete frames again (${JSON.stringify([d3, d4])})`);
+    }
+    // review M11-2 (3): Esc during a press that has not yet become a drag does nothing; the drag then moves the selection
+    {
+      await cw(() => window.castplane_web.load_example("basic"));
+      await settle();
+      const box = await page.locator("#observer").boundingBox();
+      const p = await cw(() => window.castplane_web.object_px("crate"));
+      const u0 = (await rig()).undo, a0 = (await objs()).find((o) => o.id === "crate").position;
+      await page.mouse.move(box.x + p[0], box.y + p[1]);
+      await page.mouse.down();
+      await frames2();
+      await page.keyboard.press("Escape");
+      await frames2();
+      const s1 = { sel: await sel(), press: await cw(() => window.castplane_web.press) };
+      for (let i = 1; i <= 8; i++) { await page.mouse.move(box.x + p[0] + 8 * i, box.y + p[1] + 3 * i); await frames2(); }
+      const s2 = { sel: await sel(), press: await cw(() => window.castplane_web.press), chip: (await cw(() => window.castplane_web.chip)).hidden };
+      await page.mouse.up();
+      await settle();
+      const a1 = (await objs()).find((o) => o.id === "crate").position;
+      s3.esc_pending = { s1, s2 };
+      check(s1.sel === "crate" && s1.press?.started === false && s2.sel === "crate" && s2.press?.started === true && !s2.chip
+        && await sel() === "crate" && (await rig()).undo === u0 + 1 && a1.join() !== a0.join(),
+        `m11e: Esc during a pending press keeps the selection; the drag moves the selected object (${JSON.stringify(s3.esc_pending)})`);
+      // review M11-2 (5): shortcuts follow the layout's letter: QWERTZ Ctrl+Y (key "y" on code KeyZ) does not undo, its
+      // Ctrl+Z (key "z" on code KeyY) does
+      const kd = (key, code) => cw(([k, c]) => window.dispatchEvent(new KeyboardEvent("keydown", { key: k, code: c, ctrlKey: true, bubbles: true, cancelable: true })), [key, code]);
+      await kd("y", "KeyZ");
+      await settle();
+      const uy = (await rig()).undo;
+      await kd("z", "KeyY");
+      await settle();
+      const uz = (await rig()).undo;
+      check(uy === u0 + 1 && uz === u0, `m11e: QWERTZ: Ctrl+Y does not undo, Ctrl+Z does (${u0 + 1} → ${uy} → ${uz})`);
+    }
+    // review M11-2 (4): a blank press held in the observer while 預覽 is entered by the keyboard: its release changes
+    // nothing (the selection survives the round trip)
+    {
+      const box = await page.locator("#observer").boundingBox();
+      const pc = await cw(() => window.castplane_web.object_px("crate"));
+      await page.mouse.click(box.x + pc[0], box.y + pc[1]);
+      await settle();
+      let blank = null;
+      for (let y = 20; y < 300 && blank === null; y += 10) {
+        for (let x = 20; x < 500 && blank === null; x += 10) if (await cw(([a, b]) => window.castplane_web.hit_at(a, b), [x, y]) === null) blank = [x, y];
+      }
+      check(blank !== null, "m11e: a blank point of the observer pane");
+      s3.preview_blank = {};
+      // released where it was pressed (a click) and after a 30 px move (an orbit)
+      for (const dx of blank === null ? [] : [0, 30]) {
+        const v0 = await view_of();
+        await cw(() => document.getElementById("preview").focus());
+        await page.mouse.move(box.x + blank[0], box.y + blank[1]);
+        await page.mouse.down();
+        await page.keyboard.press("Enter");
+        await frames2();
+        const mid = { on: (await cw(() => window.castplane_web.observer)).on, sel: await sel() };
+        if (dx !== 0) await page.mouse.move(box.x + blank[0] + dx, box.y + blank[1] + dx / 3);
+        await page.mouse.up();
+        await settle();
+        const after = await sel();
+        await page.keyboard.press("Escape");
+        await settle();
+        const back = { on: (await cw(() => window.castplane_web.observer)).on, sel: await sel(), view: await view_of() };
+        const row = { mid, after, back: { on: back.on, sel: back.sel }, view_kept: back.view === v0 };
+        s3.preview_blank[dx === 0 ? "click" : "drag"] = row;
+        check(!mid.on && mid.sel === "crate" && after === "crate" && back.on && back.sel === "crate" && row.view_kept,
+          `m11e: a blank press held across 預覽 (${dx === 0 ? "released in place" : "moved"}) neither changes the selection nor orbits the observer (${JSON.stringify(row)})`);
+      }
     }
     // delete: Delete, Backspace and the chip button; not with the focus in the equation field; undo is byte-identical
     {

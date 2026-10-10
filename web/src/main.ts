@@ -50,8 +50,8 @@ import type { RigState, RingGrab, ViewName } from "./rig.js";
 import { build_scene3d, object_matrix, set_object_node } from "./scene3d.js";
 import {
   NOTICE_KEEP_ONE, PREVIEW_MS, add_with_entry, can_delete, delete_with_entry, display_name, drag_begin, drag_position,
-  finish_position, index_of, label_text, move_entry, names_after, next_id, place_object, used_ids, vertical_begin, vertical_handle,
-  vertical_z, with_position, world_bbox,
+  finish_position, index_of, label_text, move_entry, names_after, next_id, place_object, preview_at_start, preview_cost_after_edit,
+  refit_frame, used_ids, vertical_begin, vertical_handle, vertical_z, with_position, world_bbox,
 } from "./scene_edit.js";
 import type { Box, CameraFrame, DragStart, VerticalStart } from "./scene_edit.js";
 import {
@@ -149,7 +149,9 @@ interface State {
   objects_dirty: boolean;
   /** M11: the scene stage A was last built from (a drag frame the validator rejects falls back to it). */
   scene_A: Scene | null;
-  /** M11 (§5.8.12): the cost (ms) of the last drag-mode edit frame of this scene; a test hook can force it. */
+  /** M11 (§5.8.12): the cost (ms) of the last drag-mode edit frame of this scene, or after a discrete edit its
+   * validate + A time when that alone exceeds PREVIEW_MS (else null: the next drag measures again); a test hook can
+   * force it. */
   edit_ms: number | null;
   edit_ms_forced: number | null;
   /** M11 (§5.8.7): the library sidebar is open (never stored; collapsed at start, on a load and on entering 預覽). */
@@ -365,6 +367,8 @@ function sync_chip(busy: boolean): void {
   const one = !can_delete(sc.objects);
   ui.selDelete.disabled = one || busy;
   ui.chipHint.hidden = !one;
+  // the chip is one clipped line in a fixed slot (style.css): the full text is its tooltip
+  ui.chip.title = `${ui.chipName.textContent}　${ui.chipPos.textContent}${one ? `　${NOTICE_KEEP_ONE}` : ""}`;
 }
 
 /** Whether a gesture is open (a ring or arrow drag; the condition that already refuses 預覽, §5.8.11). */
@@ -485,6 +489,8 @@ function apply_objects(objects: readonly SceneObject[]): boolean {
     return false;
   }
   state.timings.stage_a_ms = performance.now() - t0;
+  // the preview decision is re-taken per drag (§5.8.12): this complete recompute is what the next drag starts from
+  state.edit_ms = preview_cost_after_edit(state.timings.stage_a_ms);
   state.scene = scene;
   state.scene_A = scene;
   state.A = A;
@@ -776,8 +782,7 @@ function start_drag(pr: ObjectPress): void {
   pr.started = true;
   state.dragging = true;
   state.plane?.begin_measure();
-  const c = state.edit_ms_forced ?? state.edit_ms;
-  pr.preview = c === null ? null : c > PREVIEW_MS;
+  pr.preview = preview_at_start(state.edit_ms_forced ?? state.edit_ms);
   sync_controls();
 }
 
@@ -790,6 +795,7 @@ function press_move(p: Vec2, alt: boolean): void {
     if (!pr.tracker.dragging) return; // the 5 px dead zone: nothing moves before it (§5.8.2)
     start_drag(pr);
   }
+  refit_press(pr);
   const snap = ui.snap.checked && !alt; // Alt pauses snapping, read per event
   const ray = frame_ray(pr.cam, pr.W, pr.H, p);
   let pos: Vec3 | null = null;
@@ -800,6 +806,23 @@ function press_move(p: Vec2, alt: boolean): void {
     pos = vertical_z(pr.vert, ray, snap);
   }
   if (pos !== null) set_press_position(pr, pos);
+}
+
+/** The drag maths keeps pointer-down's observer frame; if the pane was resized since (a layout change during the
+ * press), the frame is re-read for the pane's current size (`refit_frame`) so the grabbed point stays under the
+ * pointer. A size change the ResizeObserver has not delivered yet is applied first (`layout`). */
+function refit_press(pr: ObjectPress): void {
+  if (observer === null) return;
+  const pane = ui.observerPane;
+  const [W0, H0] = observer.size;
+  if (state.obs.on && (pane.clientWidth !== W0 || pane.clientHeight !== H0)) layout();
+  const [W, H] = observer.size;
+  if (W === pr.W && H === pr.H) return;
+  const fit = refit_frame(pr.cam, pr.drag, H);
+  pr.cam = fit.cam;
+  pr.drag = fit.drag;
+  pr.W = W;
+  pr.H = H;
 }
 
 /** Put the pressed object at `pos` (a new record; the pressed one itself when `pos` is the pressed position): the
@@ -926,8 +949,11 @@ const pane_input: PaneInput = {
     press_cancel();
     return "cancel";
   },
-  // a click on blank space in the observer pane (§5.8.2): the selection is cleared; P is not changed
-  click: () => set_selection(null),
+  // a click on blank space in the observer pane (§5.8.2): the selection is cleared; P is not changed. Never while
+  // previewing (the scene and the selection are read-only, §5.8.14), e.g. the release of a press held across 預覽
+  click: () => {
+    if (state.obs.on) set_selection(null);
+  },
   hover: (p) => {
     if (hit_board_handles(p, false) !== null) return true;
     const o = obs_frame(), tip = observer?.vertical_tip ?? null;
@@ -1072,6 +1098,8 @@ function set_preview(preview: boolean): void {
   // a held drag (observer handle or orbit) keeps the pane: hiding it mid-gesture would move the board unseen
   if (preview === !state.obs.on || state.dragging || state.handle !== null) return;
   if (preview && state.press !== null) press_cancel(); // a pending press is cancelled (§5.8.14)
+  // and so is a held observer orbit (its release must not act as a blank click in 預覽)
+  if (preview) observer?.cancel_gesture();
   set_observer(!preview);
 }
 ui.preview.addEventListener("click", () => set_preview(state.obs.on));
@@ -1087,7 +1115,7 @@ function key_target(t: EventTarget | null): TargetLike | null {
 window.addEventListener("keydown", (ev) => {
   const focus = focus_kind(key_target(ev.target), ev.target === ui.equation);
   const act = shortcut_action(ev, { has_selection: state.selected_id !== null, previewing: !state.obs.on, focus,
-    gesture_open: gesture_open() });
+    gesture_open: gesture_open(), press_pending: state.press !== null && !state.press.started });
   if (act === null) return;
   ev.preventDefault();
   if (act === "leave_preview") set_preview(false);
