@@ -42,8 +42,16 @@
 // a click selects an object and Esc clears it, Esc in 預覽 leaves it and keeps the selection; an object move (the
 // `move_object` hook) and its undo / redo move neither P, E nor the observer and restore the same SVG; 整體顯示 frames
 // the edited box; 重新取中心 per mode; 重設視角 takes the current centre, keeps the selection, and its undo restores P and the
-// selector; a load clears the selection and the history. With `--shots DIR` it also saves DIR/web_ui_plane_mode.png. Prints one JSON record. Exit 1 on
-// a page error or a failed check.
+// selector; a load clears the selection and the history. With `--shots DIR` it also saves DIR/web_ui_plane_mode.png. M11
+// step 3 (contract §5.8.17): the library (collapsed and inert at load, Ctrl / ⌘+Shift+L, the tab and #lib-close, Esc
+// leaves it, no canvas box changes, the aria labels, each preset added with one undo step, Enter / Space, the narrow
+// rules), select by click, the horizontal drag (the grabbed point under the pointer), the vertical handle (its tip under
+// the pointer, the sticky ground), Alt, no entry for a click or a drag back, Esc during a drag, delete by Delete /
+// Backspace / the chip and not in the equation field, the last object kept, undo / redo of add, delete and move (undo
+// of a delete byte-identical), 預覽 read-only, the drawing pane inert on objects, the Esc order, two fingers (synthetic
+// touch), outputs identical with and without a selection, and the drag budget of a 10-primitive scene plus the forced
+// wireframe preview. With `--m11-shots DIR` it saves DIR/1_library_open.png … 4_after_delete.png at 1440 × 900.
+// Prints one JSON record. Exit 1 on a page error or a failed check.
 import { execSync } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { createRequire } from "node:module";
@@ -57,9 +65,12 @@ const argv = process.argv.slice(2);
 const shotsAt = argv.indexOf("--shots");
 const shotsDir = shotsAt >= 0 ? argv[shotsAt + 1] : undefined;
 if (shotsAt >= 0) argv.splice(shotsAt, 2);
+const m11At = argv.indexOf("--m11-shots");
+const m11ShotsDir = m11At >= 0 ? argv[m11At + 1] : undefined;
+if (m11At >= 0) argv.splice(m11At, 2);
 const [url, outdir, shot, sceneFile] = argv;
 if (!url || !outdir || (shotsAt >= 0 && !shotsDir)) {
-  console.error("usage: node web/scripts/smoke.mjs URL OUTDIR [SCREENSHOT.png] [SCENE.json] [--shots DIR]");
+  console.error("usage: node web/scripts/smoke.mjs URL OUTDIR [SCREENSHOT.png] [SCENE.json] [--shots DIR] [--m11-shots DIR]");
   process.exit(2);
 }
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..");
@@ -650,13 +661,14 @@ const plane = {};
   await frames2();
   await frames2();
   const ob = await page.locator("#observer").boundingBox();
-  /** A mouse drag in the observer pane from pane px `p` by `(dx, dy)` in `n` steps. */
-  async function obs_drag(p, dx, dy, n = 8, opts = {}) {
+  /** A mouse drag in the observer pane from pane px `p` by `(dx, dy)` in `n` steps (`mid` runs after the first step). */
+  async function obs_drag(p, dx, dy, n = 8, opts = {}, mid = null) {
     await page.mouse.move(ob.x + p[0], ob.y + p[1]);
     await page.mouse.down(opts);
     for (let i = 1; i <= n; i++) {
       await page.mouse.move(ob.x + p[0] + (dx * i) / n, ob.y + p[1] + (dy * i) / n);
       await frames2();
+      if (i === Math.min(n, 3) && mid !== null) await mid();
     }
     await page.mouse.up(opts);
     await frames2();
@@ -1116,6 +1128,492 @@ const plane = {};
     await frames2();
     const ld = await rig();
     check(ld.undo === 0 && ld.redo === 0 && await page.evaluate(() => window.castplane_web.selected) === null, "m11: a load clears the selection and the history");
+  }
+  {
+    // M11 step 3 (contract §5.8): the library, selection, the horizontal and vertical drags, delete, undo / redo of the
+    // object entries, read-only 預覽, the inert drawing pane, Esc, two fingers, overlays and the drag budget
+    const s3 = {};
+    plane.m11_edit = s3;
+    const cw = (expr, arg) => page.evaluate(expr, arg);
+    const lib = () => cw(() => window.castplane_web.library);
+    const objs = () => cw(() => window.castplane_web.objects);
+    const sel = () => cw(() => window.castplane_web.selected);
+    const objs_json = () => cw(() => window.castplane_web.scene_objects_json);
+    const view_of = async () => JSON.stringify((await cw(() => window.castplane_web.observer)).view);
+    const canvas_boxes = () => cw(() => [...document.querySelectorAll("canvas")].map((c) => {
+      const r = c.getBoundingClientRect();
+      return [r.x, r.y, r.width, r.height, c.width, c.height].join(",");
+    }).join(";"));
+    const settle = async () => { await frames2(); await frames2(); };
+    /** A click on object `id` in the observer pane (a failure when no pane point grabs it). */
+    const click_obj = async (id) => {
+      const p = await cw((i) => window.castplane_web.object_px(i), id);
+      check(p !== null, `m11e: object ${id} is grabbable in the observer pane`);
+      if (p === null) return;
+      const b = await page.locator("#observer").boundingBox();
+      await page.mouse.click(b.x + p[0], b.y + p[1]);
+      await settle();
+    };
+    await page.evaluate(() => window.castplane_web.load_example("basic"));
+    await settle();
+    // the library: collapsed at load, the tab's shortcut and the collapse button's label
+    const l0 = await lib();
+    const attrs = await cw(() => ({ keys: document.getElementById("lib-tab").getAttribute("aria-keyshortcuts"),
+      controls: document.getElementById("lib-tab").getAttribute("aria-controls"),
+      close: document.getElementById("lib-close").getAttribute("aria-label"),
+      labels: [...document.querySelectorAll("#lib-grid button.tile")].map((b) => b.getAttribute("aria-label")) }));
+    s3.library_attrs = attrs;
+    check(!l0.open && l0.inert && !l0.tab_hidden && l0.expanded === "false" && l0.tiles === 8, `m11e: the library is collapsed and inert at load (${JSON.stringify(l0)})`);
+    check(attrs.keys.split(" ").includes("Control+Shift+L") && attrs.controls === "lib" && attrs.close === "收合物件庫",
+      "m11e: the tab carries aria-keyshortcuts Control+Shift+L and #lib-close an aria-label");
+    check(JSON.stringify(attrs.labels) === JSON.stringify(["方塊", "木箱", "高柱", "圓柱", "球", "圓錐", "三角柱", "六角柱"].map((n) => `加入：${n}`)),
+      "m11e: the tiles' aria-labels are 加入：名稱");
+    const boxes0 = await canvas_boxes();
+    await page.keyboard.press("Control+Shift+L");
+    await page.waitForTimeout(300);
+    const l1 = await lib();
+    check(l1.open && !l1.inert && l1.tab_hidden && l1.expanded === "true", "m11e: Ctrl+Shift+L opens the library");
+    check(await canvas_boxes() === boxes0, "m11e: opening the library changes no canvas box");
+    await page.keyboard.press("Escape");
+    await settle();
+    check((await lib()).open, "m11e: Esc leaves the library open");
+    await page.keyboard.press("Control+Shift+L");
+    await settle();
+    check(!(await lib()).open && (await lib()).inert, "m11e: Ctrl+Shift+L closes the library");
+    await page.keyboard.press("Meta+Shift+L");
+    await settle();
+    check((await lib()).open, "m11e: ⌘⇧L opens the library");
+    await page.click("#lib-close");
+    await settle();
+    check(!(await lib()).open && await cw(() => document.activeElement?.id) === "lib-tab", "m11e: #lib-close closes it and the focus returns to the tab");
+    const prevented = await cw(() => {
+      const ev = new KeyboardEvent("keydown", { key: "L", code: "KeyL", ctrlKey: true, shiftKey: true, bubbles: true, cancelable: true });
+      document.body.dispatchEvent(ev);
+      const out = ev.defaultPrevented && window.castplane_web.library.open;
+      const ev2 = new KeyboardEvent("keydown", { key: "L", code: "KeyL", ctrlKey: true, shiftKey: true, bubbles: true, cancelable: true });
+      document.body.dispatchEvent(ev2);
+      return out && ev2.defaultPrevented && !window.castplane_web.library.open;
+    });
+    check(prevented, "m11e: the library shortcut calls preventDefault and toggles");
+    await page.focus("#equation");
+    await page.keyboard.press("Control+Shift+L");
+    await settle();
+    check(!(await lib()).open, "m11e: Ctrl+Shift+L in the equation field is the field's");
+    await page.evaluate(() => document.getElementById("equation").blur());
+    await page.click("#lib-tab");
+    await settle();
+    check((await lib()).open && await cw(() => document.activeElement?.classList.contains("tile")), "m11e: the tab opens the library (focus on the first tile)");
+    // add each preset: one add entry each, the new object selected, P, E and the observer camera unchanged
+    const r0 = await rig(), v0 = await view_of();
+    const adds = [];
+    for (const name of ["方塊", "木箱", "高柱", "圓柱", "球", "圓錐", "三角柱", "六角柱"]) {
+      const before = await objs();
+      await page.click(`#lib-grid button.tile[aria-label="加入：${name}"]`);
+      await settle();
+      const after = await objs(), r = await rig(), chip = await cw(() => window.castplane_web.chip);
+      const added = after.at(-1);
+      adds.push([name, added.id, added.position]);
+      check(after.length === before.length + 1 && await sel() === added.id && r.undo === r0.undo + adds.length && r.redo === 0
+        && chip.name === `${name}（${added.id}）` && !chip.hidden, `m11e: tile ${name} adds ${added.id}, selected, one undo step`);
+      check(near3(r.P, r0.P, 0) && near3(r.E, r0.E, 0) && await view_of() === v0, `m11e: adding ${name} moves neither P, E nor the observer`);
+    }
+    s3.adds = adds;
+    check(adds.map((a) => a[1]).join() === "box_1,box_2,box_3,cylinder_1,sphere_1,cone_1,prism_1,prism_2", `m11e: the id rule (${adds.map((a) => a[1])})`);
+    check((await lib()).open, "m11e: on a wide screen the library stays open after an add");
+    // Enter and Space activate a focused tile
+    await page.focus('#lib-grid button.tile[aria-label="加入：方塊"]');
+    await page.keyboard.press("Enter");
+    await settle();
+    await page.keyboard.press(" ");
+    await settle();
+    const ks = await objs();
+    check(ks.length === 12 && ks.at(-2).id === "box_4" && ks.at(-1).id === "box_5", "m11e: Enter and Space on a tile add the object");
+    await page.click("#undo");
+    await page.click("#undo");
+    await settle();
+    check((await objs()).length === 10 && (await rig()).redo === 2, "m11e: undo of two adds");
+    await page.click("#redo");
+    await settle();
+    check((await objs()).length === 11 && await sel() === "box_4", "m11e: redo of an add re-inserts and selects it");
+    await page.click("#undo");
+    await settle();
+    check(await sel() === null, "m11e: undo of an add clears the selection");
+    await page.click("#lib-close");
+    await settle();
+    // the 10-primitive scene: the drag budget (§5.8.12; recorded, not gated)
+    {
+      await page.uncheck("#snap"); // every pointer move is a new position (one edit frame each)
+      const p = await cw(() => window.castplane_web.object_px("crate"));
+      const n0 = (await cw(() => window.castplane_web.frames)).length;
+      await obs_drag(p, -90, 30, 40);
+      await page.check("#snap");
+      const fr = (await cw(() => window.castplane_web.frames)).slice(n0).filter((f) => f.edit && f.dragging);
+      const tot = fr.map((f) => f.core_ms + f.dom_ms + (f.obs_ms ?? 0));
+      const sorted = [...tot].sort((a, b) => a - b);
+      s3.budget_10 = { frames: fr.length, max_ms: Math.max(...tot), median_ms: median(tot), p90_ms: sorted[Math.floor(0.9 * (sorted.length - 1))],
+        over_33: tot.filter((t) => t >= 33).length, core_median: median(fr.map((f) => f.core_ms)),
+        dom_median: median(fr.map((f) => f.dom_ms)), obs_median: median(fr.map((f) => f.obs_ms ?? 0)), objects: (await objs()).length };
+      check(fr.length >= 30, `m11e: ≥ 30 drag frames measured (${fr.length})`);
+      check(fr.every((f) => !f.preview), "m11e: a 10-primitive drag is not in the preview mode");
+      await page.click("#undo");
+      await settle();
+    }
+    // the forced preview: a > 50 ms drag-mode cost switches the gesture to the wireframe; release is a complete frame
+    {
+      await page.evaluate(() => window.castplane_web.force_edit_ms(80));
+      const svg_a = await cw(() => window.castplane_web.svg), dl_a = await cw(() => window.castplane_web.download_texts());
+      const p = await cw(() => window.castplane_web.object_px("crate"));
+      let mid = null;
+      await obs_drag(p, -60, 20, 10, {}, async () => {
+        mid = await cw(() => ({ press: window.castplane_web.press, svg: window.castplane_web.svg, dl: window.castplane_web.download_texts(),
+          wire: document.getElementById("stage").classList.contains("wire"), ov: window.castplane_web.sel_overlay,
+          delta: window.castplane_web.rig.delta }));
+      });
+      const after = await cw(() => ({ svg: window.castplane_web.svg, wire: document.getElementById("stage").classList.contains("wire"),
+        frames: window.castplane_web.frames.slice(-3) }));
+      s3.preview = { press: mid?.press, wire: mid?.wire, delta: mid?.delta };
+      check(mid !== null && mid.press?.preview === true && mid.wire && mid.ov.includes('class="wire"') && mid.svg === svg_a
+        && mid.dl.svg === dl_a.svg && mid.dl.json === dl_a.json && mid.delta > 0, "m11e: a forced > 50 ms frame gives the wireframe preview (outputs keep the last frame; the delta follows)");
+      check(!after.wire && after.svg !== svg_a && after.frames.at(-1).preview === false && after.frames.at(-1).dragging === false,
+        "m11e: release runs one complete frame");
+      await page.evaluate(() => window.castplane_web.force_edit_ms(null));
+      await page.click("#undo");
+      await settle();
+    }
+    await page.evaluate(() => window.castplane_web.load_example("basic"));
+    await settle();
+    // select by click; outputs are byte-identical with and without the selection
+    const plain = await drawing();
+    const pc = await cw(() => window.castplane_web.object_px("pillar"));
+    await page.mouse.click(ob.x + pc[0], ob.y + pc[1]);
+    await settle();
+    const withSel = await drawing();
+    check(await sel() === "pillar" && (await rig()).undo === 0, "m11e: a click selects the object (not an undo step)");
+    check(same_drawing(plain, withSel) && (await cw(() => window.castplane_web.sel_overlay)).includes('class="sel"')
+      && (await cw(() => window.castplane_web.selection_names)).includes("selection:outline"),
+      "m11e: the selection is outlined in both panes and the SVG / overlay / downloads are byte-identical");
+    // the horizontal drag keeps the grabbed point under the pointer (snapping off)
+    await page.uncheck("#snap");
+    {
+      const p = await cw(() => window.castplane_web.object_px("crate"));
+      const h0 = await cw(([x, y]) => window.castplane_web.hit_point(x, y), p);
+      const a0 = (await objs()).find((o) => o.id === "crate").position;
+      const r1 = await rig(), v1 = await view_of();
+      await obs_drag(p, 70, 25, 10);
+      const a1 = (await objs()).find((o) => o.id === "crate").position;
+      const q = await cw((X) => window.castplane_web.project_observer(X), [h0.point[0] + a1[0] - a0[0], h0.point[1] + a1[1] - a0[1], h0.point[2]]);
+      const err = Math.hypot(q[0] - (p[0] + 70), q[1] - (p[1] + 25));
+      const r2 = await rig();
+      s3.horizontal = { from: a0, to: a1, grab_error_px: err };
+      check(h0.id === "crate" && err < 0.5 && a1[2] === a0[2] && await sel() === "crate", `m11e: the grabbed point stays under the pointer (${err.toFixed(3)} px)`);
+      check(r2.undo === r1.undo + 1 && near3(r2.P, r1.P, 0) && near3(r2.E, r1.E, 0) && await view_of() === v1,
+        "m11e: one move entry; P, E and the observer camera unchanged");
+    }
+    // the vertical handle: only z changes; its tip stays under the pointer
+    {
+      const t = await cw(() => window.castplane_web.vertical_px);
+      const hit = await cw(([x, y]) => window.castplane_web.hit_at(x, y), t);
+      const a0 = (await objs()).find((o) => o.id === "crate").position;
+      // move the pointer 40 px up along the image of the handle's vertical line
+      const tip3 = await cw(() => window.castplane_web.vertical_tip);
+      const low = await cw((X) => window.castplane_web.project_observer(X), [tip3[0], tip3[1], tip3[2] - 0.5]);
+      const dl = Math.hypot(t[0] - low[0], t[1] - low[1]), ux = (t[0] - low[0]) / dl, uy = (t[1] - low[1]) / dl;
+      let t_held = null; // the tip before the release (the handle keeps its length during the drag, §5.8.4)
+      await page.mouse.move(ob.x + t[0], ob.y + t[1]);
+      await page.mouse.down();
+      for (let i = 1; i <= 8; i++) { await page.mouse.move(ob.x + t[0] + 5 * i * ux, ob.y + t[1] + 5 * i * uy); await frames2(); }
+      await settle();
+      t_held = await cw(() => window.castplane_web.vertical_px);
+      await page.mouse.up();
+      await settle();
+      const a1 = (await objs()).find((o) => o.id === "crate").position;
+      const t1 = await cw(() => window.castplane_web.vertical_px);
+      const err = Math.hypot(t_held[0] - (t[0] + 40 * ux), t_held[1] - (t[1] + 40 * uy));
+      s3.vertical = { from: a0, to: a1, tip_error_px: err };
+      check(hit?.kind === "handle" && a1[0] === a0[0] && a1[1] === a0[1] && a1[2] > a0[2] && err < 2, `m11e: the vertical handle lifts the object (tip error ${err.toFixed(3)} px)`);
+      await obs_drag(t1, 0, 200, 8);
+      check((await objs()).find((o) => o.id === "crate").position[2] === 0, "m11e: the ground is sticky (z = 0 after a drag down)");
+    }
+    await page.check("#snap");
+    // Alt pauses snapping
+    {
+      const p = await cw(() => window.castplane_web.object_px("pillar"));
+      await obs_drag(p, 37, 11, 6);
+      const snapped = (await objs()).find((o) => o.id === "pillar").position;
+      const p2 = await cw(() => window.castplane_web.object_px("pillar"));
+      await page.keyboard.down("Alt");
+      await obs_drag(p2, 23, 7, 6);
+      await page.keyboard.up("Alt");
+      const free = (await objs()).find((o) => o.id === "pillar").position;
+      const on_grid = (v) => Math.abs(v * 10 - Math.round(v * 10)) < 1e-9;
+      s3.snap = { snapped, free };
+      check(snapped.slice(0, 2).every(on_grid) && !free.slice(0, 2).every(on_grid), "m11e: snapping on the 0.1 m grid; Alt pauses it");
+    }
+    // a drag that comes back to its start records nothing; a click records nothing (snapping off: no rounding onto the grid)
+    {
+      await page.uncheck("#snap");
+      const u0 = (await rig()).undo;
+      const p = await cw(() => window.castplane_web.object_px("pillar"));
+      await page.mouse.move(ob.x + p[0], ob.y + p[1]);
+      await page.mouse.down();
+      for (const [dx, dy] of [[20, 0], [40, 5], [0, 0]]) { await page.mouse.move(ob.x + p[0] + dx, ob.y + p[1] + dy); await frames2(); }
+      await page.mouse.up();
+      await settle();
+      await page.mouse.click(ob.x + p[0], ob.y + p[1]);
+      await settle();
+      check((await rig()).undo === u0, "m11e: a drag back to its start and a click record nothing");
+      await page.check("#snap");
+    }
+    // Esc during a drag does nothing
+    {
+      const u0 = (await rig()).undo;
+      const p = await cw(() => window.castplane_web.object_px("crate"));
+      let mid = null;
+      await obs_drag(p, 30, 10, 6, {}, async () => {
+        await page.keyboard.press("Escape");
+        mid = await cw(() => ({ press: window.castplane_web.press, sel: window.castplane_web.selected }));
+      });
+      check(mid?.press?.started === true && mid.sel === "crate" && (await rig()).undo === u0 + 1, "m11e: Esc during a drag does nothing (the drag goes on)");
+    }
+    // undo / redo of a move: the selection follows the object
+    {
+      const before = await objs_json();
+      await page.click("#undo");
+      await settle();
+      const back = await objs_json();
+      await page.click("#redo");
+      await settle();
+      check(back !== before && await objs_json() === before && await sel() === "crate", "m11e: undo and redo of a move (the selection follows)");
+    }
+    // delete: Delete, Backspace and the chip button; not with the focus in the equation field; undo is byte-identical
+    {
+      await page.evaluate(() => window.castplane_web.load_example("basic"));
+      await settle();
+      await page.click("#lib-tab");
+      await settle();
+      for (const name of ["方塊", "球", "圓錐"]) await page.click(`#lib-grid button.tile[aria-label="加入：${name}"]`);
+      await page.click("#lib-close");
+      await page.evaluate(() => window.castplane_web.frame_observer()); // 整體顯示: the added objects come into view (adds do not re-frame)
+      await settle();
+      const ref = { json: await objs_json(), draw: await drawing() };
+      const pc2 = await cw(() => window.castplane_web.object_px("crate"));
+      await page.mouse.click(ob.x + pc2[0], ob.y + pc2[1]);
+      await settle();
+      await page.focus("#equation");
+      await page.keyboard.press("Delete");
+      await page.keyboard.press("Backspace");
+      await settle();
+      check((await objs()).length === 5 && await sel() === "crate", "m11e: Delete / Backspace in the equation field delete nothing");
+      await page.evaluate(() => document.getElementById("equation").blur());
+      const P0 = (await rig()).P;
+      await page.keyboard.press("Delete");
+      await settle();
+      const d1 = await objs();
+      check(d1.length === 4 && !d1.some((o) => o.id === "crate") && await sel() === null && near3((await rig()).P, P0, 0),
+        "m11e: Delete deletes the selection (cleared; P unchanged)");
+      await page.keyboard.press("Control+z");
+      await settle();
+      const und = { json: await objs_json(), draw: await drawing() };
+      check(und.json === ref.json && same_drawing(und.draw, ref.draw) && await sel() === "crate", "m11e: undo of a delete is byte-identical (scene JSON, SVG, overlay, downloads) and selects it");
+      await page.keyboard.press("Control+Shift+Z");
+      await settle();
+      check((await objs()).length === 4, "m11e: redo of a delete");
+      await page.keyboard.press("Control+z");
+      await settle();
+      await click_obj("sphere_1");
+      check(await sel() === "sphere_1" && (await cw(() => window.castplane_web.chip)).name === "球（sphere_1）", "m11e: the chip names a library object");
+      await page.keyboard.press("Backspace");
+      await settle();
+      check(!(await objs()).some((o) => o.id === "sphere_1"), "m11e: Backspace deletes");
+      await click_obj("box_1");
+      await page.click("#sel-delete");
+      await settle();
+      check(!(await objs()).some((o) => o.id === "box_1") && await sel() === null, "m11e: the chip's 刪除 button deletes");
+      s3.after_deletes = (await objs()).map((o) => o.id);
+    }
+    // the last object cannot be deleted (wall_and_ground has one)
+    {
+      await page.evaluate(() => window.castplane_web.load_example("wall_and_ground"));
+      await settle();
+      const id = (await objs())[0].id;
+      const p = await cw((i) => window.castplane_web.object_px(i), id);
+      await page.mouse.click(ob.x + p[0], ob.y + p[1]);
+      await settle();
+      const chip = await cw(() => window.castplane_web.chip);
+      check(await sel() === id && chip.delete_disabled && !chip.hint_hidden
+        && await cw(() => getComputedStyle(document.getElementById("sel-hint")).display !== "none"), "m11e: one object left: the button is disabled and 場景至少要有一個物件 is visible");
+      await page.keyboard.press("Delete");
+      await settle();
+      check((await objs()).length === 1 && (await rig()).undo === 0
+        && (await cw(() => document.getElementById("notices").textContent)).includes("場景至少要有一個物件"), "m11e: Delete on the last object deletes nothing and shows the notice");
+    }
+    // 預覽 is read-only; Esc returns and the selection survives; the drawing pane is inert on objects
+    {
+      await page.evaluate(() => window.castplane_web.load_example("basic"));
+      await settle();
+      const p = await cw(() => window.castplane_web.object_px("crate"));
+      await page.mouse.click(ob.x + p[0], ob.y + p[1]);
+      await settle();
+      await page.click("#lib-tab");
+      await settle();
+      await page.click("#preview");
+      await settle();
+      const json0 = await objs_json(), r0p = await rig();
+      const st = await cw(() => ({ lib: window.castplane_web.library, chip: window.castplane_web.chip.hidden, undo: document.getElementById("undo").disabled,
+        redo: document.getElementById("redo").disabled, notices: document.getElementById("notices").textContent }));
+      check(!st.lib.open && st.lib.inert && st.lib.tab_hidden && st.chip && st.undo && st.redo && st.notices.includes("預覽中無法編輯物件"),
+        `m11e: 預覽 collapses the library, hides the tab and the chip, disables 復原 / 重做 (${JSON.stringify(st)})`);
+      for (const combo of ["Delete", "Backspace", "Control+z", "Control+Shift+Z", "Meta+z", "Control+Shift+L", "Meta+Shift+L"]) await page.keyboard.press(combo);
+      await page.evaluate(() => { for (const b of document.querySelectorAll("#lib-grid button.tile, #sel-delete, #lib-tab")) b.click(); });
+      await settle();
+      const r1p = await rig();
+      check(await objs_json() === json0 && await sel() === "crate" && r1p.undo === r0p.undo && r1p.redo === r0p.redo && !(await lib()).open,
+        "m11e: in 預覽 no key, tile, tab or delete button edits the scene or the selection");
+      // the drawing pane: a click, a drag and a press on an object change nothing
+      const sp = await cw(() => window.castplane_web.stage_object_px("pillar"));
+      const sb = await page.locator("#stage").boundingBox();
+      await page.mouse.click(sb.x + sp[0], sb.y + sp[1]);
+      await page.mouse.move(sb.x + sp[0], sb.y + sp[1]);
+      await page.mouse.down();
+      for (let i = 1; i <= 6; i++) { await page.mouse.move(sb.x + sp[0] + 8 * i, sb.y + sp[1]); await frames2(); }
+      await page.mouse.up();
+      await settle();
+      check(await objs_json() === json0 && await sel() === "crate", "m11e: the drawing pane is inert on objects (預覽)");
+      await page.keyboard.press("Escape");
+      await settle();
+      const bk = await cw(() => ({ on: window.castplane_web.observer.on, sel: window.castplane_web.selected, lib: window.castplane_web.library,
+        chip: window.castplane_web.chip.hidden }));
+      check(bk.on && bk.sel === "crate" && !bk.lib.open && !bk.lib.tab_hidden && !bk.chip, "m11e: Esc returns to the edit view; the selection survives; the tab and chip are back");
+      const sp2 = await cw(() => window.castplane_web.stage_object_px("pillar"));
+      const sb2 = await page.locator("#stage").boundingBox();
+      await page.mouse.click(sb2.x + sp2[0], sb2.y + sp2[1]);
+      await page.mouse.move(sb2.x + sp2[0], sb2.y + sp2[1]);
+      await page.mouse.down();
+      for (let i = 1; i <= 6; i++) { await page.mouse.move(sb2.x + sp2[0] - 8 * i, sb2.y + sp2[1]); await frames2(); }
+      await page.mouse.up();
+      await settle();
+      check(await objs_json() === json0 && await sel() === "crate", "m11e: the drawing pane is inert on objects (edit view)");
+    }
+    // Esc order: the equation field's own > 預覽 > the selection; never the library
+    {
+      await page.click("#lib-tab");
+      await settle();
+      const eq0 = await cw(() => document.getElementById("equation").value);
+      await page.focus("#equation");
+      await page.keyboard.type("x=");
+      await page.keyboard.press("Escape");
+      await settle();
+      const a = await cw(() => ({ sel: window.castplane_web.selected, lib: window.castplane_web.library.open, field: document.getElementById("equation").value }));
+      check(a.sel === "crate" && a.lib && a.field === eq0, "m11e: Esc in the equation field drops the typed text only (selection and library kept)");
+      await page.evaluate(() => document.body.focus());
+      await page.keyboard.press("Escape");
+      await settle();
+      check(await sel() === null && (await lib()).open, "m11e: Esc in the edit view clears the selection; the library stays open");
+      await page.keyboard.press("Escape");
+      await settle();
+      check((await lib()).open, "m11e: Esc with nothing selected does nothing");
+      await page.click("#lib-close");
+    }
+    // two fingers (touch, observer pane): before 5 px the press is cancelled (0 steps) and the pinch zooms; after 5 px the
+    // second finger is ignored
+    {
+      await page.evaluate(() => window.castplane_web.load_example("basic"));
+      await settle();
+      const p = await cw(() => window.castplane_web.object_px("crate", true));
+      check(p !== null, "m11e: the crate is grabbable by touch");
+      const touch = (type, id, x, y) => cw(([type, id, x, y]) => {
+        const el = document.getElementById("obs-gl"), b = document.getElementById("observer").getBoundingClientRect();
+        el.dispatchEvent(new PointerEvent(type, { pointerId: id, pointerType: "touch", isPrimary: id % 10 === 1, clientX: b.left + x, clientY: b.top + y,
+          bubbles: true, cancelable: true, button: 0, buttons: type === "pointerup" ? 0 : 1 }));
+      }, [type, id, x, y]);
+      const json0 = await objs_json(), v0t = (await cw(() => window.castplane_web.observer)).view, u0 = (await rig()).undo;
+      await touch("pointerdown", 11, p[0], p[1]);
+      await touch("pointermove", 11, p[0] + 3, p[1]);
+      const mid = await sel();
+      await touch("pointerdown", 12, p[0] + 80, p[1] + 40);
+      await touch("pointermove", 12, p[0] + 140, p[1] + 80);
+      await touch("pointermove", 12, p[0] + 180, p[1] + 110);
+      await touch("pointerup", 12, p[0] + 180, p[1] + 110);
+      await touch("pointerup", 11, p[0] + 3, p[1]);
+      await settle();
+      const v1t = (await cw(() => window.castplane_web.observer)).view;
+      check(mid === "crate" && await sel() === null && await objs_json() === json0 && (await rig()).undo === u0 && v1t.dist !== v0t.dist,
+        "m11e: a second finger before 5 px cancels the object press (selection back, 0 steps) and pinches the observer");
+      const q = await cw(() => window.castplane_web.object_px("crate", true)); // the pinch zoomed the observer
+      await touch("pointerdown", 21, q[0], q[1]);
+      for (let i = 1; i <= 4; i++) { await touch("pointermove", 21, q[0] + 10 * i, q[1]); await frames2(); }
+      await touch("pointerdown", 22, q[0] + 100, q[1] + 100);
+      await touch("pointermove", 22, q[0] + 160, q[1] + 160);
+      await touch("pointermove", 21, q[0] + 60, q[1]);
+      await frames2();
+      await touch("pointerup", 22, q[0] + 160, q[1] + 160);
+      await touch("pointerup", 21, q[0] + 60, q[1]);
+      await settle();
+      const v2t = (await cw(() => window.castplane_web.observer)).view;
+      check(await objs_json() !== json0 && (await rig()).undo === u0 + 1 && v2t.dist === v1t.dist && await sel() === "crate",
+        "m11e: after 5 px the second finger is ignored (one move entry, no pinch)");
+    }
+    if (m11ShotsDir) {
+      mkdirSync(m11ShotsDir, { recursive: true });
+      await page.setViewportSize({ width: 1440, height: 900 });
+      await page.evaluate(() => window.castplane_web.load_example("basic"));
+      await settle();
+      const ob3 = await page.locator("#observer").boundingBox();
+      await page.click("#lib-tab");
+      await page.click('#lib-grid button.tile[aria-label="加入：木箱"]');
+      await page.click('#lib-grid button.tile[aria-label="加入：圓錐"]');
+      await page.evaluate(() => window.castplane_web.frame_observer());
+      await settle();
+      await page.waitForTimeout(300);
+      await page.screenshot({ path: join(m11ShotsDir, "1_library_open.png") });
+      await page.click("#lib-close");
+      const p = await cw(() => window.castplane_web.object_px("crate"));
+      await page.mouse.click(ob3.x + p[0], ob3.y + p[1]);
+      await settle();
+      await page.waitForTimeout(300);
+      await page.screenshot({ path: join(m11ShotsDir, "2_selected.png") });
+      const p2 = await cw(() => window.castplane_web.object_px("crate"));
+      await page.mouse.move(ob3.x + p2[0], ob3.y + p2[1]);
+      await page.mouse.down();
+      for (let i = 1; i <= 8; i++) { await page.mouse.move(ob3.x + p2[0] - 9 * i, ob3.y + p2[1] - 4 * i); await frames2(); }
+      await page.screenshot({ path: join(m11ShotsDir, "3_dragging.png") });
+      await page.mouse.up();
+      await settle();
+      await click_obj("cone_1");
+      await page.keyboard.press("Delete");
+      await settle();
+      await page.waitForTimeout(300);
+      await page.screenshot({ path: join(m11ShotsDir, "4_after_delete.png") });
+      s3.screenshots = ["1_library_open.png", "2_selected.png", "3_dragging.png", "4_after_delete.png"].map((n) => join(m11ShotsDir, n));
+      await page.setViewportSize({ width: 1500, height: 900 });
+      await settle();
+    }
+    // narrow screen: an add closes the sidebar; an outside tap closes it and is consumed
+    {
+      await page.setViewportSize({ width: 800, height: 900 });
+      await page.evaluate(() => window.castplane_web.load_example("basic"));
+      await settle();
+      await page.click("#lib-tab");
+      await settle();
+      const w = await cw(() => document.getElementById("lib").getBoundingClientRect().width);
+      await page.click('#lib-grid button.tile[aria-label="加入：球"]');
+      await settle();
+      check(!(await lib()).open && (await objs()).length === 3 && w <= 280, `m11e: narrow screen: an add closes the sidebar (width ${w})`);
+      await page.click("#lib-tab");
+      await settle();
+      const s0 = await sel(), json0 = await objs_json(), v0n = await view_of();
+      const ob4 = await page.locator("#observer").boundingBox();
+      const pn = [ob4.width - 40, ob4.height / 2]; // right of the sidebar: an orbit, if it were not consumed
+      await page.mouse.move(ob4.x + pn[0], ob4.y + pn[1]);
+      await page.mouse.down();
+      for (let i = 1; i <= 5; i++) { await page.mouse.move(ob4.x + pn[0] + 10 * i, ob4.y + pn[1]); await frames2(); }
+      await page.mouse.up();
+      await settle();
+      check(!(await lib()).open && await sel() === s0 && await objs_json() === json0 && await view_of() === v0n,
+        "m11e: narrow screen: an outside tap closes the sidebar and is consumed (no selection, no drag)");
+      await page.setViewportSize({ width: 1500, height: 900 });
+      await settle();
+    }
   }
   {
     // the overlay is the same with the observer pane shown and hidden (預覽) for the same (edited) camera; Download scene writes

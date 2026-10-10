@@ -6479,3 +6479,69 @@ already verified (the demo has no preview mode and no core output).
   drag rows of §5.8.2 come with the object drag. The smoke script drives an object move through the test hook
   `castplane_web.move_object(id, position)`, which does what a drag's release does (one `move` entry, `set_geometry`,
   no re-framing) until the drag is wired.
+- **[decision, implementation] (M11 step 3) Choices the contract leaves open in the editing wiring, and the readings
+  that amend §5.8 by reference.** (1) **Exact hits, not the tessellation.** Objects are picked by `selection.ts`'s exact
+  ray tests (quadrics, planes and polygons of every primitive, concave prisms included; a `mesh` object on the faces of
+  its stage-A world mesh), not by a three.js ray cast: this amends the "Object hit" paragraph of §5.8.2 ("hit on their
+  tessellation, as drawn") and known limit (1) of the M11 "Known limits" note — `h₀` and the grab height `z_g` are on the
+  exact surface, which differs from the drawn 64-segment tessellation by less than `r·(1 − cos(π/64))`. The depth rule
+  (`≤ OBSERVER_NEAR_M` ignored) and the hit priority are unchanged; `ObserverPane.pick_object` is removed. (2) **One key
+  module.** Step 1's `web/src/keys.ts` is folded into `selection.ts` (amends note (5) of the "M11 step 1" note): one
+  `is_typing_target`, `shortcut_action` (Delete, Backspace, undo, redo, the library toggle and Esc) and
+  `escape_action`; exactly one of Ctrl and ⌘ must be held (Ctrl+⌘+Z and Ctrl+⌘+Shift+L are not shortcuts, as step 1
+  had it); the step-1 test rows moved to `selection.test.ts`. (3) **One entry implementation.** `plane.ts`'s entry types
+  and `apply_object_entry` are the only ones; `scene_edit.ts` re-exports the types, builds the entries
+  (`add_with_entry`, `delete_with_entry`, `move_entry`) and its `apply_entry` / `undo_entry` call `apply_object_entry`
+  and carry the display names (`names_after`). The LIFO check of an insert (redo of an add, undo of a delete) also
+  requires its id to be free. `StepResult` carries the applied object entry and direction, so the page's name table
+  follows an undo or redo. (4) **Press, drag and the dead zone.** A press on an object selects it at once; the drag
+  opens (the `state.dragging` gesture of §5.8.11) when the travel reaches `CLICK_PX`, and only then does the
+  picture-delta measurement start (`PlaneSession.begin_measure()`, `ref0` from the unmoved vertices, so equal to
+  pointer-down's), so a click does not reset the readout. A press on the vertical handle opens its gesture at once (as
+  the ring and the arrow do). A command (add, delete, undo, redo) during a press that has not become a drag ends that
+  press as it is (its selection stays, its release does nothing); entering 預覽 cancels it (the old selection comes
+  back). The drag maths uses the observer camera of pointer-down; a wheel during a drag zooms the observer only.
+  `pointercancel` cancels every taken press, ring and arrow drags included (M10 ended them; §5.8.2 "cancels like a
+  second finger"). With a second pointer the pane asks the page (`PaneInput.second`): `ignore` leaves the second pointer
+  unregistered until it is lifted, `cancel` hands over to the observer pinch. (5) **The vertical handle keeps its length
+  during its own drag.** §5.8.4's length (`max(clamp(0.6·h, 0.3, 1.0), L₃₆)`) is evaluated for the current view at every
+  observer render, except during a vertical drag, where the length at pointer-down is kept: the handle then "follows the
+  object by `Δz_b`" literally and its tip stays under the pointer (0.003 px in the smoke run); at release the length is re-evaluated. It is drawn over everything (no depth
+  test): a 3 px shaft, a triangle head in the plane of the shaft and the observer's right vector, a 13 px tip disc, and
+  the label `name（id）` at the tip (laid out with the board labels). (6) **Outlines.** In the observer the outline is
+  the feature edges (25°) of the selected object's three.js node (`EdgesGeometry`), 3 px, no depth test, following the
+  node's transform, so a drag moves it without a rebuild. In the drawing pane `#sel-overlay` is an `<svg
+  class="sel-overlay">` appended to `#stage` after the writer's overlay (above it; not class `overlay`, so the smoke
+  script's `svg.overlay` and every output stay the writer's), with the writer's `viewBox` (canvas mm, `x = u + W/2`,
+  `y = H/2 − v`), `pointer-events: none`, `overflow: hidden`, and one path of the object's edges, outline generators and
+  conics (arcs 32 and ellipses 72 samples, as the observer) at 2.6 px non-scaling. The accent colour is `#db2777`.
+  (7) **Recompute.** A drag move replaces `state.scene.objects` and moves the dragged object's node in both three.js
+  groups at once (`set_object_node`: `object_matrix(rec)` for a primitive; for a `mesh` object, whose geometry is in world
+  coordinates, the translation by the drag's displacement — exact, so the group is not rebuilt per frame, amending
+  §5.8.12 "Three.js groups"); the next animation frame runs `validate_scene`, stage A and `set_geometry` once, then B, C
+  and the SVG (a rejected drag position falls back to the last valid scene). Discrete edits (add, delete, an object
+  undo or redo, the release of a drag) validate and run stage A synchronously, so a rejected edit is refused before an
+  entry is recorded, and rebuild both groups; B and C follow in the next frame. (8) **The preview decision and the
+  wireframe.** The cost is the last drag-mode edit frame of the loaded scene (`validate + A + B + C + SVG`, reset at a
+  load); `castplane_web.force_edit_ms(ms)` overrides it for the smoke test. In preview mode the writer's overlay is
+  hidden (`#stage.wire .overlay { visibility: hidden }`) and `#sel-overlay` draws the stage-A mesh edges of every object
+  of the pressed frame (edges flagged smooth skipped; the polygon edges of curved primitives included), the dragged one
+  translated by the anchor's displacement, through the last camera record, near-clipped (`wire_segments`): "the object
+  edges of the pressed frame's document" is read as stage A's edges because the document has world points only for
+  polyhedral vertices. The picture-delta readout re-measures the translated vertices (`set_geometry` with the same
+  count). (9) **Library.** Opening moves the focus to the first tile; closing returns it to the tab when it was inside;
+  the tab is hidden while the sidebar is open and while previewing; the tiles are disabled while a gesture is open. The
+  narrow-screen outside pointer-down is captured on `document` (`preventDefault`, `stopImmediatePropagation`) and the
+  click that follows it within 800 ms is swallowed. The tab stacks 物/件/庫 under a plus icon (vertical writing mode is
+  not laid out inside a `<button>` by Chromium) with `aria-label="物件庫"`, and its `aria-keyshortcuts` lists
+  `Control+Shift+L Meta+Shift+L`. (10) **Chip and notices.** The chip sits in a slot of fixed height (28 px) above the
+  readouts, so selecting never resizes a pane; a refused Delete's 「場景至少要有一個物件」 stays in `#notices` until the next
+  selection change or edit; while previewing `#notices` adds 「預覽中無法編輯物件；按「返回編輯」或 Esc 回到編輯畫面」.
+  (11) **Test hooks.** `castplane_web.hit_at` now reports the §5.8.2 press target (`arrow`, `ring`, `handle`,
+  `object` with its id, or null for blank); new read-only hooks `object_px`, `hit_point`, `project_observer`,
+  `vertical_tip`, `vertical_px`, `stage_object_px`, `objects`, `scene_objects_json`, `names`, `library`, `chip`,
+  `sel_overlay`, `selection_names`, `press`. The `move_object` hook stays for scripted moves; the smoke script drags
+  with the pointer. (12) **Measured** (Chromium 141, SwiftShader, `web/scripts/smoke.mjs`): a horizontal drag of a box in
+  a 10-primitive scene, 38 drag frames, `core + dom + obs` median 18–22 ms and maximum 30–42 ms over five runs (90th
+  percentile 22–32 ms; at most three frames of 38 at ≥ 33 ms in a run; target 33 ms, not gated, recorded in
+  `web/README.md`).

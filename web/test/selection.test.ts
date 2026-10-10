@@ -8,7 +8,7 @@ import { dirname, resolve } from "node:path";
 import { test } from "node:test";
 import { fileURLToPath } from "node:url";
 
-import { build_object, dumps, load_scene, point_inside_solid, render, transform_frame } from "castplane";
+import { build_object, compose, dumps, load_scene, point_inside_solid, project_scene, render, shadow_geometry, transform_frame } from "castplane";
 import type { SceneObject, Vec2, Vec3 } from "castplane";
 
 import { CLICK_PX, HIT_PX_MOUSE, HIT_PX_TOUCH, initial_view, observer_basis, observer_project, observer_project_with } from "../src/observer.js";
@@ -16,8 +16,8 @@ import type { Handles, ObserverView } from "../src/observer.js";
 import {
   NON_TEXT_INPUT_TYPES, PressTracker, after_history, cancel_press, clear_selection, empty_selection, end_press,
   escape_action, focus_kind, focus_object_id, frame_ray, hit_order, hit_radius, hit_vertical, is_typing_target,
-  nearest_hit, observer_frame, observer_ray, press_select, press_target, prune_selection, ray_object_t, select_added,
-  shortcut_action,
+  nearest_hit, observer_frame, observer_ray, outline_polylines, press_select, press_target, prune_selection, ray_object_t,
+  select_added, shortcut_action, svg_point, wire_segments,
 } from "../src/selection.js";
 import type { KeyLike, ObjectHit, ShortcutContext, TargetLike } from "../src/selection.js";
 import { apply_entry, delete_with_entry, undo_entry, with_position, move_entry } from "../src/scene_edit.js";
@@ -492,6 +492,70 @@ test("Esc table: equation field > drag (nothing) > previewing > selection > noth
   }
 });
 
+// the rows of the former web/test/keys.test.ts (M11 step 1), on the single key helpers of selection.ts
+
+/** A keydown as the page describes it: the focus kind is derived from the target as `main.ts` does. */
+const KT = (k: string, mods: Partial<KeyLike> = {}, target: TargetLike = { tag: "BODY" }): [KeyLike, ShortcutContext["focus"]] =>
+  [{ key: k, ctrlKey: false, metaKey: false, altKey: false, shiftKey: false, isComposing: false, ...mods }, focus_kind(target, false)];
+
+test("is_typing_target (step 1 table): text-like inputs keep their keys whatever the case of the type", () => {
+  for (const type of ["text", "search", "number", "email", "url", "tel", "password", "", null, undefined, "weird", "TEXT", "date"]) {
+    assert.equal(is_typing_target({ tag: "INPUT", type }), true, `input type ${String(type)}`);
+  }
+  for (const type of ["range", "checkbox", "radio", "button", "submit", "reset", "file", "color", "image", "hidden", "Range"]) {
+    assert.equal(is_typing_target({ tag: "INPUT", type }), false, `input type ${type}`);
+  }
+  assert.equal(is_typing_target({ tag: "DIV", editable: false }), false);
+  for (const tag of ["SELECT", "BUTTON", "BODY", "CANVAS", "SECTION"]) assert.equal(is_typing_target({ tag }), false, tag);
+});
+
+test("shortcut_action (step 1 table): Ctrl / ⌘+Z undo, Ctrl / ⌘+Shift+Z redo; modifiers, IME, focus, preview", () => {
+  const EDIT = { has_selection: true, previewing: false };
+  const act = (k: string, mods: Partial<KeyLike> = {}, target?: TargetLike, ctx: Omit<ShortcutContext, "focus"> = EDIT) => {
+    const [ev, focus] = KT(k, mods, target);
+    return shortcut_action(ev, { ...ctx, focus });
+  };
+  assert.equal(act("z", { ctrlKey: true }), "undo");
+  assert.equal(act("z", { metaKey: true }), "undo", "⌘Z");
+  assert.equal(act("Z", { ctrlKey: true, shiftKey: true }), "redo");
+  assert.equal(act("Z", { metaKey: true, shiftKey: true }), "redo", "⌘⇧Z");
+  assert.equal(act("z", { ctrlKey: true, shiftKey: true }), "redo", "lower-case key with Shift");
+  assert.equal(act("Z", { ctrlKey: true }, undefined, { has_selection: false, previewing: false }), "undo", "Caps Lock; no selection needed");
+  // not bound
+  assert.equal(act("z"), null, "plain z");
+  assert.equal(act("y", { ctrlKey: true }), null, "Ctrl+Y is not bound");
+  assert.equal(act("z", { ctrlKey: true, altKey: true }), null, "Ctrl+Alt+Z");
+  assert.equal(act("z", { metaKey: true, altKey: true }), null, "⌘⌥Z");
+  assert.equal(act("z", { ctrlKey: true, metaKey: true }), null, "Ctrl+⌘+Z");
+  assert.equal(act("L", { ctrlKey: true, metaKey: true, shiftKey: true }), null, "Ctrl+⌘+Shift+L");
+  assert.equal(act("z", { altKey: true }), null, "Alt+Z");
+  assert.equal(act("z", { shiftKey: true }), null, "Shift+Z");
+  // IME composition and text-like targets: left to the browser
+  assert.equal(act("z", { ctrlKey: true, isComposing: true }), null, "IME");
+  assert.equal(act("z", { ctrlKey: true }, { tag: "INPUT", type: "text" }), null, "a text field");
+  assert.equal(act("Z", { metaKey: true, shiftKey: true }, { tag: "TEXTAREA" }), null);
+  assert.equal(act("z", { ctrlKey: true }, { tag: "SPAN", editable: true }), null);
+  // non-text targets take it: a focused button, slider, checkbox, select
+  for (const target of [{ tag: "BUTTON" }, { tag: "INPUT", type: "range" }, { tag: "INPUT", type: "checkbox" }, { tag: "SELECT" }]) {
+    assert.equal(act("z", { ctrlKey: true }, target), "undo", JSON.stringify(target));
+  }
+  // previewing: no shortcut acts (board entries included, §5.8.14)
+  for (const [k, mods] of [["z", { ctrlKey: true }], ["z", { metaKey: true }], ["Z", { ctrlKey: true, shiftKey: true }], ["Z", { metaKey: true, shiftKey: true }]] as const) {
+    assert.equal(act(k, mods, undefined, { has_selection: true, previewing: true }), null);
+    assert.equal(act(k, mods, undefined, { has_selection: false, previewing: true }), null);
+  }
+});
+
+test("escape_action (step 1 table): the equation field's own Esc > nothing during a drag > leave 預覽 > clear > nothing (Q3)", () => {
+  const all = [true, false];
+  for (const gesture_open of all) for (const previewing of all) for (const has_selection of all) {
+    assert.equal(escape_action({ focus: "equation", gesture_open, previewing, has_selection }), "field");
+    const want = gesture_open ? null : previewing ? "leave_preview" : has_selection ? "clear_selection" : null;
+    assert.equal(escape_action({ focus: "other", gesture_open, previewing, has_selection }), want,
+      JSON.stringify({ gesture_open, previewing, has_selection }));
+  }
+});
+
 // ------------------------------------------------------------------------------------------------ outputs
 
 test("outputs are byte-identical with and without a selection (the selection is not in the scene JSON)", () => {
@@ -508,4 +572,55 @@ test("outputs are byte-identical with and without a selection (the selection is 
   assert.equal(dumps(r1.geometry), dumps(r0.geometry));
   assert.equal(r1.svg, r0.svg);
   assert.equal(focus_object_id(sel.selected, scene.objects), "crate");
+});
+
+// ------------------------------------------------------------------------------------------------ overlays (wiring, §5.8.2, §5.8.12)
+
+test("outline_polylines: the selected object's edges, generators and conics only (canvas mm), nothing for an unknown id", () => {
+  const scene = load_scene(read_json("examples", "basic.json"));
+  const A = shadow_geometry(scene);
+  const doc = compose(scene, project_scene(scene, A));
+  const crate = outline_polylines(doc, "crate");
+  const segs = doc.edges.filter((e) => e.object === "crate" && e.segment !== null);
+  assert.ok(segs.length > 0);
+  assert.equal(crate.length, segs.length, "a box: one polyline per drawn edge");
+  segs.forEach((e, i) => assert.deepEqual(crate[i], e.segment!.map((q) => [q[0], q[1]])));
+  const pillar = outline_polylines(doc, "pillar");
+  const o = doc.outlines.find((x) => x.object === "pillar")!;
+  assert.ok(pillar.length >= o.generators.filter((g) => g.segment !== null).length + o.conics.length, "a cylinder: generators and conics");
+  for (const pl of pillar) for (const q of pl) assert.ok(Number.isFinite(q[0]) && Number.isFinite(q[1]));
+  assert.deepEqual(outline_polylines(doc, "nope"), []);
+});
+
+test("wire_segments: stage-A edges through the camera record (equal to the document's edges), shifted, near-clipped", () => {
+  const scene = load_scene(read_json("examples", "basic.json"));
+  const A = shadow_geometry(scene);
+  const B = project_scene(scene, A);
+  const doc = compose(scene, B);
+  const i = scene.objects.findIndex((o) => o.id === "crate");
+  const m = A.objects[i]!.mesh;
+  const segs = wire_segments([m], [], B.camera);
+  assert.equal(segs.length, m.edges.length, "every edge of the box is in front of the camera");
+  // every drawn document edge of the box is one of them (same projection, to rounding)
+  for (const e of doc.edges.filter((x) => x.object === "crate" && x.segment !== null)) {
+    const [a, b] = e.segment!;
+    const best = Math.min(...segs.map(([p, q]) => Math.min(
+      Math.hypot(p[0] - a![0]!, p[1] - a![1]!) + Math.hypot(q[0] - b![0]!, q[1] - b![1]!),
+      Math.hypot(p[0] - b![0]!, p[1] - b![1]!) + Math.hypot(q[0] - a![0]!, q[1] - a![1]!))));
+    assert.ok(best < 1e-6, `edge ${e.from}-${e.to}: ${best}`);
+  }
+  // a shift is the projection of the translated vertices (the dragged object of the preview)
+  const d: Vec3 = [0.7, -0.3, 0.2];
+  const moved = { ...m, vertices: m.vertices.map((v) => add(v, d)) };
+  assert.deepEqual(wire_segments([m], [d], B.camera), wire_segments([moved], [], B.camera));
+  // smooth edges of an imported mesh are left out; an edge with an end behind the near plane too
+  assert.equal(wire_segments([{ ...m, edge_smooth: m.edges.map(() => true) }], [], B.camera).length, 0);
+  const behind = { vertices: [sub(scene.camera.position, [0, 1, 0]), sub(scene.camera.position, [0, 2, 0])], edges: [[0, 1]] as [number, number][] };
+  assert.equal(wire_segments([behind], [], B.camera).length, 0);
+});
+
+test("svg_point: canvas mm (u, v) to the writer's user units x = u + W/2, y = H/2 − v", () => {
+  assert.deepEqual(svg_point([0, 0], [300, 200]), [150, 100]);
+  assert.deepEqual(svg_point([10, 20], [300, 200]), [160, 80]);
+  assert.deepEqual(svg_point([-150, -100], [300, 200]), [0, 200]);
 });

@@ -110,11 +110,13 @@ export interface ObjectStep {
  * Apply an object entry to `objects` in the direction `dir` (§5.8.11), returning a new array (records are shared by
  * reference, never rebuilt) and the selection that follows the entry (§5.8.2), or `null` when `objects` is not the
  * array the entry expects (the LIFO check: for an undo, the array right after the entry's own action; for a redo, the
- * array right before it). A `null` is a bug; the caller clears both stacks and leaves the scene as it is.
+ * array right before it; an insert also needs its id to be free). A `null` is a bug; the caller clears both stacks and
+ * leaves the scene as it is. This is the single implementation: `scene_edit.apply_entry` / `undo_entry` call it.
  */
 export function apply_object_entry(objects: readonly SceneObject[], e: ObjectEntry, dir: "undo" | "redo"): ObjectStep | null {
   const ok_index = (i: number, n: number): boolean => Number.isInteger(i) && i >= 0 && i <= n;
-  const insert = (rec: SceneObject): SceneObject[] => [...objects.slice(0, e.index), rec, ...objects.slice(e.index)];
+  const insert = (rec: SceneObject): SceneObject[] | null =>
+    objects.some((o) => o.id === rec.id) ? null : [...objects.slice(0, e.index), rec, ...objects.slice(e.index)];
   const remove = (): SceneObject[] => [...objects.slice(0, e.index), ...objects.slice(e.index + 1)];
   const replace = (rec: SceneObject): SceneObject[] => objects.map((o, i) => (i === e.index ? rec : o));
   switch (e.kind) {
@@ -124,11 +126,11 @@ export function apply_object_entry(objects: readonly SceneObject[], e: ObjectEnt
         return { objects: remove(), select: null };
       }
       if (!ok_index(e.index, objects.length)) return null;
-      return { objects: insert(e.obj), select: e.obj.id };
+      return inserted(insert(e.obj), e.obj.id);
     case "delete":
       if (dir === "undo") {
         if (!ok_index(e.index, objects.length)) return null;
-        return { objects: insert(e.obj), select: e.obj.id };
+        return inserted(insert(e.obj), e.obj.id);
       }
       if (!ok_index(e.index, objects.length - 1) || objects[e.index] !== e.obj) return null;
       return { objects: remove(), select: null };
@@ -139,6 +141,8 @@ export function apply_object_entry(objects: readonly SceneObject[], e: ObjectEnt
     }
   }
 }
+
+const inserted = (objects: SceneObject[] | null, id: string): ObjectStep | null => (objects === null ? null : { objects, select: id });
 
 /**
  * The history (§5.8.11; D86): one undo stack of at most {@link UNDO_MAX} entries (the oldest dropped when a 51st is
@@ -209,6 +213,9 @@ export interface StepResult extends ActionResult {
   entry: HistoryEntry["kind"] | null;
   objects: SceneObject[] | null;
   select?: string | null;
+  /** The object entry that was applied (its display name follows it, §5.8.9) and the direction. */
+  object_entry?: ObjectEntry;
+  dir?: "undo" | "redo";
 }
 
 const NOTHING: ActionResult = { changed: false, framing: false };
@@ -321,6 +328,14 @@ export class PlaneSession {
   /** Pointer-down of a handle drag (ring, arrow): opens one undo step and the delta. */
   begin(): void {
     this.gesture0 = { rig: clone(this.rig), scene_block: this.scene_block, delta: this.delta };
+    this.ref0 = this.measure();
+    this.delta = 0;
+  }
+
+  /** The start of an object drag (§5.8.12, Q30): the picture-delta measurement starts from the current vertices
+   * through the current rig (`ref0`); each {@link set_geometry} with the same vertex count (the dragged object's
+   * vertices translated) re-measures it. Not a rig gesture: the history and the rig are untouched. */
+  begin_measure(): void {
     this.ref0 = this.measure();
     this.delta = 0;
   }
@@ -487,7 +502,7 @@ export class PlaneSession {
       this.history.clear(); // LIFO violated: a bug; both stacks cleared, the scene left as it is
       return NO_STEP;
     }
-    return { changed: true, framing: false, entry: e.kind, objects: r.objects, select: r.select };
+    return { changed: true, framing: false, entry: e.kind, objects: r.objects, select: r.select, object_entry: e, dir };
   }
 
   /** 重設視角 (§5.8.5): the §5.7.7 load rule applied to the scene camera at the **current** scene centre (clamps and

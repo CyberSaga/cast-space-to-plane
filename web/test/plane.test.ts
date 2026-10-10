@@ -384,9 +384,11 @@ test("object entries: LIFO checks, the same record at the original index, byte-i
   assert.equal(apply_object_entry(objs, mv, "undo"), null, "objects[index] is not `after`");
   assert.equal(apply_object_entry(objs, mv, "redo")!.objects[0], mv.after);
   assert.equal(apply_object_entry(objs, { kind: "add", index: 1, obj: objs[0]!, name: null }, "undo"), null, "id mismatch");
-  const added = apply_object_entry(objs, { kind: "add", index: 2, obj: moved(objs[0]!, [0, 0, 0]), name: "木箱" }, "redo")!;
+  assert.equal(apply_object_entry(objs, { kind: "add", index: 2, obj: moved(objs[0]!, [0, 0, 0]), name: "木箱" }, "redo"), null,
+    "an insert whose id is already there");
+  const added = apply_object_entry(objs, { kind: "add", index: 2, obj: { ...moved(objs[0]!, [0, 0, 0]), id: "box_1" }, name: "木箱" }, "redo")!;
   assert.equal(added.objects.length, 3);
-  assert.equal(added.select, "crate");
+  assert.equal(added.select, "box_1");
   const s = session();
   s.history.push(mv);
   s.history.push({ kind: "board", before: clone(s.rig), after: clone(s.rig) });
@@ -847,18 +849,90 @@ test("the page opens in the edit view: no observer checkbox, a 預覽 toggle but
   assert.match(src, /ui\.preview\.addEventListener\("click", \(\) => set_preview\(state\.obs\.on\)\)/);
   assert.match(src, /ui\.preview\.setAttribute\("aria-pressed", on \? "false" : "true"\)/);
   assert.match(src, /ui\.preview\.textContent = on \? "預覽" : "返回編輯"/);
-  // M11 (§5.8.11, Q3): Esc goes through escape_action — leave 預覽 while previewing, else clear the selection
-  assert.match(src, /escape_action\(\{ in_equation: document\.activeElement === ui\.equation, dragging: gesture_open\(\),\s+previewing: !state\.obs\.on, has_selection: state\.selected_id !== null \}\)/);
-  assert.match(src, /if \(act === "leave_preview"\) set_preview\(false\);\s+else if \(act === "clear_selection"\) set_selection\(null\);/);
+  // M11 (§5.8.11, Q3): Esc goes through shortcut_action / escape_action (selection.ts) — leave 預覽 while previewing,
+  // else clear the selection; the library is toggled by Ctrl / ⌘+Shift+L only
+  assert.match(src, /shortcut_action\(ev, \{ has_selection: state\.selected_id !== null, previewing: !state\.obs\.on, focus,\s+gesture_open: gesture_open\(\) \}\);/);
+  assert.match(src, /if \(act === "leave_preview"\) set_preview\(false\);\s+else if \(act === "clear_selection"\) set_selection\(null\);\s+else if \(act === "delete"\) delete_selected\(true\);\s+else if \(act === "toggle_library"\) set_library\(!state\.library_open\);/);
+  assert.ok(!src.includes("./keys.js"), "one implementation of the key helpers (selection.ts)");
   // Esc in the equation field stays there; 預覽 is refused while a drag is held
   assert.match(src, /ev\.stopPropagation\(\); \/\/ the field's Esc/);
   assert.match(src, /preview === !state\.obs\.on \|\| state\.dragging \|\| state\.handle !== null\) return;/);
   // M11 (§5.8.11, §5.8.14): undo and redo are refused while previewing and while a gesture is open, and their buttons
   // are disabled then; the shortcuts go through shortcut_action (no action while previewing)
-  assert.match(src, /if \(pl === null \|\| state\.scene === null \|\| !state\.obs\.on \|\| gesture_open\(\)\) return;\n  const r: StepResult = dir === "undo"/);
+  assert.match(src, /if \(pl === null \|\| state\.scene === null \|\| !state\.obs\.on \|\| gesture_open\(\)\) return;\n  drop_pending_press\(\);\n  const r: StepResult = dir === "undo"/);
   assert.match(src, /ui\.undo\.disabled = !pl\.history\.canUndo \|\| !state\.obs\.on \|\| busy;/);
   assert.match(src, /ui\.redo\.disabled = !pl\.history\.canRedo \|\| !state\.obs\.on \|\| busy;/);
-  assert.match(src, /\{ has_selection: state\.selected_id !== null, previewing: !state\.obs\.on \}\);/);
+
   assert.match(src, /return state\.dragging \|\| state\.handle !== null \|\| \(state\.plane\?\.in_gesture \?\? false\);/);
   assert.ok(!src.includes("打開旁觀視角"), "no notice tells the user to switch the observer on");
+});
+
+// ------------------------------------------------------------------------------------------------ M11 step 3: the wiring
+
+test("object drag measurement: begin_measure starts the picture delta at 0; translated vertices re-measure it (§5.8.12, Q30)", () => {
+  const s = session();
+  const rig0 = clone(s.rig);
+  s.begin_measure();
+  assert.equal(s.delta, 0);
+  assert.equal(s.in_gesture, false, "not a rig gesture: undo, redo and 重設視角 are guarded by the page's drag state");
+  const i = BASIC.scene.objects.findIndex((o) => o.id === "crate");
+  let off = 0;
+  for (let k = 0; k < i; k++) off += BASIC.A.objects[k]!.mesh.vertices.length;
+  const n = BASIC.A.objects[i]!.mesh.vertices.length;
+  const V = BASIC.A.vertices.map((v, k) => (k >= off && k < off + n ? [v[0] + 0.5, v[1], v[2]] as Vec3 : v));
+  s.set_geometry(BASIC.ss.centre, BASIC.ss.object_centres, V);
+  assert.ok(s.delta! > 0.1, `the dragged object's vertices moved in the picture (${s.delta})`);
+  assert.deepEqual([s.history.size, s.history.redo_size], [0, 0]);
+  assert.deepEqual(s.rig, rig0, "the rig and P are untouched");
+  // a vertex list of another length (an add or a delete) ends the measurement and keeps the last value
+  const last = s.delta;
+  s.set_geometry(BASIC.ss.centre, BASIC.ss.object_centres, V.slice(1));
+  assert.equal(s.delta, last);
+});
+
+test("undo / redo of an object entry report the entry and its direction (the display name follows it, §5.8.9)", () => {
+  const s = session();
+  const objs = BASIC.scene.objects;
+  const del: DeleteEntry = { kind: "delete", index: 1, obj: objs[1]!, name: "高柱" };
+  s.history.push(del);
+  const u = s.undo_step([objs[0]!]);
+  assert.equal(u.object_entry, del);
+  assert.equal(u.dir, "undo");
+  assert.equal(u.select, objs[1]!.id);
+  const r = s.redo_step(u.objects!);
+  assert.equal(r.object_entry, del);
+  assert.equal(r.dir, "redo");
+  s.history.push({ kind: "board", before: clone(s.rig), after: shift_pan(s.rig, 1, 0) });
+  const b = s.undo_step(r.objects!);
+  assert.equal(b.object_entry, undefined, "a board entry carries no object entry");
+});
+
+test("M11 page wiring: library, chip and #sel-overlay markup; the drawing pane still takes no input (§5.8.7, §5.8.10, §5.8.14)", () => {
+  const html = readFileSync(resolve(ROOT, "web", "index.html"), "utf-8");
+  const css = readFileSync(resolve(ROOT, "web", "src", "style.css"), "utf-8");
+  const src = readFileSync(resolve(ROOT, "web", "src", "main.ts"), "utf-8");
+  // the edge tab and the sidebar: collapsed and inert in the markup (no flash before main.ts runs)
+  assert.match(html, /<button id="lib-tab" type="button" aria-label="物件庫" aria-expanded="false" aria-controls="lib" aria-keyshortcuts="Control\+Shift\+L Meta\+Shift\+L"/);
+  assert.match(html, /<aside id="lib" aria-label="物件庫" inert>/);
+  assert.match(html, /<button id="lib-close" type="button" aria-label="收合物件庫"/);
+  assert.match(html, /<div id="lib-grid"><\/div>/);
+  // the sidebar overlays the panes (absolute, 232 px; min(80%, 280px) below 880 px) and slides in ≤ 0.2 s, no motion when reduced
+  assert.match(css, /^#lib \{ position: absolute; left: 0; top: 0; bottom: 0; z-index: 7; width: 232px;/m);
+  assert.match(css, /transition: transform 0\.18s ease/);
+  assert.match(css, /@media \(prefers-reduced-motion: reduce\) \{ #lib \{ transition: none; \} \}/);
+  assert.match(css, /@media \(max-width: 879\.98px\) \{ #lib \{ width: min\(80%, 280px\); \} \}/);
+  assert.match(css, /^#panes \{ position: relative; \}/m);
+  // the chip: hidden in the markup, in a slot of fixed height (selecting never resizes a pane), with the keep-one text
+  assert.match(html, /<div id="selection-chip" hidden><span id="sel-name"><\/span><span id="sel-pos"><\/span><button id="sel-delete" type="button"[^>]*>刪除<\/button><span id="sel-hint" hidden>場景至少要有一個物件<\/span><\/div>/);
+  assert.match(css, /^\.chip-slot \{ min-height: 28px; \}/m);
+  // #sel-overlay: a sibling of the writer's overlay (not class "overlay"), display only
+  assert.match(src, /selOverlay\.id = "sel-overlay";\s+selOverlay\.setAttribute\("class", "sel-overlay"\);/);
+  assert.match(css, /^#sel-overlay \{[^}]*pointer-events: none;/m);
+  // the library is collapsed at every load and on entering 預覽; Esc never toggles it
+  assert.match(main_load_body(src), /set_library\(false\);/);
+  assert.match(src, /if \(!on\) set_library\(false\);/);
+  assert.ok(!/act === "leave_preview"\) set_library|Escape[^\n]*set_library/.test(src));
+  // still no listener on the drawing pane (the library's narrow-screen outside tap is captured on document)
+  assert.ok(!/\b(stage|viewport|canvas|selOverlay)\.addEventListener\(/.test(src));
+  assert.match(src, /document\.addEventListener\("pointerdown", \(ev\) => \{\n  if \(!state\.library_open \|\| window\.innerWidth >= LIB_NARROW_PX\) return;/);
 });

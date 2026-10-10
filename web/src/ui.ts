@@ -67,6 +67,17 @@ export interface Controls {
   observerPane: HTMLElement;
   observerCanvas: HTMLCanvasElement;
   observerLabels: HTMLDivElement;
+  /** M11 (§5.8.7): the library's edge tab, sidebar, collapse button and tile grid. */
+  libTab: HTMLButtonElement;
+  lib: HTMLElement;
+  libClose: HTMLButtonElement;
+  libGrid: HTMLDivElement;
+  /** M11 (§5.8.2, §5.8.10): the selection chip — name（id）, the anchor, the delete button and the keep-one text. */
+  chip: HTMLDivElement;
+  chipName: HTMLSpanElement;
+  chipPos: HTMLSpanElement;
+  selDelete: HTMLButtonElement;
+  chipHint: HTMLSpanElement;
 }
 
 export function controls(): Controls {
@@ -112,6 +123,15 @@ export function controls(): Controls {
     observerPane: $<HTMLElement>("observer"),
     observerCanvas: $<HTMLCanvasElement>("obs-gl"),
     observerLabels: $<HTMLDivElement>("obs-labels"),
+    libTab: $<HTMLButtonElement>("lib-tab"),
+    lib: $<HTMLElement>("lib"),
+    libClose: $<HTMLButtonElement>("lib-close"),
+    libGrid: $<HTMLDivElement>("lib-grid"),
+    chip: $<HTMLDivElement>("selection-chip"),
+    chipName: $<HTMLSpanElement>("sel-name"),
+    chipPos: $<HTMLSpanElement>("sel-pos"),
+    selDelete: $<HTMLButtonElement>("sel-delete"),
+    chipHint: $<HTMLSpanElement>("sel-hint"),
   };
 }
 

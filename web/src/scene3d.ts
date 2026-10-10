@@ -64,6 +64,19 @@ export function object_matrix(obj: SceneObject): THREE.Matrix4 {
   );
 }
 
+/**
+ * Move the node of object `id` in a group built by {@link build_scene3d} (§5.8.12: an object drag updates the node
+ * transform, no rebuild): `matrix` is `object_matrix(obj)` for a primitive, or, for a `mesh` object (whose geometry is
+ * in world coordinates), the translation by the drag's displacement. Returns whether the node was found.
+ */
+export function set_object_node(group: THREE.Group | null, id: string, matrix: THREE.Matrix4): boolean {
+  const node = group?.children.find((c) => c.userData[OBJECT_ID_KEY] === id);
+  if (node === undefined) return false;
+  node.matrix.copy(matrix);
+  node.matrixWorldNeedsUpdate = true;
+  return true;
+}
+
 /** Scene centre and horizontal extent (from stage A's bounding box when given). */
 function extent_of(scene: Scene, A?: StageA): { centre: Vec3; extent: number } {
   if (A !== undefined) {

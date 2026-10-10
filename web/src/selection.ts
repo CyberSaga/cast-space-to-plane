@@ -15,10 +15,11 @@
  */
 
 import { build_object, transform_frame } from "castplane";
-import type { SceneObject, Vec2, Vec3 } from "castplane";
+import type { CameraRecord, GeometryDocument, SceneObject, Vec2, Vec3 } from "castplane";
 
 import {
-  CLICK_PX, HIT_PX_MOUSE, HIT_PX_TOUCH, OBSERVER_NEAR_M, hit_handles, observer_basis, observer_project_with,
+  CLICK_PX, HIT_PX_MOUSE, HIT_PX_TOUCH, OBSERVER_NEAR_M, hit_handles, observer_basis, observer_project_with, sample_arc,
+  sample_ellipse,
 } from "./observer.js";
 import type { HandleHit, Handles, ObserverView } from "./observer.js";
 import { focal_px } from "./scene_edit.js";
@@ -524,6 +525,7 @@ function is_key(ev: KeyLike, letter: string): boolean {
  * - Delete / Backspace without Ctrl, Meta or Alt, with a selection: `delete` (not while a gesture is open).
  * - Ctrl+Z / ⌘Z: `undo`; Ctrl+Shift+Z / ⌘⇧Z: `redo` (not while a gesture is open; Alt excluded; Ctrl+Y is not bound).
  * - Ctrl+Shift+L / ⌘⇧L: `toggle_library`.
+ * Exactly one of Ctrl and ⌘ must be held: Ctrl+⌘+Z or Ctrl+⌘+Shift+L is not a shortcut.
  */
 export function shortcut_action(ev: KeyLike, ctx: ShortcutContext): ShortcutAction | null {
   if (ev.isComposing === true) return null;
@@ -539,8 +541,79 @@ export function shortcut_action(ev: KeyLike, ctx: ShortcutContext): ShortcutActi
     if (ctrl || meta || alt || !ctx.has_selection || gesture) return null;
     return "delete";
   }
-  if (!(ctrl || meta) || alt) return null;
+  if (ctrl === meta || alt) return null; // exactly one of Ctrl and ⌘ (Ctrl+⌘ held together is not a shortcut)
   if (is_key(ev, "z")) return gesture ? null : shift ? "redo" : "undo";
   if (is_key(ev, "l") && shift) return "toggle_library";
   return null;
+}
+
+// ------------------------------------------------------------------------------------------------ overlays (§5.8.2, §5.8.12)
+
+type ConicEntry = { polylines?: readonly (readonly (readonly number[])[])[]; arcs?: readonly Parameters<typeof sample_arc>[0][];
+  ellipses?: readonly Parameters<typeof sample_ellipse>[0][] };
+
+const v2 = (p: readonly number[]): Vec2 => [p[0]!, p[1]!];
+
+/**
+ * The selection outline of the drawing pane (§5.8.2): the document drawables of object `id` — its edges, its outline
+ * generators and conics — as polylines in canvas mm (the document's `(u, v)`; the page maps them to the SVG's user
+ * units `x = u + W/2`, `y = H/2 − v`). Interface only: it is drawn in `#sel-overlay`, never in an output (§5.8.13).
+ */
+export function outline_polylines(doc: Pick<GeometryDocument, "edges" | "outlines">, id: string): Vec2[][] {
+  const out: Vec2[][] = [];
+  for (const e of doc.edges) if (e.object === id && e.segment !== null) out.push(e.segment.map(v2));
+  for (const o of doc.outlines) {
+    if (o.object !== id) continue;
+    for (const g of o.generators) if (g.segment !== null) out.push(g.segment.map(v2));
+    for (const c of o.conics as readonly ConicEntry[]) {
+      for (const pl of c.polylines ?? []) if (pl.length >= 2) out.push(pl.map(v2));
+      for (const a of c.arcs ?? []) out.push(sample_arc(a));
+      for (const e of c.ellipses ?? []) {
+        const pts = sample_ellipse(e);
+        out.push([...pts, pts[0]!]);
+      }
+    }
+  }
+  return out;
+}
+
+/** A world mesh's straight edges (stage A's record mesh): vertices, edges and the smooth flags (smooth edges of an
+ * imported mesh are not drawn). */
+export interface WireMesh {
+  vertices: readonly (readonly number[])[];
+  edges: readonly (readonly [number, number])[];
+  edge_smooth?: readonly boolean[];
+}
+
+/**
+ * The preview wireframe of an object drag (§5.8.12): every edge of `meshes` (the stage-A meshes of the pressed frame,
+ * mesh `k` translated by `shifts[k]` when given — the dragged object's world displacement), projected through the
+ * camera record `rec` to canvas mm; an edge with an end at a depth `< rec.near` is left out. No shadow, no
+ * construction line; interface only (`#sel-overlay`), never an output.
+ */
+export function wire_segments(meshes: readonly WireMesh[], shifts: readonly (readonly number[] | null)[],
+  rec: Pick<CameraRecord, "P" | "Rt" | "near">): [Vec2, Vec2][] {
+  const out: [Vec2, Vec2][] = [];
+  const P = rec.P, Z = rec.Rt[2];
+  const proj = (X: readonly number[], d: readonly number[] | null): Vec2 | null => {
+    const x = X[0]! + (d?.[0] ?? 0), y = X[1]! + (d?.[1] ?? 0), z = X[2]! + (d?.[2] ?? 0);
+    if (Z[0] * x + Z[1] * y + Z[2] * z + Z[3] < rec.near) return null;
+    const w = P[2][0] * x + P[2][1] * y + P[2][2] * z + P[2][3];
+    return [(P[0][0] * x + P[0][1] * y + P[0][2] * z + P[0][3]) / w, (P[1][0] * x + P[1][1] * y + P[1][2] * z + P[1][3]) / w];
+  };
+  meshes.forEach((m, k) => {
+    const d = shifts[k] ?? null;
+    const img = m.vertices.map((X) => proj(X, d));
+    m.edges.forEach(([i, j], e) => {
+      if (m.edge_smooth?.[e] === true) return;
+      const a = img[i], b = img[j];
+      if (a != null && b != null) out.push([a, b]);
+    });
+  });
+  return out;
+}
+
+/** Canvas mm `(u, v)` to the SVG writer's user units (`x = u + W/2`, `y = H/2 − v`, `viewBox="0 0 W H"`). */
+export function svg_point(p: readonly number[], canvas_mm: readonly number[]): Vec2 {
+  return [p[0]! + canvas_mm[0]! / 2, canvas_mm[1]! / 2 - p[1]!];
 }

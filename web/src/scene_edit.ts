@@ -10,8 +10,9 @@
  * `finish_position` with its grazing-angle fallback (§5.8.3); the vertical drag `line_param` / `vertical_begin` /
  * `vertical_z` and the handle's shape with the exact 36 px length (§5.8.4); `snap_grid` / `round4`; the id rule
  * `next_id` (§5.8.9); placement `place_object` (§5.8.8); the array operations `add_object`, `remove_object`,
- * `move_object`; the keep-one rule (§5.8.10); and the object history entries `add`, `delete`, `move` with
- * `apply_entry` / `invert_entry` (§5.8.11). Symbols follow the contract: `p_b` the anchor (`transform.position`),
+ * `move_object`; the keep-one rule (§5.8.10); and the builders of the object history entries `add`, `delete`, `move`
+ * (the entry types and their LIFO-checked application are `plane.ts`'s) with `apply_entry` / `undo_entry` /
+ * `invert_entry` and the display-name side table (§5.8.9, §5.8.11). Symbols follow the contract: `p_b` the anchor (`transform.position`),
  * `e`, `d` the pointer ray, `h₀` the grabbed surface point, `δ` the grab offset, `k` metres per pixel.
  */
 
@@ -19,6 +20,8 @@ import { build_object } from "castplane";
 import type { Scene, SceneObject, Vec2, Vec3 } from "castplane";
 
 import { OBSERVER_FOV_DEG, OBSERVER_NEAR_M } from "./observer.js";
+import { apply_object_entry } from "./plane.js";
+import type { AddEntry, DeleteEntry, MoveEntry, ObjectEntry } from "./plane.js";
 import { PLANE_GRID_M, basis } from "./rig.js";
 
 // ------------------------------------------------------------------------------------------------ constants (§5.8.15)
@@ -508,32 +511,9 @@ export function can_delete(objects: readonly SceneObject[]): boolean {
 
 // ------------------------------------------------------------------------------------------------ history entries (§5.8.11)
 
-/** An add: undo removes at `index`, redo inserts `obj` at `index` (`index` = `objects.length` at the time). */
-export interface AddEntry {
-  kind: "add";
-  index: number;
-  obj: SceneObject;
-  name: string | null;
-}
-
-/** A delete: undo inserts the same record at the original `index`, redo removes at `index`. */
-export interface DeleteEntry {
-  kind: "delete";
-  index: number;
-  obj: SceneObject;
-  name: string | null;
-}
-
-/** A move (horizontal or vertical drag, settled at release): undo `objects[index] = before`, redo `= after`. */
-export interface MoveEntry {
-  kind: "move";
-  index: number;
-  id: string;
-  before: SceneObject;
-  after: SceneObject;
-}
-
-export type ObjectEntry = AddEntry | DeleteEntry | MoveEntry;
+// The entry types and the LIFO-checked application are plane.ts's (the single source, with `History`); the helpers
+// below build those entries and carry the display-name side table (§5.8.9) along.
+export type { AddEntry, DeleteEntry, MoveEntry, ObjectEntry };
 
 /** The result of applying an object entry: the new array, the names table and the selection that follows (§5.8.2). */
 export interface EntryResult {
@@ -546,9 +526,7 @@ export interface EntryResult {
 export function add_with_entry(objects: readonly SceneObject[], obj: SceneObject, name: string | null,
   names: ReadonlyMap<string, string> = new Map()): EntryResult & { entry: AddEntry } {
   const entry: AddEntry = { kind: "add", index: objects.length, obj, name };
-  const out = new Map(names);
-  if (name !== null) out.set(obj.id, name);
-  return { objects: add_object(objects, obj), names: out, selected: obj.id, entry };
+  return { objects: add_object(objects, obj), names: names_after(names, entry, "redo"), selected: obj.id, entry };
 }
 
 /** Delete `objects[index]` (§5.8.10), or `null` when refused (keep one object) or out of range. The display name moves
@@ -558,9 +536,7 @@ export function delete_with_entry(objects: readonly SceneObject[], index: number
   if (!can_delete(objects) || index < 0 || index >= objects.length) return null;
   const obj = objects[index]!;
   const entry: DeleteEntry = { kind: "delete", index, obj, name: names.get(obj.id) ?? null };
-  const out = new Map(names);
-  out.delete(obj.id);
-  return { objects: remove_object(objects, index), names: out, selected: null, entry };
+  return { objects: remove_object(objects, index), names: names_after(names, entry, "redo"), selected: null, entry };
 }
 
 /** A move entry, or `null` when the final position equals the pressed one in every component (exact): a click or a
@@ -569,6 +545,17 @@ export function move_entry(index: number, before: SceneObject, after: SceneObjec
   const p = before.transform.position, q = after.transform.position;
   if (p[0] === q[0] && p[1] === q[1] && p[2] === q[2]) return null;
   return { kind: "move", index, id: before.id, before, after };
+}
+
+/** The names table after applying `e` in the direction `dir` (§5.8.9): an insert (add redone, delete undone) puts the
+ * entry's name back, a removal drops it; a move changes nothing. */
+export function names_after(names: ReadonlyMap<string, string>, e: ObjectEntry, dir: "undo" | "redo"): Map<string, string> {
+  const out = new Map(names);
+  if (e.kind === "move") return out;
+  const inserts = (e.kind === "add") === (dir === "redo");
+  if (!inserts) out.delete(e.obj.id);
+  else if (e.name !== null) out.set(e.obj.id, e.name);
+  return out;
 }
 
 /** The entry whose redo is `e`'s undo: add ↔ delete (same index, record and name), a move with `before` / `after`
@@ -584,32 +571,24 @@ export function invert_entry(e: ObjectEntry): ObjectEntry {
   }
 }
 
+function step_entry(objects: readonly SceneObject[], e: ObjectEntry, dir: "undo" | "redo",
+  names: ReadonlyMap<string, string>): EntryResult | null {
+  const r = apply_object_entry(objects, e, dir);
+  return r === null ? null : { objects: r.objects, names: names_after(names, e, dir), selected: r.select };
+}
+
 /**
- * Apply `e` forwards (a redo; an undo is `apply_entry(objects, invert_entry(e))`), or `null` when `objects` is not the
- * array right before `e`'s action (the LIFO check of §5.8.11: `add` needs `index ≤ length`; `delete` needs
- * `objects[index].id === obj.id`; `move` needs `objects[index] === before`) — a bug guard: the caller clears both
- * stacks. The selection follows the entry (§5.8.2): the inserted or moved object, `null` after a removal.
+ * Apply `e` forwards (a redo) with `plane.apply_object_entry`, or `null` when `objects` is not the array right before
+ * `e`'s action (the LIFO check of §5.8.11) — a bug guard: the caller clears both stacks. The selection follows the
+ * entry (§5.8.2): the inserted or moved object, `null` after a removal.
  */
 export function apply_entry(objects: readonly SceneObject[], e: ObjectEntry,
   names: ReadonlyMap<string, string> = new Map()): EntryResult | null {
-  const out = new Map(names);
-  switch (e.kind) {
-    case "add":
-      if (!(e.index >= 0 && e.index <= objects.length) || objects.some((o) => o.id === e.obj.id)) return null;
-      if (e.name !== null) out.set(e.obj.id, e.name);
-      return { objects: insert_object(objects, e.index, e.obj), names: out, selected: e.obj.id };
-    case "delete":
-      if (objects[e.index]?.id !== e.obj.id) return null;
-      out.delete(e.obj.id);
-      return { objects: remove_object(objects, e.index), names: out, selected: null };
-    case "move":
-      if (objects[e.index] !== e.before) return null;
-      return { objects: objects.map((o, i) => (i === e.index ? e.after : o)), names: out, selected: e.id };
-  }
+  return step_entry(objects, e, "redo", names);
 }
 
-/** Undo `e`: {@link apply_entry} of {@link invert_entry}. */
+/** Undo `e` (`plane.apply_object_entry` with `"undo"`). */
 export function undo_entry(objects: readonly SceneObject[], e: ObjectEntry,
   names: ReadonlyMap<string, string> = new Map()): EntryResult | null {
-  return apply_entry(objects, invert_entry(e), names);
+  return step_entry(objects, e, "undo", names);
 }

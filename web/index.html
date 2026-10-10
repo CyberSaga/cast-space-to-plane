@@ -43,10 +43,16 @@
     <main id="main">
       <div id="work">
         <div id="panes" class="observer-on">
+          <button id="lib-tab" type="button" aria-label="物件庫" aria-expanded="false" aria-controls="lib" aria-keyshortcuts="Control+Shift+L Meta+Shift+L" title="物件庫（Ctrl+Shift+L / ⌘⇧L）"><svg class="plus" viewBox="0 0 12 12" aria-hidden="true"><path d="M6 1v10M1 6h10" stroke="currentColor" stroke-width="1.8" fill="none"/></svg><span>物</span><span>件</span><span>庫</span></button>
+          <aside id="lib" aria-label="物件庫" inert>
+            <div class="lib-head"><span>物件庫</span><button id="lib-close" type="button" aria-label="收合物件庫" title="收合物件庫（Ctrl+Shift+L / ⌘⇧L）">«</button></div>
+            <div id="lib-grid"></div>
+            <p class="lib-help">點一下加入場景（在眼睛看向地面的位置）</p>
+          </aside>
           <section id="observer" aria-label="observer view">
             <canvas id="obs-gl"></canvas>
             <div id="obs-labels"></div>
-            <div class="obs-hint">旁觀視角 · 拖橘色圓環＝方向 · 拖藍色箭頭尖端＝板子距離 · 拖空白處繞轉 · 滾輪或雙指縮放</div>
+            <div class="obs-hint">旁觀視角 · 拖物體＝水平移動 · 拖選取物體上方的箭頭＝上下移動 · 拖橘色圓環＝方向 · 拖藍色箭頭尖端＝板子距離 · 拖空白處繞轉 · 滾輪或雙指縮放</div>
           </section>
           <section id="viewport" aria-label="viewport">
             <button id="preview" type="button" aria-pressed="false" title="只看作圖畫面（Esc 返回）">預覽</button>
@@ -57,7 +63,12 @@
           </section>
         </div>
         <section id="controls" aria-label="plane mode controls">
-          <div id="readouts"></div>
+          <div class="readout-col">
+            <div class="chip-slot">
+              <div id="selection-chip" hidden><span id="sel-name"></span><span id="sel-pos"></span><button id="sel-delete" type="button" title="刪除選取的物件（Delete / Backspace）" aria-keyshortcuts="Delete Backspace">刪除</button><span id="sel-hint" hidden>場景至少要有一個物件</span></div>
+            </div>
+            <div id="readouts"></div>
+          </div>
           <div class="ctl-col">
             <div class="ctl-row">
               <label class="group"><input id="snap" type="checkbox" checked /> 吸附</label>
@@ -91,7 +102,7 @@
         <div id="error" hidden></div>
         <h2>Warnings</h2>
         <table id="warnings"><thead><tr><th>code</th><th>ids</th><th>message</th></tr></thead><tbody></tbody></table>
-        <p class="help">作圖畫面只供檢視，在上面拖動或捲動不會改變任何東西。要移動板子，在左側旁觀視角拖橘色圓環（方向）或藍色箭頭尖端（板子距離）；拖動時按住 Alt 暫停吸附。按「預覽」只看作圖畫面，再按「返回編輯」或 Esc 回來。旋轉中心是設定當下取的點，之後改動物件不會移動它；按「重新取中心」重新取。Ctrl+Z／⌘Z 復原，Ctrl+Shift+Z／⌘⇧Z 重做（預覽時不可用）；在左窗點空白處或按 Esc 取消選取。</p>
+        <p class="help">作圖畫面只供檢視，在上面拖動或捲動不會改變任何東西（只顯示選取外框）。在左側旁觀視角：點物體選取；拖物體水平移動；拖選取物體上方的箭頭上下移動；拖橘色圓環（方向）或藍色箭頭尖端（板子距離）移動板子；拖動時按住 Alt 暫停吸附。左緣的「物件庫」（Ctrl+Shift+L／⌘⇧L）加入物件；Delete／Backspace 或選取標籤的「刪除」刪除選取的物件（場景至少要留一個）。Ctrl+Z／⌘Z 復原，Ctrl+Shift+Z／⌘⇧Z 重做。旋轉中心是設定當下取的點，之後改動物件不會移動它；按「重新取中心」重新取，「重設視角」回到場景相機。按「預覽」只看作圖畫面（預覽時不能編輯），再按「返回編輯」或 Esc 回來；編輯時 Esc 取消選取。</p>
       </aside>
     </main>
     <script type="module" src="./src/main.ts"></script>

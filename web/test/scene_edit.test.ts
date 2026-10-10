@@ -20,7 +20,7 @@ import {
   ROUND_M, TARGET_MS, XY_LIMIT_M, Z_LIMIT_M, add_object, add_with_entry, apply_entry, box_centre, can_delete,
   candidate_bbox, delete_with_entry, display_name, drag_begin, drag_position, finish_coord, finish_position, finish_z,
   focal_px, footprints_overlap, handle_L36, index_of, insert_object, invert_entry, label_text, line_param, move_entry,
-  move_object, next_id, place_object, place_target, remove_object, round4, snap_grid, step_direction, undo_entry,
+  move_object, names_after, next_id, place_object, place_target, remove_object, round4, snap_grid, step_direction, undo_entry,
   used_ids, vertical_begin, vertical_handle, vertical_z, with_position, world_bbox,
 } from "../src/scene_edit.js";
 import type { Box, CameraFrame, ObjectEntry, Ray } from "../src/scene_edit.js";
@@ -787,4 +787,19 @@ test("random stress: 200 steps of add, delete, move, undo and redo keep every nu
     assert.ok(!/NaN|Infinity/.test(json) && !/NaN|Infinity/.test(out.svg), `non-finite output at step ${step}`);
     finite([...s.camera.position, ...(s.camera.target ?? [])], "camera block");
   }
+});
+
+test("names_after: an insert puts the entry's name back, a removal drops it, a move keeps the table (§5.8.9)", () => {
+  const obj = { id: "box_1", transform: { position: [0, 0, 0] } } as unknown as SceneObject;
+  const base = new Map([["crate", "x"]]);
+  const add = { kind: "add", index: 1, obj, name: "木箱" } as const;
+  const del = { kind: "delete", index: 1, obj, name: "木箱" } as const;
+  assert.deepEqual([...names_after(base, add, "redo")], [["crate", "x"], ["box_1", "木箱"]]);
+  assert.deepEqual([...names_after(names_after(base, add, "redo"), add, "undo")], [["crate", "x"]]);
+  assert.deepEqual([...names_after(base, del, "undo")], [["crate", "x"], ["box_1", "木箱"]]);
+  assert.deepEqual([...names_after(new Map([["box_1", "木箱"]]), del, "redo")], []);
+  assert.deepEqual([...names_after(base, { ...add, name: null }, "redo")], [["crate", "x"]], "a loaded object has no name");
+  const mv = move_entry(0, obj, with_position(obj, [1, 0, 0]))!;
+  assert.deepEqual([...names_after(base, mv, "undo")], [["crate", "x"]]);
+  assert.notEqual(names_after(base, mv, "redo"), base, "a new table");
 });

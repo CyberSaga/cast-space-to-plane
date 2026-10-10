@@ -11,6 +11,13 @@
  * with the ring and arrow handles). The drawing pane (`#stage`) is view-only: no pointer or wheel listener is
  * registered on it, so drags and wheel there do nothing (the page scrolls natively); the board is moved only in the
  * observer pane and with the controls.
+ *
+ * M11 (contract §5.8): the observer pane also edits the scene — a press on an object selects it, a drag moves it
+ * horizontally (`scene_edit.ts`), the selected object's vertical handle moves it vertically, a library tile adds a
+ * preset (`library.ts`), Delete / Backspace or the chip's button delete it, and every edit is one entry of the single
+ * history (`plane.ts`). Hit tests, the press classifier and the key rules are `selection.ts`'s. The drawing pane only
+ * shows the selection outline in `#sel-overlay`, outside the writer's markup (D79); while 預覽 is on the scene is
+ * read-only.
  */
 
 import "./style.css";
@@ -18,14 +25,14 @@ import "./style.css";
 import * as THREE from "three";
 
 import { LAYER_IDS, compose, dumps, load_scene, load_scene_text, project_scene, shadow_geometry, validate_scene, write_svg } from "castplane";
-import type { CameraRecord, GeometryDocument, Scene, SceneObject, StageA, Vec2 } from "castplane";
+import type { CameraRecord, GeometryDocument, Scene, SceneObject, StageA, Vec2, Vec3 } from "castplane";
 
 import { EXAMPLES } from "./examples.js";
 import { camera_block_text, json_blob, ordered_layers, scene_blob, svg_blob } from "./download.js";
 import { QUICK_EQUATIONS } from "./equation.js";
 import { attach_file_drop } from "./input.js";
-import { escape_action, shortcut_action } from "./keys.js";
-import type { KeyTarget } from "./keys.js";
+import { LIB_NARROW_PX, PRESETS, make_object, tile_label } from "./library.js";
+import type { Preset } from "./library.js";
 import { focal_from_slider } from "./orbit.js";
 import {
   derive_board, framing_points, frame_view, handles_of, hit_handles, initial_view, line_art, observer_basis, observer_project,
@@ -33,14 +40,25 @@ import {
 } from "./observer.js";
 import type { HandleHit } from "./observer.js";
 import { ObserverPane } from "./observer3d.js";
-import type { HandleInput } from "./observer3d.js";
+import type { ObserverSelection, PaneInput } from "./observer3d.js";
 import { IMG_MODE_THRESHOLD, Overlay } from "./overlay.js";
 import type { OverlayMode } from "./overlay.js";
 import { PlaneSession, arrow_drag, object_centres, ring_drag, ring_grab } from "./plane.js";
 import type { ActionResult, StepResult } from "./plane.js";
 import { arrowScreenVector, clone, equation, sync } from "./rig.js";
 import type { RigState, RingGrab, ViewName } from "./rig.js";
-import { build_scene3d } from "./scene3d.js";
+import { build_scene3d, object_matrix, set_object_node } from "./scene3d.js";
+import {
+  NOTICE_KEEP_ONE, PREVIEW_MS, add_with_entry, can_delete, delete_with_entry, display_name, drag_begin, drag_position,
+  finish_position, index_of, label_text, move_entry, names_after, next_id, place_object, used_ids, vertical_begin, vertical_handle,
+  vertical_z, with_position, world_bbox,
+} from "./scene_edit.js";
+import type { Box, CameraFrame, DragStart, VerticalStart } from "./scene_edit.js";
+import {
+  PressTracker, focus_kind, frame_ray, hit_vertical, observer_frame, outline_polylines, press_target, shortcut_action, svg_point,
+  wire_segments,
+} from "./selection.js";
+import type { TargetLike } from "./selection.js";
 import { Stage3D, letterbox } from "./stage.js";
 import { initial_toggles } from "./toggles.js";
 import {
@@ -61,6 +79,40 @@ interface FrameRecord {
   mode: OverlayMode;
   dragging: boolean;
   svg_bytes: number;
+  /** M11 (§5.8.12): an object-drag frame (stage A re-run; `core_ms` includes validate + A), and whether it was drawn as
+   * the wireframe preview (no core run). */
+  edit: boolean;
+  preview: boolean;
+}
+
+/** M11: an open press on an object or on the selected object's vertical handle in the observer pane (§5.8.2–§5.8.4). */
+interface ObjectPress {
+  kind: "object" | "vertical";
+  id: string;
+  index: number;
+  /** The record at pointer-down (restored on a cancel; the move entry's `before`). */
+  before: SceneObject;
+  tracker: PressTracker;
+  /** The selection before the press (a cancel brings it back). */
+  prev_selected: string | null;
+  /** The observer camera and pane size at pointer-down (the drag maths uses that frame). */
+  cam: CameraFrame;
+  W: number;
+  H: number;
+  drag: DragStart | null;
+  vert: VerticalStart | null;
+  /** The drag has begun (an object: travel ≥ CLICK_PX; the handle: at once). */
+  started: boolean;
+  /** Wireframe preview for this gesture (§5.8.12), decided once (`null`: after the first drag frame). */
+  preview: boolean | null;
+  /** Stage A and the vertex offset of the object at pointer-down (the wireframe and the translated vertices). */
+  A0: StageA;
+  offset: number;
+  /** The anchor's world displacement since pointer-down. */
+  shift: Vec3;
+  /** A vertical drag: the handle's length at pointer-down, kept for the gesture (the handle follows the object by
+   * `Δz_b`, §5.8.4, so its tip stays under the pointer). */
+  len0: number | null;
 }
 
 interface State {
@@ -89,6 +141,21 @@ interface State {
   /** M11 (§5.8.1): the selected object id (at most one), web state only: never in the scene JSON or a history entry.
    * It is the observer's vertex-ray focus (§5.8.6). */
   selected_id: string | null;
+  /** M11 (§5.8.9): display names of the objects the library made (`id → tile name`), never written to the JSON. */
+  names: Map<string, string>;
+  /** M11: the open object or vertical-handle press (§5.8.2). */
+  press: ObjectPress | null;
+  /** M11 (§5.8.12): the objects were changed by a drag since the last frame; the next frame re-runs stage A. */
+  objects_dirty: boolean;
+  /** M11: the scene stage A was last built from (a drag frame the validator rejects falls back to it). */
+  scene_A: Scene | null;
+  /** M11 (§5.8.12): the cost (ms) of the last drag-mode edit frame of this scene; a test hook can force it. */
+  edit_ms: number | null;
+  edit_ms_forced: number | null;
+  /** M11 (§5.8.7): the library sidebar is open (never stored; collapsed at start, on a load and on entering 預覽). */
+  library_open: boolean;
+  /** M11 (§5.8.10): a Delete was refused by the keep-one rule; the notice shows until the next edit or selection. */
+  keep_one_notice: boolean;
 }
 
 const state: State = {
@@ -109,6 +176,14 @@ const state: State = {
   handle: null,
   equation_error: null,
   selected_id: null,
+  names: new Map(),
+  press: null,
+  objects_dirty: false,
+  scene_A: null,
+  edit_ms: null,
+  edit_ms_forced: null,
+  library_open: false,
+  keep_one_notice: false,
 };
 
 const ui = controls();
@@ -117,6 +192,14 @@ const { viewport, stage, canvas, examplesSelect, fileInput, focalInput, distInpu
 // ---------------------------------------------------------------------------- three.js and overlay
 const view = new Stage3D(canvas);
 const overlay = new Overlay(stage);
+/** M11 (§5.8.2, §5.8.12, §5.8.14): the drawing pane's selection outline and drag wireframe — a sibling of the writer's
+ * overlay (interface only, `pointer-events: none`, never in an output). */
+const selOverlay = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+selOverlay.id = "sel-overlay";
+selOverlay.setAttribute("class", "sel-overlay");
+selOverlay.setAttribute("preserveAspectRatio", "xMidYMid meet");
+selOverlay.setAttribute("aria-hidden", "true");
+stage.append(selOverlay);
 const warnings = new WarningsTable(ui.warningsBody);
 /** The observer pane, created at startup (D80; while 預覽 hides it the layout and outputs are the §5.4.10 page's;
  *  the drawing pane takes no input either way, D79). */
@@ -164,7 +247,9 @@ function load(name: string, make: () => Scene): boolean {
     return false;
   }
   show_error(null);
+  state.press = null; // a press held across the load belongs to the old scene (§5.8.16)
   state.scene = scene;
+  state.scene_A = scene;
   state.sceneName = name;
   state.A = A;
   state.timings.stage_a_ms = stage_a_ms;
@@ -178,6 +263,12 @@ function load(name: string, make: () => Scene): boolean {
   state.handle = null;
   state.dragging = false;
   state.selected_id = null; // a load clears the selection (§5.8.2) and, with the new session, both history stacks
+  state.names = new Map();
+  state.objects_dirty = false;
+  state.edit_ms = null;
+  state.keep_one_notice = false;
+  stage.classList.remove("wire");
+  set_library(false); // collapsed after every scene load (§5.8.7)
   set_equation_error(null);
   ui.pivotMode.value = "scene";
   state.rec = null;
@@ -237,6 +328,8 @@ function sync_controls(): void {
   if (pl.pivot.mode === "object" && pl.pivot.object_id === null) {
     notes.push(state.obs.on ? "請點一下左窗的物體，把它設為旋轉中心（在那之前旋轉中心不動）" : "按「返回編輯」後點一下左窗的物體，把它設為旋轉中心（在那之前旋轉中心不動）");
   }
+  if (!state.obs.on) notes.push(NOTICE_PREVIEW_READ_ONLY);
+  if (state.keep_one_notice) notes.push(NOTICE_KEEP_ONE);
   set_lines(ui.notices, notes);
   ui.pivotMode.value = pl.pivot.mode; // an undo or redo of 重設視角 restores the selector (§5.8.5)
   // §5.8.11: undo and redo need an entry and the edit view (preview is read-only, §5.8.14); during a gesture the
@@ -246,6 +339,32 @@ function sync_controls(): void {
   ui.redo.disabled = !pl.history.canRedo || !state.obs.on || busy;
   ui.reset.disabled = busy;
   ui.recenter.disabled = busy;
+  sync_chip(busy);
+  ui.libTab.hidden = state.library_open || !state.obs.on; // the tab is hidden while the sidebar is open and in 預覽
+  for (const t of ui.libGrid.querySelectorAll<HTMLButtonElement>("button.tile")) t.disabled = busy; // add is inert in a gesture
+}
+
+/** 預覽 is read-only (§5.8.14): the one-line hint of `#notices`. */
+const NOTICE_PREVIEW_READ_ONLY = "預覽中無法編輯物件；按「返回編輯」或 Esc 回到編輯畫面";
+
+const f2 = (x: number): string => {
+  const t = x.toFixed(2);
+  return t === "-0.00" ? "0.00" : t;
+};
+
+/** The selection chip (§5.8.2, §5.8.10): `name（id）`, the anchor `底面 (x, y, z) m` and the delete button; hidden
+ * without a selection and while previewing. The keep-one rule disables the button and shows its text. */
+function sync_chip(busy: boolean): void {
+  const sc = state.scene, id = state.selected_id;
+  const obj = sc === null || id === null ? undefined : sc.objects.find((o) => o.id === id);
+  ui.chip.hidden = obj === undefined || !state.obs.on;
+  if (obj === undefined || sc === null) return;
+  const p = obj.transform.position;
+  ui.chipName.textContent = label_text(obj.id, state.names);
+  ui.chipPos.textContent = `底面 (${f2(p[0])}, ${f2(p[1])}, ${f2(p[2])}) m`;
+  const one = !can_delete(sc.objects);
+  ui.selDelete.disabled = one || busy;
+  ui.chipHint.hidden = !one;
 }
 
 /** Whether a gesture is open (a ring or arrow drag; the condition that already refuses 預覽, §5.8.11). */
@@ -333,9 +452,13 @@ ui.equation.addEventListener("blur", () => {
 function history_step(dir: "undo" | "redo"): void {
   const pl = state.plane;
   if (pl === null || state.scene === null || !state.obs.on || gesture_open()) return;
+  drop_pending_press();
   const r: StepResult = dir === "undo" ? pl.undo_step(state.scene.objects) : pl.redo_step(state.scene.objects);
+  state.keep_one_notice = false;
   if (r.objects !== null && !apply_objects(r.objects)) {
     pl.history.clear(); // the restored scene failed validation: a bug guard, as a LIFO violation
+  } else if (r.object_entry !== undefined && r.dir !== undefined) {
+    state.names = names_after(state.names, r.object_entry, r.dir); // the display name follows the record (§5.8.9)
   }
   if (r.select !== undefined) set_selection(r.select);
   after_action(r);
@@ -363,7 +486,9 @@ function apply_objects(objects: readonly SceneObject[]): boolean {
   }
   state.timings.stage_a_ms = performance.now() - t0;
   state.scene = scene;
+  state.scene_A = scene;
   state.A = A;
+  state.objects_dirty = false;
   pl.set_geometry(scene_centre(A), object_centres(A.objects), A.vertices);
   if (state.selected_id !== null && !scene.objects.some((o) => o.id === state.selected_id)) state.selected_id = null;
   view.replace_group(() => build_scene3d(scene, A));
@@ -372,14 +497,139 @@ function apply_objects(objects: readonly SceneObject[]): boolean {
   return true;
 }
 
+/** Re-run stage A for the objects a drag changed (§5.8.12; the three.js nodes were already moved): the port's
+ * `validate_scene`, `shadow_geometry` and the session's `set_geometry`. A rejected edit falls back to the last scene
+ * stage A was built from. Returns the cost in ms. */
+function rebuild_stage_a(): number {
+  const pl = state.plane, sc = state.scene;
+  state.objects_dirty = false;
+  if (pl === null || sc === null) return 0;
+  const t0 = performance.now();
+  let A: StageA;
+  try {
+    validate_scene(sc);
+    A = shadow_geometry(sc);
+  } catch (e) {
+    show_error(describe_error(e));
+    if (state.scene_A !== null) state.scene = state.scene_A;
+    return performance.now() - t0;
+  }
+  state.scene_A = sc;
+  state.A = A;
+  pl.set_geometry(scene_centre(A), object_centres(A.objects), A.vertices);
+  return performance.now() - t0;
+}
+
 /** Select an object (or clear with `null`): web state only, not a history step (§5.8.2); the observer's vertex rays
  * follow it without a core frame (§5.8.6). */
 function set_selection(id: string | null): void {
   const next = id !== null && state.scene !== null && state.scene.objects.some((o) => o.id === id) ? id : null;
   if (next === state.selected_id) return;
   state.selected_id = next;
+  state.keep_one_notice = false;
   observer_refresh(true);
+  draw_sel_overlay();
+  sync_controls();
 }
+
+// ---------------------------------------------------------------------------- M11 editing: add, delete (§5.8.7–§5.8.10)
+/** Whether the scene can be edited now: the edit view (預覽 is read-only, §5.8.14) and no gesture open (§5.8.11). */
+function can_edit(): boolean {
+  return state.plane !== null && state.scene !== null && state.A !== null && state.obs.on && !gesture_open();
+}
+
+/** Add a preset (§5.8.8): the target, the avoidance, the snap; appended with the id of §5.8.9, selected, one add
+ * entry; the pivot and the observer framing are untouched; a narrow screen closes the sidebar. */
+function add_preset(preset: Preset): void {
+  const pl = state.plane, sc = state.scene, A = state.A;
+  if (pl === null || sc === null || A === null || !can_edit()) return;
+  drop_pending_press();
+  const id = next_id(preset.prefix, used_ids(sc));
+  const d = sync(pl.rig);
+  const at = place_object(make_object(preset, id, [0, 0, 0]), { E: d.E, f: pl.rig.f, P: pl.rig.P, r0: d.r0,
+    existing: A.objects.map((o) => o.bbox), snap: ui.snap.checked });
+  const res = add_with_entry(sc.objects, make_object(preset, id, at.position), preset.name, state.names);
+  if (!apply_objects(res.objects)) return;
+  state.names = res.names;
+  pl.history.push(res.entry);
+  set_selection(id);
+  if (window.innerWidth < LIB_NARROW_PX) set_library(false);
+  sync_controls();
+}
+
+/** Delete the selection (§5.8.10): refused by the keep-one rule (a refused key press shows the notice), otherwise
+ * removed with one delete entry; the selection is cleared and `P` is untouched. */
+function delete_selected(by_key: boolean): void {
+  const pl = state.plane, sc = state.scene, id = state.selected_id;
+  if (pl === null || sc === null || id === null || !can_edit()) return;
+  drop_pending_press();
+  const res = delete_with_entry(sc.objects, index_of(sc.objects, id), state.names);
+  if (res === null) {
+    if (by_key) {
+      state.keep_one_notice = true;
+      sync_controls();
+    }
+    return;
+  }
+  if (!apply_objects(res.objects)) return;
+  state.names = res.names;
+  pl.history.push(res.entry);
+  set_selection(null);
+  sync_controls();
+}
+
+// ---------------------------------------------------------------------------- M11 library sidebar (§5.8.7)
+/** Open or close the library. Closing returns the focus to the tab when it was inside the sidebar; opening moves it to
+ * the first tile. Not while previewing (the tab is hidden and the sidebar inert). */
+function set_library(open: boolean): void {
+  if (open && !state.obs.on) return;
+  const had_focus = ui.lib.contains(document.activeElement);
+  state.library_open = open;
+  ui.lib.classList.toggle("open", open);
+  ui.lib.inert = !open;
+  ui.libTab.setAttribute("aria-expanded", open ? "true" : "false");
+  ui.libTab.hidden = open || !state.obs.on;
+  if (open) ui.libGrid.querySelector<HTMLButtonElement>("button.tile")?.focus({ preventScroll: true });
+  else if (had_focus) (state.obs.on ? ui.libTab : ui.preview).focus({ preventScroll: true });
+}
+
+for (const preset of PRESETS) {
+  const b = document.createElement("button");
+  b.type = "button";
+  b.className = "tile";
+  b.setAttribute("aria-label", tile_label(preset));
+  b.title = tile_label(preset);
+  const thumb = document.createElement("span");
+  thumb.className = "thumb";
+  thumb.innerHTML = preset.thumbnail; // a static string of library.ts (no script, currentColor)
+  const name = document.createElement("span");
+  name.className = "name";
+  name.textContent = preset.name;
+  b.append(thumb, name);
+  b.addEventListener("click", () => add_preset(preset));
+  ui.libGrid.append(b);
+}
+ui.libTab.addEventListener("click", () => set_library(true));
+ui.libClose.addEventListener("click", () => set_library(false));
+// below the narrow breakpoint a pointer-down outside the sidebar and the tab closes it and is consumed (§5.8.7, Q34):
+// it starts no gesture and changes no selection; the click that follows it is swallowed too
+let swallow_click_until = 0;
+document.addEventListener("pointerdown", (ev) => {
+  if (!state.library_open || window.innerWidth >= LIB_NARROW_PX) return;
+  const t = ev.target instanceof Node ? ev.target : null;
+  if (t !== null && (ui.lib.contains(t) || ui.libTab.contains(t))) return;
+  ev.preventDefault();
+  ev.stopImmediatePropagation();
+  swallow_click_until = performance.now() + 800;
+  set_library(false);
+}, { capture: true });
+document.addEventListener("click", (ev) => {
+  if (performance.now() > swallow_click_until) return;
+  swallow_click_until = 0;
+  ev.preventDefault();
+  ev.stopImmediatePropagation();
+}, { capture: true });
+ui.selDelete.addEventListener("click", () => delete_selected(false));
 
 ui.undo.addEventListener("click", () => history_step("undo"));
 ui.redo.addEventListener("click", () => history_step("redo"));
@@ -439,56 +689,249 @@ function obs_frame(): { W: number; H: number; basis: ReturnType<typeof observer_
   return { W, H, basis: observer_basis(observer.view) };
 }
 
-const handle_input: HandleInput = {
-  hit: (p, touch): HandleHit => {
-    const o = obs_frame(), h = observer?.last_handles ?? null;
-    if (o === null || h === null || state.plane === null || state.dragging) return null;
-    return hit_handles(o.basis, o.W, o.H, p, touch, h);
-  },
-  begin: (hit) => {
-    const pl = state.plane, o = obs_frame(), h = observer?.last_handles ?? null;
-    if (pl === null || o === null || h === null || observer === null) return;
-    const rig0 = clone(pl.rig);
-    if (hit.kind === "ring") {
-      state.handle = { kind: "ring", rig0, grab: ring_grab(h.ring[hit.index]!, rig0.P, o.basis.r, o.basis.u) };
-    } else {
-      const view = observer.view;
-      state.handle = { kind: "arrow", rig0, v: arrowScreenVector(rig0, (X) => observer_project(view, o.W, o.H, X)) };
-    }
-    pl.begin();
-    state.dragging = true;
-    request_render();
-  },
-  move: (dx, dy, alt) => {
-    const pl = state.plane, hd = state.handle;
-    if (pl === null || hd === null) return;
-    const snap = ui.snap.checked && !alt;
-    const next = hd.kind === "ring" ? ring_drag(hd.rig0, hd.grab, dx, dy, snap) : arrow_drag(hd.rig0, hd.v, dx, dy, snap);
-    if (pl.drag(next)) request_render();
-  },
-  end: () => {
-    state.plane?.end();
-    state.handle = null;
+/** The ring / arrow hit at pane px `p` (null while a drag is held). */
+function hit_board_handles(p: Vec2, touch: boolean): HandleHit {
+  const o = obs_frame(), h = observer?.last_handles ?? null;
+  if (o === null || h === null || state.plane === null || state.dragging) return null;
+  return hit_handles(o.basis, o.W, o.H, p, touch, h);
+}
+
+/** The stage-A world mesh of every `mesh` object (the exact hit test of the others needs none). */
+function world_meshes(): (StageA["objects"][number]["mesh"] | null)[] {
+  return (state.A?.objects ?? []).map((o) => (o.type === "mesh" ? o.mesh : null));
+}
+
+/** What a press at pane px `p` grabs (§5.8.2): arrow tip > ring > the selected object's vertical handle > object
+ * (exact ray hits, `selection.ts`) > blank. */
+function pane_target(p: Vec2, touch: boolean): ReturnType<typeof press_target> | null {
+  const sc = state.scene, o = obs_frame();
+  if (observer === null || sc === null || o === null || state.plane === null) return null;
+  return press_target({ view: observer.view, W: o.W, H: o.H, p, touch, handles: observer.last_handles, selected: state.selected_id,
+    vertical_tip: observer.vertical_tip, objects: sc.objects, meshes: world_meshes() });
+}
+
+/** Pointer-down on the ring or the arrow (§5.7.8 items 1, 4): opens a board gesture. */
+function begin_handle(hit: NonNullable<HandleHit>): void {
+  const pl = state.plane, o = obs_frame(), h = observer?.last_handles ?? null;
+  if (pl === null || o === null || h === null || observer === null) return;
+  const rig0 = clone(pl.rig);
+  if (hit.kind === "ring") {
+    state.handle = { kind: "ring", rig0, grab: ring_grab(h.ring[hit.index]!, rig0.P, o.basis.r, o.basis.u) };
+  } else {
+    const v = observer.view;
+    state.handle = { kind: "arrow", rig0, v: arrowScreenVector(rig0, (X) => observer_project(v, o.W, o.H, X)) };
+  }
+  pl.begin();
+  state.dragging = true;
+  sync_controls();
+  request_render();
+}
+
+function end_handle(cancel: boolean): void {
+  if (cancel) state.plane?.cancel();
+  else state.plane?.end();
+  state.handle = null;
+  state.dragging = false;
+  sync_controls();
+  request_render();
+}
+
+/** The vertex offset of object `index` in stage A's vertex list (objects' vertices come first, in order). */
+function vertex_offset(A: StageA, index: number): number {
+  let n = 0;
+  for (let k = 0; k < index; k++) n += A.objects[k]!.mesh.vertices.length;
+  return n;
+}
+
+/** Pointer-down on an object (§5.8.2, §5.8.3) or on the selected object's vertical handle (§5.8.4). An object becomes
+ * selected at once (the previous selection is kept for a cancel); its drag starts after CLICK_PX of travel. */
+function begin_press(kind: "object" | "vertical", id: string, p: Vec2, point: Vec3 | null): void {
+  const sc = state.scene, A = state.A, o = obs_frame();
+  if (sc === null || A === null || o === null || observer === null) return;
+  const index = index_of(sc.objects, id);
+  const before = sc.objects[index];
+  if (before === undefined) return;
+  const cam = observer_frame(observer.view, o.H);
+  const ray0 = frame_ray(cam, o.W, o.H, p);
+  const prev = state.selected_id;
+  let drag: DragStart | null = null, vert: VerticalStart | null = null, len0: number | null = null;
+  if (kind === "object") {
+    drag = drag_begin(before.transform.position, point!, ray0, cam);
+  } else {
+    const box = world_bbox(before, A.objects[index]);
+    vert = vertical_begin(before.transform.position, box, ray0);
+    if (vert === null) return; // s₀ does not exist: the press does nothing (§5.8.4)
+    len0 = vertical_handle(box, cam).len;
+  }
+  state.press = { kind, id, index, before, tracker: new PressTracker(kind === "object" ? "object" : "handle", p[0], p[1]),
+    prev_selected: prev, cam, W: o.W, H: o.H, drag, vert, started: false, preview: null, A0: A, offset: vertex_offset(A, index),
+    shift: [0, 0, 0], len0 };
+  if (kind === "object") set_selection(id);
+  else start_drag(state.press);
+}
+
+/** The press becomes a drag (§5.8.2): the gesture opens (the history commands are inert), the picture-delta
+ * measurement starts (§5.8.12) and the wireframe preview is decided from the last drag-mode frame's cost. */
+function start_drag(pr: ObjectPress): void {
+  pr.started = true;
+  state.dragging = true;
+  state.plane?.begin_measure();
+  const c = state.edit_ms_forced ?? state.edit_ms;
+  pr.preview = c === null ? null : c > PREVIEW_MS;
+  sync_controls();
+}
+
+/** A move of the open press: the object's new anchor from the pointer (horizontal drag, or the vertical handle). */
+function press_move(p: Vec2, alt: boolean): void {
+  const pr = state.press;
+  if (pr === null) return;
+  pr.tracker.move(p[0], p[1]);
+  if (!pr.started) {
+    if (!pr.tracker.dragging) return; // the 5 px dead zone: nothing moves before it (§5.8.2)
+    start_drag(pr);
+  }
+  const snap = ui.snap.checked && !alt; // Alt pauses snapping, read per event
+  const ray = frame_ray(pr.cam, pr.W, pr.H, p);
+  let pos: Vec3 | null = null;
+  if (pr.drag !== null) {
+    const xy = drag_position(pr.drag, ray, pr.tracker.dx, pr.tracker.dy);
+    if (xy !== null) pos = finish_position(xy, pr.before.transform.position, snap);
+  } else if (pr.vert !== null) {
+    pos = vertical_z(pr.vert, ray, snap);
+  }
+  if (pos !== null) set_press_position(pr, pos);
+}
+
+/** Put the pressed object at `pos` (a new record; the pressed one itself when `pos` is the pressed position): the
+ * three.js nodes move at once, stage A waits for the next frame (one recompute per frame, §5.8.12). */
+function set_press_position(pr: ObjectPress, pos: Vec3): void {
+  const sc = state.scene;
+  if (sc === null) return;
+  const cur = sc.objects[pr.index]!.transform.position, p0 = pr.before.transform.position;
+  if (cur[0] === pos[0] && cur[1] === pos[1] && cur[2] === pos[2]) return;
+  const same = p0[0] === pos[0] && p0[1] === pos[1] && p0[2] === pos[2];
+  const rec = same ? pr.before : with_position(pr.before, pos);
+  const objects = sc.objects.slice();
+  objects[pr.index] = rec;
+  state.scene = { ...sc, objects };
+  pr.shift = [pos[0] - p0[0], pos[1] - p0[1], pos[2] - p0[2]];
+  const m = rec.type === "mesh" ? new THREE.Matrix4().makeTranslation(pr.shift[0], pr.shift[1], pr.shift[2]) : object_matrix(rec);
+  set_object_node(view.group, rec.id, m);
+  set_object_node(observer?.stage.group ?? null, rec.id, m);
+  if (pr.preview !== true) state.objects_dirty = true;
+  request_render();
+}
+
+/** Release of the open press: a click keeps the selection (and takes `P` in 點選物體); a drag records one move entry
+ * when the position changed and runs one complete recompute (§5.8.11, §5.8.12). */
+function press_up(): void {
+  const pr = state.press, pl = state.plane, sc = state.scene;
+  state.press = null;
+  if (pr === null || pl === null || sc === null) return;
+  if (!pr.started) {
+    // a click (§5.8.2): the selection stays; in 點選物體 the pivot is taken from the object's current box centre
+    if (pl.pivot.mode === "object") after_action(pl.pick_object(pr.id));
+    else sync_controls();
+    return;
+  }
+  state.dragging = false;
+  stage.classList.remove("wire");
+  const after = sc.objects[pr.index]!;
+  const e = move_entry(pr.index, pr.before, after);
+  const objects = sc.objects.slice();
+  if (e === null) objects[pr.index] = pr.before; // no movement: the pressed record itself, no entry
+  if (apply_objects(objects)) {
+    if (e !== null) pl.history.push(e);
+  } else {
+    objects[pr.index] = pr.before;
+    apply_objects(objects);
+  }
+  sync_controls();
+}
+
+/** Cancel the open press (a second finger before CLICK_PX, `pointercancel`, entering 預覽): the pressed record and
+ * the previous selection come back; nothing is recorded (§5.8.2, §5.8.16). */
+function press_cancel(): void {
+  const pr = state.press, sc = state.scene;
+  state.press = null;
+  if (pr === null || sc === null) return;
+  if (pr.started) {
     state.dragging = false;
-    sync_controls();
-    request_render();
+    stage.classList.remove("wire");
+    const objects = sc.objects.slice();
+    objects[pr.index] = pr.before;
+    apply_objects(objects);
+  }
+  if (pr.kind === "object") set_selection(pr.prev_selected);
+  sync_controls();
+}
+
+/** A command (add, delete, undo, redo) while an object press has not yet become a drag ends that press as it is (the
+ * selection it made stays; its release does nothing). */
+function drop_pending_press(): void {
+  if (state.press !== null && !state.press.started) state.press = null;
+}
+
+/** The observer pane's input (§5.7.9, §5.8.2): hit priority, handles, object and vertical drags, blank clicks. */
+const pane_input: PaneInput = {
+  down: (p, touch) => {
+    if (state.dragging || state.press !== null || !state.obs.on) return false;
+    const t = pane_target(p, touch);
+    if (t === null) return false;
+    switch (t.kind) {
+      case "arrow":
+        begin_handle({ kind: "arrow" });
+        return true;
+      case "ring":
+        begin_handle({ kind: "ring", index: t.index });
+        return true;
+      case "handle":
+        begin_press("vertical", t.id, p, null);
+        return true;
+      case "object":
+        begin_press("object", t.hit.id, p, t.hit.point);
+        return true;
+      default:
+        return false;
+    }
+  },
+  move: (p, dx, dy, alt) => {
+    const pl = state.plane, hd = state.handle;
+    if (pl !== null && hd !== null) {
+      const snap = ui.snap.checked && !alt;
+      const next = hd.kind === "ring" ? ring_drag(hd.rig0, hd.grab, dx, dy, snap) : arrow_drag(hd.rig0, hd.v, dx, dy, snap);
+      if (pl.drag(next)) request_render();
+      return;
+    }
+    press_move(p, alt);
+  },
+  up: () => {
+    if (state.handle !== null) end_handle(false);
+    else press_up();
   },
   cancel: () => {
-    state.plane?.cancel();
-    state.handle = null;
-    state.dragging = false;
-    sync_controls();
-    request_render();
+    if (state.handle !== null) end_handle(true);
+    else press_cancel();
   },
-  // a click in the observer pane (§5.8.2): on an object it selects it, and in 點選物體 mode also takes P from it; on
-  // blank space it clears the selection (P is not changed)
-  click: (p) => {
-    const pl = state.plane;
-    if (pl === null || observer === null) return;
-    const id = observer.pick_object(p);
-    set_selection(id);
-    if (id !== null && pl.pivot.mode === "object") after_action(pl.pick_object(id));
-    else sync_controls();
+  // a second finger (§5.8.2, Q18): a handle drag (ring, arrow, vertical) is cancelled; an object press that has not
+  // moved CLICK_PX is cancelled (no entry, the old selection back); a running object drag ignores it
+  second: () => {
+    if (state.handle !== null) {
+      end_handle(true);
+      return "cancel";
+    }
+    const pr = state.press;
+    if (pr === null) return "cancel";
+    if (pr.tracker.second_pointer() === "ignore") return "ignore";
+    press_cancel();
+    return "cancel";
+  },
+  // a click on blank space in the observer pane (§5.8.2): the selection is cleared; P is not changed
+  click: () => set_selection(null),
+  hover: (p) => {
+    if (hit_board_handles(p, false) !== null) return true;
+    const o = obs_frame(), tip = observer?.vertical_tip ?? null;
+    return o !== null && tip !== null && state.selected_id !== null && hit_vertical(o.basis, o.W, o.H, p, false, tip);
   },
 };
 
@@ -525,10 +968,64 @@ function update_observer(rec: CameraRecord, doc: GeometryDocument): number {
     observer.view = frame_view(observer.view, framing_points(board, state.scene, state.A.bbox), observer.aspect);
     state.obs.needs_framing = false;
   }
+  const pivot_id = pl.pivot.mode === "object" ? pl.pivot.object_id : null;
   observer.update({ board, art, rays, handles: handles_of(rig, state.scene.camera.frame_mm),
-    pivot_id: pl.pivot.mode === "object" ? pl.pivot.object_id : null, active: state.handle?.kind ?? null });
+    pivot_id: pivot_id === null ? null : display_name(pivot_id, state.names), active: state.handle?.kind ?? null });
+  observer.set_selection(observer_selection());
   observer.render();
   return performance.now() - t0;
+}
+
+/** The world box of object `index` now (§5.8.1): stage A's record, or, during a wireframe-preview drag, the pressed
+ * frame's record translated by the drag (stage A is not re-run then). */
+function current_box(index: number): Box | null {
+  const sc = state.scene, A = state.A, pr = state.press;
+  const obj = sc?.objects[index];
+  if (obj === undefined || A === null) return null;
+  if (pr !== null && pr.started && pr.preview === true && pr.index === index) {
+    const b = pr.A0.objects[index]!.bbox, d = pr.shift;
+    return [[b[0][0] + d[0], b[0][1] + d[1], b[0][2] + d[2]], [b[1][0] + d[0], b[1][1] + d[1], b[1][2] + d[2]]];
+  }
+  const rec = A.objects[index];
+  return world_bbox(obj, rec !== undefined && rec.id === obj.id ? rec : null);
+}
+
+/** The observer's selection (outline, vertical handle, label `name（id）`), or null. */
+function observer_selection(): ObserverSelection | null {
+  const sc = state.scene, id = state.selected_id;
+  if (sc === null || id === null) return null;
+  const box = current_box(index_of(sc.objects, id));
+  const pr = state.press;
+  const len = pr !== null && pr.started && pr.kind === "vertical" && pr.id === id ? pr.len0 : null;
+  return box === null ? null : { id, box, label: label_text(id, state.names), len };
+}
+
+/** The drawing pane's interface layer `#sel-overlay` (§5.8.2, §5.8.12, §5.8.14): the selected object's document
+ * drawables in the accent colour, or, during a wireframe-preview drag, every object's edges (the dragged one
+ * translated) through the current camera record. Never part of the writer's markup or of an output. */
+function draw_sel_overlay(): void {
+  const doc = state.doc, rec = state.rec, sc = state.scene, pr = state.press;
+  if (doc === null || sc === null) {
+    selOverlay.replaceChildren();
+    return;
+  }
+  const cv = doc.canvas_mm;
+  const vb = `0 0 ${cv[0]} ${cv[1]}`;
+  if (selOverlay.getAttribute("viewBox") !== vb) selOverlay.setAttribute("viewBox", vb);
+  const path = (lines: readonly (readonly (readonly number[])[])[]): string =>
+    lines.map((pl) => pl.map((q, i) => { const [x, y] = svg_point(q, cv); return `${i === 0 ? "M" : "L"}${x.toFixed(3)} ${y.toFixed(3)}`; }).join("")).join("");
+  let html = "";
+  const wire = pr !== null && pr.started && pr.preview === true && rec !== null;
+  if (wire) {
+    const meshes = pr.A0.objects.map((o) => o.mesh);
+    const others = wire_segments(meshes.map((m, k) => (k === pr.index ? { vertices: [], edges: [] } : m)), [], rec);
+    const moved = wire_segments([meshes[pr.index]!], [pr.shift], rec);
+    html += `<path class="wire" d="${path(others)}"/><path class="sel" d="${path(moved)}"/>`;
+  } else if (state.selected_id !== null) {
+    html += `<path class="sel" d="${path(outline_polylines(doc, state.selected_id))}"/>`;
+  }
+  stage.classList.toggle("wire", wire);
+  selOverlay.innerHTML = html;
 }
 
 /** Re-draw the observer without a core frame: `rebuild` re-derives its geometry from the last frame (layer or ray
@@ -559,9 +1056,10 @@ function set_observer(on: boolean): void {
   ui.observerPane.hidden = !on;
   ui.observerControls.hidden = !on;
   ui.panes.classList.toggle("observer-on", on);
+  if (!on) set_library(false); // an open sidebar collapses on entering 預覽 (§5.8.14)
   if (on && observer === null) {
     observer = new ObserverPane(ui.observerCanvas, ui.observerLabels);
-    observer.attach_input(ui.observerPane, request_observer_render, handle_input);
+    observer.attach_input(ui.observerPane, request_observer_render, pane_input);
     if (state.scene !== null && state.A !== null) observer.set_scene(state.scene, state.A);
   }
   layout();
@@ -573,30 +1071,30 @@ function set_observer(on: boolean): void {
 function set_preview(preview: boolean): void {
   // a held drag (observer handle or orbit) keeps the pane: hiding it mid-gesture would move the board unseen
   if (preview === !state.obs.on || state.dragging || state.handle !== null) return;
+  if (preview && state.press !== null) press_cancel(); // a pending press is cancelled (§5.8.14)
   set_observer(!preview);
 }
 ui.preview.addEventListener("click", () => set_preview(state.obs.on));
 
 /** The `keydown` target as the key rules read it (§5.8.10). */
-function key_target(t: EventTarget | null): KeyTarget | null {
+function key_target(t: EventTarget | null): TargetLike | null {
   if (!(t instanceof HTMLElement)) return null;
   return { tag: t.tagName, type: t instanceof HTMLInputElement ? t.type : null, editable: t.isContentEditable };
 }
 
-// Esc and the history shortcuts (§5.8.11): one keydown at window; the equation field's own Esc stops the event first
+// Esc, Delete / Backspace, the history shortcuts and the library toggle (§5.8.10, §5.8.11): one keydown at window;
+// the equation field's own Esc stops the event first. preventDefault only when a shortcut acts.
 window.addEventListener("keydown", (ev) => {
-  if (ev.key === "Escape") {
-    const act = escape_action({ in_equation: document.activeElement === ui.equation, dragging: gesture_open(),
-      previewing: !state.obs.on, has_selection: state.selected_id !== null });
-    if (act === "leave_preview") set_preview(false);
-    else if (act === "clear_selection") set_selection(null);
-    return;
-  }
-  const act = shortcut_action({ key: ev.key, ctrlKey: ev.ctrlKey, metaKey: ev.metaKey, altKey: ev.altKey, shiftKey: ev.shiftKey,
-    isComposing: ev.isComposing, target: key_target(ev.target) }, { has_selection: state.selected_id !== null, previewing: !state.obs.on });
+  const focus = focus_kind(key_target(ev.target), ev.target === ui.equation);
+  const act = shortcut_action(ev, { has_selection: state.selected_id !== null, previewing: !state.obs.on, focus,
+    gesture_open: gesture_open() });
   if (act === null) return;
   ev.preventDefault();
-  history_step(act);
+  if (act === "leave_preview") set_preview(false);
+  else if (act === "clear_selection") set_selection(null);
+  else if (act === "delete") delete_selected(true);
+  else if (act === "toggle_library") set_library(!state.library_open);
+  else history_step(act);
 });
 ui.observerFrame.addEventListener("click", () => {
   state.obs.needs_framing = true;
@@ -621,6 +1119,14 @@ function frame(): void {
   const pl = state.plane;
   if (!state.dirty || state.scene === null || state.A === null || pl === null) return;
   state.dirty = false;
+  const pr = state.press;
+  if (pr !== null && pr.started && pr.preview === true) {
+    preview_frame(pr, pl);
+    return;
+  }
+  // an object drag changed the objects: one stage-A recompute per frame, the latest position wins (§5.8.12)
+  const edit = state.objects_dirty;
+  const a_ms = edit ? rebuild_stage_a() : 0;
   const scene = state.scene;
   const block = pl.block(); // what the core renders: the scene camera until the first change, then the rig's (§5.7.7)
   const img_mode = state.dragging && state.full_svg_length > IMG_MODE_THRESHOLD;
@@ -641,23 +1147,50 @@ function frame(): void {
   const t1 = performance.now();
   if (img_mode) overlay.set_img(svg);
   else overlay.set_svg(svg);
-  const t2 = performance.now();
   if (!img_mode) state.full_svg_length = svg.length;
   state.doc = doc;
   state.svg = svg;
   state.rec = rec;
+  draw_sel_overlay(); // the selection outline is part of the overlay update (`dom ms`)
+  const t3 = performance.now();
   if (view3d.checked) view.render(block, scene.output.canvas_mm, state.A.scene_scale);
   warnings.update(doc);
   const obs_ms = state.obs.on ? update_observer(rec, doc) : null;
   state.obs.ms = obs_ms;
-  state.timings.core_ms = t1 - t0;
-  state.timings.dom_ms = t2 - t1;
+  const core_ms = a_ms + (t1 - t0);
+  if (edit && state.dragging) {
+    // §5.8.12: the cost of a drag-mode edit frame (validate + A + B + C + SVG); the first one of a gesture with no
+    // earlier measurement decides its preview mode
+    state.edit_ms = core_ms;
+    if (pr !== null && pr.started && pr.preview === null) pr.preview = (state.edit_ms_forced ?? core_ms) > PREVIEW_MS;
+  }
+  state.timings.core_ms = core_ms;
+  state.timings.dom_ms = t3 - t1;
   state.timings.mode = overlay.mode;
-  state.frames.push({ core_ms: t1 - t0, dom_ms: t2 - t1, obs_ms, mode: overlay.mode, dragging: state.dragging, svg_bytes: svg.length });
+  state.frames.push({ core_ms, dom_ms: t3 - t1, obs_ms, mode: overlay.mode, dragging: state.dragging, svg_bytes: svg.length,
+    edit, preview: false });
   if (state.frames.length > 500) state.frames.shift();
   sync_controls(); // sliders, equation, readouts (the picture delta is measured here, once per frame), notices, undo
   const form = pl.scene_block ? "scene camera" : "picture_plane";
   ui.statusLine.textContent = status_text(state.sceneName, state.timings, overlay.mode, doc, scene, rec, block.focal_length_mm, form, obs_ms);
+}
+
+/** A wireframe-preview frame of an object drag (§5.8.12): no stage A, B, C or SVG; `#sel-overlay` shows the objects'
+ * edges (the dragged one translated), the writer's overlay is hidden, `state.doc` / `state.svg` and the downloads keep
+ * the last complete frame; the picture-delta readout follows the translated vertices (Q30). */
+function preview_frame(pr: ObjectPress, pl: PlaneSession): void {
+  const t0 = performance.now();
+  const A0 = pr.A0, n = A0.objects[pr.index]!.mesh.vertices.length, d = pr.shift;
+  const V = A0.vertices.map((v, i) => (i >= pr.offset && i < pr.offset + n ? [v[0] + d[0], v[1] + d[1], v[2] + d[2]] as Vec3 : v));
+  pl.set_geometry(scene_centre(A0), object_centres(A0.objects), V);
+  draw_sel_overlay();
+  const t1 = performance.now();
+  const obs_ms = state.obs.on && state.rec !== null && state.doc !== null ? update_observer(state.rec, state.doc) : null;
+  state.obs.ms = obs_ms;
+  state.frames.push({ core_ms: 0, dom_ms: t1 - t0, obs_ms, mode: overlay.mode, dragging: true, svg_bytes: state.svg.length,
+    edit: true, preview: true });
+  if (state.frames.length > 500) state.frames.shift();
+  sync_controls();
 }
 
 // ---------------------------------------------------------------------------- start
@@ -698,9 +1231,9 @@ function frame(): void {
     return state.A === null || state.scene === null ? null
       : { bbox: state.A.bbox.map((p) => [...p]), ids: state.scene.objects.map((o) => o.id) };
   },
-  /** M11 test hook, until the object drag is wired (§5.8.3): what the release of an object drag does — move the object
-   * `id` to `position` and record one `move` entry (nothing when the position is unchanged, while previewing or during
-   * a gesture). Returns whether it moved. */
+  /** M11 test hook (§5.8.3): what the release of an object drag does — move the object `id` to `position` and record
+   * one `move` entry (nothing when the position is unchanged, while previewing or during a gesture). Returns whether it
+   * moved. The smoke script drags with the pointer; this hook remains for scripted moves. */
   move_object: (id: string, position: [number, number, number]) => {
     const pl = state.plane, sc = state.scene;
     if (pl === null || sc === null || !state.obs.on || gesture_open()) return false;
@@ -749,8 +1282,78 @@ function frame(): void {
     state.dirty = true;
     return bad;
   },
-  /** M10: the observer's handle hit test at pane px `(x, y)` (mouse radius). */
-  hit_at: (x: number, y: number) => handle_input.hit([x, y], false),
+  /** The observer pane's hit test at pane px `(x, y)` (mouse radius; M11 priority, §5.8.2): `{kind: "arrow"}`,
+   * `{kind: "ring", index}`, `{kind: "handle", id}` (the vertical handle), `{kind: "object", id}`, or null (blank). */
+  hit_at: (x: number, y: number) => {
+    if (state.dragging) return null;
+    const t = pane_target([x, y], false);
+    if (t === null || t.kind === "blank") return null;
+    return t.kind === "object" ? { kind: "object", id: t.hit.id } : t;
+  },
+  /** M11: a pane px of the observer pane where a press (a mouse, or touch with its larger radius) grabs object `id`
+   * (null when none is found). */
+  object_px: (id: string, touch = false) => {
+    const o = obs_frame(), pl = state.plane;
+    const c = pl?.scene.object_centres.get(id);
+    if (o === null || observer === null || c === undefined) return null;
+    const q = observer_project(observer.view, o.W, o.H, c);
+    if (q === null) return null;
+    for (let r = 0; r <= 60; r += 4) {
+      for (let k = 0; k < (r === 0 ? 1 : 12); k++) {
+        const p: Vec2 = [q[0] + r * Math.cos((k * Math.PI) / 6), q[1] + r * Math.sin((k * Math.PI) / 6)];
+        if (!(p[0] >= 2 && p[0] <= o.W - 2 && p[1] >= 2 && p[1] <= o.H - 2)) continue;
+        const t = pane_target(p, touch);
+        if (t !== null && t.kind === "object" && t.hit.id === id) return p;
+      }
+    }
+    return null;
+  },
+  /** M11: the world point a press at observer-pane px `(x, y)` grabs on an object (null: not an object). */
+  hit_point: (x: number, y: number) => {
+    const t = pane_target([x, y], false);
+    return t !== null && t.kind === "object" ? { id: t.hit.id, point: t.hit.point } : null;
+  },
+  /** M11: the observer-pane px of a world point (null behind the observer). */
+  project_observer: (X: [number, number, number]) => {
+    const o = obs_frame();
+    return o === null || observer === null ? null : observer_project(observer.view, o.W, o.H, X);
+  },
+  /** M11: the world tip of the selected object's vertical handle as drawn (null without one). */
+  get vertical_tip() { return observer?.vertical_tip ?? null; },
+  /** M11: the observer-pane px of the selected object's vertical-handle tip (null without one). */
+  get vertical_px() {
+    const o = obs_frame(), tip = observer?.vertical_tip ?? null;
+    return o === null || tip === null || observer === null ? null : observer_project(observer.view, o.W, o.H, tip);
+  },
+  /** M11: the drawing-pane px (relative to `#stage`) of object `id`'s box centre through the last camera record. */
+  stage_object_px: (id: string) => {
+    const c = state.plane?.scene.object_centres.get(id), rec = state.rec, doc = state.doc;
+    if (c === undefined || rec === null || doc === null) return null;
+    const P = rec.P, w = P[2][0] * c[0] + P[2][1] * c[1] + P[2][2] * c[2] + P[2][3];
+    const u = (P[0][0] * c[0] + P[0][1] * c[1] + P[0][2] * c[2] + P[0][3]) / w;
+    const v = (P[1][0] * c[0] + P[1][1] * c[1] + P[1][2] * c[2] + P[1][3]) / w;
+    const [x, y] = svg_point([u, v], doc.canvas_mm);
+    const b = stage.getBoundingClientRect(), k = Math.min(b.width / doc.canvas_mm[0], b.height / doc.canvas_mm[1]);
+    return [b.width / 2 + (x - doc.canvas_mm[0] / 2) * k, b.height / 2 + (y - doc.canvas_mm[1] / 2) * k];
+  },
+  /** M11: the page's objects (ids and anchors), the display names, the library and the chip (read-only). */
+  get objects() { return state.scene === null ? [] : state.scene.objects.map((o) => ({ id: o.id, type: o.type, position: [...o.transform.position] })); },
+  get scene_objects_json() { return state.scene === null ? null : JSON.stringify(state.scene.objects); },
+  get names() { return Object.fromEntries(state.names); },
+  get library() {
+    return { open: state.library_open, inert: ui.lib.inert, tab_hidden: ui.libTab.hidden, expanded: ui.libTab.getAttribute("aria-expanded"),
+      tiles: ui.libGrid.querySelectorAll("button.tile").length };
+  },
+  get chip() {
+    return { hidden: ui.chip.hidden, name: ui.chipName.textContent, pos: ui.chipPos.textContent, delete_disabled: ui.selDelete.disabled,
+      hint_hidden: ui.chipHint.hidden };
+  },
+  /** M11: `#sel-overlay`'s markup (the selection outline / the drag wireframe) and the observer's selection group. */
+  get sel_overlay() { return selOverlay.innerHTML; },
+  get selection_names() { return observer?.selection_names ?? []; },
+  get press() { const pr = state.press; return pr === null ? null : { kind: pr.kind, id: pr.id, started: pr.started, preview: pr.preview }; },
+  /** M11 test hook (§5.8.17 "performance"): force the cost that decides the wireframe preview (null: measured). */
+  force_edit_ms: (ms: number | null) => { state.edit_ms_forced = ms; },
   /** M10: the equation field's state. */
   get equation_field() { return { value: ui.equation.value, error: state.equation_error, bad: ui.equation.classList.contains("bad") }; },
   get svg_length() { return state.svg.length; },
