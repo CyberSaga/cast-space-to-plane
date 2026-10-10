@@ -5913,19 +5913,29 @@ h₀_x, p₀_y − h₀_y)` is the **grab offset**; `(Δx, Δy)` is the total po
 fallback  = |d₀_z| < sin 5°   or   not (t₀ > 0),   t₀ = (z_g − e₀_z) / d₀_z       (decided once, at pointer-down)
 normal:   t = (z_g − e_z) / d_z;    skip the update unless t is finite, t > 0 and t ≤ 200      (|h − e| = t, d is a unit vector)
           h = e + t·d;              (x, y) = (h_x + δ_x, h_y + δ_y)
-fallback: f_px = the pane's focal length in CSS px; k = |h₀ − e₀| / f_px      (metres per pixel at the grabbed point)
-          (x, y) = (p₀_x, p₀_y) + k · (Δx · r_g − Δy · f_g)
+fallback: f_px = the pane's focal length in CSS px; k = ((h₀ − e₀)·f_c) / f_px     (the camera depth of h₀ over f_px)
+          w = Δx·r − Δy·u;    Δx' = w·right₀,   Δv' = w·up₀                     (the displacement in the level basis)
+          (x, y) = (p₀_x, p₀_y) + k · (Δx' · r_g + Δv' · f_g)
 ```
 - `f_px` is `(H_px / 2) / tan 20°` in the observer pane (`H_px` its height) and `K[0][0] · W_px / canvas_mm_w` in the
-  drawing pane (`K[0][0]` of `rec`, §2.2; `W_px` the stage width). `r_g` is the camera right vector at pointer-down
-  projected to the ground and normalised, `(1, 0, 0)` if its horizontal part is `< 1e-9` (the drawing pane uses the
-  rolled frame basis); `f_g` is the camera forward projected the same way, or, when the camera looks straight up or down
-  (horizontal part `< 1e-9`), the projected camera up, else `(0, 1, 0)`. Dragging right moves the object along `r_g`;
-  dragging down moves it opposite to `f_g` (closer), dragging up pushes it away. The basis is captured at pointer-down.
+  drawing pane (`K[0][0]` of `rec`, §2.2; `W_px` the stage width). `k` is the size of one pixel, in metres, for a motion
+  parallel to the image plane at the camera depth of `h₀` (spec-v0.3 §4.1 "物件深度 / 每像素焦距" read as the camera
+  depth; the Euclidean distance `|h₀ − e₀|` would overshoot by `1/cos θ` for a point `θ` off the axis). All vectors are
+  those of the pane camera at pointer-down: `f_c` its unit forward, `(r, u)` its frame right and up **with roll**
+  (observer camera, or `rec` in the drawing pane), and `(right₀, up₀)` the level default basis of `f_c` as in §5.7.3
+  (`up_world = (0, 0, 1)`, or `(0, 1, 0)` when `|f_c × (0, 0, 1)| ≤ 1e-9`; `right₀` is always horizontal). Since `(r, u)`
+  and `(right₀, up₀)` span the same plane, `(Δx', Δv')` is the screen displacement with the roll removed (`Δv'` points
+  up): `Δx' = Δx·cos ρ + Δy·sin ρ`, `Δv' = Δx·sin ρ − Δy·cos ρ` for a frame rolled by `ρ` (§5.7.3). `r_g =
+  (right₀_x, right₀_y)`; `f_g` is the horizontal part of `f_c`, normalised, or, when it is `< 1e-9` (the camera looks
+  straight up or down), that of `up₀`. `r_g ⊥ f_g`, so the map has full rank at every roll (`|det| = 1`); at `ρ = 0` it is
+  `k·(Δx·r_g − Δy·f_g)`. Without roll, dragging right moves the object along `r_g`, dragging down moves it opposite to
+  `f_g` (closer) and dragging up pushes it away; with roll the same holds in the de-rolled frame (pending: Q28 in
+  .claude/scratch/v3_m11_questions.md).
 - **The fallback is decided at pointer-down and never switches during the drag**, so the object does not jump when the ray
-  crosses the 5° limit. At the default eye height (0.9 m, level view) most drawing-pane presses are within 5° of the
-  horizon and take the fallback; the steeper the view looks down, the closer the fallback is to "the grabbed point stays
-  under the pointer".
+  crosses the 5° limit. With a level view at a low eye height (for example the demo's 0.9 m) most drawing-pane presses
+  are within 5° of the horizon and take the fallback; in `examples/basic.json` (eye 1.5 m, 5.7° down) presses on `crate`
+  take the normal mode. The steeper the view looks down, the closer the fallback is to "the grabbed point stays under the
+  pointer".
 - **Finish** (applied in this order to `x` and to `y` alone; `z_b` is copied bit for bit and is not clamped): `v ← snap ?
   Math.round(v·10)/10 : Math.round(v·1e4)/1e4`, then `v ← clamp(v, min(−50, v₀), max(50, v₀))` with `v₀` the value at
   pointer-down, then `v + 0` (so `-0` becomes `0` and the scene JSON never prints it). `snap` = the 吸附 checkbox on and Alt
@@ -5933,21 +5943,42 @@ fallback: f_px = the pane's focal length in CSS px; k = |h₀ − e₀| / f_px  
   `0.30000000000000004`). The clamp therefore never moves an object at pointer-down: one that was loaded outside ±50 m can
   be pulled inwards but not pushed further out, and a loaded `z_b < 0` or `> 50` is kept (pending: Q26 in
   .claude/scratch/v3_m11_questions.md). A horizontal drag writes both `x_b` and `y_b` (so rounding touches the one that did
-  not move).
+  not move). **Grid exception [decision]:** because the clamp comes after the rounding and its bound can be `v₀`, a
+  coordinate loaded off the grid outside ±50 m that is pushed outwards with snapping on finishes at `v₀` itself, which is
+  off the grid (for example `v₀ = 50.03` and a raw `50.2` give `50.03`); this "kept at its pressed value" case is the only
+  snapped result that is not on the 0.1 m grid (pending: Q26 in .claude/scratch/v3_m11_questions.md).
 - **Accuracy contract.** `drag_position` (before `finish_position`) satisfies: with the pointer ray through `h₀ + s` for any
-  horizontal shift `s` (normal mode), it returns `p₀ + s` within 1e-6 m; `finish_position` then differs from it by at most
-  `5e-5` m with snapping off and lies on the 0.1 m grid with snapping on. Because `h₀` is a point on the pane's
-  tessellated mesh, `z_g` is that mesh's height; the property concerns `h₀` itself.
+  horizontal shift `s` (normal mode), it returns `p₀ + s` within 1e-6 m; for a result inside the clamp range,
+  `finish_position` then differs from it by at most `5e-5 + 1e-12` m with snapping off (`Math.round(v·1e4)/1e4` exceeds
+  `5e-5` by float rounding, e.g. `5.000000000000166e-5` at `v = −45.90005`) and lies on the 0.1 m grid with snapping on,
+  except for the grid exception above. Because `h₀` is a point on the pane's tessellated mesh, `z_g` is that mesh's
+  height; the property concerns `h₀` itself.
 
 #### 5.8.4 Vertical handle (spec-v0.3 §4.2; D83) — observer pane only
 - **Shape.** For the selected object with world box `[lo, hi]` (§5.8.1): base `b = (c_x, c_y, hi_z)`, `height = hi_z −
-  lo_z`, length `len = max(clamp(0.6 · height, 0.3, 1.0), 36 · dep / f_px)` m, `dep = max(the camera depth of b in the
-  observer camera, OBSERVER_NEAR_M)`; tip `b + len·(0, 0, 1)`. The second term makes the handle at least 36 px long when it
-  is perpendicular to the view axis (far objects); a view steeply down the axis foreshortens it below 36 px, and the tip
-  disc (hit radius, never smaller than 14 px) stays its target. It is drawn as an arrow with a triangle and a tip disc,
-  with the label `name（id）`. During a drag it follows the object (`b` moves by the drag's `Δz_b`).
-- **Drag.** At pointer-down the vertical line is the one through the anchor, `X(s) = (x_b0, y_b0, 0) + s·ẑ` (spec-v0.3
-  §4.2), and `s₀ = line_param(ray, line)`. With the pointer ray (`e`, unit `d`) and `w₀ = (x_b0, y_b0, 0) − e`:
+  lo_z`, length `len = max(clamp(0.6 · height, 0.3, 1.0), L₃₆)` m, tip `b + len·(0, 0, 1)`. `L₃₆` is the **exact** length
+  whose image in the observer camera (position `C_o`, unit basis `r`, `u`, `f`, focal length `f_px` in CSS px) is 36 px:
+  ```
+  q = b − C_o;   z₀ = q·f;   f_z = ẑ·f;   m = |(ẑ·r, ẑ·u)·z₀ − (q·r, q·u)·f_z|
+  L₃₆ = 36·z₀² / (f_px·m − 36·z₀·f_z)        (the image length of b → b + L·ẑ is f_px·L·m / (z₀·(z₀ + L·f_z)))
+  ```
+  `L₃₆` is `min(that value, HANDLE_MAX_M)` with `HANDLE_MAX_M = 1e3` m when the denominator is `> 0`, and `HANDLE_MAX_M`
+  when it is `≤ 0` (no finite length reaches 36 px); when `f_z < 0` it is further limited to `(z₀ − OBSERVER_NEAR_M) /
+  (−f_z)` so that the tip stays in front of the near plane; when `z₀ ≤ OBSERVER_NEAR_M` (`b` is not in front of the
+  camera) `L₃₆ = 0` and the first term is used. The unlimited tip depth `z₀ + L₃₆·f_z = z₀·f_px·m / (f_px·m − 36·z₀·f_z)`
+  is positive whenever `m > 0`. So the handle is at least 36 px on screen (spec-v0.3 §4.2) at every elevation, and exactly
+  36 px when the second term wins, except where the cap or the near-plane limit applies (the view looks almost straight
+  along the handle, `m → 0`); the tip disc (hit radius, never smaller than 14 px) then stays its target. The simpler `36 · depth / f_px` gives 36 px only for a
+  handle perpendicular to the view axis: 32.5 px at the observer's default 28° elevation and 26.3 px at 45°. It is drawn
+  as an arrow with a triangle and a tip disc, with the label `name（id）`. During a drag it follows the object (`b` moves by
+  the drag's `Δz_b`).
+- **Drag.** At pointer-down the vertical line is the **handle's own**, `X(s) = (c_x0, c_y0, 0) + s·ẑ` with `(c_x0, c_y0)`
+  the world-box centre of §5.8.1 captured at pointer-down, and `s₀ = line_param(ray, line)`. Spec-v0.3 §4.2 names the line
+  through the anchor, `(x_b0, y_b0, 0) + s·ẑ`; the two coincide when the anchor is at the box centre, and the drag is a
+  pure vertical move either way (`Δz_b = s − s₀`), but only the handle's line keeps the tip under the pointer when they
+  differ (a prism whose polygon origin is not its box centre, a tilted object, a mesh; with a 0.635 m offset the tip ends
+  15.6 px from the pointer after a 120 px drag at 6 m on the anchor's line, 0 px on the handle's). With the pointer ray
+  (`e`, unit `d`) and `w₀ = (c_x0, c_y0, 0) − e`:
   ```
   β = d_z;   s = (β·(d·w₀) − w₀_z) / (1 − β²);    t = d·w₀ + s·β          (the closest points of the two lines)
   ```
@@ -5956,7 +5987,8 @@ fallback: f_px = the pane's focal length in CSS px; k = |h₀ − e₀| / f_px  
   Math.round(v·10)/10 : Math.round(v·1e4)/1e4`, clamp to `[min(0, z_b0), max(50, z_b0)]`, then the **ground snap**
   `|z_b| < 0.02 → 0` in every mode (Alt included), so the ground is always a sticky value, then `+ 0`. `x_b`, `y_b` and
   `rotation_deg` are copied bit for bit. A buried object (`z_b0 < 0`) is not pushed to 0 at pointer-down (pending: Q25, Q26, Q28
-  in .claude/scratch/v3_m11_questions.md).
+  in .claude/scratch/v3_m11_questions.md). The grid exception of §5.8.3 applies to `z_b` in the same way: an off-grid
+  `z_b0 ≤ −0.02` or `> 50` pushed outwards with snapping on finishes at `z_b0` itself.
 - **Not in the drawing pane** (the drawing pane has no vertical handle; height is not legible there) and not while
   previewing (the observer pane is hidden, §5.8.14).
 
@@ -6052,13 +6084,20 @@ fallback: f_px = the pane's focal length in CSS px; k = |h₀ − e₀| / f_px  
   `v<k>` never applies), not computed with `cos` / `sin` at run time: the saved scene carries no trig noise (`0.20000000000000007`,
   `4.9e-17`), matches the 1e-4 rounding of §5.8.3, and both ports read the same bytes. The hexagon has circumradius 0.4 and a
   first vertex on `+x`; the triangle has side 1.0 (the sides are 1.00007 with the rounding), centroid exactly `(0, 0)`
-  (`0.5774 = 2 × 0.2887`), and its apex on **`+x`**, which spec-v0.3 §5.1 leaves open: with the apex on `±y` a triangle placed
-  at `x = 0` (the camera axis of the bundled examples, the usual snap target) makes the core skip a construction check
-  (`CONSTRUCTION_CHECK_SKIPPED`, `prism_1.v3.shadow.lamp`; benign), which the `+x` apex avoids at every position tried
-  (pending: Q13 in .claude/scratch/v3_m11_questions.md).
+  (`0.5774 = 2 × 0.2887`), and its apex on **`+x`**, which spec-v0.3 §5.1 leaves open; it matches the hexagon's "first
+  vertex on `+x`", and that consistency is the reason for the choice. The benign warning `CONSTRUCTION_CHECK_SKIPPED`
+  (§2.7: the core skips one construction check) is **positional, not a property of a preset**: it appears whenever a
+  vertex or a silhouette point lies in the vertical plane through the eye and the light, which in the bundled examples is
+  `x = 0`. In `examples/basic.json` it appears for the `±y`-apex triangle at `x = 0` (`prism_1.v3.shadow.lamp`); for 方塊
+  at `x = ±0.5`, 高柱 at `x = ±0.3`, 六角柱 at `x = ±0.2`, `±0.4` and at `(0.4, 3.1)`, all on the 0.1 m grid; for the
+  `+x`-apex triangle at `x = 0.2887` and `−0.5774` (reachable with snapping off); and for 球 (3 warnings) and 圓錐 (1) at
+  the default target `T = (0, 15, 0)` of §5.8.8. The `+x` apex therefore only avoids the warning at `x = 0`, the default
+  placement of the triangle; the `+x` triangle gave none at the positions `(0, 10.5)`, `(0, 5)`, `(0, 3)`, `(0.1, 3)`,
+  `(0.4, 3.1)` and `(0, 2 … 12)` that were tried (pending: Q13 in .claude/scratch/v3_m11_questions.md).
 - **Verified against the core.** Every preset, appended to `examples/basic.json`, validates and renders in Python and in
-  the TS port with byte-identical SVG text and identical warnings (none for the `+x` triangle); this is re-checked by the
-  `library.test.ts` row of §5.8.17.
+  the TS port with byte-identical SVG text and identical warnings; this is re-checked by the `library.test.ts` row of
+  §5.8.17. Warnings, when a position produces them, are the benign positional one above; no test may assert that a preset
+  renders without warnings at an arbitrary position.
 
 #### 5.8.8 Adding an object: target, avoidance, snapping (spec-v0.3 §5.2; D84)
 Activating a tile builds the object, in this order. `E`, `f` are the rig's eye and board normal (the line of sight of the
@@ -6111,7 +6150,7 @@ screen the sidebar closes (§5.8.7).
 - **Keep one object [decision].** Core validation requires a non-empty `objects` list (§2.0). When `objects.length ≤ 1`
   (every entry counts, meshes included) the button is `disabled` **and** the text 「場景至少要有一個物件」 is shown as visible
   text in the chip (a tooltip alone never appears on touch); pressing Delete or Backspace does not delete and shows the same
-  text in `#notices`. A refused delete records nothing.
+  text in `#notices`. A refused delete records nothing (pending: Q34 in .claude/scratch/v3_m11_questions.md).
 - **Effect.** The object is removed with `remove_object` (order of the others kept), the selection is cleared, the
   display-name entry moves to the history entry, `P` and the pivot are untouched (§5.8.5), the picture-delta measurement
   ends (the vertex list changed), and the history gets a **delete** entry holding the original index (§5.8.11).
@@ -6119,12 +6158,12 @@ screen the sidebar closes (§5.8.7).
 
 #### 5.8.11 History, shortcuts and Esc (spec-v0.3 §3, §7; D86)
 - **One stack [decision].** `UNDO_MAX = 50` entries in total; the oldest is dropped when a 51st is pushed. Entries are
-  per operation (not whole-scene snapshots: a deep snapshot of a scene with a 49 900-triangle mesh is ≈ 570 MiB, a diff
-  entry ≈ 0.5 KB plus at most one retained record):
+  per operation (not whole-scene snapshots: 50 deep snapshots of a scene with a 49 900-triangle mesh take ≈ 570 MiB, one
+  ≈ 6–11 MiB; a diff entry is ≈ 0.5 KB plus at most one retained record):
   | entry | recorded by | undo | redo |
   | --- | --- | --- | --- |
   | `board` `{before, after}` | the M10 steps (a ring or arrow drag that changed `(f, g, up, a, b)`, a view, an equation, lock-horizontal off → on) | assign `before` (including `D`, `ρ`, focal and the sliders), keep the current `P` | assign `after`, keep the current `P` |
-  | `reset` `{before, after, pivot_before, pivot_after}` | 重設視角, when the rig, `P` or the pivot selection differs | restore `before` and `pivot_before` | restore `after` and `pivot_after` |
+  | `reset` `{before, after, pivot_before, pivot_after}` | 重設視角, when the rig, `P` or the pivot selection differs | restore `before` and `pivot_before` (not the observer camera; pending: Q14 in .claude/scratch/v3_m11_questions.md) | restore `after` and `pivot_after` |
   | `add` `{index, obj, name}` | a library tile (`index` = `objects.length` at the time) | remove at `index` | insert `obj` at `index` |
   | `delete` `{index, obj, name}` | a delete | insert the **same record** at the **original** `index` | remove at `index` |
   | `move` `{index, id, before, after}` | an object drag or a vertical-handle drag, **settled at release** | `objects[index] = before` | `objects[index] = after` |
@@ -6139,8 +6178,8 @@ screen the sidebar closes (§5.8.7).
   (for `delete`: `index ≤ objects.length`; for `add`: `objects[index].id` equals the recorded id; for `move`:
   `objects[index] === after`). A violation is a bug: both stacks are cleared and the scene is left as it is.
 - **What is recorded.** A drag records a `move` only if its final position differs from the pressed one in some component
-  (exact comparison): a click, a drag cancelled by a second finger, and a drag that snaps back to its start record
-  nothing. A refused delete, a reset that changes nothing, a board gesture with `(f, g, up, a, b)` unchanged record
+  (exact comparison), and the entry is recorded at release: a click, a drag cancelled by a second finger, and a drag that
+  snaps back to its start record nothing (pending: Q20 in .claude/scratch/v3_m11_questions.md). A refused delete, a reset that changes nothing, a board gesture with `(f, g, up, a, b)` unchanged record
   nothing. **Not steps:** selection, the library, 重新取中心, the pivot selector and a pivot pick, the sliders (as in M10), the
   observer camera, toggles, 預覽, downloads. The selection is not part of an entry; after an undo or redo of an object entry it
   follows the object the entry acted on (§5.8.2) (pending: Q15 in .claude/scratch/v3_m11_questions.md).
@@ -6247,7 +6286,7 @@ screen the sidebar closes (§5.8.7).
 | `GRAZE_DEG` (fallback limit) | 5 | `DRAG_MAX_T_M` (normal-mode guard) | 200 |
 | `XY_LIMIT_M`, `Z_LIMIT_M` | 50, 50 | `GROUND_SNAP_M` | 0.02 |
 | `PLANE_GRID_M` (existing) | 0.1 | `ROUND_M` (snap off) | 1e-4 |
-| `HANDLE_LEN` | `clamp(0.6·h, 0.3, 1.0)` m | `HANDLE_MIN_PX` | 36 |
+| `HANDLE_LEN` | `clamp(0.6·h, 0.3, 1.0)` m | `HANDLE_MIN_PX` (exact, §5.8.4), `HANDLE_MAX_M` | 36, 1e3 |
 | `LIB_W_PX`, narrow width, breakpoint | 232, `min(80%, 280px)`, < 880 px | `THUMB_PX`, `TILE_NAME_MAX` | 64, 6 |
 | `PLACE_MIN_F_Z` | `sin 2°` | `PLACE_MAX_T_M` | 40 |
 | `PLACE_GAP_M`, `PLACE_STEP_EXTRA_M`, `PLACE_TRIES` | 0.1, 0.2, 8 | `PREVIEW_MS` (wireframe), `TARGET_MS` | 50, 33 |
@@ -6282,15 +6321,15 @@ install`). Spec-v0.3 §10.1 reports its rows as passed on the demo; for M11 they
 already verified (the demo has no preview mode and no core output).
 | spec-v0.3 §10.1 row | test | criterion |
 | --- | --- | --- |
-| horizontal drag | `scene_edit.test.ts` | for random `h₀`, shifts and both pane camera models, `drag_position` returns `p₀ + s` within 1e-6 m before `finish_position`; `z_b` and `rotation_deg` bit-identical; snapping on gives x, y on the 0.1 m grid; Alt (snap off) gives 1e-4 rounding; no `-0` |
-| grazing fallback | `scene_edit.test.ts` | for `\|d₀_z\| < sin 5°` the displacement is finite, in the sign of `Δx` along `r_g` and of `−Δy` along `f_g`, `k = \|h₀ − e₀\| / f_px`; the mode is decided at pointer-down and does not change when later rays cross the limit; the 200 m and `t ≤ 0` guards skip the update |
-| vertical handle | `scene_edit.test.ts` | only `z_b` changes; clamp to `[min(0, z_b0), max(50, z_b0)]`; the ground is sticky (`\|z_b\| < 0.02 → 0`, Alt included); `line_param` equals a brute-force minimisation of the distance between the two lines within 1e-9; degenerate rays skip; a buried start is not moved at pointer-down; the handle length formula incl. the 36 px term |
+| horizontal drag | `scene_edit.test.ts` | for random `h₀`, shifts and both pane camera models, `drag_position` returns `p₀ + s` within 1e-6 m before `finish_position`; `z_b` and `rotation_deg` bit-identical; snapping on gives x, y on the 0.1 m grid except the grid exception of §5.8.3 (an off-grid `v₀` outside ±50 m pushed outwards finishes at `v₀`); Alt (snap off) gives 1e-4 rounding within `5e-5 + 1e-12` m; no `-0` |
+| grazing fallback | `scene_edit.test.ts` | for `\|d₀_z\| < sin 5°` the displacement is finite and equals `k·(Δx'·r_g + Δv'·f_g)` with `k = ((h₀ − e₀)·f_c) / f_px` (the camera depth); at `ρ = 0` it is in the sign of `Δx` along `r_g` and of `−Δy` along `f_g`; with a rolled drawing camera (`ρ = 30°`, `90°`, random) the 2 × 2 map has `\|det\| = 1` within 1e-12, and at `ρ = 90°` a right drag moves along `+f_g` and a down drag along `+r_g`; at `ρ = 0` a right drag moves the image of an off-axis grabbed point (15°, 30° off the axis) by exactly `Δx` px within 1e-9 relative (`r_g ⊥ f_c`, so the depth does not change); the mode is decided at pointer-down and does not change when later rays cross the limit; the 200 m and `t ≤ 0` guards skip the update |
+| vertical handle | `scene_edit.test.ts` | only `z_b` changes; clamp to `[min(0, z_b0), max(50, z_b0)]`; the ground is sticky (`\|z_b\| < 0.02 → 0`, Alt included); `line_param` equals an independent 2 × 2 linear solve (least squares of `[d, −ẑ]·[t, s] = a − e`) within `1e-9·max(1, \|w₀\|)`, and the orthogonality residuals `\|(X(s) − (e + t·d))·d\|` and `\|(X(s) − (e + t·d))·ẑ\|` are `≤ 1e-9·max(1, \|w₀\|)` (a brute-force minimisation, if kept, at 1e-6 only: the distance is flat at its minimum); the line is the handle's (box centre), so the tip stays under the pointer for an off-centre anchor; degenerate rays skip; a buried start is not moved at pointer-down; the handle length formula: the projected length is 36 px within 1e-9 px when `L₃₆` wins, at elevations 0°, 28°, 45° and random, and the cap and near-plane limit apply when `m → 0` |
 | pivot does not follow | `plane.test.ts` | after add, drag, vertical drag, delete and the undo / redo of each, `rig.P` and the eye `E` are bit-identical, also when the edited object is the pivot object; switching the selector to 點選物體 keeps `P`; 重新取中心 takes per mode (§5.8.5); 重設視角 takes the current centre and the unclamped reset again renders `scene.camera`; the geometry refresh does not rebuild the session |
 | library | `library.test.ts`, smoke | `PRESETS` has the 8 rows of §5.8.7 exactly; every preset appended to each bundled example and each v8 case passes the port's `validate_scene` and renders; polygons are counter-clockwise with the centroid at `(0, 0)` within 1e-12 and simple; thumbnails parse, have `viewBox="0 0 64 64"`, use `currentColor` and no script; names ≤ 6 characters. Smoke: collapsed at load and after a scene load; expanding changes no canvas box; each tile adds one valid object; Enter and Space activate; narrow viewport closes after an add and on an outside tap (the tap does not reach the canvas); `aria-label` "加入：名稱" |
 | ids | `scene_edit.test.ts` | smallest free `n` over objects, lights and receivers (object `box_1`, light `box_2`, receiver `box_3` give `box_4`); a freed number is reused; never `.` / `hidden` / `core` / `umbra` |
 | placement and avoidance | `scene_edit.test.ts` | target on the ground ray when `f_z < −sin 2°` and `t ≤ 40`, else under `P`; the anchor is at `T`; avoidance steps of `w_u + 0.2` along `r₀`, at most 8; keeps the last position; snap then ±50 clamp; closed-form footprints equal `build_object(...).bbox` within 5 mm |
 | delete | `selection.test.ts`, smoke | `shortcut_action` and `is_typing_target` tables (Delete, Backspace, Ctrl / Meta, IME, text-like and non-text targets); smoke: Delete, Backspace and the chip button delete; focus in the equation field does not; the last object cannot be deleted, the visible text appears |
-| undo and redo | `scene_edit.test.ts`, `plane.test.ts` | add, delete and a drag are one entry each; undo of a delete restores the same record at the original index and `dumps` / SVG text are byte-identical on the five examples and the v8 cases (the end-of-list insert differs); a click and a no-change drag record nothing; redo cleared by a new entry or an actual rig / pivot / object change and not by a selection; 50-entry cap (60 adds, 50 undos leave 10 objects, the 51st is a no-op); object entries do not move `P` or `scene_block`; a board entry still keeps the current `P`; reset entry restores `P` and the selector; the stacks are inert during a gesture |
+| undo and redo | `scene_edit.test.ts`, `plane.test.ts` | add, delete and a drag are one entry each; undo of a delete restores the same record at the original index and `dumps` / SVG text are byte-identical on the five examples and the v8 cases (the end-of-list insert differs); a click and a no-change drag record nothing; redo cleared by a new entry or an actual rig / pivot / object change and not by a selection; 50-entry cap (60 adds then 50 undos leave the base objects plus the first 10 added, base + 10; the 51st undo is a no-op); object entries do not move `P` or `scene_block`; a board entry still keeps the current `P`; reset entry restores `P` and the selector; the stacks are inert during a gesture |
 | selection | `selection.test.ts`, `plane.test.ts` | nearest hit wins; blank click clears; press selects, click in 點選物體 takes `P`, drag does not; the hit priority tables per pane (tip > ring > handle > object > blank; the ring wins over an object); `PressTracker` uses the maximum excursion (4.9 px click, 5 px drag; no movement before 5 px); `observer_ray` / `drawing_ray` reproject to the pointer within 1e-9; ignoring hits at depth `≤ near_m`; focus object = selection else `objects[0]`; after undo / redo of add, delete and move the selection follows the object the entry acted on |
 | overlays | smoke | the writer's SVG text, the overlay markup and the JSON text are identical with and without a selection and, for the same objects, between the edit view and 預覽 |
 | two fingers | smoke (touch) | first finger on an object and moved `< 5 px`, second finger arrives: the object is at its start, the selection is as before the press, the history is unchanged (zero entries), the observer pane zoomed (drawing pane: nothing else happens); moved `≥ 5 px`: the second finger is ignored; run in both panes |
@@ -6317,8 +6356,15 @@ already verified (the demo has no preview mode and no core output).
   moves from the first `pointermove` and uses the net displacement. (3) "錨點 = 底面中心" and the box / height / centre of
   spec-v0.3 §0.1, §4.2 are defined per type and from the world box (§5.8.1). (4) The ranges of §4.1 and §4.2 apply to the
   coordinate being moved and never move an object at pointer-down; the ground snap is symmetric (§5.8.3, §5.8.4). (5) The
-  handle's base is the top centre of the world box while the vertical line of the drag is the anchor's (spec-v0.3 §4.2); the
-  two differ only for the off-centre triangle prism and for tilted objects. (6) The triangle's apex is on `+x` and the polygons are 1e-4 literals (§5.8.7). (7) Placement: the anchor goes to `T`, the
+  handle's base is the top centre of the world box, and spec-v0.3 §4.2 measures the drag on the vertical line through the
+  anchor. The two lines differ for any object whose anchor is not at its world-box centre in x and y, untilted ones
+  included: the 三角柱 preset (0.144 m), a loaded prism whose polygon origin is off its box centre (the spiral of
+  `arc_base_level_spiral_floor` by 0.379 m, the wedge of `multilight_point_and_directional_curved` by 0.635 m), a tilted
+  object, a mesh. So the drag measures `s` on the handle's own vertical line through the world-box centre (§5.8.4), which
+  keeps the tip under the pointer; `Δz_b = s − s₀` is still a pure vertical move, and the line is the spec's for
+  box-centred anchors. The handle's minimum length is the exact 36 px length, not `36 · depth / f_px`, which is 32.5 px at
+  the default 28° elevation (§5.8.4). The grazing fallback reads "物件深度" as the camera depth of `h₀` and removes the
+  roll from the screen displacement (§5.8.3). (6) The triangle's apex is on `+x` and the polygons are 1e-4 literals (§5.8.7). (7) Placement: the anchor goes to `T`, the
   step direction is the pre-roll right vector, the width is the extent along it, the position is clamped to ±50 m, receivers
   are not avoided (§5.8.8). (8) The hit width "約 11 px" of the ring is the mouse value (0.8 × 14); touch is 0.8 × 26.
   (9) The two-finger rule of spec-v0.3 §3 (board distance, pan, one undo step) is replaced by the cancel-and-pinch rule with
@@ -6360,7 +6406,7 @@ already verified (the demo has no preview mode and no core output).
   | Q4 | D-numbers D81–D86 instead of Appendix A's D79–D84 | §5.8 preface, notes |
   | Q8 | reset target is the load rule at the current centre; the selection is kept; the label is 重設視角 | §5.8.5, §5.7 note (M11, D82, D86) |
   | Q9 | object edits do not re-frame the observer | §5.8.6, §5.6 note (M11, D82) |
-  | Q13 | polygon literals at 1e-4; the triangle's apex on `+x` | §5.8.7 |
+  | Q13 | polygon literals at 1e-4; the triangle's apex on `+x` (consistency with the hexagon; the benign positional warning is not avoided in general) | §5.8.7 |
   | Q14 | undo of a reset restores `P` and the selector (not the observer camera) | §5.8.5, §5.8.11 |
   | Q15 | after undo / redo the selection follows the object the entry acted on; the pivot label drops the name of a deleted object | §5.8.2, §5.8.5, §5.8.11 |
   | Q16 | redo is cleared by an actual change of rig, pivot or objects, not by selection, library or 預覽 | §5.8.11 |
@@ -6372,9 +6418,9 @@ already verified (the demo has no preview mode and no core output).
   | Q22 | switching to 點選物體 keeps `P`; 重新取中心 takes the selected object, else the scene centre | §5.8.5 |
   | Q24 | mesh objects are selectable, draggable and deletable, and not in the library | §5.8.0 |
   | Q25 | anchor per type; top centre, height and centre from the world box | §5.8.1 |
-  | Q26 | clamps apply to the coordinate being moved and never move an object at pointer-down; symmetric ground snap; no `-0` | §5.8.3, §5.8.4 |
+  | Q26 | clamps apply to the coordinate being moved and never move an object at pointer-down; symmetric ground snap; no `-0`; the grid exception (an off-grid value kept at its pressed value) | §5.8.3, §5.8.4 |
   | Q27 | placement: anchor at `T`, pre-roll `r₀`, width along `u`, ±50 m clamp, receivers not avoided | §5.8.8 |
-  | Q28 | the grazing-fallback and handle formulas (`k`, `r_g` / `f_g`, 36 px term, degenerate skips) | §5.8.3, §5.8.4 |
+  | Q28 | the grazing-fallback and handle formulas (`k` from the camera depth, the de-rolled `r_g` / `f_g` map, the exact 36 px length, the drag on the handle's own line, degenerate skips) | §5.8.3, §5.8.4 |
   | Q29 | preview decided at pointer-down from the drag-mode cost; web-side wireframe; one recompute at release | §5.8.12 |
   | Q30 | "畫面變動" is measured over object drags and ended by add, delete and object undo / redo | §5.8.12 |
   | Q33 | display names are a side table; the id is shown when there is no name | §5.8.9 |

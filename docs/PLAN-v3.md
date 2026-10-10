@@ -179,7 +179,8 @@ milestone ever runs `regen_conformance.py` without `--dry-run`.
   library presets, placement and id rule; D85 keep at least one object; D86 object edits join the single undo stack.
   spec-v0.3 Appendix A's D79–D84 is renumbered; the spec text itself is not edited.
 - **Conflicts with D79 / D80.** Right-pane object drag is a new input to the drawing pane (D79 made blank-area gestures
-  inert, and they stay inert); the two-finger rule applies to the left pane only; editing keeps working in preview
+  inert, and they stay inert); a second finger cancels an object drag that has moved < 5 px in either pane (zero
+  steps), and the observer pinch exists only in the left pane; editing keeps working in preview
   (D80) except the vertical handle, which lives in the observer pane. These positions are pending the user's
   confirmation (`.claude/scratch/v3_m11_questions.md`); the contract and D81–D86 record whatever is confirmed.
 
@@ -252,6 +253,6 @@ deciding gates, plus the smoke test in `/opt/pw-browsers/chromium` (never run `p
 rows are the web rows of spec-v0.3 §10.1: horizontal drag (grab point stays under the pointer to < 1e-6 m, z_b fixed,
 grid snap, Alt), grazing-angle fallback, vertical handle, pivot does not follow, library (every tile valid), delete,
 undo (the output after undoing a delete is byte-identical), selection, overlay identity (SVG and JSON with and without a
-selection are byte-identical), two fingers (left pane), random stress (200 steps, all drawing values finite), and the
+selection are byte-identical), two fingers (both panes), random stress (200 steps, all drawing values finite), and the
 10-object drag time (< 33 ms recorded). The conformance row is "0 changes" / "0 mismatches". Benchmark gate limits are
 never loosened.
