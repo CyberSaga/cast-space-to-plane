@@ -159,7 +159,11 @@ milestone ever runs `regen_conformance.py` without `--dry-run`.
 
 ### Scope
 - **Select and drag.** One selected object at most. A click selects; a drag on an object selects and moves it along the
-  horizontal plane at the grabbed point's height (both panes). The left pane also has a vertical handle (z_b only). The
+  horizontal plane at the grabbed point's height, in the observer (left) pane only, which also has a vertical handle
+  (z_b only). The drawing (right) pane stays view-only exactly as D79 says: no selection, no drag, no blank click, no
+  listener on `#stage` (the user's answer to Q1). It only shows the selection outline. **Preview is read-only**: while
+  預覽 is on there is no library, no delete (key or chip), no undo or redo (button or shortcut), no handle and no
+  selection change (the user's answer to Q2). The
   grazing-angle fallback is decided at pointer-down.
 - **Object library.** A sidebar that is collapsed on every load and overlays both panes (the canvases are never pushed
   or resized): 64 px thumbnail plus one line of name per tile, eight presets in a data table (方塊, 木箱, 高柱, 圓柱, 球,
@@ -178,11 +182,12 @@ milestone ever runs `regen_conformance.py` without `--dry-run`.
   pivot; D82 the pivot is the value taken when set; D83 horizontal drag, vertical handle and grazing-angle fallback; D84
   library presets, placement and id rule; D85 keep at least one object; D86 object edits join the single undo stack.
   spec-v0.3 Appendix A's D79–D84 is renumbered; the spec text itself is not edited.
-- **Conflicts with D79 / D80.** Right-pane object drag is a new input to the drawing pane (D79 made blank-area gestures
-  inert, and they stay inert); a second finger cancels an object drag that has moved < 5 px in either pane (zero
-  steps), and the observer pinch exists only in the left pane; editing keeps working in preview
-  (D80) except the vertical handle, which lives in the observer pane. These positions are pending the user's
-  confirmation (`.claude/scratch/v3_m11_questions.md`); the contract and D81–D86 record whatever is confirmed.
+- **D79 / D80.** D79 is **not** amended: the drawing pane takes no input at all, objects included (Q1, answered by the
+  user), and spec-v0.3's right-pane object input is not adopted. D80 is amended in one place: the scene is read-only
+  while previewing (Q2, answered by the user), which also disables 復原 in 預覽 for board entries. A second finger cancels
+  an object drag that has moved < 5 px (zero steps) and the observer pinch exists only in the left pane. The remaining
+  positions are pending the user's confirmation (`.claude/scratch/v3_m11_questions.md`); the contract and D81–D86 record
+  whatever is confirmed.
 
 Out of scope (spec-v0.3 §1): rotating or scaling objects, a numeric inspector, dragging from the library onto the
 drawing, editing lights or receivers, importing meshes from the library, collisions, and concave prisms in the library
@@ -193,7 +198,7 @@ drawing, editing lights or receivers, importing meshes from the library, collisi
 | --- | --- | --- |
 | `web/src/scene_edit.ts` | **new**; pure functions, no DOM: add / delete (with the original index) / move, snap, id generation, placement and avoidance, grazing-angle fallback, applying an undo entry to an `objects` array | step M11-b |
 | `web/src/library.ts` | **new**; the preset table (name, type, parameters as 1e-4 literals, id prefix, thumbnail SVG) | step M11-b |
-| `web/src/selection.ts` | **new**; hit testing and selection state shared by both panes | step M11-b |
+| `web/src/selection.ts` | **new**; hit testing and selection state of the observer pane (no drawing-pane ray) | step M11-b |
 | `web/test/scene_edit.test.ts`, `library.test.ts`, `selection.test.ts` | **new** | step M11-b |
 | `web/src/rig.ts` | shared with M10: undo stack entry union and redo | M11-a (the stack API), M11-b consumes |
 | `web/src/observer.ts` | shared with M10: `framing_points` (bbox corners), `vertex_rays` (focus id) | M11-a |
@@ -226,10 +231,10 @@ shared file at any time, append-only hunks elsewhere, the owner of each shared f
 3. **M11-b — the pure modules** (can run in parallel worktrees, disjoint files): `scene_edit.ts` + test, `library.ts` +
    test (every tile passes the core `validate_scene` in the port; ids; CCW polygons), `selection.ts` + test. No wiring,
    no shared files.
-4. **M11-c — UI wiring.** Library sidebar and tiles, selection (both panes, hit order, click vs drag), horizontal drag
-   in both panes, the vertical handle, the selection chip and delete, undo / redo of object entries, shortcuts and
-   the Esc order, the right-pane object listener under the amended D79 note. One writer for `main.ts` and
-   `observer3d.ts`.
+4. **M11-c — UI wiring.** Library sidebar and tiles, selection (observer pane, hit order, click vs drag), horizontal drag
+   in the observer pane, the vertical handle, the selection chip and delete, undo / redo of object entries, shortcuts and
+   the Esc order, and the read-only preview (library, chip, undo / redo and shortcuts switched off in 預覽). No code
+   touches `#stage`: it keeps no listener. One writer for `main.ts` and `observer3d.ts`.
 5. **M11-d — throttling and preview.** `scene_dirty` (at most one recompute per animation frame), per-object node
    updates during a drag, the drag-mode cost measured at pointer-down, the web-side wireframe preview that never reaches
    `state.doc`, `state.svg` or the downloads, the "畫面變動" readout during an object drag; the 10-object drag row in the
@@ -253,6 +258,6 @@ deciding gates, plus the smoke test in `/opt/pw-browsers/chromium` (never run `p
 rows are the web rows of spec-v0.3 §10.1: horizontal drag (grab point stays under the pointer to < 1e-6 m, z_b fixed,
 grid snap, Alt), grazing-angle fallback, vertical handle, pivot does not follow, library (every tile valid), delete,
 undo (the output after undoing a delete is byte-identical), selection, overlay identity (SVG and JSON with and without a
-selection are byte-identical), two fingers (both panes), random stress (200 steps, all drawing values finite), and the
+selection are byte-identical), two fingers (observer pane), the drawing pane inert including on objects, preview read-only, random stress (200 steps, all drawing values finite), and the
 10-object drag time (< 33 ms recorded). The conformance row is "0 changes" / "0 mismatches". Benchmark gate limits are
 never loosened.

@@ -5708,12 +5708,12 @@ through the port's `resolve_picture_plane` and draws its readout camera through 
   **future** takes only. A take that moves `P` clears the pan, re-frames the observer and is not an undo step (item 10,
   unchanged). (2) What picks the object pivot changes: in the left pane a press on an object no longer starts an
   observer orbit; the hit order of §5.7.9 becomes arrow tip > ring > the selected object's vertical handle > object >
-  blank (observer orbit). A **click** on an object (pointer-up within `CLICK_PX` of pointer-down) selects it, in both
-  panes and in both selector modes, and in 點選物體 mode also takes `P`; a **drag** on an object selects it and moves
-  it, and does not take `P`. The label `旋轉中心：<name>` names the object `P` was taken from (display name, §5.8.9),
-  and drops the name when that object is deleted. (3) The notice for 點選物體 with nothing picked no longer says the
-  click must be in the left pane or after leaving 預覽. Tests: the "object pivot" row of §5.7.13 is read through §5.8.17.
-  See §5.8.2, §5.8.5, D81, D82 (pending: Q15, Q21, Q22, Q33 in .claude/scratch/v3_m11_questions.md).
+  blank (observer orbit). A **click** on an object (pointer-up within `CLICK_PX` of pointer-down) selects it, in the left
+  pane only (the drawing pane takes no input, D79 is not amended, §5.8.14) and in both selector modes, and in 點選物體
+  mode also takes `P`; a **drag** on an object selects it and moves it, and does not take `P`. The label `旋轉中心：<name>` names the object `P` was taken from (display name, §5.8.9),
+  and drops the name when that object is deleted. (3) The notice for 點選物體 with nothing picked keeps saying that the
+  click is in the left pane, and, while previewing, after 「返回編輯」 (§5.8.5). Tests: the "object pivot" row of §5.7.13 is read through §5.8.17.
+  See §5.8.2, §5.8.5, D81, D82 (pending: Q15, Q22, Q33 in .claude/scratch/v3_m11_questions.md).
 - **[decision, implementation] (M11, D86) The undo stack holds object steps and has a redo.** Amends §5.7.8 item 13
   (the step list, "pivot excluded", and "Undo restores the snapshot, re-syncs …"), the D79 note (4) list of steps, the
   §5.7.13 rows "undo details" and "undo and reset", and the note "Modules and the render path of plane mode" where it
@@ -5740,24 +5740,31 @@ through the port's `resolve_picture_plane` and draws its readout camera through 
   unclamped reset again renders `scene.camera` as it is. Reset is one undo step (recorded when the rig, `P` or the pivot
   selection changes) and, unlike the other board steps, its undo restores the pivot and the selector as well (§5.8.5).
   See §5.8.5, D82, D86 (pending: Q8, Q14 in .claude/scratch/v3_m11_questions.md).
-- **[decision, implementation] (M11, D83) The drawing pane takes object gestures; amends the D79 and D80 notes.**
-  The D79 note ("The drawing pane is read-only") and the D80 notes are unchanged and are read with these exceptions.
-  (1) **Input on `#stage`.** A press on an **object** in the drawing pane (primary button, a touch or a pen, with
-  Shift, Ctrl and Meta not held; Alt only suspends snapping) selects it and, once the pointer has
-  moved `CLICK_PX`, drags it horizontally (§5.8.3); a click on blank space clears the selection (§5.8.2). Every other
-  gesture on `#stage` (blank-area drags with any button or Shift, the wheel, a two-finger move, a press on an object with
-  the right or middle button) still changes nothing and is still never prevented. The D79 clauses "no `preventDefault`
-  for pointer or touch events on `#stage`" and "no grab cursor" are amended to: no `preventDefault` except one on the
-  `touchstart` whose first touch lands on an object (so a one-finger drag that starts on an object does not scroll the
-  page), no cursor rule on `#stage`. `touch-action` on `#stage` stays the browser default. (2) **Where the board is
-  manipulated** is unchanged (ring, arrow, controls); objects are moved in the left pane (horizontally and vertically)
-  and in the drawing pane (horizontally). (3) **Preview (D80).** Editing works while previewing; only the vertical
-  handle, which lives in the observer pane, is unavailable; 預覽 is refused while an object drag is open (the guard of
-  the D80 follow-up note is extended). Esc acts on the equation field, the library and the selection before it leaves 預覽 (§5.8.11). (4) **Readouts
-  (D79 note (5)).** "這次拖動右窗畫面變動" is also measured over an object drag (§5.8.12). (5) **Tests (D79 note (6)).**
-  The row that pins "no listener on `#stage`" is rewritten as: blank-area gestures change nothing; the only handlers on
-  `#stage` are the object-gesture handlers. The smoke script's drawing-pane negative checks start on blank space. See
-  §5.8.14, D83 (pending: Q1, Q2, Q3, Q18, Q19, Q21 in .claude/scratch/v3_m11_questions.md).
+- **[decision, implementation] (M11, D83) The drawing pane stays read-only (D79 is not amended); the scene is read-only
+  while previewing; amends the D80 notes.** The user answered Q1 ("drag right pane should do nothing. keep gestures on
+  right pane empty-area inert.") and Q2 ("make editing unavailable while previewing, since we already can't edit in right
+  pane"). The D79 note ("The drawing pane is read-only") is unchanged and in force in full; the D80 notes are unchanged
+  except for (3). (1) **Input on `#stage` is exactly D79 note (1).** No pointer event (any button, Shift, touch with one or
+  two fingers, pen) and no wheel event on `#stage`, on an object or on blank space, changes the scene, the selection, the
+  rig, the observer camera, the undo stack, a readout, a notice or the cursor. No pointer, wheel or touch listener is
+  attached to `#stage`; no `preventDefault`, no `stopPropagation`, `touch-action` is the browser default, there is no
+  cursor rule, and the context menu is not suppressed. A press, drag or click on an object in `#stage` neither selects
+  nor moves it, and a click on blank space does not clear the selection. The selection outline that the drawing pane
+  shows (§5.8.2) is display in the sibling `#sel-overlay` (`pointer-events: none`), not input. (2) **Where objects and the
+  board are manipulated.** The board is unchanged (ring, arrow, controls). Objects are selected and moved only in the
+  observer (left) pane: horizontally, and vertically with the handle. (3) **Preview (D80).** While 預覽 is on the scene is
+  read-only. The observer pane, the only place where objects are selected or moved, is hidden, and every other editing path
+  is switched off as well: the library tab and sidebar (an open sidebar collapses on entering 預覽), delete by key or by
+  the chip (the chip is hidden), undo and redo by button or by Ctrl / ⌘+Z and Ctrl / ⌘+Shift+Z (board entries too: there
+  is one stack), the vertical handle and every selection change. This amends the list of controls in the D80 note (2),
+  where 復原 still worked while previewing. The selection survives the round trip and stays outlined in the drawing pane.
+  預覽 is refused while a gesture is open (the guard of the D80 follow-up note is extended to object drags), and entering
+  it cancels any pending press. Esc in 預覽 only returns to the edit view (§5.8.11). (4) **Readouts (D79 note (5)).**
+  "這次拖動右窗畫面變動" is also measured over an object drag in the observer pane (§5.8.12). (5) **Tests (D79 note
+  (6)).** The D79 row stands unchanged and gains an object case: a press, drag or click on an object in `#stage` changes
+  neither the selection nor the scene. A new row pins the read-only preview. The M10 "drawing pane is view-only" scan and
+  the smoke `stage_drag` checks stay as they are. See §5.8.14, D83 (pending: Q3, Q18 in
+  .claude/scratch/v3_m11_questions.md).
 
 ### 5.8 M11 — scene editing in the web UI (spec-v0.3 §1–§10, §10.2 row M11)
 
@@ -5775,7 +5782,7 @@ M11 decisions are numbered D81–D86 in the same order (pending: Q4 in .claude/s
 | --- | --- | --- |
 | D81 | selection, unified with the 點選物體 pivot; the selection is the vertex-ray focus | §5.8.2, §5.8.6 |
 | D82 | the pivot is the value taken when it is set; 重新取中心; 重設視角; framing on the scene box | §5.8.5, §5.8.6 |
-| D83 | horizontal drag, vertical handle, grazing-angle fallback; the drawing pane and preview | §5.8.3, §5.8.4, §5.8.14 |
+| D83 | horizontal drag, vertical handle, grazing-angle fallback; the drawing pane stays view-only; preview is read-only | §5.8.3, §5.8.4, §5.8.14 |
 | D84 | library presets, placement and the id rule | §5.8.7–§5.8.9 |
 | D85 | keep at least one object | §5.8.10 |
 | D86 | object edits join the single undo stack (with a redo) | §5.8.11 |
@@ -5785,8 +5792,10 @@ A default that this contract takes before the user has confirmed it is marked "(
 in the same change.
 
 M11 is a pure web-UI milestone: the user selects an object, drags it in the observer pane (horizontally, and vertically
-with a handle) and in the drawing pane (horizontally), adds one of eight preset objects from a collapsed-by-default
-sidebar, deletes the selected object, and undoes and redoes all of it.
+with a handle), adds one of eight preset objects from a collapsed-by-default sidebar, deletes the selected object, and
+undoes and redoes all of it. The drawing pane stays view-only exactly as D79 says (the user's answer to Q1): it takes no
+input, objects included, and only shows the selection outline. While previewing (預覽) the scene is read-only (the user's
+answer to Q2).
 
 #### 5.8.0 Scope, hard rules and modules
 - **Core unchanged [decision].** Stages A, B and C (`castplane/`), the TypeScript port (`ts/`), the §3.1 document, the SVG
@@ -5811,7 +5820,7 @@ sidebar, deletes the selected object, and undoes and redoes all of it.
   | --- | --- |
   | `web/src/scene_edit.ts` (new) | `world_bbox` (§5.8.1), the horizontal drag (`drag_begin`, `drag_position`, `finish_position`; §5.8.3) and its grazing fallback, the vertical drag (`line_param`, `vertical_begin`, `vertical_z`; §5.8.4), `snap_grid` / `round4`, `next_id` (§5.8.9), `place_object` (§5.8.8), the pure array operations `add_object`, `remove_object`, `move_object`, and `apply_entry` / `invert_entry` for the object entries of §5.8.11 |
   | `web/src/library.ts` (new) | the preset table `PRESETS` (§5.8.7: name, type, params, id prefix, thumbnail), `make_object(preset, id, position)`, the thumbnail strings |
-  | `web/src/selection.ts` (new) | the selection state and its transitions, the hit priority per pane (`hit_order`, `nearest_hit`), the click / drag classifier (`PressTracker`), the pointer rays (`observer_ray`, `drawing_ray`), and two pure key helpers, `is_typing_target` and `shortcut_action` (§5.8.10, §5.8.11) |
+  | `web/src/selection.ts` (new) | the selection state and its transitions, the hit priority (`hit_order`, `nearest_hit`), the click / drag classifier (`PressTracker`), the pointer ray (`observer_ray`), and two pure key helpers, `is_typing_target` and `shortcut_action` (§5.8.10, §5.8.11) |
 
   The wiring is thin: `web/src/main.ts`, `observer.ts` / `observer3d.ts`, `ui.ts`, `index.html`, `style.css` (sidebar, tiles, chip, handle, shortcuts, recompute throttling, preview mode); `plane.ts` gains the history and the session geometry refresh (§5.8.5, §5.8.11). Names are indicative; the
   behaviour is binding. Symbols follow the spec's: `p_b = (x_b, y_b, z_b)` is the anchor, `z_b` the base height, `P` the
@@ -5850,15 +5859,16 @@ sidebar, deletes the selected object, and undoes and redoes all of it.
 - **Operations.**
   | action | result |
   | --- | --- |
-  | press on an object (either pane) | the object becomes selected at once (the previous selection is kept to restore on a cancel) |
+  | press on an object (observer pane) | the object becomes selected at once (the previous selection is kept to restore on a cancel) |
   | release with a total travel `< CLICK_PX` (a **click**) | the selection stays; in 點選物體 mode the pivot is taken (§5.8.5) |
   | travel `≥ CLICK_PX` (a **drag**) | the object moves (§5.8.3, §5.8.4); the pivot is **not** taken |
-  | click on blank space | the selection is cleared; `P` is not changed |
+  | click on blank space (observer pane) | the selection is cleared; `P` is not changed |
   | add an object | the new object becomes selected; `P` is not changed, also in 點選物體 mode |
   | delete the object | the selection is cleared |
   | undo / redo of an object entry | the object the entry acted on is selected if it exists: undo of an add clears it, redo of an add selects the new object, undo of a delete selects the restored object, undo and redo of a move select the moved object; a board or reset entry keeps the selection, and a selected id that no longer exists is cleared (pending: Q15 in .claude/scratch/v3_m11_questions.md) |
   | load, 重設視角 | a load clears the selection; 重設視角 keeps it |
   | Esc | §5.8.11 |
+| any input on the drawing pane (`#stage`) | nothing, objects included (D79, §5.8.14) |
 
 - **Click versus drag [decision].** `moved` is the **largest** distance from the pointer-down point reached during the
   gesture (the semantics `CLICK_PX` has in the M10 note "Observer handles and their input", not the net distance at
@@ -5872,41 +5882,39 @@ sidebar, deletes the selected object, and undoes and redoes all of it.
   | pane | order |
   | --- | --- |
   | observer (left) | arrow tip > ring > the **selected** object's vertical handle (a disc of the hit radius around its tip; the shaft is not hit) > object > blank (observer orbit, §5.6.4) |
-  | drawing (right) | object > blank (inert, D79) |
+  | drawing (right) | none: the pane takes no input and nothing is hit (D79, §5.8.14) |
 
   The eye is never returned (D72). Where the ring is drawn over an object the ring wins; the object is dragged from any
   other part of it. A press on the arrow, ring or handle never changes the selection.
-- **Object hit.** The nearest ray hit among the objects, i.e. the first intersection of a three.js ray cast into the pane's
-  tagged `scene3d` group, objects only (lights, receivers and grids are not candidates), read through the `userData` tag
-  (`object_id_of`, "Review fixes (4)"). Curved primitives are hit on their tessellation, as drawn. The **observer ray**
-  starts at the observer camera and passes through the pointer (vertical field of view 40°). The **drawing ray** is built
-  from the castplane camera record `rec` of the last rendered frame, not from the (possibly hidden, un-rendered) WebGL
-  view: origin `C`, direction `normalize(unproject_to_plane(rec, uv, 1) − C)`, with `uv` the stage pixel mapped through
-  the letterbox to canvas mm (`v` up, §2.1). A hit whose camera depth `f·(X − C)` is `≤ near_m` is ignored: the part
-  of an object that the near clip removes cannot be picked.
-- **Blank in the drawing pane.** A click there (pointer-up within `CLICK_PX`, no drag) clears the selection, as in the
-  observer; it is the only effect any blank-area input has on `#stage` (D79, §5.8.14) (pending: Q21 in
-  .claude/scratch/v3_m11_questions.md). In the observer a click on blank space is an orbit that ended within `CLICK_PX`: the
-  view goes back to its pointer-down state (as in M10) and the selection is cleared; an orbit that moved further does not
-  clear it.
-- **Two fingers [decision].** If a second pointer arrives while the first pointer's object drag is open (either pane):
+- **Object hit.** The nearest ray hit among the objects, i.e. the first intersection of a three.js ray cast into the
+  observer pane's tagged `scene3d` group, objects only (lights, receivers and grids are not candidates), read through the
+  `userData` tag (`object_id_of`, "Review fixes (4)"). Curved primitives are hit on their tessellation, as drawn. The
+  **observer ray** starts at the observer camera and passes through the pointer (vertical field of view 40°). A hit whose
+  camera depth is `≤ OBSERVER_NEAR_M` is ignored: the part of an object that the observer's near plane cuts away is not
+  drawn and cannot be picked. There is no ray for the drawing pane: spec-v0.3 §4.1's drawing-camera ray is not adopted
+  (user's answer to Q1).
+- **Blank click (observer pane only).** In the observer a click on blank space is an orbit that ended within `CLICK_PX`:
+  the view goes back to its pointer-down state (as in M10) and the selection is cleared; an orbit that moved further does
+  not clear it. The drawing pane has no blank click: a click there does nothing (D79, §5.8.14; Q1 answered by the user,
+  and the question whether a blank click clears the selection there, Q21, is moot).
+- **Two fingers [decision].** If a second pointer arrives while the first pointer's object drag is open (observer pane):
   when the first pointer has moved `< CLICK_PX` (the object has not started to move, §5.8.2) the drag is cancelled (the
   selection of before the press comes back, **no** history entry), and when it has moved `≥ CLICK_PX` the second pointer is
-  ignored. A second pointer during a handle drag (ring, arrow, vertical handle; left pane) cancels it as in M10. What
-  remains of the gesture is, in the observer pane, the observer pinch (§5.6.4: it zooms the observer camera and is not an
-  undo step) and, in the drawing pane, nothing (D79: there is no pinch or pan there). Spec-v0.3 §3 describes this gesture
-  as board distance and pan "recorded as one undo step"; those mappings were removed by D79, so the step count is
-  **zero** (pending: Q18 in .claude/scratch/v3_m11_questions.md). `pointercancel` cancels like a second finger.
+  ignored. A second pointer during a handle drag (ring, arrow, vertical handle) cancels it as in M10. What remains of the
+  gesture is the observer pinch (§5.6.4: it zooms the observer camera and is not an undo step). Two fingers on the
+  drawing pane do nothing at all (D79: no pinch, no pan, no object gesture). Spec-v0.3 §3 describes this gesture as board
+  distance and pan "recorded as one undo step"; those mappings were removed by D79, so the step count is **zero**
+  (pending: Q18 in .claude/scratch/v3_m11_questions.md). `pointercancel` cancels like a second finger.
 - **Overlays (interface only, never in an output).** In both panes the selected object is outlined in the accent colour
   (observer: its mesh edges, 3 px; drawing: its document drawables — edges, outline generators and conics — mapped to
-  px, 2.6 px, in the sibling element `#sel-overlay` with `pointer-events: none`, **outside** the writer's overlay markup).
+  px, 2.6 px, in the sibling element `#sel-overlay` with `pointer-events: none`, **outside** the writer's overlay markup; display only, the drawing pane takes no input, D79).
   The observer also shows the vertical handle (§5.8.4) and the label `name（id）` at its tip. The **selection chip**
-  `#selection-chip` sits above the readout lines and is hidden when nothing is selected: display name and id, the anchor
+  `#selection-chip` sits above the readout lines and is hidden when nothing is selected and while previewing: display name and id, the anchor
   `底面 (x, y, z) m` with 2 decimals (`transform.position`), and the delete button (§5.8.10).
 
-#### 5.8.3 Horizontal drag (spec-v0.3 §4.1; D83)
+#### 5.8.3 Horizontal drag (spec-v0.3 §4.1; D83) — observer pane only
 Symbols (renamed from the spec, whose `o` is both the ray origin and the grab offset): `e` is the pointer ray's origin and
-`d` its unit direction (observer camera in the left pane, `rec.C` in the drawing pane); `h₀` is the surface point hit at
+`d` its unit direction (the observer camera's position, and the direction through the pointer); `h₀` is the surface point hit at
 pointer-down, `z_g = h₀_z` its height (the drag plane is `z = z_g`); `p₀` is the anchor at pointer-down; `δ = (p₀_x −
 h₀_x, p₀_y − h₀_y)` is the **grab offset**; `(Δx, Δy)` is the total pointer displacement since pointer-down.
 ```
@@ -5917,24 +5925,25 @@ fallback: f_px = the pane's focal length in CSS px; k = ((h₀ − e₀)·f_c) /
           w = Δx·r − Δy·u;    Δx' = w·right₀,   Δv' = w·up₀                     (the displacement in the level basis)
           (x, y) = (p₀_x, p₀_y) + k · (Δx' · r_g + Δv' · f_g)
 ```
-- `f_px` is `(H_px / 2) / tan 20°` in the observer pane (`H_px` its height) and `K[0][0] · W_px / canvas_mm_w` in the
-  drawing pane (`K[0][0]` of `rec`, §2.2; `W_px` the stage width). `k` is the size of one pixel, in metres, for a motion
+- `f_px` is `(H_px / 2) / tan 20°` (`H_px` the observer pane's height). `k` is the size of one pixel, in metres, for a motion
   parallel to the image plane at the camera depth of `h₀` (spec-v0.3 §4.1 "物件深度 / 每像素焦距" read as the camera
   depth; the Euclidean distance `|h₀ − e₀|` would overshoot by `1/cos θ` for a point `θ` off the axis). All vectors are
-  those of the pane camera at pointer-down: `f_c` its unit forward, `(r, u)` its frame right and up **with roll**
-  (observer camera, or `rec` in the drawing pane), and `(right₀, up₀)` the level default basis of `f_c` as in §5.7.3
+  those of the observer camera at pointer-down: `f_c` its unit forward, `(r, u)` its frame right and up (with roll, if
+  the frame has any), and `(right₀, up₀)` the level default basis of `f_c` as in §5.7.3
   (`up_world = (0, 0, 1)`, or `(0, 1, 0)` when `|f_c × (0, 0, 1)| ≤ 1e-9`; `right₀` is always horizontal). Since `(r, u)`
   and `(right₀, up₀)` span the same plane, `(Δx', Δv')` is the screen displacement with the roll removed (`Δv'` points
   up): `Δx' = Δx·cos ρ + Δy·sin ρ`, `Δv' = Δx·sin ρ − Δy·cos ρ` for a frame rolled by `ρ` (§5.7.3). `r_g =
   (right₀_x, right₀_y)`; `f_g` is the horizontal part of `f_c`, normalised, or, when it is `< 1e-9` (the camera looks
   straight up or down), that of `up₀`. `r_g ⊥ f_g`, so the map has full rank at every roll (`|det| = 1`); at `ρ = 0` it is
   `k·(Δx·r_g − Δy·f_g)`. Without roll, dragging right moves the object along `r_g`, dragging down moves it opposite to
-  `f_g` (closer) and dragging up pushes it away; with roll the same holds in the de-rolled frame (pending: Q28 in
-  .claude/scratch/v3_m11_questions.md).
+  `f_g` (closer) and dragging up pushes it away; with roll the same holds in the de-rolled frame. The observer camera
+  (`ObserverView {target, dist, az_deg, el_deg}`, §5.6.4) has no roll, so in the web `(r, u) = (right₀, up₀)`, `ρ = 0` and
+  the de-roll is the identity; the roll terms stay in the formula because `drag_position` is a pure function of a camera
+  frame and is tested with rolled frames (pending: Q28 in .claude/scratch/v3_m11_questions.md).
 - **The fallback is decided at pointer-down and never switches during the drag**, so the object does not jump when the ray
-  crosses the 5° limit. With a level view at a low eye height (for example the demo's 0.9 m) most drawing-pane presses
-  are within 5° of the horizon and take the fallback; in `examples/basic.json` (eye 1.5 m, 5.7° down) presses on `crate`
-  take the normal mode. The steeper the view looks down, the closer the fallback is to "the grabbed point stays under the
+  crosses the 5° limit. At the observer's default elevation of 28° the top edge of the pane
+  looks 28° − 20° = 8° below the horizon, so every press takes the normal mode; with the observer at a low elevation
+  (below about 25°) the upper part of the pane is within 5° of the horizon and presses there take the fallback. The steeper the view looks down, the closer the fallback is to "the grabbed point stays under the
   pointer".
 - **Finish** (applied in this order to `x` and to `y` alone; `z_b` is copied bit for bit and is not clamped): `v ← snap ?
   Math.round(v·10)/10 : Math.round(v·1e4)/1e4`, then `v ← clamp(v, min(−50, v₀), max(50, v₀))` with `v₀` the value at
@@ -5951,7 +5960,7 @@ fallback: f_px = the pane's focal length in CSS px; k = ((h₀ − e₀)·f_c) /
   horizontal shift `s` (normal mode), it returns `p₀ + s` within 1e-6 m; for a result inside the clamp range,
   `finish_position` then differs from it by at most `5e-5 + 1e-12` m with snapping off (`Math.round(v·1e4)/1e4` exceeds
   `5e-5` by float rounding, e.g. `5.000000000000166e-5` at `v = −45.90005`) and lies on the 0.1 m grid with snapping on,
-  except for the grid exception above. Because `h₀` is a point on the pane's tessellated mesh, `z_g` is that mesh's
+  except for the grid exception above. Because `h₀` is a point on the observer pane's tessellated mesh, `z_g` is that mesh's
   height; the property concerns `h₀` itself.
 
 #### 5.8.4 Vertical handle (spec-v0.3 §4.2; D83) — observer pane only
@@ -5989,8 +5998,8 @@ fallback: f_px = the pane's focal length in CSS px; k = ((h₀ − e₀)·f_c) /
   `rotation_deg` are copied bit for bit. A buried object (`z_b0 < 0`) is not pushed to 0 at pointer-down (pending: Q25, Q26, Q28
   in .claude/scratch/v3_m11_questions.md). The grid exception of §5.8.3 applies to `z_b` in the same way: an off-grid
   `z_b0 ≤ −0.02` or `> 50` pushed outwards with snapping on finishes at `z_b0` itself.
-- **Not in the drawing pane** (the drawing pane has no vertical handle; height is not legible there) and not while
-  previewing (the observer pane is hidden, §5.8.14).
+- **Observer pane only.** The drawing pane takes no input (D79), so there is no handle there; and not while previewing
+  (the observer pane is hidden and the scene is read-only, §5.8.14).
 
 #### 5.8.5 Pivot, reset and the geometry the session keeps (revises §5.7.7, §5.7.8 items 10 and 13; D81, D82)
 - **`P` is a stored value taken when it is set [decision].** `rig.P` is the point; stage A is not consulted again. The
@@ -6031,9 +6040,9 @@ fallback: f_px = the pane's focal length in CSS px; k = ((h₀ − e₀)·f_c) /
   selector; its redo re-applies the `P` that was taken at the reset (the value, not a re-take, consistent with the
   rule above). The observer camera is not recorded: after undoing a reset the observer is re-framed as after any board
   undo (pending: Q8, Q14 in .claude/scratch/v3_m11_questions.md).
-- **Notice.** In 點選物體 mode with no object picked the notice (formerly "請點一下左窗的物體 …") asks for a click on an
-  object in either pane and says the pivot stays where it is until then; the preview-only wording is dropped (editing works
-  while previewing, §5.8.14).
+- **Notice.** In 點選物體 mode with no object picked the notice keeps the M10 meaning (formerly "請點一下左窗的物體 …" and,
+  while previewing, "按「返回編輯」後點一下左窗的物體 …"): the click is on an object in the left pane, after 「返回編輯」 while
+  previewing, and the pivot stays where it is until then.
 
 #### 5.8.6 Observer pane: focus object and framing (amends §5.6.4, §5.6.5; D81, D82)
 - **Focus object.** The vertex rays (視線) use the selected object as the focus object, else `objects[0]`. A selection
@@ -6046,8 +6055,8 @@ fallback: f_px = the pane's focal length in CSS px; k = ((h₀ − e₀)·f_c) /
 
 #### 5.8.7 Object library: sidebar, tiles and presets (spec-v0.3 §2, §5.1; D84)
 - **Sidebar [decision].** A vertical tab button `#lib-tab` ("物件庫" with a plus icon, `aria-expanded`, `aria-controls="lib"`)
-  sits on the left edge of the two panes; the sidebar `#lib` (`<aside aria-label="物件庫">`) is **collapsed at page start
-  and after every scene load**, and its state is never stored. Expanded, it is 232 px wide and **overlays** the panes
+  sits on the left edge of the two panes; the sidebar `#lib` (`<aside aria-label="物件庫">`) is **collapsed at page start,
+  after every scene load and on entering 預覽**, and its state is never stored. Expanded, it is 232 px wide and **overlays** the panes
   (absolutely positioned above the canvases, labels and overlays): it never pushes the panes, never changes the size of
   any canvas and so never makes a canvas re-size (a test compares the canvases' boxes before and after). It has a title row
   ("物件庫" and a collapse button `#lib-close`) and a two-column grid `#lib-grid` of tiles. Collapsed, the sidebar is
@@ -6057,7 +6066,8 @@ fallback: f_px = the pane's focal length in CSS px; k = ((h₀ − e₀)·f_c) /
   viewport width (the page's narrow breakpoint, `window.innerWidth`) the width is `min(80%, 280px)`, a pointer-down
   outside the sidebar and the tab closes it, and **that pointer-down is consumed** (captured on `document`, it does not
   start a gesture or change the selection) (pending: Q34 in .claude/scratch/v3_m11_questions.md); adding an object closes
-  the sidebar so the result is visible. On a wide screen it stays open after an add, so objects can be added in a row.
+  the sidebar so the result is visible. On a wide screen it stays open after an add, so objects can be added in a row. While 預覽 is on the tab is hidden and the
+  sidebar is `inert` (§5.8.14).
   When focus was inside the sidebar, closing it returns focus to the tab.
 - **Tiles.** `<button type="button" class="tile" aria-label="加入：<name>">`: a 64 × 64 px thumbnail above one line of the
   name (`white-space: nowrap`, ellipsis; at most 6 CJK characters). The border darkens on hover and the tile gives feedback
@@ -6143,10 +6153,10 @@ screen the sidebar closes (§5.8.7).
   `text`, `search`, `number`, `email`, `url`, `tel`, `password`, or missing or unknown (the equation field is `type="text"`).
   Range, checkbox, button, `<select>` and file inputs are not text-like and take the shortcut (pending: Q17 in
   .claude/scratch/v3_m11_questions.md). The pure helpers `is_typing_target({tag, type, editable})` and
-  `shortcut_action(event, has_selection)` decide this and the shortcuts of §5.8.11. `preventDefault` is called only when the
-  shortcut acts (a refused delete counts as acting).
+  `shortcut_action(event, {has_selection, previewing})` decide this and the shortcuts of §5.8.11. `preventDefault` is called only
+  when the shortcut acts (a refused delete counts as acting); while previewing no shortcut acts and none is intercepted.
 - **Chip button.** `#sel-delete` ("刪除") in the selection chip deletes the selection (touch and mouse). It is a normal
-  `<button>`, so Enter and Space work.
+  `<button>`, so Enter and Space work. The chip is hidden while previewing.
 - **Keep one object [decision].** Core validation requires a non-empty `objects` list (§2.0). When `objects.length ≤ 1`
   (every entry counts, meshes included) the button is `disabled` **and** the text 「場景至少要有一個物件」 is shown as visible
   text in the chip (a tooltip alone never appears on touch); pressing Delete or Backspace does not delete and shows the same
@@ -6154,7 +6164,7 @@ screen the sidebar closes (§5.8.7).
 - **Effect.** The object is removed with `remove_object` (order of the others kept), the selection is cleared, the
   display-name entry moves to the history entry, `P` and the pivot are untouched (§5.8.5), the picture-delta measurement
   ends (the vertex list changed), and the history gets a **delete** entry holding the original index (§5.8.11).
-- **While a gesture is open** (§5.8.11) a delete command is ignored.
+- **While a gesture is open** (§5.8.11) or while previewing (§5.8.14) a delete command is ignored.
 
 #### 5.8.11 History, shortcuts and Esc (spec-v0.3 §3, §7; D86)
 - **One stack [decision].** `UNDO_MAX = 50` entries in total; the oldest is dropped when a 51st is pushed. Entries are
@@ -6190,19 +6200,20 @@ screen the sidebar closes (§5.8.7).
 - **Inert during a gesture [decision].** While a gesture is open (a ring, arrow, handle, vertical or object drag; the
   `state.dragging` / held-handle condition that already refuses 預覽) the commands undo, redo, delete, add, 重設視角 and
   重新取中心 are ignored and their buttons are disabled, so that a keyboard shortcut cannot pop the entry of the gesture
-  that is still open (pending: Q17 in .claude/scratch/v3_m11_questions.md). They work in 預覽.
-- **Buttons and keys.** `#undo` and `#redo` are disabled when their stack is empty (re-synced every frame by
-  `sync_controls`). `Ctrl+Z` / `⌘Z` undo and `Ctrl+Shift+Z` / `⌘⇧Z` redo, on `keydown` at `window` with the
+  that is still open (pending: Q17 in .claude/scratch/v3_m11_questions.md). They do not work in 預覽 either: add, delete, undo and redo are
+  unavailable while previewing (§5.8.14); 重設視角 and 重新取中心 keep their M10 behaviour.
+- **Buttons and keys.** `#undo` and `#redo` are disabled when their stack is empty or while previewing (re-synced every
+  frame by `sync_controls`). `Ctrl+Z` / `⌘Z` undo and `Ctrl+Shift+Z` / `⌘⇧Z` redo, on `keydown` at `window` with the
   focus rule of §5.8.10; `Ctrl+Y` is not bound. A board entry's undo re-syncs the controls and re-frames the observer as in
   M10; an object entry's does neither (§5.8.6) but re-runs stage A once (§5.8.12).
 - **Esc [decision].** One `keydown` at `window`; each press does exactly one thing, the innermost state first: (1) focus in
   the equation field: its own Esc (drops the typed text) and no further effect (the field stops the event, as in the D80
-  follow-up); (2) the library is open: close it; (3) an object is selected: clear the selection; (4) previewing: return to
-  the edit view. The selection is state inside the view, so it goes before the mode, and a press in 預覽 does not both drop
-  the selection and leave. During a drag (object, vertical, handle) Esc does nothing, as 預覽 is refused then. The
-  alternative, (3) and (4) swapped so that the first Esc always leaves 預覽 as the button's tooltip says, is a change of
-  two conditions in the handler (pending: Q3 in .claude/scratch/v3_m11_questions.md). The pure `escape_action(state)`
-  returns which of the four applies.
+  follow-up); (2) the library is open: close it; (3) previewing: return to the edit view and nothing else; (4) an object
+  is selected: clear the selection. In 預覽 the library cannot be open and the selection cannot change (§5.8.14), so Esc
+  there only leaves 預覽, and the selection survives the round trip; in the edit view (3) does not apply and the order is
+  field, library, selection. During a drag (object, vertical, handle) Esc does nothing, as 預覽 is refused then. The alternative
+  of Q3, 預覽 before the selection, now behaves the same; only the order field > library > selection of the edit view
+  remains to be confirmed (pending: Q3 in .claude/scratch/v3_m11_questions.md). The pure `escape_action(state)` returns which of the four applies.
 
 #### 5.8.12 Recompute, preview mode and readouts (spec-v0.3 §4.4; D83, D86)
 - **One recompute per animation frame [decision].** An edit event (a drag move, an add, a delete, an undo or redo of an
@@ -6258,23 +6269,31 @@ screen the sidebar closes (§5.8.7).
 - Object edits do not touch `scene.camera`: after an object edit with an unedited rig the frame still renders
   `scene.camera` as it is (the M10 note "The unedited scene camera"), so the document is the CLI's for the edited file.
 
-#### 5.8.14 The drawing pane and preview (amends the D79 and D80 notes; D83)
-(pending: Q1, Q2, Q18, Q19, Q21 in .claude/scratch/v3_m11_questions.md for this subsection.)
-- **What `#stage` accepts.** Only these, with the primary button, a touch or a pen, Shift / Ctrl / Meta not held: a press on
-  an object (select, then drag after `CLICK_PX`, §5.8.2–§5.8.3) and a click on blank space (clear the selection). Wheel,
-  every blank-area drag, Shift drags, right and middle buttons, a two-finger move and a second touch change no state,
-  show no notice or cursor and are not prevented.
-- **Touch.** `touch-action` on `#stage` stays the browser default. The page scrolls natively over the drawing, except that a
-  `touchstart` whose first touch point lands on an object calls `preventDefault()` (a non-passive listener; the hit test is
-  the same as for `pointerdown`), so a one-finger drag that starts on an object moves it instead of scrolling. The
-  alternative `touch-action: none` on `#stage` would break page scrolling over the whole drawing and is not used. A
-  browser that cancels the pointer anyway (`pointercancel`) cancels the drag (§5.8.2).
-- **Preview.** While previewing, everything of §5.8 works except the vertical handle and the observer's own gestures:
-  selection (by a click on an object or blank space in the drawing pane), horizontal drag in the drawing pane, the
-  library (its tab is at the left edge of the drawing pane), delete, the chip, undo, redo and the shortcuts. The selection
-  chip lives in the controls area, which stays visible. 預覽 is refused while an object drag is open, as while a handle is
-  held. While previewing, a selected object shows a one-line hint in `#notices` that its height is changed in the edit view
-  (after 「返回編輯」, with the handle in the observer pane). Esc: §5.8.11.
+#### 5.8.14 The drawing pane and preview (D79 unchanged; amends the D80 notes; D83)
+Q1 and Q2 are answered by the user (see the §5.7 note "(M11, D83)"); nothing in this subsection is pending.
+- **The drawing pane takes no input.** D79 note (1) stands word for word. No pointer event (any button, Shift, touch with
+  one or two fingers, pen) and no wheel event on `#stage`, on an object or on blank space, changes the scene, the
+  selection, the rig, the observer camera, the history, a readout, a notice or the cursor. No pointer, wheel or touch
+  listener is attached to `#stage`; nothing is prevented or stopped; there is no object selection, no object drag and no
+  blank click that clears the selection. The selection is cleared from the observer pane (a blank click), by Esc, by a
+  delete and by a load.
+- **Touch.** `touch-action` on `#stage` stays the browser default and the page scrolls natively over the whole drawing,
+  over objects included; there is no `touchstart` listener and no `preventDefault`. There is nothing to cancel.
+- **Display only.** The drawing pane shows the selection outline (§5.8.2) and, during the wireframe preview of an object
+  drag made in the observer pane (§5.8.12), the translated object wireframe, both in `#sel-overlay` (`pointer-events:
+  none`, outside the SVG overlay markup of the writer).
+- **Preview is read-only [decision].** While 預覽 is on (D80) the scene cannot be edited by any path: the observer pane
+  is hidden, so no object is selected, dragged or given a handle; the library tab is hidden and the sidebar is `inert`
+  (an open sidebar collapses on entering 預覽); Delete and Backspace do nothing and the selection chip, with its delete
+  button, is hidden; `#undo` and `#redo` are disabled and Ctrl / ⌘+Z and Ctrl / ⌘+Shift+Z do nothing (board entries
+  included); Esc only returns to the edit view (§5.8.11). The selection is not changed by entering or leaving 預覽 and
+  is still outlined in the drawing pane. `#notices` carries a one-line hint while previewing that objects cannot be
+  edited until 「返回編輯」. 重設視角 and 重新取中心 are board and pivot commands, not scene edits, and keep their M10
+  behaviour.
+- **Entering 預覽.** It is refused while a gesture is open (a ring, arrow, handle or object drag, as while a handle was
+  held in M10); otherwise any pending press that has not yet become a gesture is cancelled (no selection change, no
+  history entry) before the observer pane is hidden. Returning with 「返回編輯」 shows the tab (collapsed), the chip and the
+  handle again.
 - **Identity (D80).** The selection outline of the drawing pane lives in `#sel-overlay`, outside the SVG overlay markup the
   writer produces, so the "edit vs preview" and "with vs without selection" comparisons of the smoke script (`same_drawing`)
   compare equal.
@@ -6298,7 +6317,7 @@ screen the sidebar closes (§5.8.7).
 | the view is nearly parallel to the ground at pointer-down (`\|d_z\| < sin 5°`) | the grazing fallback for the whole drag (§5.8.3) |
 | normal mode, the ray later misses the plane, points away from it or `t > 200` | that update is skipped; the object stays |
 | the vertical ray is nearly vertical, or the closest point is behind the eye | the update is skipped (§5.8.4); no press target if `s₀` does not exist |
-| an object is dragged behind the camera or out of the frame | computed as usual; the §2.2 near clip applies; an object clipped away cannot be picked in the drawing pane |
+| an object is dragged behind the camera or out of the frame | computed as usual; the §2.2 near clip applies; the observer's near plane clips what it does not draw (§5.8.2) |
 | an object is raised above a point light, or the light ends up inside it | computed as usual; the core's warnings (for example an unbounded shadow) appear in the warnings panel |
 | drag beyond ±50 m or `z_b` outside `[0, 50]` | clamped to `[min(−50, v₀), max(50, v₀)]` per coordinate (never moved at pointer-down, §5.8.3–§5.8.4) |
 | a loaded object has `z_b < 0`, `> 50` or `\|x_b\|, \|y_b\| > 50`, a tilted object or a mesh | untouched until dragged; a drag changes only the coordinates it moves; `rotation_deg` is never written |
@@ -6307,7 +6326,9 @@ screen the sidebar closes (§5.8.7).
 | Delete, Backspace, Ctrl+Z with focus in a text-like field | left to the field; nothing is deleted or undone |
 | a drag whose complete recompute exceeded 50 ms | wireframe preview for the rest of that gesture (§5.8.12) |
 | the ring is drawn over an object | the ring wins; drag from another part of the object |
-| two fingers, the first on an object | §5.8.2 (zero history entries) |
+| two fingers, the first on an object (observer pane) | §5.8.2 (zero history entries) |
+| any gesture on the drawing pane, on an object or not | nothing (D79, §5.8.14) |
+| add, delete, undo, redo or a selection change while previewing | not available: ignored, buttons disabled or hidden (§5.8.14) |
 | `pointercancel`, a scene load, or the window losing the pointer during a drag | the gesture is cancelled: the pressed record and the selection come back, nothing is recorded (a load also drops the held gesture, as M10 review fix (2)) |
 | undo, redo, delete, add, reset while a gesture is open | ignored (§5.8.11) |
 | the pivot object is deleted or moved | `P` stays; the name is dropped from the label on delete (§5.8.5) |
@@ -6321,8 +6342,8 @@ install`). Spec-v0.3 §10.1 reports its rows as passed on the demo; for M11 they
 already verified (the demo has no preview mode and no core output).
 | spec-v0.3 §10.1 row | test | criterion |
 | --- | --- | --- |
-| horizontal drag | `scene_edit.test.ts` | for random `h₀`, shifts and both pane camera models, `drag_position` returns `p₀ + s` within 1e-6 m before `finish_position`; `z_b` and `rotation_deg` bit-identical; snapping on gives x, y on the 0.1 m grid except the grid exception of §5.8.3 (an off-grid `v₀` outside ±50 m pushed outwards finishes at `v₀`); Alt (snap off) gives 1e-4 rounding within `5e-5 + 1e-12` m; no `-0` |
-| grazing fallback | `scene_edit.test.ts` | for `\|d₀_z\| < sin 5°` the displacement is finite and equals `k·(Δx'·r_g + Δv'·f_g)` with `k = ((h₀ − e₀)·f_c) / f_px` (the camera depth); at `ρ = 0` it is in the sign of `Δx` along `r_g` and of `−Δy` along `f_g`; with a rolled drawing camera (`ρ = 30°`, `90°`, random) the 2 × 2 map has `\|det\| = 1` within 1e-12, and at `ρ = 90°` a right drag moves along `+f_g` and a down drag along `+r_g`; at `ρ = 0` a right drag moves the image of an off-axis grabbed point (15°, 30° off the axis) by exactly `Δx` px within 1e-9 relative (`r_g ⊥ f_c`, so the depth does not change); the mode is decided at pointer-down and does not change when later rays cross the limit; the 200 m and `t ≤ 0` guards skip the update |
+| horizontal drag | `scene_edit.test.ts` | for random `h₀`, shifts and random camera frames (the observer's among them), `drag_position` returns `p₀ + s` within 1e-6 m before `finish_position`; `z_b` and `rotation_deg` bit-identical; snapping on gives x, y on the 0.1 m grid except the grid exception of §5.8.3 (an off-grid `v₀` outside ±50 m pushed outwards finishes at `v₀`); Alt (snap off) gives 1e-4 rounding within `5e-5 + 1e-12` m; no `-0` |
+| grazing fallback | `scene_edit.test.ts` | for `\|d₀_z\| < sin 5°` the displacement is finite and equals `k·(Δx'·r_g + Δv'·f_g)` with `k = ((h₀ − e₀)·f_c) / f_px` (the camera depth); at `ρ = 0` it is in the sign of `Δx` along `r_g` and of `−Δy` along `f_g`; with a rolled camera frame handed to the pure function (`ρ = 30°`, `90°`, random; the observer camera itself has no roll) the 2 × 2 map has `\|det\| = 1` within 1e-12, and at `ρ = 90°` a right drag moves along `+f_g` and a down drag along `+r_g`; at `ρ = 0` a right drag moves the image of an off-axis grabbed point (15°, 30° off the axis) by exactly `Δx` px within 1e-9 relative (`r_g ⊥ f_c`, so the depth does not change); the mode is decided at pointer-down and does not change when later rays cross the limit; the 200 m and `t ≤ 0` guards skip the update |
 | vertical handle | `scene_edit.test.ts` | only `z_b` changes; clamp to `[min(0, z_b0), max(50, z_b0)]`; the ground is sticky (`\|z_b\| < 0.02 → 0`, Alt included); `line_param` equals an independent 2 × 2 linear solve (least squares of `[d, −ẑ]·[t, s] = a − e`) within `1e-9·max(1, \|w₀\|)`, and the orthogonality residuals `\|(X(s) − (e + t·d))·d\|` and `\|(X(s) − (e + t·d))·ẑ\|` are `≤ 1e-9·max(1, \|w₀\|)` (a brute-force minimisation, if kept, at 1e-6 only: the distance is flat at its minimum); the line is the handle's (box centre), so the tip stays under the pointer for an off-centre anchor; degenerate rays skip; a buried start is not moved at pointer-down; the handle length formula: the projected length is 36 px within 1e-9 px when `L₃₆` wins, at elevations 0°, 28°, 45° and random, and the cap and near-plane limit apply when `m → 0` |
 | pivot does not follow | `plane.test.ts` | after add, drag, vertical drag, delete and the undo / redo of each, `rig.P` and the eye `E` are bit-identical, also when the edited object is the pivot object; switching the selector to 點選物體 keeps `P`; 重新取中心 takes per mode (§5.8.5); 重設視角 takes the current centre and the unclamped reset again renders `scene.camera`; the geometry refresh does not rebuild the session |
 | library | `library.test.ts`, smoke | `PRESETS` has the 8 rows of §5.8.7 exactly; every preset appended to each bundled example and each v8 case passes the port's `validate_scene` and renders; polygons are counter-clockwise with the centroid at `(0, 0)` within 1e-12 and simple; thumbnails parse, have `viewBox="0 0 64 64"`, use `currentColor` and no script; names ≤ 6 characters. Smoke: collapsed at load and after a scene load; expanding changes no canvas box; each tile adds one valid object; Enter and Space activate; narrow viewport closes after an add and on an outside tap (the tap does not reach the canvas); `aria-label` "加入：名稱" |
@@ -6330,13 +6351,14 @@ already verified (the demo has no preview mode and no core output).
 | placement and avoidance | `scene_edit.test.ts` | target on the ground ray when `f_z < −sin 2°` and `t ≤ 40`, else under `P`; the anchor is at `T`; avoidance steps of `w_u + 0.2` along `r₀`, at most 8; keeps the last position; snap then ±50 clamp; closed-form footprints equal `build_object(...).bbox` within 5 mm |
 | delete | `selection.test.ts`, smoke | `shortcut_action` and `is_typing_target` tables (Delete, Backspace, Ctrl / Meta, IME, text-like and non-text targets); smoke: Delete, Backspace and the chip button delete; focus in the equation field does not; the last object cannot be deleted, the visible text appears |
 | undo and redo | `scene_edit.test.ts`, `plane.test.ts` | add, delete and a drag are one entry each; undo of a delete restores the same record at the original index and `dumps` / SVG text are byte-identical on the five examples and the v8 cases (the end-of-list insert differs); a click and a no-change drag record nothing; redo cleared by a new entry or an actual rig / pivot / object change and not by a selection; 50-entry cap (60 adds then 50 undos leave the base objects plus the first 10 added, base + 10; the 51st undo is a no-op); object entries do not move `P` or `scene_block`; a board entry still keeps the current `P`; reset entry restores `P` and the selector; the stacks are inert during a gesture |
-| selection | `selection.test.ts`, `plane.test.ts` | nearest hit wins; blank click clears; press selects, click in 點選物體 takes `P`, drag does not; the hit priority tables per pane (tip > ring > handle > object > blank; the ring wins over an object); `PressTracker` uses the maximum excursion (4.9 px click, 5 px drag; no movement before 5 px); `observer_ray` / `drawing_ray` reproject to the pointer within 1e-9; ignoring hits at depth `≤ near_m`; focus object = selection else `objects[0]`; after undo / redo of add, delete and move the selection follows the object the entry acted on |
+| selection | `selection.test.ts`, `plane.test.ts` | nearest hit wins; blank click clears; press selects, click in 點選物體 takes `P`, drag does not; the hit priority of the observer pane (tip > ring > handle > object > blank; the ring wins over an object); `PressTracker` uses the maximum excursion (4.9 px click, 5 px drag; no movement before 5 px); `observer_ray` reprojects to the pointer within 1e-9; ignoring hits at depth `≤ OBSERVER_NEAR_M`; focus object = selection else `objects[0]`; after undo / redo of add, delete and move the selection follows the object the entry acted on |
 | overlays | smoke | the writer's SVG text, the overlay markup and the JSON text are identical with and without a selection and, for the same objects, between the edit view and 預覽 |
-| two fingers | smoke (touch) | first finger on an object and moved `< 5 px`, second finger arrives: the object is at its start, the selection is as before the press, the history is unchanged (zero entries), the observer pane zoomed (drawing pane: nothing else happens); moved `≥ 5 px`: the second finger is ignored; run in both panes |
+| two fingers | smoke (touch) | first finger on an object and moved `< 5 px`, second finger arrives: the object is at its start, the selection is as before the press, the history is unchanged (zero entries), the observer pane zoomed; moved `≥ 5 px`: the second finger is ignored; observer pane only (two fingers on `#stage` do nothing, next row) |
 | random stress | `scene_edit.test.ts` | 200 random steps of add, delete, move, undo and redo on a bundled example: every number handed to the drawing code (camera block, record, board, handles, observer view, SVG text) is finite, the LIFO checks hold, the id set stays unique |
 | performance | smoke | a 10-primitive scene: `max(core_ms + dom_ms + obs_ms)` over ≥ 30 drag frames is recorded (not gated); a forced `> 50 ms` drag-mode frame switches that gesture to the preview wireframe and release produces a complete frame |
-| drawing pane (D79 row, rewritten) | `plane.test.ts`, smoke | blank-area gestures on `#stage` (all buttons, Shift, wheel, two fingers) leave the rig, the observer camera, the history, the readouts and the selection (except the blank click that clears it) unchanged, throw nothing and are not prevented; the only `#stage` handlers are the object-gesture ones; `touch-action` is the default; no cursor rule |
-| existing tests that pin replaced behaviour | `observer.test.ts`, `plane.test.ts` | rewritten in the same change: the framing-points test (`2 + 8 + lights + 4`, no ground point), the "drawing pane is view-only" scan, the preview-guard regex (object drag added), the pick-in-object-mode and reset tests (current centre), and the smoke `stage_drag` starts (blank space) |
+| drawing pane (D79 row, unchanged, plus an object case) | `plane.test.ts`, smoke | as in M10: any gesture on `#stage` (buttons 0, 1, 2, Shift, wheel, one and two fingers, pen), on blank space **and on an object**, leaves the scene (the `objects` array is the same reference), the selection, the rig, the observer camera, the history and the readouts unchanged, throws nothing, shows no notice and is not prevented; in particular a press, drag or click on an object in `#stage` changes neither the selection nor the scene; no listener on `#stage`; `touch-action` is the default; no cursor rule |
+| preview is read-only | `selection.test.ts`, `plane.test.ts`, smoke | with a selection, in 預覽: Delete, Backspace, Ctrl / ⌘+Z, Ctrl / ⌘+Shift+Z, the library tab and its tiles and the 復原, 重做 and chip delete buttons leave the scene, the selection and both stacks unchanged (`shortcut_action` returns no action when `previewing`); the sidebar is collapsed on entering and inert, the chip hidden; Esc only returns to the edit view; the selection is the same after 返回編輯; 預覽 is refused during an object, vertical, ring or arrow drag, and entering it cancels a pending press without a selection or history change |
+| existing tests that pin replaced behaviour | `observer.test.ts`, `plane.test.ts` | rewritten in the same change: the framing-points test (`2 + 8 + lights + 4`, no ground point), the preview-guard regex (object drag added; undo and redo guarded), the pick-in-object-mode and reset tests (current centre). The "drawing pane is view-only" scan and the smoke `stage_drag` checks stay as in M10 |
 
 #### 5.8.18 Acceptance (spec-v0.3 §10.2 row M11)
 - Every row of §5.8.17 passes; `npm test` (ts build, TS tests, web tests) and `npm run -w web build` succeed; the smoke script
@@ -6368,8 +6390,11 @@ already verified (the demo has no preview mode and no core output).
   step direction is the pre-roll right vector, the width is the extent along it, the position is clamped to ±50 m, receivers
   are not avoided (§5.8.8). (8) The hit width "約 11 px" of the ring is the mouse value (0.8 × 14); touch is 0.8 × 26.
   (9) The two-finger rule of spec-v0.3 §3 (board distance, pan, one undo step) is replaced by the cancel-and-pinch rule with
-  zero steps, because D79 removed those mappings (§5.8.2). (10) Spec-v0.3 §3's right-pane blank drags "照 v0.2 §5.9" are inert
-  (D79); its §11 line "要環繞時從空白處開始拖" has no drawing-pane meaning any more. (11) Spec-v0.3 §5.3 cites
+  zero steps, because D79 removed those mappings (§5.8.2). (10) Spec-v0.3's right-pane input is not adopted, per the user's answer to Q1 ("drag right pane should do nothing.
+  keep gestures on right pane empty-area inert."): §3's right-pane hit-priority and blank-click rows, its right-pane blank
+  drags "照 v0.2 §5.9", §1's "兩窗都能拖曳", §4.1's drawing-camera ray, the right-pane parts of §9 and of the §10.1 rows
+  (two fingers: observer pane only), and §11's line "要環繞時從空白處開始拖" are not implemented; the drawing pane stays
+  view-only (D79, §5.8.14). Spec-v0.3 does not discuss 預覽; the read-only preview is the user's answer to Q2. (11) Spec-v0.3 §5.3 cites
   "contract §2.0" for the reserved id; the rule is §5.0.1. (12) Spec-v0.3 §10.1's "15 項 … 已在 demo 上通過" are not
   evidence for M11 (§5.8.17). (13) Spec-v0.3 Appendix A's D79–D84 are D81–D86 (pending: Q4 in
   .claude/scratch/v3_m11_questions.md).
@@ -6383,7 +6408,8 @@ already verified (the demo has no preview mode and no core output).
   pivot take (the demo keeps it; M10 rule); the pivot name is dropped when its object is deleted (the demo keeps the stale
   name); the delete hint is visible text (the demo's is a tooltip); the library's closing tap on a narrow screen is consumed
   (the demo lets it through); there is a 5 px dead zone; the wireframe preview exists (the demo has no timing or preview); the
-  demo's 旁觀視角 checkbox, 旁觀視角取景 label and right-pane orbit, pan, wheel and pinch are not carried over (D79, D80).
+  demo's 旁觀視角 checkbox, 旁觀視角取景 label and right-pane orbit, pan, wheel, pinch, selection and object drag are not carried
+  over (D79, D80, Q1); the demo edits while previewing, the page does not (Q2).
 - **[decision, implementation] (M11) Known limits and deferred items.** (1) Objects are picked on the three.js tessellation, so
   the grab height `z_g` of a curved primitive is that mesh's, not the exact quadric's. (2) A per-object stage-A cache (so
   that dragging one primitive does not re-validate and re-mesh an unchanged large mesh) needs a core API change and is
@@ -6397,12 +6423,13 @@ already verified (the demo has no preview mode and no core output).
   three.js, SwiftShader) are measured by the smoke script, not in node.
 - **[decision, implementation] (M11) Positions pending the user's confirmation, and the questions already settled.** The
   numbers are those of `.claude/scratch/v3_m11_questions.md`. The defaults below are what §5.8 and the §5.6 / §5.7 notes
-  above say, so that the work can proceed; an answer amends the paragraph it names by reference.
+  above say, so that the work can proceed; an answer amends the paragraph it names by reference. Rows marked "resolved"
+  were answered by the user (Q1, Q2) or became moot by those answers (Q19, Q21).
   | Q | subject (default written in the contract) | where |
   | --- | --- | --- |
-  | Q1 | an object press / drag is allowed in the drawing pane; blank-area gestures stay inert (D79) | §5.8.14, §5.7 note (M11, D83) |
-  | Q2 | editing works while previewing (D80); only the vertical handle is unavailable; 預覽 refused during an object drag | §5.8.14 |
-  | Q3 | Esc: equation field, library, selection, then 預覽; nothing during a drag | §5.8.11 |
+  | Q1 | resolved (user): the drawing pane stays fully view-only, objects included; D79 is not amended | §5.8.14, §5.7 note (M11, D83) |
+  | Q2 | resolved (user): the scene is read-only while previewing (no add, delete, undo, redo, handle or selection change); 預覽 refused during a gesture | §5.8.14, §5.7 note (M11, D83) |
+  | Q3 | Esc: equation field, library, selection in the edit view; in 預覽 Esc only returns to the edit view; nothing during a drag | §5.8.11 |
   | Q4 | D-numbers D81–D86 instead of Appendix A's D79–D84 | §5.8 preface, notes |
   | Q8 | reset target is the load rule at the current centre; the selection is kept; the label is 重設視角 | §5.8.5, §5.7 note (M11, D82, D86) |
   | Q9 | object edits do not re-frame the observer | §5.8.6, §5.6 note (M11, D82) |
@@ -6411,10 +6438,10 @@ already verified (the demo has no preview mode and no core output).
   | Q15 | after undo / redo the selection follows the object the entry acted on; the pivot label drops the name of a deleted object | §5.8.2, §5.8.5, §5.8.11 |
   | Q16 | redo is cleared by an actual change of rig, pivot or objects, not by selection, library or 預覽 | §5.8.11 |
   | Q17 | undo, redo, delete, add, reset are inert during a gesture; focus rule: select and file inputs are not text-like, IME skipped, no Ctrl+Y | §5.8.10, §5.8.11 |
-  | Q18 | a second finger cancels an object drag moved `< 5 px` (either pane), zero undo steps | §5.8.2 |
-  | Q19 | touch on the drawing pane: a non-passive `touchstart` prevented only on an object; amends D79 note (1) | §5.8.14 |
+  | Q18 | a second finger cancels an object drag moved `< 5 px` (observer pane only), zero undo steps | §5.8.2 |
+  | Q19 | resolved, moot after Q1: the drawing pane has no touch handling | §5.8.14 |
   | Q20 | click = maximum excursion `< 5 px`; an object does not move before 5 px; entries are recorded at release | §5.8.2, §5.8.11 |
-  | Q21 | a blank click in the drawing pane clears the selection | §5.8.2, §5.8.14 |
+  | Q21 | resolved, moot after Q1: the drawing pane has no blank click | §5.8.2, §5.8.14 |
   | Q22 | switching to 點選物體 keeps `P`; 重新取中心 takes the selected object, else the scene centre | §5.8.5 |
   | Q24 | mesh objects are selectable, draggable and deletable, and not in the library | §5.8.0 |
   | Q25 | anchor per type; top centre, height and centre from the world box | §5.8.1 |
