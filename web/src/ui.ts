@@ -45,7 +45,10 @@ export interface Controls {
   equationError: HTMLSpanElement;
   quickEquations: HTMLSpanElement;
   undo: HTMLButtonElement;
+  /** M11 (§5.8.5, §5.8.11): redo, 重設視角 (id `reset`) and 重新取中心. */
+  redo: HTMLButtonElement;
   reset: HTMLButtonElement;
+  recenter: HTMLButtonElement;
   readouts: HTMLDivElement;
   notices: HTMLDivElement;
   layersBox: HTMLSpanElement;
@@ -89,7 +92,9 @@ export function controls(): Controls {
     equationError: $<HTMLSpanElement>("equation-error"),
     quickEquations: $<HTMLSpanElement>("quick-equations"),
     undo: $<HTMLButtonElement>("undo"),
+    redo: $<HTMLButtonElement>("redo"),
     reset: $<HTMLButtonElement>("reset"),
+    recenter: $<HTMLButtonElement>("recenter"),
     readouts: $<HTMLDivElement>("readouts"),
     notices: $<HTMLDivElement>("notices"),
     layersBox: $<HTMLSpanElement>("layers"),

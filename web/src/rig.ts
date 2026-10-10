@@ -642,7 +642,7 @@ export function readouts(rig: RigState, frame_mm: readonly number[]): Readouts {
   };
 }
 
-// ------------------------------------------------------------------------------------------------ undo
+// ------------------------------------------------------------------------------------------------ snapshots (the history is plane.ts's, §5.8.11)
 
 /** A deep copy of a rig. */
 export function clone(rig: RigState): RigState {
@@ -660,68 +660,4 @@ export function sameBoard(p: RigState, q: RigState): boolean {
 /** Everything but the pivot. */
 export function sameState(p: RigState, q: RigState): boolean {
   return sameBoard(p, q) && p.D === q.D && p.roll_deg === q.roll_deg && p.focal === q.focal;
-}
-
-/**
- * The undo stack (spec-v0.2 §5.7): at most 50 snapshots (the pivot excluded: undo keeps the current pivot). One step
- * each: a handle drag that changed the board ({@link begin} / {@link end}; a press without change records nothing),
- * a view, an equation apply, reset, lock-horizontal off → on ({@link record}). The observer camera, focal length, `D`, roll and pivot changes are never recorded (callers do not
- * call the stack for them).
- */
-export class UndoStack {
-  private readonly steps: RigState[] = [];
-  private gesture: RigState | null = null;
-
-  constructor(readonly max = UNDO_MAX) {}
-
-  get size(): number {
-    return this.steps.length;
-  }
-
-  get canUndo(): boolean {
-    return this.steps.length > 0;
-  }
-
-  private push(rig: RigState): void {
-    this.steps.push(clone(rig));
-    if (this.steps.length > this.max) this.steps.shift();
-  }
-
-  /** A discrete action (view, equation, reset, lock on): one step when the state changed (pivot ignored). */
-  record(before: RigState, after: RigState): boolean {
-    if (sameState(before, after)) return false;
-    this.push(before);
-    return true;
-  }
-
-  /** Pointer-down of a handle drag. */
-  begin(rig: RigState): void {
-    this.gesture = clone(rig);
-  }
-
-  /** Release: one step when the board changed since {@link begin}. */
-  end(rig: RigState): boolean {
-    const g = this.gesture;
-    this.gesture = null;
-    if (g === null || sameBoard(g, rig)) return false;
-    this.push(g);
-    return true;
-  }
-
-  /** Abandon the current gesture without recording. */
-  cancel(): void {
-    this.gesture = null;
-  }
-
-  /** Pop the last snapshot, keeping the current pivot; `null` when empty. */
-  undo(current: RigState): RigState | null {
-    this.gesture = null;
-    const s = this.steps.pop();
-    return s === undefined ? null : { ...s, P: copy3(current.P) };
-  }
-
-  clear(): void {
-    this.steps.length = 0;
-    this.gesture = null;
-  }
 }

@@ -17,13 +17,15 @@ import "./style.css";
 
 import * as THREE from "three";
 
-import { LAYER_IDS, compose, dumps, load_scene, load_scene_text, project_scene, shadow_geometry, write_svg } from "castplane";
-import type { CameraRecord, GeometryDocument, Scene, StageA, Vec2 } from "castplane";
+import { LAYER_IDS, compose, dumps, load_scene, load_scene_text, project_scene, shadow_geometry, validate_scene, write_svg } from "castplane";
+import type { CameraRecord, GeometryDocument, Scene, SceneObject, StageA, Vec2 } from "castplane";
 
 import { EXAMPLES } from "./examples.js";
 import { camera_block_text, json_blob, ordered_layers, scene_blob, svg_blob } from "./download.js";
 import { QUICK_EQUATIONS } from "./equation.js";
 import { attach_file_drop } from "./input.js";
+import { escape_action, shortcut_action } from "./keys.js";
+import type { KeyTarget } from "./keys.js";
 import { focal_from_slider } from "./orbit.js";
 import {
   derive_board, framing_points, frame_view, handles_of, hit_handles, initial_view, line_art, observer_basis, observer_project,
@@ -35,6 +37,7 @@ import type { HandleInput } from "./observer3d.js";
 import { IMG_MODE_THRESHOLD, Overlay } from "./overlay.js";
 import type { OverlayMode } from "./overlay.js";
 import { PlaneSession, arrow_drag, object_centres, ring_drag, ring_grab } from "./plane.js";
+import type { ActionResult, StepResult } from "./plane.js";
 import { arrowScreenVector, clone, equation, sync } from "./rig.js";
 import type { RigState, RingGrab, ViewName } from "./rig.js";
 import { build_scene3d } from "./scene3d.js";
@@ -83,6 +86,9 @@ interface State {
   handle: { kind: "ring"; rig0: RigState; grab: RingGrab } | { kind: "arrow"; rig0: RigState; v: Vec2 } | null;
   /** M10: the last equation error (the field turns red with it), null when none. */
   equation_error: string | null;
+  /** M11 (§5.8.1): the selected object id (at most one), web state only: never in the scene JSON or a history entry.
+   * It is the observer's vertex-ray focus (§5.8.6). */
+  selected_id: string | null;
 }
 
 const state: State = {
@@ -102,6 +108,7 @@ const state: State = {
   obs: { on: false, needs_framing: true, ms: null },
   handle: null,
   equation_error: null,
+  selected_id: null,
 };
 
 const ui = controls();
@@ -170,6 +177,7 @@ function load(name: string, make: () => Scene): boolean {
   // a drag held across the load (keyboard on the examples menu, a drop) belongs to the old scene: drop it
   state.handle = null;
   state.dragging = false;
+  state.selected_id = null; // a load clears the selection (§5.8.2) and, with the new session, both history stacks
   set_equation_error(null);
   ui.pivotMode.value = "scene";
   state.rec = null;
@@ -227,14 +235,26 @@ function sync_controls(): void {
   set_lines(ui.readouts, pl.readout_lines());
   const notes = pl.notices();
   if (pl.pivot.mode === "object" && pl.pivot.object_id === null) {
-    notes.push(state.obs.on ? "請點一下左窗的物體，把它設為旋轉中心（目前暫用場景中心）" : "按「返回編輯」後點一下左窗的物體，把它設為旋轉中心（目前暫用場景中心）");
+    notes.push(state.obs.on ? "請點一下左窗的物體，把它設為旋轉中心（在那之前旋轉中心不動）" : "按「返回編輯」後點一下左窗的物體，把它設為旋轉中心（在那之前旋轉中心不動）");
   }
   set_lines(ui.notices, notes);
-  ui.undo.disabled = !pl.undo.canUndo;
+  ui.pivotMode.value = pl.pivot.mode; // an undo or redo of 重設視角 restores the selector (§5.8.5)
+  // §5.8.11: undo and redo need an entry and the edit view (preview is read-only, §5.8.14); during a gesture the
+  // history commands, 重設視角 and 重新取中心 are inert and their buttons disabled
+  const busy = gesture_open();
+  ui.undo.disabled = !pl.history.canUndo || !state.obs.on || busy;
+  ui.redo.disabled = !pl.history.canRedo || !state.obs.on || busy;
+  ui.reset.disabled = busy;
+  ui.recenter.disabled = busy;
+}
+
+/** Whether a gesture is open (a ring or arrow drag; the condition that already refuses 預覽, §5.8.11). */
+function gesture_open(): boolean {
+  return state.dragging || state.handle !== null || (state.plane?.in_gesture ?? false);
 }
 
 /** After a session action: re-frame the observer when asked (never during a drag), then render. */
-function after_action(r: { changed: boolean; framing: boolean }): void {
+function after_action(r: ActionResult): void {
   if (r.framing) state.obs.needs_framing = true;
   sync_controls();
   request_render();
@@ -307,16 +327,73 @@ ui.equation.addEventListener("blur", () => {
   set_equation_error(null);
   sync_controls();
 });
-ui.undo.addEventListener("click", () => {
-  if (state.plane !== null) after_action(state.plane.undo_step());
-});
+/** Undo or redo (§5.8.11): not while previewing (§5.8.14) or during a gesture. A board or reset entry re-frames the
+ * observer; an object entry replaces the objects (stage A re-run, the session's geometry refreshed, `P` untouched, no
+ * re-framing) and the selection follows the object it acted on (§5.8.2). */
+function history_step(dir: "undo" | "redo"): void {
+  const pl = state.plane;
+  if (pl === null || state.scene === null || !state.obs.on || gesture_open()) return;
+  const r: StepResult = dir === "undo" ? pl.undo_step(state.scene.objects) : pl.redo_step(state.scene.objects);
+  if (r.objects !== null && !apply_objects(r.objects)) {
+    pl.history.clear(); // the restored scene failed validation: a bug guard, as a LIFO violation
+  }
+  if (r.select !== undefined) set_selection(r.select);
+  after_action(r);
+}
+
+/**
+ * Replace the page's objects after an edit (§5.8.0): the loaded scene with the new `objects` array (records shared by
+ * reference) is checked by the port's `validate_scene`, stage A is re-run and the session gets the new geometry
+ * (`set_geometry`: `P`, the history and `scene_block` are kept, §5.8.5); the three.js groups are rebuilt. The observer
+ * is not re-framed (§5.8.6). A selected id that no longer exists is cleared. Returns false (the previous scene stays,
+ * the reason in the error panel) when the edited scene is rejected.
+ */
+function apply_objects(objects: readonly SceneObject[]): boolean {
+  const pl = state.plane, sc = state.scene;
+  if (pl === null || sc === null) return false;
+  const scene: Scene = { ...sc, objects: [...objects] };
+  let A: StageA;
+  const t0 = performance.now();
+  try {
+    validate_scene(scene);
+    A = shadow_geometry(scene);
+  } catch (e) {
+    show_error(describe_error(e));
+    return false;
+  }
+  state.timings.stage_a_ms = performance.now() - t0;
+  state.scene = scene;
+  state.A = A;
+  pl.set_geometry(scene_centre(A), object_centres(A.objects), A.vertices);
+  if (state.selected_id !== null && !scene.objects.some((o) => o.id === state.selected_id)) state.selected_id = null;
+  view.replace_group(() => build_scene3d(scene, A));
+  observer?.set_scene(scene, A);
+  request_render();
+  return true;
+}
+
+/** Select an object (or clear with `null`): web state only, not a history step (§5.8.2); the observer's vertex rays
+ * follow it without a core frame (§5.8.6). */
+function set_selection(id: string | null): void {
+  const next = id !== null && state.scene !== null && state.scene.objects.some((o) => o.id === id) ? id : null;
+  if (next === state.selected_id) return;
+  state.selected_id = next;
+  observer_refresh(true);
+}
+
+ui.undo.addEventListener("click", () => history_step("undo"));
+ui.redo.addEventListener("click", () => history_step("redo"));
+// 重設視角 (§5.8.5): board, pivot (the current scene centre) and observer camera; objects and the selection are kept
 ui.reset.addEventListener("click", () => {
-  if (state.plane === null) return;
+  if (state.plane === null || gesture_open()) return;
   const r = state.plane.reset();
-  ui.pivotMode.value = "scene";
   set_equation_error(null);
   if (observer !== null) observer.view = { ...initial_view(), target: observer.view.target, dist: observer.view.dist };
   after_action({ ...r, framing: true });
+});
+// 重新取中心 (§5.8.5): re-take P for the current mode; not an undo step
+ui.recenter.addEventListener("click", () => {
+  if (state.plane !== null && !gesture_open()) after_action(state.plane.recenter(state.selected_id));
 });
 
 // phase 2 of §5.4.10: the hidden-line switch, passed as `hidden_lines` to `compose` (page-level, on at start), and the
@@ -403,11 +480,15 @@ const handle_input: HandleInput = {
     sync_controls();
     request_render();
   },
+  // a click in the observer pane (§5.8.2): on an object it selects it, and in 點選物體 mode also takes P from it; on
+  // blank space it clears the selection (P is not changed)
   click: (p) => {
     const pl = state.plane;
-    if (pl === null || observer === null || pl.pivot.mode !== "object") return;
+    if (pl === null || observer === null) return;
     const id = observer.pick_object(p);
-    if (id !== null) after_action(pl.pick_object(id));
+    set_selection(id);
+    if (id !== null && pl.pivot.mode === "object") after_action(pl.pick_object(id));
+    else sync_controls();
   },
 };
 
@@ -438,9 +519,10 @@ function update_observer(rec: CameraRecord, doc: GeometryDocument): number {
   // M10: the board of the rig (§5.6.5): pivot P, R = g + D, D of the rig; the frame from the rendered record
   const board = derive_board(rec, { target: rig.P, distance: d.R }, rig.D);
   const art = line_art(doc, rec, rig.D, state.layersChecked);
-  const rays = ui.observerRays.checked ? vertex_rays(doc, state.scene, board, rec.near) : null;
-  if (state.obs.needs_framing && !state.dragging) {
-    observer.view = frame_view(observer.view, framing_points(board, state.scene, pl.scene.centre), observer.aspect);
+  const rays = ui.observerRays.checked ? vertex_rays(doc, state.scene, board, rec.near, state.selected_id) : null;
+  if (state.obs.needs_framing && !state.dragging && state.A !== null) {
+    // §5.8.6: framed on the eight corners of the current stage-A box (object edits do not ask for a framing)
+    observer.view = frame_view(observer.view, framing_points(board, state.scene, state.A.bbox), observer.aspect);
     state.obs.needs_framing = false;
   }
   observer.update({ board, art, rays, handles: handles_of(rig, state.scene.camera.frame_mm),
@@ -494,8 +576,27 @@ function set_preview(preview: boolean): void {
   set_observer(!preview);
 }
 ui.preview.addEventListener("click", () => set_preview(state.obs.on));
+
+/** The `keydown` target as the key rules read it (§5.8.10). */
+function key_target(t: EventTarget | null): KeyTarget | null {
+  if (!(t instanceof HTMLElement)) return null;
+  return { tag: t.tagName, type: t instanceof HTMLInputElement ? t.type : null, editable: t.isContentEditable };
+}
+
+// Esc and the history shortcuts (§5.8.11): one keydown at window; the equation field's own Esc stops the event first
 window.addEventListener("keydown", (ev) => {
-  if (ev.key === "Escape" && !state.obs.on) set_preview(false);
+  if (ev.key === "Escape") {
+    const act = escape_action({ in_equation: document.activeElement === ui.equation, dragging: gesture_open(),
+      previewing: !state.obs.on, has_selection: state.selected_id !== null });
+    if (act === "leave_preview") set_preview(false);
+    else if (act === "clear_selection") set_selection(null);
+    return;
+  }
+  const act = shortcut_action({ key: ev.key, ctrlKey: ev.ctrlKey, metaKey: ev.metaKey, altKey: ev.altKey, shiftKey: ev.shiftKey,
+    isComposing: ev.isComposing, target: key_target(ev.target) }, { has_selection: state.selected_id !== null, previewing: !state.obs.on });
+  if (act === null) return;
+  ev.preventDefault();
+  history_step(act);
 });
 ui.observerFrame.addEventListener("click", () => {
   state.obs.needs_framing = true;
@@ -580,7 +681,7 @@ function frame(): void {
     if (pl === null) return null;
     const d = sync(pl.rig);
     return { ...clone(pl.rig), E: d.E, Q: d.Q, R: d.R, c: d.c, r: d.r, u: d.u, equation: equation(pl.rig),
-      scene_block: pl.scene_block, pivot: { ...pl.pivot }, undo: pl.undo.size, delta: pl.delta,
+      scene_block: pl.scene_block, pivot: { ...pl.pivot }, undo: pl.history.size, redo: pl.history.redo_size, delta: pl.delta,
       readouts: pl.readout_lines(), notices: pl.notices() };
   },
   /** M10: the observer-pane px of the handles, the eye and the pivot (`null` entries behind the observer). */
@@ -589,6 +690,31 @@ function frame(): void {
     if (o === null || h === null || b === null || observer === null) return null;
     const pr = (X: readonly number[]) => observer_project(observer!.view, o.W, o.H, X);
     return { tip: pr(h.tip), Q: pr(h.Q), ring: h.ring.map(pr), E: pr(b.E), P: pr(b.P), size: [o.W, o.H] };
+  },
+  /** M11: the selected object id (§5.8.1), null when none. */
+  get selected() { return state.selected_id; },
+  /** M11: the current stage-A box and object ids (the scene geometry after edits). */
+  get scene_geometry() {
+    return state.A === null || state.scene === null ? null
+      : { bbox: state.A.bbox.map((p) => [...p]), ids: state.scene.objects.map((o) => o.id) };
+  },
+  /** M11 test hook, until the object drag is wired (§5.8.3): what the release of an object drag does — move the object
+   * `id` to `position` and record one `move` entry (nothing when the position is unchanged, while previewing or during
+   * a gesture). Returns whether it moved. */
+  move_object: (id: string, position: [number, number, number]) => {
+    const pl = state.plane, sc = state.scene;
+    if (pl === null || sc === null || !state.obs.on || gesture_open()) return false;
+    const index = sc.objects.findIndex((o) => o.id === id);
+    const before = sc.objects[index];
+    if (before === undefined) return false;
+    const p0 = before.transform.position;
+    if (p0[0] === position[0] && p0[1] === position[1] && p0[2] === position[2]) return false;
+    const after: SceneObject = { ...before, transform: { ...before.transform, position: [position[0], position[1], position[2]] } };
+    if (!apply_objects(sc.objects.map((o, i) => (i === index ? after : o)))) return false;
+    pl.history.push({ kind: "move", index, id, before, after });
+    set_selection(id);
+    sync_controls();
+    return true;
   },
   /** M10: the observer-pane px of each object's pivot (its stage-A bounding-box centre). */
   get objects_px() {

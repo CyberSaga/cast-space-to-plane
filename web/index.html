@@ -18,8 +18,9 @@
         <span class="group" id="quick-equations"></span>
         <span id="equation-error" role="status"></span>
       </span>
-      <button id="undo" type="button">復原</button>
-      <button id="reset" type="button">重設</button>
+      <button id="undo" type="button" title="復原（Ctrl+Z / ⌘Z）" aria-keyshortcuts="Control+Z Meta+Z">復原</button>
+      <button id="redo" type="button" title="重做（Ctrl+Shift+Z / ⌘⇧Z）" aria-keyshortcuts="Control+Shift+Z Meta+Shift+Z">重做</button>
+      <button id="reset" type="button" title="板子、旋轉中心與旁觀相機回到載入時的狀態（以目前的場景中心為準；物件與選取不變）">重設視角</button>
       <label class="group">Example
         <select id="examples"><option value="">—</option></select>
       </label>
@@ -66,6 +67,7 @@
               <label class="group">旋轉中心
                 <select id="pivot-mode"><option value="scene">場景中心</option><option value="object">點選物體</option></select>
               </label>
+              <button id="recenter" type="button" title="依目前模式重新取旋轉中心（場景中心，或選取的物體）">重新取中心</button>
             </div>
             <div class="ctl-row sliders">
               <label class="group">焦距 <input id="focal" type="range" min="0" max="1" step="0.001" /> <output id="focal-out"></output></label>
@@ -89,7 +91,7 @@
         <div id="error" hidden></div>
         <h2>Warnings</h2>
         <table id="warnings"><thead><tr><th>code</th><th>ids</th><th>message</th></tr></thead><tbody></tbody></table>
-        <p class="help">作圖畫面只供檢視，在上面拖動或捲動不會改變任何東西。要移動板子，在左側旁觀視角拖橘色圓環（方向）或藍色箭頭尖端（板子距離）；拖動時按住 Alt 暫停吸附。按「預覽」只看作圖畫面，再按「返回編輯」或 Esc 回來。</p>
+        <p class="help">作圖畫面只供檢視，在上面拖動或捲動不會改變任何東西。要移動板子，在左側旁觀視角拖橘色圓環（方向）或藍色箭頭尖端（板子距離）；拖動時按住 Alt 暫停吸附。按「預覽」只看作圖畫面，再按「返回編輯」或 Esc 回來。旋轉中心是設定當下取的點，之後改動物件不會移動它；按「重新取中心」重新取。Ctrl+Z／⌘Z 復原，Ctrl+Shift+Z／⌘⇧Z 重做（預覽時不可用）；在左窗點空白處或按 Esc 取消選取。</p>
       </aside>
     </main>
     <script type="module" src="./src/main.ts"></script>

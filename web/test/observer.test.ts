@@ -227,20 +227,39 @@ test("framing: centroid target, dist = clamp(2.3 · max radius, 6, 60) in a wide
   close(mid.dist, 2.3 * 5, 1e-12, "2.3 · radius");
   const huge = frame_view(v0, [[0, 0, 0], [100, 0, 0]], 1.5);
   assert.equal(huge.dist, FRAMING_MAX_M);
-  // the points of §5.6.4: E, Q, scene centre, point lights, ground point, four corners
+  // the points of §5.6.4 as amended by M11 (§5.8.6, D82): E, Q, the eight corners of stage A's bbox, point lights, the
+  // four frame corners (2 + 8 + lights + 4); the scene centre and its ground point are no longer points
   const scene = example("basic");
   const A = shadow_geometry(scene);
   const orbit = orbit_from_camera(scene.camera, scene);
   const b = derive_board(frame_rec(scene, orbit), orbit, 4);
   const c = scene_centre(A);
-  const pts = framing_points(b, scene, c);
-  assert.equal(pts.length, 3 + 1 + 1 + 4);
-  close3(pts[3]!, scene.lights[0]!.position as Vec3, 0, "the point light");
-  close3(pts[4]!, [c[0], c[1], 0], 0, "the ground point");
+  const pts = framing_points(b, scene, A.bbox);
+  assert.equal(pts.length, 2 + 8 + 1 + 4);
+  assert.deepEqual([pts[0], pts[1]], [b.E, b.Q]);
+  const [lo, hi] = A.bbox as [Vec3, Vec3];
+  const corners = pts.slice(2, 10);
+  for (const p of corners) for (let i = 0; i < 3; i++) assert.ok(p[i] === lo[i] || p[i] === hi[i], `a bbox corner: ${p}`);
+  assert.equal(new Set(corners.map((p) => p.join())).size, 8, "the eight distinct corners");
+  close3(pts[10]!, scene.lights[0]!.position as Vec3, 0, "the point light");
+  assert.deepEqual(pts.slice(11), b.corners, "the four frame corners");
+  assert.ok(!pts.some((p) => p[0] === c[0] && p[1] === c[1] && (p[2] === c[2] || p[2] === 0)), "no centre, no ground point");
   const dirScene = example("directional");
-  assert.equal(framing_points(b, dirScene, c).length, 3 + 1 + 4, "a directional light contributes no point");
+  assert.equal(framing_points(b, dirScene, A.bbox).length, 2 + 8 + 4, "a directional light contributes no point");
   const v = frame_view(initial_view(), pts, 1.5);
   assert.ok(v.dist >= FRAMING_MIN_M && v.dist <= FRAMING_MAX_M);
+  // an edited scene (an object moved 6 m away): the corners of the new box frame it, so the moved object is inside the
+  // framed volume at the next framing (§5.8.6)
+  const moved = load_scene({ ...raw("basic"), objects: (raw("basic")["objects"] as Record<string, unknown>[]).map((o, i) =>
+    i === 0 ? { ...o, transform: { ...(o["transform"] as object), position: [8, 4, 0] } } : o) });
+  const A2 = shadow_geometry(moved);
+  const pts2 = framing_points(b, moved, A2.bbox);
+  const v2 = frame_view(initial_view(), pts2, 1.5);
+  const [olo, ohi] = A2.objects[0]!.bbox;
+  for (const X of [olo, ohi, [olo[0], ohi[1], olo[2]], [ohi[0], olo[1], ohi[2]]]) {
+    const q = observer_project(v2, 1500, 1000, X);
+    assert.ok(q !== null && q[0] >= 0 && q[0] <= 1500 && q[1] >= 0 && q[1] <= 1000, `moved object's corner ${X} in the framed pane`);
+  }
 });
 
 test("framing is aspect-aware: every framing point inside a portrait, square or wide pane (the eye stays in view)", () => {
@@ -250,7 +269,7 @@ test("framing is aspect-aware: every framing point inside a portrait, square or 
     const c = scene_centre(A);
     const orbit = orbit_from_camera(orbit_camera(scene.camera, c), scene);
     const b = derive_board(frame_rec(scene, orbit), orbit, observer_D(scene.camera, scene.output.canvas_mm));
-    const pts = framing_points(b, scene, c);
+    const pts = framing_points(b, scene, A.bbox);
     for (const [W, H] of [[630, 840], [790, 1016], [1000, 1000], [1600, 700]] as const) {
       for (const az of [55, -30, 160]) {
         const v = frame_view({ ...initial_view(), az_deg: az }, pts, W / H);
@@ -474,13 +493,42 @@ test("vertex rays: the focus object's sight lines, crossings on the board, light
   }
 });
 
+test("vertex rays follow the focus object: the selection, else objects[0]; a curved focus draws none (M11 §5.8.6, D81)", () => {
+  const scene = example("three_point"); // tower (box), crate (box), wedge (prism)
+  const orbit = orbit_from_camera(scene.camera, scene);
+  const { doc, rec } = render(scene, camera_from_orbit(orbit, scene.camera));
+  const b = derive_board(rec, orbit, 4);
+  const vertices_of = (id: string): Vec3[] => Object.keys(doc.points).filter((n) => new RegExp(`^${id}\\.v\\d+$`).test(n))
+    .sort((p, q) => Number(p.split(".v")[1]) - Number(q.split(".v")[1])).map((n) => (doc.points[n] as { world: Vec3 }).world);
+  const ids = scene.objects.map((o) => o.id);
+  assert.deepEqual(ids, ["tower", "crate", "wedge"]);
+  for (const id of ids) {
+    const rays = vertex_rays(doc, scene, b, rec.near, id);
+    const vs = vertices_of(id);
+    assert.ok(vs.length > 0);
+    assert.deepEqual(rays.sight.map(([, P]) => P), vs, `${id}: the sight lines are the focus object's vertices`);
+  }
+  // no selection, or a selected id that is not an object: objects[0] (what M9 and M10 drew)
+  const first = vertex_rays(doc, scene, b, rec.near);
+  assert.deepEqual(vertex_rays(doc, scene, b, rec.near, null), first);
+  assert.deepEqual(vertex_rays(doc, scene, b, rec.near, "no such object"), first);
+  assert.deepEqual(first.sight.map(([, P]) => P), vertices_of("tower"));
+  assert.notDeepEqual(vertex_rays(doc, scene, b, rec.near, "wedge").sight, first.sight);
+  // a curved focus object has no <obj>.v<k> points: no rays (not a defect)
+  const basic = example("basic");
+  const o3 = orbit_from_camera(basic.camera, basic);
+  const r3 = render(basic, camera_from_orbit(o3, basic.camera));
+  const curved = vertex_rays(r3.doc, basic, derive_board(r3.rec, o3, 4), r3.rec.near, "pillar");
+  assert.deepEqual([curved.sight.length, curved.light.length], [0, 0]);
+});
+
 // ------------------------------------------------------------------------------------------------ finite numbers, identity
 
 function all_geometry(doc: GeometryDocument, scene: Scene, rec: CameraRecord, orbit: { target: Vec3; distance: number }, D: number,
-  centre: Vec3): unknown {
+  bbox: readonly (readonly number[])[]): unknown {
   const b = derive_board(rec, orbit, D);
   return { b, fr: frustum(b), art: line_art(doc, rec, D, new Set(LAYER_IDS)), rays: vertex_rays(doc, scene, b, rec.near),
-    view: frame_view(initial_view(), framing_points(b, scene, centre), 0.75), labels: board_labels(b) };
+    view: frame_view(initial_view(), framing_points(b, scene, bbox), 0.75), labels: board_labels(b) };
 }
 
 test("every number finite: the five examples and 200 random cameras (incl. horizontal boards and roll)", () => {
@@ -492,7 +540,7 @@ test("every number finite: the five examples and 200 random cameras (incl. horiz
     const orbit0 = orbit_from_camera(orbit_camera(scene.camera, centre), scene);
     {
       const B = project_scene(scene, A, camera_from_orbit(orbit0, scene.camera));
-      assertFinite(all_geometry(compose(scene, B), scene, B.camera, orbit0, 4, centre), `${name} scene camera`);
+      assertFinite(all_geometry(compose(scene, B), scene, B.camera, orbit0, 4, A.bbox), `${name} scene camera`);
     }
     for (let k = 0; k < 40; k++) {
       let cam: Camera | ReturnType<typeof camera_from_orbit>;
@@ -508,7 +556,7 @@ test("every number finite: the five examples and 200 random cameras (incl. horiz
         const doc = compose(scene, B);
         assert.equal(doc.horizon.segment, null, "a horizontal board has no horizon on the frame");
         const D = observer_D(cam as Camera, scene.output.canvas_mm);
-        assertFinite(all_geometry(doc, scene, B.camera, orbit, D, centre), `${name} horizontal ${k}`);
+        assertFinite(all_geometry(doc, scene, B.camera, orbit, D, A.bbox), `${name} horizontal ${k}`);
         continue;
       }
       const o: OrbitState = { ...orbit0, yaw_deg: 360 * r() - 180, pitch_deg: 178 * r() - 89, roll_deg: 360 * r() - 180,
@@ -516,7 +564,7 @@ test("every number finite: the five examples and 200 random cameras (incl. horiz
       cam = camera_from_orbit(o, scene.camera);
       orbit = o;
       const B = project_scene(scene, A, cam);
-      assertFinite(all_geometry(compose(scene, B), scene, B.camera, orbit, 4, centre), `${name} random ${k}`);
+      assertFinite(all_geometry(compose(scene, B), scene, B.camera, orbit, 4, A.bbox), `${name} random ${k}`);
     }
   }
 });
@@ -530,7 +578,7 @@ test("switch-off identity: building the observer geometry leaves the document an
     const before = structuredClone(doc);
     const svg0 = write_svg(doc, LAYER_IDS), json0 = dumps(doc);
     const orbit = orbit_from_camera(orbit_camera(scene.camera, scene_centre(A)), scene);
-    all_geometry(doc, scene, B.camera, orbit, observer_D(scene.camera, scene.output.canvas_mm), scene_centre(A));
+    all_geometry(doc, scene, B.camera, orbit, observer_D(scene.camera, scene.output.canvas_mm), A.bbox);
     assert.deepEqual(doc, before, `${name}: document mutated`);
     assert.equal(write_svg(doc, LAYER_IDS), svg0, `${name}: SVG changed`);
     assert.equal(dumps(doc), json0, `${name}: JSON changed`);

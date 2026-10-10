@@ -1,5 +1,6 @@
 /** Tests of the plane-mode rig (`web/src/rig.ts`; spec-v0.2 §7.1 web rows, contract §5.7.13): invariants, ring,
- * arrow, the pan state, roll, sliders, views, pivot, undo, the load rule and random frames. Picture checks go through the
+ * arrow, the pan state, roll, sliders, views, pivot, the snapshot keys of the history (and its cap, `plane.ts`'s
+ * `History`), the load rule and random frames. Picture checks go through the
  * port's `camera_matrix` with `toTargetCameraBlock` (the equivalent target form) or `toCameraBlock` (the
  * `picture_plane` form the port resolves). */
 
@@ -15,14 +16,16 @@ import type { Camera, Scene, Vec2, Vec3 } from "castplane";
 import { camera_from_orbit, orbit_from_camera, rotate_orbit } from "../src/orbit.js";
 import type { LensBase } from "../src/orbit.js";
 import {
-  D_MAX_M, D_MIN_M, KAPPA_DEG_PER_PX, PITCH_LIMIT_DEG, R_MAX_M, R_MIN_M, UNDO_MAX, VIEWS, UndoStack, applyPlane,
+  D_MAX_M, D_MIN_M, KAPPA_DEG_PER_PX, PITCH_LIMIT_DEG, R_MAX_M, R_MIN_M, UNDO_MAX, VIEWS, applyPlane,
   arrowDrag, arrowLength, arrowScreenVector, arrowTip, basis, bboxCentre, deltaText, equation, eye, fixed, foot,
   frameMetres, frameOf, fromCamera, fromOrbitState, measureRef, orbitFree, orbitLockLevel, orbitRing,
   pictureDelta, planeConst, planeToRig, plane_equation, readouts, resolvePicturePlane, ringPoint, ringRadius,
-  ringSign, rollOfFrame, setD, setFocal, setLockLevel, setPivot, setRoll, sixView, snapToAxis, sync,
+  ringSign, rollOfFrame, sameBoard, sameState, setD, setFocal, setLockLevel, setPivot, setRoll, sixView, snapToAxis, sync,
   toCameraBlock, toTargetCameraBlock, wrap_deg,
 } from "../src/rig.js";
 import type { RigState, RingGrab, ViewName } from "../src/rig.js";
+import { History } from "../src/plane.js";
+import type { BoardEntry } from "../src/plane.js";
 
 // web/build/test/rig.test.js -> repository root
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..", "..");
@@ -590,13 +593,12 @@ test("views and equation after pan / roll: views clear them, the equation keeps 
   assert.equal(equation(e), "0.707x + 0.707y = 2.121");
 });
 
-test("pivot change: the eye faces the new pivot again (pan cleared), orbiting keeps the radius; not an undo step", () => {
+// (that a pivot change is not an undo step and that an undo keeps the current pivot is the session's: plane.test.ts)
+test("pivot change: the eye faces the new pivot again (pan cleared), orbiting keeps the radius", () => {
   const obs = observer();
-  const undo = new UndoStack();
   const rig0 = withPan(initial(), -0.6, 0);
   const Pobj: Vec3 = [1.8, 4.2, 0.35];
   const r1 = setPivot(rig0, Pobj);
-  assert.equal(undo.size, 0);
   assert.deepEqual([r1.a, r1.b], [0, 0]);
   assert.deepEqual([r1.f, r1.g, r1.D], [rig0.f, rig0.g, rig0.D]);
   pivotCentred(r1, 1e-7, "picked object");
@@ -605,11 +607,6 @@ test("pivot change: the eye faces the new pivot again (pan cleared), orbiting ke
     close(dist(sync(r2).E, Pobj), r1.g + r1.D, 1e-9, "radius about the object");
     pivotCentred(r2, 1e-7, "orbit about the object");
   }
-  // undo keeps the current pivot
-  undo.record(r1, sixView(r1, "top"));
-  const back = undo.undo(setPivot(sixView(r1, "top"), P0))!;
-  assert.deepEqual(back.P, P0);
-  assert.deepEqual(back.f, r1.f);
 });
 
 test("planeToRig: the board between the eye and the pivot; |s_d| is g", () => {
@@ -658,60 +655,37 @@ test("plane_equation: contract table — x = 1 from (−1,0,0, 1) and z = 3 from
 
 // ------------------------------------------------------------------------------------------------ undo
 
-test("undo details: a press without movement records nothing, a pivot change records nothing, at most 50 steps", () => {
-  const undo = new UndoStack();
+test("history keys: a press without movement leaves the board key, a no-op view the state key; at most 50 entries", () => {
+  // M10's UndoStack is now plane.ts's History (§5.8.11): the session records a board entry when sameBoard (a drag) or
+  // sameState (a discrete action) says the rig changed; the session-level rules are in plane.test.ts
   const rig0 = initial();
   const grab = grabAt(rig0, 0.5, observer());
-  undo.begin(rig0);
-  assert.equal(undo.end(orbitRing(rig0, 0, 0, grab)), false);
-  assert.equal(undo.size, 0);
-  undo.begin(rig0);
-  assert.equal(undo.end(arrowDrag(rig0, [0, -40], 0, 0)), false, "arrow press");
-  undo.begin(rig0);
+  assert.equal(sameBoard(rig0, orbitRing(rig0, 0, 0, grab)), true, "ring press");
+  assert.equal(sameBoard(rig0, arrowDrag(rig0, [0, -40], 0, 0)), true, "arrow press");
   const moved = orbitRing(rig0, 30, 0, grab, false);
-  assert.equal(undo.end(moved), true);
-  assert.equal(undo.size, 1);
-  // sliders and pivot never call the stack; a view that changes nothing is not a step
-  assert.equal(undo.record(moved, sixView(sixView(moved, "front"), "front")), true);
+  assert.equal(sameBoard(rig0, moved), false);
+  // the sliders are not part of the board key, but they are part of the state key
+  assert.equal(sameBoard(moved, setRoll(setD(setFocal(moved, 35), 6), 15)), true);
+  assert.equal(sameState(moved, setFocal(moved, 35)), false);
+  assert.equal(sameState(moved, { ...moved, P: [9, 9, 9] }), true, "the pivot is not part of the state key");
   const front = sixView(moved, "front");
-  assert.equal(undo.record(front, sixView(front, "front")), false);
-  assert.equal(undo.size, 2);
-  for (let i = 0; i < 80; i++) undo.record({ ...rig0, g: i }, { ...rig0, g: i + 1 });
-  assert.equal(undo.size, UNDO_MAX);
+  assert.equal(sameState(front, sixView(front, "front")), true, "the same view again changes nothing");
+  // the cap: 80 entries keep the newest 50; undoing all of them moves them onto the redo stack
+  const h = new History();
+  const entry = (i: number): BoardEntry => ({ kind: "board", before: { ...rig0, g: i }, after: { ...rig0, g: i + 1 } });
+  for (let i = 0; i < 80; i++) h.push(entry(i));
+  assert.equal(h.size, UNDO_MAX);
   assert.equal(UNDO_MAX, 50);
-  let last: RigState | null = null, n = 0;
-  for (let cur = rig0; ; n++) {
-    const prev = undo.undo(cur);
-    if (prev === null) break;
-    last = prev;
-    cur = prev;
-  }
+  let last: BoardEntry | null = null, n = 0;
+  for (let e = h.take_undo(); e !== null; e = h.take_undo(), n++) last = e as BoardEntry;
   assert.equal(n, 50);
-  assert.equal(last!.g, 30, "the oldest 30 steps were dropped");
-  assert.equal(undo.canUndo, false);
-});
-
-test("undo and reset: restore f, g, up and the slider values D, ρ, focal of the snapshot", () => {
-  const undo = new UndoStack();
-  const rig0 = setLockLevel(initial(), false);
-  const obs = observer();
-  undo.begin(rig0);
-  let rig = orbitFree(rig0, 50, 20, grabAt(rig0, 0, obs), false);
-  undo.end(rig);
-  rig = setRoll(setD(setFocal(rig, 35), 6), 15); // sliders: not steps
-  assert.equal(undo.size, 1);
-  const reset = initial();
-  undo.record(rig, reset);
-  assert.equal(undo.size, 2);
-  const a = undo.undo(reset)!;
-  assert.deepEqual([a.f, a.g, a.up, a.D, a.roll_deg, a.focal], [rig.f, rig.g, rig.up, 6, 15, 35]);
-  const b = undo.undo(a)!;
-  assert.deepEqual(b, rig0);
-  // lock-horizontal off → on is one step
-  const on = setLockLevel(rig, true);
-  assert.equal(on.up, null);
-  assert.equal(undo.record(rig, on), true);
-  assert.deepEqual(setLockLevel(on, false).up, basis(on.f, null).u0);
+  assert.equal(last!.before.g, 30, "the oldest 30 steps were dropped");
+  assert.equal(h.canUndo, false);
+  assert.equal(h.redo_size, 50, "undo + redo never exceed the cap");
+  assert.equal((h.take_redo() as BoardEntry).before.g, 30, "redo takes them back in order");
+  h.push(entry(99));
+  assert.equal(h.redo_size, 0, "a new entry clears the redo stack");
+  assert.equal(h.size, 2);
 });
 
 // ------------------------------------------------------------------------------------------------ readouts
