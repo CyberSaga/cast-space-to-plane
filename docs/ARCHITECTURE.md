@@ -5742,8 +5742,9 @@ through the port's `resolve_picture_plane` and draws its readout camera through 
   See §5.8.5, D82, D86 (pending: Q8, Q14 in .claude/scratch/v3_m11_questions.md).
 - **[decision, implementation] (M11, D83) The drawing pane stays read-only (D79 is not amended); the scene is read-only
   while previewing; amends the D80 notes.** The user answered Q1 ("drag right pane should do nothing. keep gestures on
-  right pane empty-area inert.") and Q2 ("make editing unavailable while previewing, since we already can't edit in right
-  pane"). The D79 note ("The drawing pane is read-only") is unchanged and in force in full; the D80 notes are unchanged
+  right pane empty-area inert."), Q2 ("make editing unavailable while previewing, since we already can't edit in right
+  pane") and Q3 ("Esc order: if in preview, leave preview. if editing in left pane, clear selection. fold object library
+  with ctrl+shift+L or by clicking minimize button on it"). The D79 note ("The drawing pane is read-only") is unchanged and in force in full; the D80 notes are unchanged
   except for (3). (1) **Input on `#stage` is exactly D79 note (1).** No pointer event (any button, Shift, touch with one or
   two fingers, pen) and no wheel event on `#stage`, on an object or on blank space, changes the scene, the selection, the
   rig, the observer camera, the undo stack, a readout, a notice or the cursor. No pointer, wheel or touch listener is
@@ -5759,11 +5760,11 @@ through the port's `resolve_picture_plane` and draws its readout camera through 
   is one stack), the vertical handle and every selection change. This amends the list of controls in the D80 note (2),
   where 復原 still worked while previewing. The selection survives the round trip and stays outlined in the drawing pane.
   預覽 is refused while a gesture is open (the guard of the D80 follow-up note is extended to object drags), and entering
-  it cancels any pending press. Esc in 預覽 only returns to the edit view (§5.8.11). (4) **Readouts (D79 note (5)).**
+  it cancels any pending press. Esc in 預覽 only returns to the edit view, and Ctrl / ⌘+Shift+L does nothing there (§5.8.11). (4) **Readouts (D79 note (5)).**
   "這次拖動右窗畫面變動" is also measured over an object drag in the observer pane (§5.8.12). (5) **Tests (D79 note
   (6)).** The D79 row stands unchanged and gains an object case: a press, drag or click on an object in `#stage` changes
   neither the selection nor the scene. A new row pins the read-only preview. The M10 "drawing pane is view-only" scan and
-  the smoke `stage_drag` checks stay as they are. See §5.8.14, D83 (pending: Q3, Q18 in
+  the smoke `stage_drag` checks stay as they are. See §5.8.14, D83 (pending: Q18 in
   .claude/scratch/v3_m11_questions.md).
 
 ### 5.8 M11 — scene editing in the web UI (spec-v0.3 §1–§10, §10.2 row M11)
@@ -5795,7 +5796,7 @@ M11 is a pure web-UI milestone: the user selects an object, drags it in the obse
 with a handle), adds one of eight preset objects from a collapsed-by-default sidebar, deletes the selected object, and
 undoes and redoes all of it. The drawing pane stays view-only exactly as D79 says (the user's answer to Q1): it takes no
 input, objects included, and only shows the selection outline. While previewing (預覽) the scene is read-only (the user's
-answer to Q2).
+answer to Q2). Esc never opens or closes the library (the user's answer to Q3).
 
 #### 5.8.0 Scope, hard rules and modules
 - **Core unchanged [decision].** Stages A, B and C (`castplane/`), the TypeScript port (`ts/`), the §3.1 document, the SVG
@@ -5867,7 +5868,7 @@ answer to Q2).
   | delete the object | the selection is cleared |
   | undo / redo of an object entry | the object the entry acted on is selected if it exists: undo of an add clears it, redo of an add selects the new object, undo of a delete selects the restored object, undo and redo of a move select the moved object; a board or reset entry keeps the selection, and a selected id that no longer exists is cleared (pending: Q15 in .claude/scratch/v3_m11_questions.md) |
   | load, 重設視角 | a load clears the selection; 重設視角 keeps it |
-  | Esc | §5.8.11 |
+  | Esc | previewing: leave 預覽; edit view: clear the selection (§5.8.11); never touches the library |
 | any input on the drawing pane (`#stage`) | nothing, objects included (D79, §5.8.14) |
 
 - **Click versus drag [decision].** `moved` is the **largest** distance from the pointer-down point reached during the
@@ -6062,7 +6063,10 @@ fallback: f_px = the pane's focal length in CSS px; k = ((h₀ − e₀)·f_c) /
   ("物件庫" and a collapse button `#lib-close`) and a two-column grid `#lib-grid` of tiles. Collapsed, the sidebar is
   hidden and `inert` (its tiles are not in the tab order); while it is open the tab is hidden. The slide transition is
   `≤ 0.2 s` and is dropped under `prefers-reduced-motion`.
-- **Open and close.** The tab and the collapse button toggle it; Esc closes it (priority in §5.8.11). Below **880 px** of
+- **Open and close [decision].** The tab (`aria-keyshortcuts="Control+Shift+L"`) opens it, the collapse button `#lib-close`
+  (`aria-label="收合物件庫"`) closes it, and Ctrl+Shift+L (⌘⇧L on macOS) toggles it (§5.8.11). **Esc never opens or closes
+  it** (the user's answer to Q3; spec-v0.3 §2 and §3, which collapse the library on Esc, are not adopted). While 預覽 is on
+  none of these acts, since the tab is hidden and the sidebar `inert` (§5.8.14). Below **880 px** of
   viewport width (the page's narrow breakpoint, `window.innerWidth`) the width is `min(80%, 280px)`, a pointer-down
   outside the sidebar and the tab closes it, and **that pointer-down is consumed** (captured on `document`, it does not
   start a gesture or change the selection) (pending: Q34 in .claude/scratch/v3_m11_questions.md); adding an object closes
@@ -6153,7 +6157,7 @@ screen the sidebar closes (§5.8.7).
   `text`, `search`, `number`, `email`, `url`, `tel`, `password`, or missing or unknown (the equation field is `type="text"`).
   Range, checkbox, button, `<select>` and file inputs are not text-like and take the shortcut (pending: Q17 in
   .claude/scratch/v3_m11_questions.md). The pure helpers `is_typing_target({tag, type, editable})` and
-  `shortcut_action(event, {has_selection, previewing})` decide this and the shortcuts of §5.8.11. `preventDefault` is called only
+  `shortcut_action(event, {has_selection, previewing})` decide this and the shortcuts of §5.8.11 (delete, undo, redo, the library toggle). `preventDefault` is called only
   when the shortcut acts (a refused delete counts as acting); while previewing no shortcut acts and none is intercepted.
 - **Chip button.** `#sel-delete` ("刪除") in the selection chip deletes the selection (touch and mouse). It is a normal
   `<button>`, so Enter and Space work. The chip is hidden while previewing.
@@ -6204,16 +6208,18 @@ screen the sidebar closes (§5.8.7).
   unavailable while previewing (§5.8.14); 重設視角 and 重新取中心 keep their M10 behaviour.
 - **Buttons and keys.** `#undo` and `#redo` are disabled when their stack is empty or while previewing (re-synced every
   frame by `sync_controls`). `Ctrl+Z` / `⌘Z` undo and `Ctrl+Shift+Z` / `⌘⇧Z` redo, on `keydown` at `window` with the
-  focus rule of §5.8.10; `Ctrl+Y` is not bound. A board entry's undo re-syncs the controls and re-frames the observer as in
+  focus rule of §5.8.10; `Ctrl+Y` is not bound. `Ctrl+Shift+L` / `⌘⇧L` toggles the library, on the same `keydown`, with the same focus
+  rule (not intercepted in a text-like target) and no action while previewing; `preventDefault` is called when it is handled
+  (a browser or the OS may reserve the combination in some environments; the collapse button and the tab are the
+  fallback). A board entry's undo re-syncs the controls and re-frames the observer as in
   M10; an object entry's does neither (§5.8.6) but re-runs stage A once (§5.8.12).
-- **Esc [decision].** One `keydown` at `window`; each press does exactly one thing, the innermost state first: (1) focus in
-  the equation field: its own Esc (drops the typed text) and no further effect (the field stops the event, as in the D80
-  follow-up); (2) the library is open: close it; (3) previewing: return to the edit view and nothing else; (4) an object
-  is selected: clear the selection. In 預覽 the library cannot be open and the selection cannot change (§5.8.14), so Esc
-  there only leaves 預覽, and the selection survives the round trip; in the edit view (3) does not apply and the order is
-  field, library, selection. During a drag (object, vertical, handle) Esc does nothing, as 預覽 is refused then. The alternative
-  of Q3, 預覽 before the selection, now behaves the same; only the order field > library > selection of the edit view
-  remains to be confirmed (pending: Q3 in .claude/scratch/v3_m11_questions.md). The pure `escape_action(state)` returns which of the four applies.
+- **Esc [decision] (the user's answer to Q3).** One `keydown` at `window`; each press does exactly one thing: (1) focus in
+  the equation field: its own Esc (drops the typed text), no further effect (the field stops the event, as in the D80
+  follow-up); otherwise (2) previewing: return to the edit view (返回編輯) and nothing else, and the selection survives
+  the round trip; otherwise (3) in the edit view: clear the selection (nothing happens when there is none). **Esc never
+  opens or closes the library**; that is the collapse button and Ctrl+Shift+L (above). During a drag (object, vertical,
+  handle) Esc does nothing, as 預覽 is refused then and the drag is not cancelled by Esc. The pure `escape_action(state)`
+  returns which of the three (or none) applies.
 
 #### 5.8.12 Recompute, preview mode and readouts (spec-v0.3 §4.4; D83, D86)
 - **One recompute per animation frame [decision].** An edit event (a drag move, an add, a delete, an undo or redo of an
@@ -6284,9 +6290,9 @@ Q1 and Q2 are answered by the user (see the §5.7 note "(M11, D83)"); nothing in
   none`, outside the SVG overlay markup of the writer).
 - **Preview is read-only [decision].** While 預覽 is on (D80) the scene cannot be edited by any path: the observer pane
   is hidden, so no object is selected, dragged or given a handle; the library tab is hidden and the sidebar is `inert`
-  (an open sidebar collapses on entering 預覽); Delete and Backspace do nothing and the selection chip, with its delete
+  (an open sidebar collapses on entering 預覽) and Ctrl / ⌘+Shift+L does nothing; Delete and Backspace do nothing and the selection chip, with its delete
   button, is hidden; `#undo` and `#redo` are disabled and Ctrl / ⌘+Z and Ctrl / ⌘+Shift+Z do nothing (board entries
-  included); Esc only returns to the edit view (§5.8.11). The selection is not changed by entering or leaving 預覽 and
+  included); Esc only returns to the edit view (§5.8.11, the user's answer to Q3). The selection is not changed by entering or leaving 預覽 and
   is still outlined in the drawing pane. `#notices` carries a one-line hint while previewing that objects cannot be
   edited until 「返回編輯」. 重設視角 and 重新取中心 are board and pivot commands, not scene edits, and keep their M10
   behaviour.
@@ -6346,18 +6352,19 @@ already verified (the demo has no preview mode and no core output).
 | grazing fallback | `scene_edit.test.ts` | for `\|d₀_z\| < sin 5°` the displacement is finite and equals `k·(Δx'·r_g + Δv'·f_g)` with `k = ((h₀ − e₀)·f_c) / f_px` (the camera depth); at `ρ = 0` it is in the sign of `Δx` along `r_g` and of `−Δy` along `f_g`; with a rolled camera frame handed to the pure function (`ρ = 30°`, `90°`, random; the observer camera itself has no roll) the 2 × 2 map has `\|det\| = 1` within 1e-12, and at `ρ = 90°` a right drag moves along `+f_g` and a down drag along `+r_g`; at `ρ = 0` a right drag moves the image of an off-axis grabbed point (15°, 30° off the axis) by exactly `Δx` px within 1e-9 relative (`r_g ⊥ f_c`, so the depth does not change); the mode is decided at pointer-down and does not change when later rays cross the limit; the 200 m and `t ≤ 0` guards skip the update |
 | vertical handle | `scene_edit.test.ts` | only `z_b` changes; clamp to `[min(0, z_b0), max(50, z_b0)]`; the ground is sticky (`\|z_b\| < 0.02 → 0`, Alt included); `line_param` equals an independent 2 × 2 linear solve (least squares of `[d, −ẑ]·[t, s] = a − e`) within `1e-9·max(1, \|w₀\|)`, and the orthogonality residuals `\|(X(s) − (e + t·d))·d\|` and `\|(X(s) − (e + t·d))·ẑ\|` are `≤ 1e-9·max(1, \|w₀\|)` (a brute-force minimisation, if kept, at 1e-6 only: the distance is flat at its minimum); the line is the handle's (box centre), so the tip stays under the pointer for an off-centre anchor; degenerate rays skip; a buried start is not moved at pointer-down; the handle length formula: the projected length is 36 px within 1e-9 px when `L₃₆` wins, at elevations 0°, 28°, 45° and random, and the cap and near-plane limit apply when `m → 0` |
 | pivot does not follow | `plane.test.ts` | after add, drag, vertical drag, delete and the undo / redo of each, `rig.P` and the eye `E` are bit-identical, also when the edited object is the pivot object; switching the selector to 點選物體 keeps `P`; 重新取中心 takes per mode (§5.8.5); 重設視角 takes the current centre and the unclamped reset again renders `scene.camera`; the geometry refresh does not rebuild the session |
-| library | `library.test.ts`, smoke | `PRESETS` has the 8 rows of §5.8.7 exactly; every preset appended to each bundled example and each v8 case passes the port's `validate_scene` and renders; polygons are counter-clockwise with the centroid at `(0, 0)` within 1e-12 and simple; thumbnails parse, have `viewBox="0 0 64 64"`, use `currentColor` and no script; names ≤ 6 characters. Smoke: collapsed at load and after a scene load; expanding changes no canvas box; each tile adds one valid object; Enter and Space activate; narrow viewport closes after an add and on an outside tap (the tap does not reach the canvas); `aria-label` "加入：名稱" |
+| library | `library.test.ts`, smoke | `PRESETS` has the 8 rows of §5.8.7 exactly; every preset appended to each bundled example and each v8 case passes the port's `validate_scene` and renders; polygons are counter-clockwise with the centroid at `(0, 0)` within 1e-12 and simple; thumbnails parse, have `viewBox="0 0 64 64"`, use `currentColor` and no script; names ≤ 6 characters. Smoke: collapsed at load and after a scene load; expanding changes no canvas box; each tile adds one valid object; Enter and Space activate; narrow viewport closes after an add and on an outside tap (the tap does not reach the canvas); `aria-label` "加入：名稱". Collapse: `#lib-close` closes the sidebar; Ctrl+Shift+L and ⌘⇧L toggle it (and call `preventDefault`), but not with focus in the equation field, and not while previewing; Esc never opens or closes it; the tab has `aria-keyshortcuts="Control+Shift+L"` and `#lib-close` an `aria-label`; the narrow-screen auto-collapse after an add and on an outside tap still work |
 | ids | `scene_edit.test.ts` | smallest free `n` over objects, lights and receivers (object `box_1`, light `box_2`, receiver `box_3` give `box_4`); a freed number is reused; never `.` / `hidden` / `core` / `umbra` |
 | placement and avoidance | `scene_edit.test.ts` | target on the ground ray when `f_z < −sin 2°` and `t ≤ 40`, else under `P`; the anchor is at `T`; avoidance steps of `w_u + 0.2` along `r₀`, at most 8; keeps the last position; snap then ±50 clamp; closed-form footprints equal `build_object(...).bbox` within 5 mm |
-| delete | `selection.test.ts`, smoke | `shortcut_action` and `is_typing_target` tables (Delete, Backspace, Ctrl / Meta, IME, text-like and non-text targets); smoke: Delete, Backspace and the chip button delete; focus in the equation field does not; the last object cannot be deleted, the visible text appears |
+| delete | `selection.test.ts`, smoke | `shortcut_action` and `is_typing_target` tables (Delete, Backspace, Ctrl+Z, Ctrl+Shift+Z, Ctrl+Shift+L and their ⌘ forms, Ctrl / Meta / Alt combinations, IME, text-like and non-text targets, `previewing`); smoke: Delete, Backspace and the chip button delete; focus in the equation field does not; the last object cannot be deleted, the visible text appears |
 | undo and redo | `scene_edit.test.ts`, `plane.test.ts` | add, delete and a drag are one entry each; undo of a delete restores the same record at the original index and `dumps` / SVG text are byte-identical on the five examples and the v8 cases (the end-of-list insert differs); a click and a no-change drag record nothing; redo cleared by a new entry or an actual rig / pivot / object change and not by a selection; 50-entry cap (60 adds then 50 undos leave the base objects plus the first 10 added, base + 10; the 51st undo is a no-op); object entries do not move `P` or `scene_block`; a board entry still keeps the current `P`; reset entry restores `P` and the selector; the stacks are inert during a gesture |
 | selection | `selection.test.ts`, `plane.test.ts` | nearest hit wins; blank click clears; press selects, click in 點選物體 takes `P`, drag does not; the hit priority of the observer pane (tip > ring > handle > object > blank; the ring wins over an object); `PressTracker` uses the maximum excursion (4.9 px click, 5 px drag; no movement before 5 px); `observer_ray` reprojects to the pointer within 1e-9; ignoring hits at depth `≤ OBSERVER_NEAR_M`; focus object = selection else `objects[0]`; after undo / redo of add, delete and move the selection follows the object the entry acted on |
+| Esc | `selection.test.ts`, smoke | `escape_action` table: equation field (its own Esc, no further effect) > previewing (leave 預覽, the selection is kept) > edit view with a selection (clear it) > nothing; the library state is never changed by Esc, open or closed, with or without a selection; Esc during an object, vertical, ring or arrow drag does nothing |
 | overlays | smoke | the writer's SVG text, the overlay markup and the JSON text are identical with and without a selection and, for the same objects, between the edit view and 預覽 |
 | two fingers | smoke (touch) | first finger on an object and moved `< 5 px`, second finger arrives: the object is at its start, the selection is as before the press, the history is unchanged (zero entries), the observer pane zoomed; moved `≥ 5 px`: the second finger is ignored; observer pane only (two fingers on `#stage` do nothing, next row) |
 | random stress | `scene_edit.test.ts` | 200 random steps of add, delete, move, undo and redo on a bundled example: every number handed to the drawing code (camera block, record, board, handles, observer view, SVG text) is finite, the LIFO checks hold, the id set stays unique |
 | performance | smoke | a 10-primitive scene: `max(core_ms + dom_ms + obs_ms)` over ≥ 30 drag frames is recorded (not gated); a forced `> 50 ms` drag-mode frame switches that gesture to the preview wireframe and release produces a complete frame |
 | drawing pane (D79 row, unchanged, plus an object case) | `plane.test.ts`, smoke | as in M10: any gesture on `#stage` (buttons 0, 1, 2, Shift, wheel, one and two fingers, pen), on blank space **and on an object**, leaves the scene (the `objects` array is the same reference), the selection, the rig, the observer camera, the history and the readouts unchanged, throws nothing, shows no notice and is not prevented; in particular a press, drag or click on an object in `#stage` changes neither the selection nor the scene; no listener on `#stage`; `touch-action` is the default; no cursor rule |
-| preview is read-only | `selection.test.ts`, `plane.test.ts`, smoke | with a selection, in 預覽: Delete, Backspace, Ctrl / ⌘+Z, Ctrl / ⌘+Shift+Z, the library tab and its tiles and the 復原, 重做 and chip delete buttons leave the scene, the selection and both stacks unchanged (`shortcut_action` returns no action when `previewing`); the sidebar is collapsed on entering and inert, the chip hidden; Esc only returns to the edit view; the selection is the same after 返回編輯; 預覽 is refused during an object, vertical, ring or arrow drag, and entering it cancels a pending press without a selection or history change |
+| preview is read-only | `selection.test.ts`, `plane.test.ts`, smoke | with a selection, in 預覽: Delete, Backspace, Ctrl / ⌘+Z, Ctrl / ⌘+Shift+Z, Ctrl / ⌘+Shift+L, the library tab and its tiles and the 復原, 重做 and chip delete buttons leave the scene, the selection and both stacks unchanged (`shortcut_action` returns no action when `previewing`); the sidebar is collapsed on entering and inert, the chip hidden; Esc only returns to the edit view; the selection is the same after 返回編輯; 預覽 is refused during an object, vertical, ring or arrow drag, and entering it cancels a pending press without a selection or history change |
 | existing tests that pin replaced behaviour | `observer.test.ts`, `plane.test.ts` | rewritten in the same change: the framing-points test (`2 + 8 + lights + 4`, no ground point), the preview-guard regex (object drag added; undo and redo guarded), the pick-in-object-mode and reset tests (current centre). The "drawing pane is view-only" scan and the smoke `stage_drag` checks stay as in M10 |
 
 #### 5.8.18 Acceptance (spec-v0.3 §10.2 row M11)
@@ -6397,7 +6404,8 @@ already verified (the demo has no preview mode and no core output).
   view-only (D79, §5.8.14). Spec-v0.3 does not discuss 預覽; the read-only preview is the user's answer to Q2. (11) Spec-v0.3 §5.3 cites
   "contract §2.0" for the reserved id; the rule is §5.0.1. (12) Spec-v0.3 §10.1's "15 項 … 已在 demo 上通過" are not
   evidence for M11 (§5.8.17). (13) Spec-v0.3 Appendix A's D79–D84 are D81–D86 (pending: Q4 in
-  .claude/scratch/v3_m11_questions.md).
+  .claude/scratch/v3_m11_questions.md). (14) Spec-v0.3 §2 and §3 collapse the library on Esc; that is not adopted (the user's
+  answer to Q3): Esc never opens or closes the library, which is folded by `#lib-close` or Ctrl+Shift+L (§5.8.7, §5.8.11).
 - **[decision, implementation] (M11) Differences from `scene_edit_demo.html`** (this contract wins). Curved primitives, shadows
   and hit tests are the core's and three.js's, not the demo's polygon approximations, convex hulls and convex-face ray test
   (a concave prism is valid input, so no convexity may be assumed); no hard-coded reserved ids (`lamp`, `ground`); object
@@ -6424,12 +6432,12 @@ already verified (the demo has no preview mode and no core output).
 - **[decision, implementation] (M11) Positions pending the user's confirmation, and the questions already settled.** The
   numbers are those of `.claude/scratch/v3_m11_questions.md`. The defaults below are what §5.8 and the §5.6 / §5.7 notes
   above say, so that the work can proceed; an answer amends the paragraph it names by reference. Rows marked "resolved"
-  were answered by the user (Q1, Q2) or became moot by those answers (Q19, Q21).
+  were answered by the user (Q1, Q2, Q3) or became moot by those answers (Q19, Q21).
   | Q | subject (default written in the contract) | where |
   | --- | --- | --- |
   | Q1 | resolved (user): the drawing pane stays fully view-only, objects included; D79 is not amended | §5.8.14, §5.7 note (M11, D83) |
   | Q2 | resolved (user): the scene is read-only while previewing (no add, delete, undo, redo, handle or selection change); 預覽 refused during a gesture | §5.8.14, §5.7 note (M11, D83) |
-  | Q3 | Esc: equation field, library, selection in the edit view; in 預覽 Esc only returns to the edit view; nothing during a drag | §5.8.11 |
+  | Q3 | resolved (user): Esc = equation field's own, else leave 預覽, else clear the selection; Esc never touches the library, which folds with `#lib-close` or Ctrl+Shift+L; nothing during a drag | §5.8.7, §5.8.11 |
   | Q4 | D-numbers D81–D86 instead of Appendix A's D79–D84 | §5.8 preface, notes |
   | Q8 | reset target is the load rule at the current centre; the selection is kept; the label is 重設視角 | §5.8.5, §5.7 note (M11, D82, D86) |
   | Q9 | object edits do not re-frame the observer | §5.8.6, §5.6 note (M11, D82) |

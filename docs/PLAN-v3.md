@@ -163,7 +163,7 @@ milestone ever runs `regen_conformance.py` without `--dry-run`.
   (z_b only). The drawing (right) pane stays view-only exactly as D79 says: no selection, no drag, no blank click, no
   listener on `#stage` (the user's answer to Q1). It only shows the selection outline. **Preview is read-only**: while
   預覽 is on there is no library, no delete (key or chip), no undo or redo (button or shortcut), no handle and no
-  selection change (the user's answer to Q2). The
+  selection change (the user's answer to Q2). **Esc** (the user's answer to Q3): the equation field's own, else leave 預覽, else clear the selection; it never opens or closes the library, which folds with its collapse button or Ctrl/⌘+Shift+L (no action in 預覽). The
   grazing-angle fallback is decided at pointer-down.
 - **Object library.** A sidebar that is collapsed on every load and overlays both panes (the canvases are never pushed
   or resized): 64 px thumbnail plus one line of name per tile, eight presets in a data table (方塊, 木箱, 高柱, 圓柱, 球,
@@ -233,7 +233,7 @@ shared file at any time, append-only hunks elsewhere, the owner of each shared f
    no shared files.
 4. **M11-c — UI wiring.** Library sidebar and tiles, selection (observer pane, hit order, click vs drag), horizontal drag
    in the observer pane, the vertical handle, the selection chip and delete, undo / redo of object entries, shortcuts and
-   the Esc order, and the read-only preview (library, chip, undo / redo and shortcuts switched off in 預覽). No code
+   the Esc order (field, 預覽, selection; never the library), Ctrl/⌘+Shift+L and the collapse button, and the read-only preview (library, chip, undo / redo and shortcuts switched off in 預覽). No code
    touches `#stage`: it keeps no listener. One writer for `main.ts` and `observer3d.ts`.
 5. **M11-d — throttling and preview.** `scene_dirty` (at most one recompute per animation frame), per-object node
    updates during a drag, the drag-mode cost measured at pointer-down, the web-side wireframe preview that never reaches
@@ -258,6 +258,6 @@ deciding gates, plus the smoke test in `/opt/pw-browsers/chromium` (never run `p
 rows are the web rows of spec-v0.3 §10.1: horizontal drag (grab point stays under the pointer to < 1e-6 m, z_b fixed,
 grid snap, Alt), grazing-angle fallback, vertical handle, pivot does not follow, library (every tile valid), delete,
 undo (the output after undoing a delete is byte-identical), selection, overlay identity (SVG and JSON with and without a
-selection are byte-identical), two fingers (observer pane), the drawing pane inert including on objects, preview read-only, random stress (200 steps, all drawing values finite), and the
+selection are byte-identical), two fingers (observer pane), the drawing pane inert including on objects, preview read-only, Esc order and library folding, random stress (200 steps, all drawing values finite), and the
 10-object drag time (< 33 ms recorded). The conformance row is "0 changes" / "0 mismatches". Benchmark gate limits are
 never loosened.
