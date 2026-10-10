@@ -14,5 +14,5 @@
     "noFallthroughCasesInSwitch": true,
     "types": ["node"]
   },
-  "include": ["src/orbit.ts", "src/download.ts", "src/mesh3d.ts", "src/helpers3d.ts", "src/rig.ts", "src/equation.ts", "src/observer.ts", "src/plane.ts", "src/toggles.ts", "src/keys.ts", "test"]
+  "include": ["src/orbit.ts", "src/download.ts", "src/mesh3d.ts", "src/helpers3d.ts", "src/rig.ts", "src/equation.ts", "src/observer.ts", "src/plane.ts", "src/toggles.ts", "src/keys.ts", "src/scene_edit.ts", "src/library.ts", "src/selection.ts", "test"]
 }
