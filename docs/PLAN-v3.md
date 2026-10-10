@@ -142,3 +142,116 @@ in the observer pane and with the toolbar, the pan comes from the load rule alon
 fixed page-level defaults (horizon, objects, form_shadow, cast_shadow, labels, Hidden lines checked; construction and
 3D view unchecked). The contract text is amended by reference in the §5.4 and §5.7 implementation notes; no core
 output, conformance case or gate limit changes. The step texts above are kept as the historical plan.
+
+## M11 — 場景編輯
+
+Companion to `docs/spec/spec-v0.3.md` (scene editing: drag objects in 3D, a collapsed-by-default object library, select +
+Delete) and to the §5.8 M11 section of `docs/ARCHITECTURE.md` that the contract step adds. `docs/demo/scene_edit_demo.html`
+is behaviour reference only; where it differs from the spec, the spec wins (its curved primitives are polygon
+approximations and its shadows are vertex convex hulls, neither of which is the spec). Where this file and the contract
+disagree, the contract wins. Base: `main` at `20bd2ce` plus the spec commit (conformance set v8 / 63 cases, 18 warning
+codes, D1–D80, TS tests 465, web tests 101).
+
+**Core, TS port and conformance set are untouched.** M11 is a web-only change on the scene JSON: stages A, B and C,
+`ts/src/*`, `castplane/*` and `tests/conformance/` do not change, and there is no v9.
+`regen_conformance.py --dry-run` must stay "0 changes" and `compare_svg.py` "0 mismatches" at every step; nothing in this
+milestone ever runs `regen_conformance.py` without `--dry-run`.
+
+### Scope
+- **Select and drag.** One selected object at most. A click selects; a drag on an object selects and moves it along the
+  horizontal plane at the grabbed point's height (both panes). The left pane also has a vertical handle (z_b only). The
+  grazing-angle fallback is decided at pointer-down.
+- **Object library.** A sidebar that is collapsed on every load and overlays both panes (the canvases are never pushed
+  or resized): 64 px thumbnail plus one line of name per tile, eight presets in a data table (方塊, 木箱, 高柱, 圓柱, 球,
+  圓錐, 三角柱, 六角柱), `prefix_n` ids, placement at the camera's line of sight on the ground with avoidance.
+- **Delete.** Delete or Backspace on a selection, or the delete button on the selection chip. A scene keeps at least one
+  object (the core requires a non-empty `objects`).
+- **Undo and redo.** Object add, delete and drag join the single undo stack (50 steps); new 重做 button; Ctrl/⌘+Z and
+  Ctrl/⌘+Shift+Z with the focus rule of spec-v0.3 §6.
+- **Pivot.** The rotation pivot P is the point taken at the moment it is set; adding, dragging and deleting objects never
+  moves it; a new 重新取中心 button re-takes it. 點選物體 is decided by selection, and only a click (not a drag) sets the
+  pivot.
+- **Revisions of M10** (spec-v0.3 §0, five places): the pivot rule above; the vertex-ray focus object is the selection
+  (else `objects[0]`); undo covers object edits and gains redo; 重設 becomes 重設視角 (board, pivot and observer camera
+  only; objects are not restored); observer framing uses the eight corners of the scene bounding box.
+- **Decisions.** D79 and D80 already exist, so the new decisions are **D81–D86**: D81 selection unified with the 點選物體
+  pivot; D82 the pivot is the value taken when set; D83 horizontal drag, vertical handle and grazing-angle fallback; D84
+  library presets, placement and id rule; D85 keep at least one object; D86 object edits join the single undo stack.
+  spec-v0.3 Appendix A's D79–D84 is renumbered; the spec text itself is not edited.
+- **Conflicts with D79 / D80.** Right-pane object drag is a new input to the drawing pane (D79 made blank-area gestures
+  inert, and they stay inert); the two-finger rule applies to the left pane only; editing keeps working in preview
+  (D80) except the vertical handle, which lives in the observer pane. These positions are pending the user's
+  confirmation (`.claude/scratch/v3_m11_questions.md`); the contract and D81–D86 record whatever is confirmed.
+
+Out of scope (spec-v0.3 §1): rotating or scaling objects, a numeric inspector, dragging from the library onto the
+drawing, editing lights or receivers, importing meshes from the library, collisions, and concave prisms in the library
+(the core already supports them).
+
+### Files
+| file | state | owner |
+| --- | --- | --- |
+| `web/src/scene_edit.ts` | **new**; pure functions, no DOM: add / delete (with the original index) / move, snap, id generation, placement and avoidance, grazing-angle fallback, applying an undo entry to an `objects` array | step M11-b |
+| `web/src/library.ts` | **new**; the preset table (name, type, parameters as 1e-4 literals, id prefix, thumbnail SVG) | step M11-b |
+| `web/src/selection.ts` | **new**; hit testing and selection state shared by both panes | step M11-b |
+| `web/test/scene_edit.test.ts`, `library.test.ts`, `selection.test.ts` | **new** | step M11-b |
+| `web/src/rig.ts` | shared with M10: undo stack entry union and redo | M11-a (the stack API), M11-b consumes |
+| `web/src/observer.ts` | shared with M10: `framing_points` (bbox corners), `vertex_rays` (focus id) | M11-a |
+| `web/src/plane.ts` | shared with M10: updatable `SessionScene`, pivot as value, selection, reset target, redo | M11-a, extended in M11-c |
+| `web/src/main.ts` | shared with M10: sidebar, selection chip, shortcuts, `scene_dirty` throttling, preview | M11-a (revisions only), then M11-c, then M11-d, one writer at a time |
+| `web/src/observer3d.ts`, `helpers3d.ts`, `scene3d.ts`, `stage.ts` | shared with M9 / M10: hit at pointer-down, vertical handle, per-object node updates | M11-c |
+| `web/src/ui.ts`, `web/index.html`, `web/src/style.css` | shared: 重做, 重新取中心, 重設視角, library tab and sidebar, selection chip | M11-a (labels, buttons), M11-c (library, chip) |
+| `web/test/plane.test.ts`, `rig.test.ts`, `observer.test.ts`, `web/scripts/smoke.mjs` | shared: existing M10 tests updated, new rows appended | see the merge order |
+| `docs/ARCHITECTURE.md`, `docs/DECISIONS.md` | new §5.8 M11 (English, `[decision]` marks, Implementation notes); amendments to §5.6 / §5.7 as appended `[decision, implementation]` paragraphs (never rewrite existing text); D81–D86 | the contract step, before M11-a |
+| `docs/USAGE.md`, `README.md`, `web/README.md`, `CLAUDE.md` | web UI section (drag, library, delete, shortcuts, 重設視角); decision range `(D1–D80)` → `(D1–D86)` | last step |
+
+Nothing under `castplane/`, `ts/` or `tests/conformance/` is edited. The shared-file rule of §1 applies: one writer per
+shared file at any time, append-only hunks elsewhere, the owner of each shared function named in the prompt.
+
+### Merge order
+1. **Contract and decisions (no code).** `docs/ARCHITECTURE.md` §5.8 and the amendment paragraphs, `docs/DECISIONS.md`
+   D81–D86, and the answers to the open points. This precedes every code step.
+2. **M11-a — the five spec-v0.3 §0 revisions applied to M10 code, as a separate commit, before any editing feature.**
+   Behaviour of an unedited scene must not change except where listed. Contents:
+   - `SessionScene` becomes updatable (`set_geometry`) without rebuilding `PlaneSession`; the pivot is the value taken
+     when set; `set_pivot_mode("object")` no longer re-derives P; selection state; 重新取中心.
+   - `vertex_rays(…, focus_id?)`; `framing_points(board, scene, bbox)` with the eight corners.
+   - Undo stack entry union and a redo stack; 重做 button; reset takes the current centre and is labelled 重設視角
+     (`index.html:22`, `index.html:92`, `web/README.md`, `docs/USAGE.md`).
+   - Existing M10 tests updated in the same commit: `plane.test.ts` "discrete actions", "undo keeps the current pivot;
+     reset restores…", "switching the pivot mode without a pick…"; `observer.test.ts` "framing: centroid target…" (the
+     point count and the ground point) and "framing is aspect-aware…" (the signature); `rig.test.ts` "undo details" and
+     "undo and reset" where the stack API changes; `smoke.mjs` reset and object-pivot rows (message texts, 重設視角).
+   - Gates: `npm test`, `npm run -w web build`, the dry run (0 changes), `compare_svg.py` (0 mismatches).
+3. **M11-b — the pure modules** (can run in parallel worktrees, disjoint files): `scene_edit.ts` + test, `library.ts` +
+   test (every tile passes the core `validate_scene` in the port; ids; CCW polygons), `selection.ts` + test. No wiring,
+   no shared files.
+4. **M11-c — UI wiring.** Library sidebar and tiles, selection (both panes, hit order, click vs drag), horizontal drag
+   in both panes, the vertical handle, the selection chip and delete, undo / redo of object entries, shortcuts and
+   the Esc order, the right-pane object listener under the amended D79 note. One writer for `main.ts` and
+   `observer3d.ts`.
+5. **M11-d — throttling and preview.** `scene_dirty` (at most one recompute per animation frame), per-object node
+   updates during a drag, the drag-mode cost measured at pointer-down, the web-side wireframe preview that never reaches
+   `state.doc`, `state.svg` or the downloads, the "畫面變動" readout during an object drag; the 10-object drag row in the
+   smoke test (recorded in `web/README.md`, not gated, as in M10).
+6. **Docs and counts.** `README.md`, `docs/USAGE.md`, `web/README.md`, `CLAUDE.md` (decision range and web test counts).
+
+Each step ends with the gates below and a reviewer pass (`.claude/agents/reviewer.md`) with a different lens from the
+implementer (web steps: interaction / invariant lens; for M11-b the pure functions get a numeric lens).
+
+### Gates
+```sh
+python3 tools/regen_conformance.py --reason "check" --dry-run   # expect "0 changes" (63 cases, set v8)
+python3 tools/compare_svg.py                                     # 0 mismatches (needs the ts build)
+npm ci && npm test                                               # TS port + web, builds ts first
+node --test --test-reporter=tap ts/build/test/conformance.test.js
+npm run -w web build
+```
+Python and TS gate outputs are a no-change check for M11 (`pytest -q`, `benchmarks/bench.py --gate full`,
+`node ts/build/bench/camera_only.js --gate both --reps 20` should be unchanged); `npm test` and the web build are the
+deciding gates, plus the smoke test in `/opt/pw-browsers/chromium` (never run `playwright install`). The M11 acceptance
+rows are the web rows of spec-v0.3 §10.1: horizontal drag (grab point stays under the pointer to < 1e-6 m, z_b fixed,
+grid snap, Alt), grazing-angle fallback, vertical handle, pivot does not follow, library (every tile valid), delete,
+undo (the output after undoing a delete is byte-identical), selection, overlay identity (SVG and JSON with and without a
+selection are byte-identical), two fingers (left pane), random stress (200 steps, all drawing values finite), and the
+10-object drag time (< 33 ms recorded). The conformance row is "0 changes" / "0 mismatches". Benchmark gate limits are
+never loosened.
