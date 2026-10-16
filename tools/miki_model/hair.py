@@ -25,7 +25,8 @@ How it is built (spec ``miki_spec.md`` §C):
   lines, the inner edge draws only as a silhouette.
 * **H5 strand** (§C.4): one thin swept strand on her left.
 * **H2 side curtain + back sheet** (§C.6): one slab from inside the dome down to five uneven clumps on a
-  convex-down hem; the curtain's front edges taper and end inside the sidelocks, the front end faces and the
+  convex-down hem; the curtain's front edges taper and end just behind the sidelocks' front (round 3: in
+  profile the lock is the front-most hair, the curtain covers only its back edge), the front end faces and the
   lateral faces share the outer surface's groups (silhouette-only), the clump ends are rims, and three
   strand lines (group boundaries + shallow grooves) end at the notches nearest the middle.
 
@@ -54,9 +55,38 @@ __all__ = ["REGIONS", "build"]
 REGIONS = ("hair", "headband")
 
 SIDES = (1, -1)
+#: Round 3 (tech F1 / F2): quads of the dome, sidelocks and H2 whose two fan triangles differ by more than this
+#: (degrees) become two triangles (:func:`meshkit.split_twisted`): castplane takes a polygon's facing from its
+#: Newell normal but hides lines with its triangles, so on a twisted quad at the outline a piece of the outline
+#: was hidden by the quad's own other triangle (the 2.3 mm gap in the back hair's outline at az 210).
+TWIST_SPLIT_DEG = 1.0
 
 def _side_name(side: int) -> str:
     return "l" if side > 0 else "r"
+
+
+#: Round 3: rig values this module uses in place of ``rig.py``'s (the review's rig changes; ``rig.py`` is
+#: shared, so they live here until they are moved there).
+#: F5: the sidelock's inner edge comes in and forward over the cheek (``rig.sidelock_rows`` rows
+#: ``z -> (x_in, y_in)``), 3 mm off the skin (head.head_section) at 1.40 ... 1.342, so from the front it covers the
+#: cheek outline (PDF p.21 item 1; the lock's edge was 3 mm outside it), then hangs straight past the cheek; in
+#: profile ~37 mm of face still shows in front of it.
+SIDELOCK_INNER_PATCH = {1.370: (0.0788, -0.045), 1.342: (0.0745, -0.045), 1.310: (0.0745, -0.045),
+                        1.270: (0.0750, -0.041)}
+#: Tech F1 / F10: the curtain comes out of the dome at a steeper angle (its top row 4.5 mm inside the dome,
+#: 1 mm outside it at 1.405) while the dome tucks inside the curtain (:data:`DOME_BACK_INSET`), so the two
+#: outlines cross once (~1.445) instead of running within 1 mm of each other (a dashed crown outline).
+CURTAIN_TOP_ROWS = ((1.452, -0.0045, 0.018), (1.405, 0.0010, 0.020))
+
+
+@functools.lru_cache(maxsize=8)
+def hair_rig(rig: Rig) -> Rig:
+    """``rig`` with :data:`SIDELOCK_INNER_PATCH` and :data:`CURTAIN_TOP_ROWS` applied (idempotent)."""
+    rows = []
+    for z, xi, yi, xo, yo in rig.sidelock_rows:
+        xi, yi = SIDELOCK_INNER_PATCH.get(round(z, 4), (xi, yi))
+        rows.append((z, xi, yi, xo, yo))
+    return rig.replace(sidelock_rows=tuple(rows), curtain_top_rows=CURTAIN_TOP_ROWS)
 
 
 def _smoothstep(e0: float, e1: float, x):
@@ -124,6 +154,11 @@ DOME_FLAT_THETA = (8.0, 18.0, 28.0, 38.5, 49.0)   # constant-z rings (polar angl
 #: Round 2 (F5): behind the band's visible span the dome now reaches its equator (DOME_BACK_BOTTOM_Z), where
 #: the curtain comes out from under it tangentially (rig.curtain_top_rows).
 DOME_BLEND_BACK_Z = (1.466, 1.436, 1.405)
+#: Round 3 (tech F1 / F10): the blend rings sink this far (along the dome normal) inside the dome surface where
+#: the side curtain covers them (behind the curtain's front edge, :data:`CURTAIN_FRONT_Y`), so below ~1.445
+#: the dome is >= 1.5 mm inside the curtain and only the curtain's outline survives (was: both within 1 mm,
+#: each hiding the other's outline in turns).
+DOME_BACK_INSET = (0.0, 0.003, 0.005)
 #: Bottom of the dome behind the headband's visible span (inside the side curtain; round 1: 1.452, the
 #: curtain row that stands 2.5 mm out, so no piece of the dome's rim pokes through the curtain's chords).
 DOME_BACK_BOTTOM_Z = 1.405
@@ -263,11 +298,20 @@ def _dome(rig: Rig) -> mk.Mesh:
     th_back = math.acos(np.clip((DOME_BACK_BOTTOM_Z - c[2]) / az, -1.0, 1.0))
     for th in DOME_FLAT_THETA:
         rings.append(np.array([_ellipsoid(rig, math.radians(th), phi) for phi in phis]))
-    for zb in DOME_BLEND_BACK_Z:
+    for zb, inset in zip(DOME_BLEND_BACK_Z, DOME_BACK_INSET):
         t = (math.acos(np.clip((zb - c[2]) / az, -1.0, 1.0)) - th0) / (th_back - th0)
-        rings.append(np.array([_ellipsoid(rig, th0 + t * (tb - th0), phi) for tb, phi in zip(theta_b, phis)]))
+        ring = []
+        for tb, phi in zip(theta_b, phis):
+            p = _ellipsoid(rig, th0 + t * (tb - th0), phi)
+            if inset > 0.0:
+                yf = _front_y(float(p[2]))
+                w = float(_smoothstep(yf + 0.002, yf + 0.008, p[1]))
+                p = p - inset * w * _ellipsoid_normal(rig, p)
+            ring.append(p)
+        rings.append(np.array(ring))
     top = c + np.array([0.0, 0.0, az])
-    return mk.inscribed_fan(mk.loft(rings, ("pole", top), ("pole", DOME_CAP_APEX), groups=1, cap_groups=(1, 1)))
+    dome = mk.inscribed_fan(mk.loft(rings, ("pole", top), ("pole", DOME_CAP_APEX), groups=1, cap_groups=(1, 1)))
+    return mk.split_twisted(dome, TWIST_SPLIT_DEG)
 
 
 # ---------------------------------------------------------------------------------------------------------
@@ -573,14 +617,6 @@ def _sidelock_root_row(rig: Rig):
     return tuple(out)
 
 
-def _sidelock_section(rig: Rig, z: float):
-    """``(inner (2,), outer (2,))`` edge points of the lock's table rows interpolated at ``z`` (before the
-    outfit fit; her left)."""
-    rows = np.array(rig.sidelock_rows)[::-1]
-    return (np.array([np.interp(z, rows[:, 0], rows[:, 1]), np.interp(z, rows[:, 0], rows[:, 2])]),
-            np.array([np.interp(z, rows[:, 0], rows[:, 3]), np.interp(z, rows[:, 0], rows[:, 4])]))
-
-
 def _cr_insert(P, after):
     """Rows ``P`` with a Catmull-Rom midpoint inserted after each index in ``after`` (sorted)."""
     P = np.asarray(P, dtype=np.float64)
@@ -643,7 +679,7 @@ def _sidelock(rig: Rig, side: int) -> mk.Mesh:
     mesh = mk.loft(rings, "flat", "flat", groups=G, cap_groups=(1, 3))       # root cap smooth (buried)
     if side < 0:
         mesh = mesh.mirror_x()
-    return mk.inscribed_fan(mesh)
+    return mk.split_twisted(mk.inscribed_fan(mesh), TWIST_SPLIT_DEG)
 
 
 # ---------------------------------------------------------------------------------------------------------
@@ -710,15 +746,18 @@ BACK_ROUND = 0.004
 CRESCENT_SIDE_S = 0.90
 EXTRA_COLUMNS_S = (0.95,)
 #: Round 1 (F1): the curtain thins to CURTAIN_END_THICKNESS over the last CURTAIN_TAPER_DEG of its crescent
-#: (its front edge tucks into the sidelock; the end face is in the outer surface's group).
+#: (the end face is in the outer surface's group).
 CURTAIN_END_THICKNESS = 0.006
 CURTAIN_TAPER_DEG = 30.0
-#: Curtain rows at or above this height end inside the sidelock (their y_end is computed), but no further
-#: forward than CURTAIN_END_MIN_Y (at the temple the lock stands 4 cm in front of the curtain's side; a
-#: curtain reaching that far forward is never seen but is no longer culled by castplane's depth test for
-#: the face's hidden-line samples, which costs ~0.1 s of the TS still frame).
+#: Curtain rows at or above this height take their front edge from CURTAIN_FRONT_Y (rounds 1-2: they ended
+#: inside the sidelock, no further forward than y -0.038).
 CURTAIN_TUCK_MIN_Z = 1.28
-CURTAIN_END_MIN_Y = -0.038
+#: Round 3 (F1): those rows no longer end inside the sidelock (the curtain, outside the lock, then hid it in
+#: profile from 1.37 to 1.27 and framed the face like a hood): their front edge
+#: ``y_end`` is this table ``(z, y)`` (linear in z), ~3 mm in front of the lock's back (outer) edge (the
+#: curtain lies outside the lock, so in profile it covers the lock's back 3 mm and no skin shows between
+#: them): the lock is the front-most hair from the band to its cut with the side hair behind it.
+CURTAIN_FRONT_Y = ((1.290, -0.014), (1.340, -0.015), (1.405, -0.029), (1.425, -0.031), (1.452, -0.034))
 #: Thickness of the plate's lateral edges (fraction of the row thickness; round 1, T2: was 0.4).
 BACK_EDGE_TAPER = 0.7
 
@@ -813,36 +852,24 @@ def _crescent_thickness(t: float, psi, psi_end: float) -> np.ndarray:
     return t - (t - min(t, CURTAIN_END_THICKNESS)) * k
 
 
-def _tucked_psi_end(rig: Rig, z: float, ellipse) -> float:
-    """Crescent angle at which the middle of the curtain's (tapered) front end lies on the sidelock's
-    middle surface at height ``z`` (the end face is buried in the lock).  ``ellipse(psi, inset)`` gives the
-    crescent point ``inset`` inside the outer surface."""
-    inner, outer = _sidelock_section(rig, z)
-    d = outer - inner
-    w = float(np.linalg.norm(d))
-    acr = d / w
-    nrm = np.array([acr[1], -acr[0]])
-    if nrm[1] > 0:
-        nrm = -nrm                                           # forward
-    th = rig.sidelock_thickness
-    best = None
-    prev = None
-    for psi in np.radians(np.linspace(92.0, 160.0, 341)):
-        q = ellipse(psi, 0.5 * CURTAIN_END_THICKNESS)
-        s = float((q - inner) @ acr) / w
-        u = 2.0 * s - 1.0
-        midv = (SIDELOCK_FRONT_SHARE - 0.5) * th * max(0.0, 1.0 - u * u) ** SIDELOCK_FULLNESS
-        g = float((q - inner) @ nrm) - midv
-        if prev is not None and prev < 0.0 <= g and 0.1 < s < 0.95:
-            best = psi
-            break
-        if ellipse(psi, 0.0)[1] < CURTAIN_END_MIN_Y:
-            best = psi
-            break
-        prev = g
-    if best is None:
-        raise mk.MeshError(f"curtain row z {z}: no crossing with the sidelock")
-    return float(best)
+def _psi_at_y(f, y_end: float) -> float:
+    """Crescent angle (past the side, 90 ... 170 degrees) at which the outline ``f(psi, 0)`` reaches
+    ``y = y_end`` (bisection)."""
+    lo, hi = math.radians(90.0), math.radians(170.0)
+    if f(lo, 0.0)[1] <= y_end:
+        return lo
+    for _ in range(60):
+        mid = 0.5 * (lo + hi)
+        if f(mid, 0.0)[1] > y_end:
+            lo = mid
+        else:
+            hi = mid
+    return 0.5 * (lo + hi)
+
+
+def _front_y(z: float) -> float:
+    zs, ys = zip(*CURTAIN_FRONT_Y)
+    return float(np.interp(z, zs, ys))
 
 
 def _back_hair(rig: Rig, dome: mk.Mesh) -> mk.Mesh:
@@ -868,19 +895,14 @@ def _back_hair(rig: Rig, dome: mk.Mesh) -> mk.Mesh:
     for z, cy, axc, yb_o, t, y_end in table:
         f = ellipse_fn(cy, axc, yb_o - cy)
         if z >= CURTAIN_TUCK_MIN_Z:
-            pe = _tucked_psi_end(rig, z, f)
+            pe = _psi_at_y(f, _front_y(z))
         else:
             pe = math.acos(float(np.clip((y_end - cy) / (yb_o - cy), -1.0, 1.0)))
         cres.append((z, f, t, pe))
-    top_pe = cres[0][3]
     top = []
     for z, off, t in rig.curtain_top_rows:
         f = dome_fn(z, off)
-        if off >= 0.0:
-            pe = _tucked_psi_end(rig, z, f)
-        else:                                  # inside the dome: end a little behind the tucked rows
-            pe = top_pe - math.radians(3.0)
-        top.append((z, f, t, pe))
+        top.append((z, f, t, _psi_at_y(f, _front_y(z))))
     rows = []
     for z, f, t, pe in top + cres:
         psi = _crescent_psi(S, pe)
@@ -954,7 +976,12 @@ def _h2_slab(rig: Rig, rows, gcols, n_cres: int) -> mk.Mesh:
     # surface's group: they draw only as silhouettes (no blunt end lines, one continuous outer edge)
     u0 = [int(front[0][v]) for v in range(V - 1)]
     u1 = [int(front[U - 2][v]) for v in range(V - 1)]
-    return mk.inscribed_fan(slab(Fo, Bi, (front, g_in, rims["v0"], rims["v1"], u0, u1)))
+    mesh = mk.inscribed_fan(slab(Fo, Bi, (front, g_in, rims["v0"], rims["v1"], u0, u1)))
+    # the outer surface down to the last tucked row (below it, behind the jaw and the shoulder, the curtain's
+    # front strip folds sharply and its split diagonals would draw as a fan of outlines)
+    _faces, kinds = slab_faces(U, V)
+    only = [k[0] == "front" and Fo[0, k[2] + 1, 2] >= CURTAIN_TUCK_MIN_Z for k in kinds]
+    return mk.split_twisted(mesh, TWIST_SPLIT_DEG, only=only)
 
 
 
@@ -991,6 +1018,7 @@ def _rims_by_light(F, B, front, g_back: int, g_rim: int) -> dict:
 
 def build(rig: Rig):
     """Parts of :data:`REGIONS` for ``rig``."""
+    rig = hair_rig(rig)
     dome = _dome(rig)
     band, ridge = _headband(rig, dome)
     bangs = _bangs(rig, dome)

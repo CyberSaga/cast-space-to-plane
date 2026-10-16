@@ -37,7 +37,7 @@ from .meshkit import Part
 from .rig import SUN_TOWARDS, Rig
 
 __all__ = ["REGIONS", "build", "skin_surface", "face_point", "slab", "column_grid", "band_grid",
-           "head_section", "HEAD_ROWS", "SUN", "slab_faces", "oriented"]
+           "head_section", "HEAD_ROWS", "SUN", "slab_faces", "oriented", "head_rig"]
 
 #: The mannequin regions this module replaces.
 REGIONS = ("head", "eyes", "face_marks")
@@ -61,7 +61,9 @@ BACK_ANGLES = (20.0, 90.0, 160.0)
 #: Nose bump (§B.4): row -> displacement (forward, m) of the midline column; the neighbouring columns
 #: (fraction 0.05, about 6 mm off the midline at the nose) move ``NOSE_SIDE`` times as much.
 #: Round 2 (F4): a clear nose point (was 0.0032 / 0.0065 / 0.0018), 6 mm ahead of the brow.
-NOSE_BUMP = {1.325: 0.0045, 1.312: 0.0095, 1.304: 0.003}
+#: Round 3 (F4): that read as a 36 mm beak in 3/4 and profile; now a small point (tip y -0.093 = the spec's
+#: nose_tip, ~8 mm ahead of the eye bridge, which is eased back halfway, see :data:`PROFILE_PATCH`).
+NOSE_BUMP = {1.325: 0.0005, 1.312: 0.0065, 1.304: 0.0015}
 NOSE_SIDE = 0.10
 #: Round 2 (F1 / F2): the lower head.  Every ring below :data:`HEAD_ROWS` is the face's front half-section
 #: at ``zf`` (hw / yf from the profile) ending at the jaw rim point ``(hw, c, zf)`` on each side, then its
@@ -72,16 +74,24 @@ NOSE_SIDE = 0.10
 #: (``c`` by ``zf``) rises ~28 degrees from the chin toward the ear; the underside between the rim and the
 #: neck slopes up into the throat at the front and down into the neck side under the ear; the nape runs
 #: down outside the neck to the junction, so no shelf sticks out of the neck.
+#: Round 3 (F3): the rim (``c``) comes forward and its side points rise (:data:`JAW_RIM_LIFT`), so seen from
+#: the side the jaw line climbs 33-41 degrees from the chin toward the jaw angle instead of 23-27: from below
+#: (elevation -20 ... -35) it stays a downward-bowing U close to the mouth (PDF p.18) instead of a straight
+#: bar (a rim rising at 27 degrees is seen edge-on from elevation -27).
 JAW_RINGS = (
     # zf      c        phi    P20 z   nape (y, z) or None
-    (1.286, -0.008, 10.0, 1.268, (0.066, 1.276)),
-    (1.279, -0.020, 0.0, 1.265, (0.054, 1.266)),
-    (1.272, -0.033, -18.0, 1.265, (0.044, 1.257)),
-    (1.2665, -0.041, -36.0, 1.268, None),
-    (1.262, -0.049, -52.0, 1.2725, None),
-    (1.2595, -0.054, -62.0, 1.2748, None),
-    (1.2575, -0.058, -70.0, 1.2759, None),
+    (1.286, -0.018, 10.0, 1.268, (0.066, 1.276)),          # round 3 (F3): c was -0.008, -0.020, -0.033,
+    (1.279, -0.031, 0.0, 1.265, (0.054, 1.266)),           # -0.041, -0.049, -0.054, -0.058
+    (1.272, -0.045, -18.0, 1.265, (0.044, 1.257)),
+    (1.2665, -0.051, -36.0, 1.268, None),
+    (1.262, -0.056, -52.0, 1.2725, None),
+    (1.2595, -0.059, -62.0, 1.2748, None),
+    (1.2575, -0.062, -70.0, 1.2759, None),
 )
+#: Round 3 (F3): per jaw ring, how far its rim (side) points rise above ``zf``; the front points rise by
+#: ``lift * (|x| / hw)^2`` (the midline stays on the profile), so from the front the outline narrows into a
+#: small rounded chin.
+JAW_RIM_LIFT = (0.0015, 0.0026, 0.003, 0.0012, 0.0006, 0.0, 0.0)   # outline 47 -> 15 degrees, chin ~19 mm wide
 #: P20 lies at the given z on the neck, JUNCTION_INSET inside its surface: about level (1.265) where the
 #: rim descends from the jaw angle (so the strips from the rim into the neck do not twist), then rising to
 #: the throat.  The inside-the-neck midline points start at JAW_INSIDE_START_Z.
@@ -100,6 +110,41 @@ CHIN_POLE_DY = 0.002
 
 def _side_name(side: int) -> str:
     return "l" if side > 0 else "r"
+
+
+#: Round 3: rig values this module uses in place of ``rig.py``'s (the review's rig changes; ``rig.py`` is
+#: shared, so they live here until they are moved there).  F2: the flat upper lid pressed down 4.5 mm (it
+#: hides the top ~29 % of the full 0.031 iris: the half-lidded smug look of PDF p.15), the sclera's corners
+#: and the lash flick with it (F8: the flick ends at x 0.0625, on the front of the cheek), the highlight under
+#: the lid and the brows 2 mm lower (close to the eye).  F9: a narrower pupil (spec B.2 0.011 x 0.016).
+RIG_OVERRIDES = (
+    ("eye_lid_z", 1.3465),
+    ("lid_band_inner", (0.018, 1.3451)),
+    ("lid_band_outer", (0.062, 1.3475)),
+    ("lid_flick_tip", (0.0625, 1.3385)),
+    ("sclera_lower", ((0.019, 1.3435), (0.023, 1.3350), (0.030, 1.3262), (0.040, 1.3232), (0.050, 1.3248),
+                      (0.057, 1.3320), (0.0612, 1.3445))),
+    ("pupil_size", (0.011, 0.016)),
+    ("highlight_z", 1.341),
+    ("brow_inner", (0.020, 1.364)),
+    ("brow_mid", (0.039, 1.373)),
+    ("brow_outer", (0.058, 1.379)),
+)
+#: Round 3: ``rig.head_profile`` rows replaced, ``z -> (hw, yf)``.  F4: the eye recess eased back halfway
+#: (1.342 / 1.333); F3: a narrower chin (1.262 / 1.257, was hw 0.027 / 0.016).
+PROFILE_PATCH = {1.342: (0.076, -0.0835), 1.333: (0.075, -0.0845), 1.262: (0.021, -0.076), 1.257: (0.008, -0.073)}
+
+
+@functools.lru_cache(maxsize=8)
+def head_rig(rig: Rig) -> Rig:
+    """``rig`` with :data:`RIG_OVERRIDES` and :data:`PROFILE_PATCH` applied (idempotent)."""
+    rows = []
+    for z, hw, yf, yb in rig.head_profile:
+        key = round(z, 4)
+        if key in PROFILE_PATCH:
+            hw, yf = PROFILE_PATCH[key]
+        rows.append((z, hw, yf, yb))
+    return rig.replace(head_profile=tuple(rows), **dict(RIG_OVERRIDES))
 
 
 # ---------------------------------------------------------------------------------------------------------
@@ -137,6 +182,7 @@ def _jaw_y(rig: Rig, z: float) -> float:
 def head_section(rig: Rig, z: float):
     """``(hw, yf, yb, c)`` of the skin head section at ``z`` without the nose ridge; below the nape row the
     back ``yb`` is the jaw underside and ``c`` the middle of the section."""
+    rig = head_rig(rig)
     rows = _base_profile(rig)
     hw = _interp_rows(rows, z, 1)
     yf = _interp_rows(rows, z, 2)
@@ -223,7 +269,11 @@ def _jaw_ring(rig: Rig, k: int) -> np.ndarray:
     hw, yf = _interp_rows(rows, zf, 1), _interp_rows(rows, zf, 2)
     p20, p90 = _jaw_back(rig, k)
     p160 = p20 * np.array([-1.0, 1.0, 1.0])
-    return _ring_points(rig, hw, yf, c, zf, [p20, p90, p160])
+    P = _ring_points(rig, hw, yf, c, zf, [p20, p90, p160])
+    nb = len(BACK_ANGLES)
+    front = np.r_[0, nb + 1:len(P)]                           # side points and the front half-section
+    P[front, 2] += JAW_RIM_LIFT[k] * (np.abs(P[front, 0]) / hw) ** 2
+    return P
 
 
 def _head_ring(rig: Rig, z: float) -> np.ndarray:
@@ -318,9 +368,14 @@ class SkinSurface:
         return np.array([x, float(y[j]), z]), n / np.linalg.norm(n)
 
 
-@functools.lru_cache(maxsize=4)
 def skin_surface(rig: Rig) -> SkinSurface:
-    """The skin head mesh of ``rig`` with its ray caster (cached per rig)."""
+    """The skin head mesh of ``rig`` (with this module's overrides, :func:`head_rig`) with its ray caster
+    (cached per rig)."""
+    return _skin_surface(head_rig(rig))
+
+
+@functools.lru_cache(maxsize=4)
+def _skin_surface(rig: Rig) -> SkinSurface:
     return SkinSurface(_head_mesh(rig))
 
 
@@ -641,7 +696,7 @@ def _decal(rig: Rig, grid_xz, relief: float, depth: float | None = None, stack: 
 #: finer outlines in castplane's hidden-line time.
 SCLERA_COLS, SCLERA_ROWS = 15, 3
 IRIS_COLS, IRIS_ROWS = 11, 2
-PUPIL_COLS, PUPIL_ROWS = 8, 2
+PUPIL_COLS, PUPIL_ROWS = 9, 2               # round 3 (F9): 18 outline segments (was 8: 16)
 HIGHLIGHT_COLS = 4
 #: The sclera / iris tops stay this far under the lid band's upper edge (hidden under it).
 LID_COVER = 0.0006
@@ -762,16 +817,20 @@ RELIEF_TAPER_FRACTION = 0.25
 #: Round 2 (F4): the lid band (with its flick) thins over its outer 45 %, so it no longer juts out of the profile
 #: like a visor.
 LID_TAPER_FRACTION = 0.45
+#: Round 3 (F8): ... down to this relief (was RELIEF_TAPER_END), so the far eye's lid does not jut out of the
+#: cheek outline at azimuth 45-90.
+LID_TAPER_END = 0.0003
 
 
-def _tapered_relief(centre_xz, relief: float, fraction: float = RELIEF_TAPER_FRACTION) -> np.ndarray:
+def _tapered_relief(centre_xz, relief: float, fraction: float = RELIEF_TAPER_FRACTION,
+                    end: float = RELIEF_TAPER_END) -> np.ndarray:
     """Per-column relief along the polyline ``centre_xz`` (inner end first): ``relief`` up to the last
-    :data:`RELIEF_TAPER_FRACTION` of its length, then linear down to :data:`RELIEF_TAPER_END`."""
+    ``fraction`` of its length, then linear down to ``end``."""
     P = np.asarray(centre_xz, dtype=np.float64)
     s = np.concatenate([[0.0], np.cumsum(np.linalg.norm(np.diff(P, axis=0), axis=1))])
     s /= s[-1]
     t = np.clip((s - (1.0 - fraction)) / fraction, 0.0, 1.0)
-    return relief + t * (min(relief, RELIEF_TAPER_END) - relief)
+    return relief + t * (min(relief, end) - relief)
 
 
 def _line_intersection(p, d, q, e):
@@ -811,7 +870,7 @@ def _lid_band(rig: Rig, side: int, stack: DecalStack) -> mk.Mesh:
     half = np.concatenate([hw_main, hw_arc, hw_tail])
     g = band_grid(centre_line, half)
     g[..., 0] *= side
-    return _decal(rig, g, _tapered_relief(centre_line, rig.lid_band_relief, LID_TAPER_FRACTION),
+    return _decal(rig, g, _tapered_relief(centre_line, rig.lid_band_relief, LID_TAPER_FRACTION, LID_TAPER_END),
                   rig.eye_slab_depth + 0.5 * LAYER_DEPTH_STEP, stack, shrink=("across", BAND_SHRINK))
 
 
@@ -844,6 +903,26 @@ def _lower_lid(rig: Rig, side: int, stack: DecalStack) -> mk.Mesh:
                   shrink=("across", BAND_SHRINK))
 
 
+#: Round 3 (tech F6): a tiny nose mark (the anime nose of frame-000: a short dash under the tip, slightly to her
+#: left, the side away from the sun), ``(x, z)`` ends and its half height; a decal like the mouth, so the
+#: front view shows a nose too.
+NOSE_MARK = ((-0.0010, 1.3070), (0.0030, 1.3062))
+NOSE_MARK_HALF = 0.0005
+NOSE_MARK_COLS = 3
+
+
+def _nose_mark(rig: Rig) -> mk.Mesh:
+    (x0, z0), (x1, z1) = NOSE_MARK
+    xs = np.linspace(x0, x1, NOSE_MARK_COLS)
+    zc = z0 + (xs - x0) * (z1 - z0) / (x1 - x0)
+    half = np.full(len(xs), NOSE_MARK_HALF)
+    half[0] *= 0.6
+    half[-1] *= 0.6
+    lo = np.stack([xs, zc - half], axis=1)
+    hi = np.stack([xs, zc + half], axis=1)
+    return _decal(rig, column_grid(lo, hi, 2), rig.mouth_relief, shrink=("across", BAND_SHRINK))
+
+
 def _mouth(rig: Rig) -> mk.Mesh:
     hw = 0.5 * rig.mouth_width
     xs = np.linspace(-hw, hw, MOUTH_COLS)
@@ -865,6 +944,7 @@ def _mouth(rig: Rig) -> mk.Mesh:
 
 def build(rig: Rig):
     """Parts of :data:`REGIONS` for ``rig``."""
+    rig = head_rig(rig)
     parts = [Part("head.skin", "skin", skin_surface(rig).mesh, "head")]
     marks = []
     for side in SIDES:
@@ -876,4 +956,5 @@ def build(rig: Rig):
                   Part(f"head.brow_{s}", "face_marks", _brow(rig, side), "face_marks")]
     parts += marks
     parts.append(Part("head.mouth", "face_marks", _mouth(rig), "face_marks"))
+    parts.append(Part("head.nose_mark", "face_marks", _nose_mark(rig), "face_marks"))
     return parts

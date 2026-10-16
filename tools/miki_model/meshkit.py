@@ -1349,3 +1349,32 @@ def lift_band_borders(mesh: Mesh, border_a, border_b, up, clearance: float, samp
             break
         lift += bump
     return lift
+
+
+# --- additions by headhair r3 ---
+
+def split_twisted(mesh: Mesh, max_deg: float, only=None) -> Mesh:
+    """``mesh`` with every quad whose two fan triangles ``(f0, f1, f2)`` / ``(f0, f2, f3)`` differ in normal by
+    more than ``max_deg`` degrees replaced by those two triangles (same group, same diagonal).  castplane
+    decides a polygon's facing by its Newell normal but tests occlusion against its fan triangles: on a twisted
+    quad near the outline one triangle can face the camera while the polygon does not (or the reverse), so the
+    outline is drawn along an edge that the quad's own other triangle hides, and a piece of it is missing.  As
+    two triangles the facing and the occluders agree.  The triangles (and the shape) are unchanged; each split
+    quad adds one polygon.  ``only`` (one bool per face) limits the split to those faces."""
+    V = mesh.vertices
+    cos_max = math.cos(math.radians(max_deg))
+    faces, groups = [], []
+    for k, (f, g) in enumerate(zip(mesh.faces, mesh.groups)):
+        f = list(f)
+        if len(f) == 4 and (only is None or only[k]):
+            a, b, c, d = (V[i] for i in f)
+            n1 = np.cross(b - a, c - a)
+            n2 = np.cross(c - a, d - a)
+            l1, l2 = float(np.linalg.norm(n1)), float(np.linalg.norm(n2))
+            if l1 > 0.0 and l2 > 0.0 and float(n1 @ n2) / (l1 * l2) < cos_max:
+                faces += [[f[0], f[1], f[2]], [f[0], f[2], f[3]]]
+                groups += [g, g]
+                continue
+        faces.append(f)
+        groups.append(g)
+    return Mesh(V.copy(), faces, groups)
