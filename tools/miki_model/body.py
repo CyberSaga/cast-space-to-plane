@@ -45,23 +45,29 @@ SIDES = (1, -1)
 #: Convex shoulder slope of the blouse between the neck root (1.215) and the acromion (1.180), as
 #: ``(z, hw)``: through the collar's I3 (x 0.042 at z 1.213) and O5 (x 0.118 at z 1.191) (spec §D.2);
 #: yf / yb are interpolated linearly between the rig's 1.215 and 1.180 rows.
-SHOULDER_HW = ((1.215, 0.031), (1.211, 0.052), (1.202, 0.085), (1.191, 0.118), (1.180, 0.150))
-TORSO_RING_POINTS = 24                 # points per blouse section
+SHOULDER_HW = ((1.215, 0.0275), (1.202, 0.085), (1.191, 0.118), (1.180, 0.150))
+TORSO_RING_POINTS = 18                 # points per blouse section
+TORSO_SKIP_ROWS = (0.990,)             # rig rows the loft leaves out (linear between their neighbours)
 TORSO_NECK_INSET = 0.004               # the blouse's top ring sits this far inside the neck
 COLLAR_END_WIDTH = 0.004               # each lapel ends at the V tip with this width (the halves don't touch)
 COLLAR_STRIPE_SMOOTHING = 0            # Laplacian passes on the stripe border rows (shoulder turn)
 COLLAR_SMOOTH_ABOVE_Z = 1.10           # ... only where the outer edge is above this (flap top, shoulder)
-COLLAR_SHOULDER_ROUNDING = 12          # moving-average half window (samples of 400) rounding the O3-O5 turn
+COLLAR_LAPEL_Y = -0.03                 # collar columns in front of this are the lapels (feature-line edges)
+COLLAR_SHOULDER_ROUNDING = 12         # moving-average half window (samples of 400) rounding the O3-O5 turn
 COLLAR_EDGE_THICKNESS = 0.0030        # the 4 mm collar thins to this at its outer / inner edges
 STRIPE_FLOAT = 0.00025                 # decal bands float this far above the surface they decorate
 NECK_POINTS = 16
+SCARF_START_THICKNESS = 0.007          # spec 0.010 at S0: the ribbon start must stay under the lapel
+SCARF_TUCK_Z = (-0.006, -0.003)        # S0, S1 lowered (their ribbon edge poked through the lapel)
+RING_POINTS = 8                        # scarf ring (and its stripes) section points
 BIB_COLUMNS = 13
 BIB_LIFT = 0.0015                      # spec 1 mm: the chords between columns sag ~1 mm on the curved chest
 DICKEY_LIFT = 0.0019                   # the dickey's back face: above the bib, so its top edge draws
 BIB_SINK = 0.002                       # the bib's top row lies this far inside the neck surface
 DICKEY_CORNER_X = 0.034                # dickey top corners pushed under the lapels (spec 0.024 lies in the V)
 DICKEY_BOTTOM_Z = 1.087                # dickey bottom point under the collar's V tip (spec 1.096)
-SKIRT_ROWS_Z = (0.950, 0.900, 0.860, 0.780, 0.450)   # pleated band 0.78 -> 0.45 is straight (one section)
+SKIRT_FACING_INSET = 0.007             # the facing's top ring inside the pleated surface
+SKIRT_CEILING_Z = 0.702                # the skirt's inner facing closes here, just above the under-skirt's bottom
 UNDERSKIRT = ((0.950, 0.100, -0.060, 0.055), (0.780, 0.150, -0.075, 0.090), (0.700, 0.157, -0.081, 0.092))
 
 
@@ -217,13 +223,13 @@ def torso_model(rig: Rig) -> Torso:
     br = list(rig.blouse_rows)
     y0, y1 = rig.neck_y
     # the neck-root row inside the neck's front / back (the rig's yf -0.026 sticks 4 mm out of the neck)
-    br[0] = (br[0][0], br[0][1], max(br[0][2], y0 + 0.001), min(br[0][3], y1 - 0.001))
+    br[0] = (br[0][0], br[0][1], max(br[0][2], y0 + 0.003), min(br[0][3], y1 - 0.003))
     top, sh = br[0], br[1]
     rows = []
     for z, hw in SHOULDER_HW:
         t = (top[0] - z) / (top[0] - sh[0])
         rows.append((z, hw, top[2] + t * (sh[2] - top[2]), top[3] + t * (sh[3] - top[3])))
-    rows += br[2:]
+    rows += [r for r in br[2:] if r[0] not in TORSO_SKIP_ROWS]
     return Torso(rows, rig.torso_exponent)
 
 
@@ -271,7 +277,7 @@ def _bib(rig: Rig, torso: Torso, inner_edge):
         inner = _neck_point(rig, phi, torso.rows[0][0] + BIB_LIFT, BIB_SINK)
         rows.append([inner] + [inner + t * (out - inner) for t in (0.15, 0.4, 0.7, 1.0)])
     P = np.array(rows)
-    grid = np.concatenate([P[:, :1], lay_on(torso, P[:, 1:], BIB_LIFT, margin=0.0008)], axis=1)
+    grid = np.concatenate([P[:, :1], lay_on(torso, P[:, 1:], BIB_LIFT, margin=0.0013)], axis=1)
     return mk.thicken(grid, 0.0015, offset="inward", away_from=(0.0, cy, 1.15), groups="single")
 
 
@@ -295,7 +301,7 @@ def _blouse(rig: Rig, torso: Torso):
 # sailor collar, stripe, dickey (object collar)
 # ---------------------------------------------------------------------------------------------------
 
-def _collar_edges(rig: Rig, n1=2, n2=5, n3=7):
+def _collar_edges(rig: Rig, n1=2, n2=5, n3=6):
     """Corresponding outer / inner edge points of her left half, back centre -> V tip: ``(outer, inner,
     lift)`` with the lapel lift (spec §D.2) per column."""
     O, I = np.array(rig.collar_outer), np.array(rig.collar_inner)
@@ -365,7 +371,7 @@ def _collar(rig: Rig, torso: Torso):
         bis = segs[0] + segs[-1]
         bis /= np.linalg.norm(bis)
         off[j] = bis / max(0.5, float(np.dot(bis, segs[0])))
-    vfrac = (0.0, None, None, 0.5, 0.8, 1.0)
+    vfrac = (0.0, None, None, 0.6, 1.0)
     Q1, Q2 = np.zeros((U, 3)), np.zeros((U, 3))
     for j in range(U):
         w = float(np.linalg.norm(inner[j] - outer[j]))
@@ -404,7 +410,21 @@ def _collar(rig: Rig, torso: Torso):
         return COLLAR_EDGE_THICKNESS + (rig.collar_thickness - COLLAR_EDGE_THICKNESS) * min(1.0, edge)
 
     col, sides = mk.thicken(grid, thick, offset="outward", away_from=(0.0, 0.012, 1.12),
-                            groups={"front": 1, "back": 2, "rim": 2}, return_sides=True)
+                            groups={"front": 1, "back": 2, "rim": {"v0": 3, "v1": 4, "u0": 5, "u1": 5}},
+                            return_sides=True)
+    # groups: on the lapels (the dickey, the bib and the scarf lie under their edges, so the underside
+    # silhouette would be hidden) the walls + underside are a second group and both edges always draw;
+    # around the back and the shoulders the whole collar is one group: its edges draw once, as outlines
+    lapel = np.array([outer[j][1] < COLLAR_LAPEL_Y for j in range(U)])
+    face_col = []
+    for u in range(U - 1):
+        face_col += [u, u] * (len(vfrac) - 1) + [u, u]
+    face_col += [0, U - 2] * (len(vfrac) - 1)
+    groups = []
+    for g, u in zip(col.groups, face_col):
+        on_lapel = lapel[u] and lapel[u + 1]
+        groups.append(1 if (g == 1 or not on_lapel) else 2)
+    col = col.with_groups(groups)
     top = sides["front"]
     nrm = _grid_normals(top, (0.0, 0.012, 1.12))[:, 1:3]
     base = top[:, 1:3] + STRIPE_FLOAT * nrm
@@ -443,6 +463,9 @@ def _ribbon(rig: Rig, torso: Torso, side: int):
     s = np.linspace(0.0, 1.0, n)
     w = np.interp(s, [0.0, 0.8, 1.0], [rig.scarf_width[0], rig.scarf_width[1], rig.scarf_width[1]])
     th = np.interp(s, [0.0, 0.8, 1.0], [rig.scarf_thickness[0], rig.scarf_thickness[1], rig.scarf_thickness[1]])
+    th[0] = SCARF_START_THICKNESS
+    for k, dz in enumerate(SCARF_TUCK_Z):            # S0, S1 lowered under the lifted lapel
+        S[k, 2] += dz
     P = S.copy()
     for k in range(n - 1):                           # S5 stays inside the ring
         P[k] = torso.onto(S[k], 0.001 + 0.5 * th[k])
@@ -460,7 +483,7 @@ def _ring(rig: Rig):
     c = np.array(rig.ring_center)
     w, d, h = rig.ring_size
     r = rig.ring_corner_radius
-    n = 12
+    n = RING_POINTS
     zs = (c[2] - (0.5 * h - r), c[2] + (0.5 * h - r))
     rings = [mk.rounded_rect_ring(w, d, r, n, (c[0], c[1], z)) for z in zs]
     box = mk.loft(rings, ("dome", r, 1), ("dome", r, 1))
@@ -527,50 +550,64 @@ def _tip(rig: Rig, torso: Torso, side: int):
 # ---------------------------------------------------------------------------------------------------
 
 def _skirt(rig: Rig):
-    """Thin pleated tube: 16 knife pleats (crest / valley sawtooth, depth 0 at pleat_top_z -> pleat_depth
-    at the hem), the inner surface skirt_thickness inside, open bottom.  The two faces of each pleat
-    alternate groups 1 / 2 on the outer surface, the rims and the inner surface, so every crease draws."""
+    """Pleated skirt shell (spec §D.5): smooth from the waist (0.95) down to pleat_top_z, below it 16 knife
+    pleats (crest / valley sawtooth, depth 0 at pleat_top_z -> pleat_depth at the hem), a 3 mm
+    hem rim and a short inner facing that rises to SKIRT_CEILING_Z, where a ceiling closes the shell level
+    with the under-skirt's bottom (from below the legs and the under-skirt still show).  Groups: the two
+    faces of each pleat 1 / 2 from the waist to the hem (the pressed pleat lines run up to the blouse
+    hem; above pleat_top_z they lie on the smooth surface), the hidden waist cap 3, hem rim + facing +
+    ceiling 4; so the 32 crest / valley creases and the hem always draw, and nothing inside adds lines."""
     n = rig.skirt_pleats
     span = 2.0 * np.pi / n
     ang = np.concatenate([[k * span, (k + 0.8) * span] for k in range(n)])
     M = 2 * n
     e = rig.skirt_exponent
-    outer, inner = [], []
-    for z in SKIRT_ROWS_Z:
+    ct, st = np.cos(ang), np.sin(ang)
+
+    def offset(P, inset):
+        nx = np.roll(P, -1, axis=0) - np.roll(P, 1, axis=0)
+        nv = np.stack([nx[:, 1], -nx[:, 0]], axis=1)
+        nv /= np.linalg.norm(nv, axis=1)[:, None]
+        return P - inset * nv
+
+    def ring(z, inset):
         hw, yf, yb = rig.skirt_section(z)
         depth = rig.pleat_depth * min(1.0, max(0.0, (rig.pleat_top_z - z) / (rig.pleat_top_z - rig.skirt_hem_z)))
-        ct, st = np.cos(ang), np.sin(ang)
         x = hw * np.sign(ct) * np.abs(ct) ** (2.0 / e)
         y = np.where(st > 0, yb, -yf) * np.sign(st) * np.abs(st) ** (2.0 / e)
         rad = np.hypot(x, y)
         k = 1.0 - depth * (np.arange(M) % 2) / rad
         P = np.stack([x * k, y * k], axis=1)
-        # 2D vertex normals of the sawtooth (outward) for the inner surface
-        nx = np.roll(P, -1, axis=0) - np.roll(P, 1, axis=0)
-        nv = np.stack([nx[:, 1], -nx[:, 0]], axis=1)
-        nv /= np.linalg.norm(nv, axis=1)[:, None]
-        Q = P - rig.skirt_thickness * nv
-        outer.append(np.column_stack([P, np.full(M, z)]))
-        inner.append(np.column_stack([Q, np.full(M, z)]))
-    R = len(SKIRT_ROWS_Z)
-    V = np.concatenate(outer + inner)
+        if inset:
+            nx = np.roll(P, -1, axis=0) - np.roll(P, 1, axis=0)
+            nv = np.stack([nx[:, 1], -nx[:, 0]], axis=1)
+            nv /= np.linalg.norm(nv, axis=1)[:, None]
+            P = P - inset * nv
+        return np.column_stack([P, np.full(M, z)])
 
-    def o(r, j):
+    zw, zp, zh = rig.skirt_waist_z, rig.pleat_top_z, rig.skirt_hem_z
+    # the facing's top ring: on the straight pleated section of the mesh (not the curved rows) + inset
+    t = (zp - SKIRT_CEILING_Z) / (zp - zh)
+    mid = (1.0 - t) * ring(zp, 0.0) + t * ring(zh, 0.0)
+    # (7 mm in: the twisted pleat quads' fan triangles dip up to ~3 mm inside the bilinear surface)
+    ceil_ring = np.column_stack([offset(mid[:, :2], SKIRT_FACING_INSET), np.full(M, SKIRT_CEILING_Z)])
+    rings = [ring(zw, 0.0), ring(zp, 0.0), ring(zh, 0.0), ring(zh, rig.skirt_thickness), ceil_ring]
+    V = np.concatenate(rings + [np.array([[0.0, 0.0, zw + 0.002], [0.0, 0.005, SKIRT_CEILING_Z + 0.004]])])
+    top, ceil = 5 * M, 5 * M + 1
+
+    def v(r, j):
         return r * M + j % M
-
-    def i_(r, j):
-        return R * M + r * M + j % M
 
     faces, groups = [], []
     for j in range(M):
-        g = 1 + (j % 2)
-        for r in range(R - 1):
-            faces.append([o(r, j), o(r + 1, j), o(r + 1, j + 1), o(r, j + 1)])
-            faces.append([i_(r, j), i_(r, j + 1), i_(r + 1, j + 1), i_(r + 1, j)])
-            groups += [g, g]
-        faces.append([o(0, j), o(0, j + 1), i_(0, j + 1), i_(0, j)])                 # waist rim
-        faces.append([o(R - 1, j), i_(R - 1, j), i_(R - 1, j + 1), o(R - 1, j + 1)])  # hem rim
-        groups += [g, g]
+        ab = 1 + (j % 2)
+        faces.append([top, v(0, j + 1), v(0, j)])                                   # waist cap (hidden)
+        faces.append([v(0, j), v(0, j + 1), v(1, j + 1), v(1, j)])                  # yoke
+        faces.append([v(1, j), v(1, j + 1), v(2, j + 1), v(2, j)])                  # pleat face
+        faces.append([v(2, j), v(2, j + 1), v(3, j + 1), v(3, j)])                  # hem rim
+        faces.append([v(3, j), v(3, j + 1), v(4, j + 1), v(4, j)])                  # inner facing
+        faces.append([ceil, v(4, j), v(4, j + 1)])                                  # ceiling
+        groups += [1, ab, ab, 4, 4, 4]           # waist cap: group 1 (half its rim is a hidden feature)
     return mk._outward(mk.Mesh(V, faces, groups))
 
 

@@ -33,16 +33,16 @@ SIDES = (1, -1)
 # ---------------------------------------------------------------------------------------------------
 # Module constants (numbers the rig does not carry; see the report for the rig changes they suggest)
 # ---------------------------------------------------------------------------------------------------
-SLEEVE_POINTS = 14                 # sleeve section polygon (the cuff stripes reuse it)
+SLEEVE_POINTS = 10                 # sleeve section polygon (the cuff stripes reuse it)
 SLEEVE_START = 0.025               # the round sleeve cap is centred this far down the upper arm: centred on
 #                                    the joint its 0.048 radius would rise 2 cm above the shoulder and through
 #                                    the collar (O5); here its top meets the blouse's shoulder at the acromion
 STRIPE_FLOAT = 0.00025             # cuff stripes float this far above the sleeve
-LEG_POINTS = 12
-SOCK_POINTS = 14
-LEG_Z = (0.720, 0.700, 0.600, 0.500, 0.420, 0.370)          # the leg ends inside the sock
+LEG_POINTS = 10
+SOCK_POINTS = 12
+LEG_Z = (0.720, 0.700, 0.500, 0.420, 0.370)          # the leg ends inside the sock
 SOCK_Z = (0.025, 0.065, 0.200, 0.320, 0.385)          # from inside the shoe to the sock top
-SHOE_POINTS = 16
+SHOE_POINTS = 12
 SHOE_ANKLE_U = 0.040               # the shoe axis passes under the ankle centre this far from the heel back
 #                                    (spec: heel back at x 0.082 would put the ankle 1 cm off the shoe axis)
 #: Sole half-width factor B(u) along the foot (u from the heel back); half-width = B * sin(theta).
@@ -86,12 +86,12 @@ def _sleeve(rig: Rig, side: int):
     d1, d2 = rig.upper_arm_dir(side), rig.forearm_dir(side)
     Lu = rig.upper_arm_length
     Lf = rig.forearm_length
-    stations = [(J + SLEEVE_START * d1, SLEEVE_START / Lu), (J + 0.12 * d1, 0.12 / Lu),
+    stations = [(J + SLEEVE_START * d1, SLEEVE_START / Lu),
                 (E - 0.035 * d1, 1.0 - 0.035 / Lu), (E + 0.0 * d1, 1.0), (E + 0.035 * d2, 1.0 + 0.035 / Lf),
                 (C - 0.045 * d2, 2.0), (C, 2.0)]
     # round the elbow: pull the elbow station toward the inside of the bend
     P = np.array([p for p, _ in stations])
-    P[3] = 0.5 * P[3] + 0.25 * (P[2] + P[4])
+    P[2] = 0.5 * P[2] + 0.25 * (P[1] + P[3])
     pos = np.array([q for _, q in stations])
     rad = np.array([rig.sleeve_radius(q) for q in pos])
     _m, (Pp, T, N, B) = mk.sweep(P, width=2 * rad, profile=mk.profile_ellipse(SLEEVE_POINTS), start="round",
@@ -151,7 +151,7 @@ def _hand(rig: Rig, side: int):
     tang = np.gradient(path, axis=0)
     nrm = np.array([np.cross(w, t) for t in tang])
     nrm = np.array([n if np.dot(n, p) > 0 else -n for n in nrm])
-    hand = _sweep_loft(path, 2 * half_w, 2 * half_t, mk.profile_rect(12, 2.6), nrm, "flat",
+    hand = _sweep_loft(path, 2 * half_w, 2 * half_t, mk.profile_rect(8, 2.6), nrm, "flat",
                        ("dome", 0.5 * rig.finger_tip_thickness, 1), cap_groups=(1, None))
     # thumb: a lobe from the index side of the palm base, lying forward along the index finger and
     # slightly toward the palm (the palm direction is the rotated centreline, not the chord)
@@ -165,7 +165,7 @@ def _hand(rig: Rig, side: int):
     tp = np.array([base, q1, q2, q3])
     th = rig.thumb_thickness
     thumb = _sweep_loft(tp, np.array([0.022, 0.020, 0.017, 0.014]), np.array([th, th, 0.9 * th, 0.8 * th]),
-                        mk.profile_ellipse(8), np.tile(p, (4, 1)), "flat", ("dome", 0.006, 1), cap_groups=(1, None))
+                        mk.profile_ellipse(6), np.tile(p, (4, 1)), "flat", ("dome", 0.006, 1), cap_groups=(1, None))
     return hand, thumb
 
 
@@ -230,7 +230,7 @@ def _shoe(rig: Rig, side: int):
     su = SHOE_STRAP_U
     hw = 0.5 * rig.strap_width
     secs = [_plane_section(shoe, upper, su + k * hw) for k in (-1.0, 1.0)]
-    m = 17
+    m = 7
     A_, B_ = (mk.resample_polyline(sec, m) for sec in secs)
     mid = 0.5 * (A_ + B_)
     tang = np.gradient(mid, axis=0)
