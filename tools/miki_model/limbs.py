@@ -21,6 +21,7 @@ import numpy as np
 
 from . import meshkit as mk
 from .meshkit import Part
+from .body import shoulder_rig
 from .rig import Rig
 
 __all__ = ["REGIONS", "build"]
@@ -38,6 +39,8 @@ SLEEVE_START = 0.010               # the round sleeve cap is centred this far do
 #                                    the joint its 0.048 radius would rise 2 cm above the shoulder and through
 #                                    the collar (O5); r1 had 0.025, where its top only grazed the blouse's
 #                                    shoulder and the arc over the sleeve top drew dashed in side views (r2 F5)
+SLEEVE_CAP_RINGS = 2               # review r4 (F1): rings of the round sleeve cap (1 ring left a flat top facet
+#                                    with square corners: the "coat-hanger" shoulder in the front views)
 LEG_POINTS = 10
 SOCK_POINTS = 12
 LEG_Z = (0.720, 0.700, 0.500, 0.420, 0.370)          # the leg ends inside the sock
@@ -59,6 +62,10 @@ SHOE_STRAP_POINTS = 13             # points along each strap border (r2 F5: 11 s
 HAND_WRIST = (0.0215, 0.0135)      # half-width, half-thickness at the wrist (and inside the sleeve)
 HAND_PALM_HEEL = (0.015, 0.0285)   # distance from the wrist, half-width: the heel of the palm
 HAND_FINGER_HALF_WIDTH = (0.029, 0.021)   # middle of the fingers, fingertips
+#: Review r4 (F13): relaxed, slightly curled hands instead of flat mitten paddles: this much more curl at the
+#: knuckles than ``rig.finger_curl_deg``, and the palm / finger half-widths times HAND_NARROW.
+HAND_EXTRA_KNUCKLE_CURL_DEG = 15.0
+HAND_NARROW = 0.9
 
 
 def _side_name(side: int) -> str:
@@ -109,7 +116,7 @@ def _sleeve(rig: Rig, side: int):
     rings.append(C + r_open * (ct * Bc + st * Nc))                                  # the rim turning in
     rings.append(C - rig.cuff_recess * d2 + r_open * (ct * Bc + st * Nc))           # opening to the disc
     groups = [1] * (len(Pp) - 1) + [2, 2]
-    sleeve = mk.loft(rings, ("dome", rad[0], 1), "flat", groups=groups, cap_groups=(None, 2))
+    sleeve = mk.loft(rings, ("dome", rad[0], SLEEVE_CAP_RINGS), "flat", groups=groups, cap_groups=(None, 2))
     stripes = []
     R = rad[-1] + rig.stripe_float
     for d0, d1_ in rig.cuff_stripes:
@@ -133,6 +140,7 @@ def _hand(rig: Rig, side: int):
         w = -w
     # centreline in the (a, p) plane: palm straight, fingers curled toward the palm
     c1, c2 = (math.radians(x) for x in rig.finger_curl_deg)
+    c1 += math.radians(HAND_EXTRA_KNUCKLE_CURL_DEG)
     pl, fl = rig.palm_length, rig.finger_length
     pts2 = [(-rig.wrist_in_sleeve, 0.0), (0.0, 0.0), (HAND_PALM_HEEL[0], 0.0), (0.035, 0.0), (pl, 0.0)]
     i_wrist, i_palm = 1, 4
@@ -153,6 +161,7 @@ def _hand(rig: Rig, side: int):
     # section half sizes (width along w, thickness along p) per station
     ww, wt = HAND_WRIST
     half_w = np.array([ww, ww, HAND_PALM_HEEL[1], 0.031, 0.5 * rig.palm_width + 0.001, *HAND_FINGER_HALF_WIDTH])
+    half_w[2:] *= HAND_NARROW                                       # the wrist (inside the cuff) keeps its size
     half_t = np.array([wt, wt, 0.0125, 0.5 * rig.palm_thickness, 0.0105, 0.0090, 0.5 * rig.finger_tip_thickness])
     # thickness direction along the curl
     tang = np.gradient(path, axis=0)
@@ -163,7 +172,7 @@ def _hand(rig: Rig, side: int):
     # thumb: a lobe from the index side of the palm base, lying forward along the index finger and
     # slightly toward the palm (the palm direction is the rotated centreline, not the chord)
     a_palm = _unit(path[i_palm] - path[i_wrist])
-    base = path[i_wrist] + 0.010 * a_palm + 0.019 * w + 0.002 * p
+    base = path[i_wrist] + 0.010 * a_palm + 0.019 * HAND_NARROW * w + 0.002 * p
     d_a = _unit(0.95 * a_palm + 0.25 * w + 0.10 * p)
     d_b = _unit(0.97 * a_palm + 0.02 * w + 0.20 * p)
     q1 = base + 0.024 * d_a
@@ -304,6 +313,7 @@ def _plane_section(mesh, mask, u0):
 
 def build(rig: Rig):
     """Parts of :data:`REGIONS` for ``rig``."""
+    rig = shoulder_rig(rig)                           # review r4 (F1): the lower, narrower shoulder joint
     parts = []
     for side in SIDES:
         s = _side_name(side)
