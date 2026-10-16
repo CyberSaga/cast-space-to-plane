@@ -650,14 +650,12 @@ def _sidelock(rig: Rig, side: int) -> mk.Mesh:
 # ---------------------------------------------------------------------------------------------------------
 STRAND_POINTS = 9
 STRAND_SIDES = 4
-#: Round 4 (tech F4): lateral (x) shift of the rig's strand points P0 ... P6: P4 / P5 move out 3 / 4.5 mm, so
-#: the strand passes outside the (shortened) brow's outer end and the lid's outer corner (spec I.12) instead of
-#: crossing them.  Wanted as a rig change (``strand_points``).
-STRAND_DX = (0.0, 0.0, 0.0, 0.001, 0.003, 0.0045, 0.0)
 
 
 def _strand(rig: Rig, lock_l: mk.Mesh) -> mk.Mesh:
-    pts = [np.array(p) + np.array([dx, 0.0, 0.0]) for p, dx in zip(rig.strand_points, STRAND_DX)]
+    # round 4 (tech F4): the rig's P3 / P4 / P5 moved out 1 / 3 / 4.5 mm, so the strand passes outside the
+    # (shortened) brow's outer end and the lid's outer corner (spec I.12) instead of crossing them
+    pts = [np.array(p) for p in rig.strand_points]
     # the tip lies on the sidelock's front face (§C.4 P6): find that face along +y
     tip = pts[-1]
     lock = SkinSurface(lock_l)

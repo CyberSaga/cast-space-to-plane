@@ -21,7 +21,6 @@ import numpy as np
 
 from . import meshkit as mk
 from .meshkit import Part
-from .body import shoulder_rig
 from .rig import Rig
 
 __all__ = ["REGIONS", "build"]
@@ -313,7 +312,6 @@ def _plane_section(mesh, mask, u0):
 
 def build(rig: Rig):
     """Parts of :data:`REGIONS` for ``rig``."""
-    rig = shoulder_rig(rig)                           # review r4 (F1): the lower, narrower shoulder joint
     parts = []
     for side in SIDES:
         s = _side_name(side)

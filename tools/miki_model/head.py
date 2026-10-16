@@ -132,17 +132,12 @@ def _interp_rows(rows, z, col):
     raise ValueError(z)
 
 
-#: Round 4 (F4): fuller cheeks just below the eyes (PDF p.17, spec I.10): the half-widths of these
-#: ``rig.head_profile`` rows (were 0.074 / 0.071), so the face is ~0.0747 wide at 1.320 and ~0.0726 at 1.310
-#: (were 0.0728 / 0.0702) and then tapers quickly to the small chin; the cheek stays inside the sidelocks'
-#: inner edges (x 0.0745, 4.5 cm further forward).  Wanted as a rig change (``head_profile``).
-CHEEK_HW = {1.325: 0.0752, 1.312: 0.0738}
-
-
 def _base_profile(rig: Rig):
-    """The §B.1 profile with the nose row's front replaced by its neighbours' mean (the nose is a bump) and
-    the cheek rows widened (:data:`CHEEK_HW`)."""
-    rows = [(z, CHEEK_HW.get(round(z, 4), hw), yf, yb) for z, hw, yf, yb in rig.head_profile]
+    """The §B.1 profile with the nose row's front replaced by its neighbours' mean (the nose is a bump).
+    Round 4 (F4): the rig's cheek rows 1.325 / 1.312 are fuller (hw 0.0752 / 0.0738, were 0.074 / 0.071), so
+    the face is ~0.0747 wide at 1.320 and ~0.0726 at 1.310 and then tapers quickly to the small chin; the
+    cheek stays inside the sidelocks' inner edges."""
+    rows = list(rig.head_profile)
     nz = rig.nose_tip[2]
     for k, (z, hw, yf, yb) in enumerate(rows):
         if abs(z - nz) < 1e-9 and 0 < k < len(rows) - 1:
@@ -847,17 +842,15 @@ def _lid_band(rig: Rig, side: int, stack: DecalStack) -> mk.Mesh:
                   rig.eye_slab_depth + 0.5 * LAYER_DEPTH_STEP, stack, shrink=("across", BAND_SHRINK))
 
 
-#: Round 4 (F5): shorter brows closer to the eyes (PDF p.15): the rig's brow curve moved down by BROW_DROP and
-#: ending at x = BROW_OUTER_X (was rig.brow_outer x 0.058: 38.6 mm long, 18-31 mm above the lid), same slope.
-#: Wanted as a rig change (``brow_inner`` / ``brow_mid`` / ``brow_outer``).
-BROW_DROP = 0.003
+#: Round 4 (F5): shorter brows closer to the eyes (PDF p.15): the rig's brow curve (3 mm lower in round 4) ends
+#: at x = BROW_OUTER_X (was rig.brow_outer x 0.058: 38.6 mm long, 18-31 mm above the lid), same slope.
 BROW_OUTER_X = 0.053
 
 
 def _brow(rig: Rig, side: int) -> mk.Mesh:
     pts = np.array([rig.brow_inner, rig.brow_mid, rig.brow_outer])
     xs = np.linspace(pts[0, 0], min(BROW_OUTER_X, pts[-1, 0]), BROW_COLS)
-    zs = _smooth_curve(pts, xs) - BROW_DROP
+    zs = _smooth_curve(pts, xs)
     t = (xs - xs[0]) / (xs[-1] - xs[0])
     w0, w1 = rig.brow_width
     half = 0.5 * (w0 + (w1 - w0) * t)
@@ -924,9 +917,16 @@ def _mouth(rig: Rig) -> mk.Mesh:
 # build
 # ---------------------------------------------------------------------------------------------------------
 
+#: Round 4 merge (shared F6): skin quads twisted more than this become their two fan triangles (same diagonal,
+#: same shape; +32 polygons, no extra triangles).  castplane faces a polygon by its Newell normal but occludes
+#: with its fan triangles, so a twisted quad at the outline hid ~50 px (at 1200 px) of the far jaw contour in
+#: the low 3/4 head view and part of the nose stroke in the 3/4 view.
+SKIN_TWIST_SPLIT_DEG = 10.0
+
+
 def build(rig: Rig):
     """Parts of :data:`REGIONS` for ``rig``."""
-    parts = [Part("head.skin", "skin", skin_surface(rig).mesh, "head")]
+    parts = [Part("head.skin", "skin", mk.split_twisted(skin_surface(rig).mesh, SKIN_TWIST_SPLIT_DEG), "head")]
     marks = []
     for side in SIDES:
         s = _side_name(side)

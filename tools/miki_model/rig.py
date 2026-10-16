@@ -107,8 +107,8 @@ class Rig:
     blouse_rows: tuple = (
         (1.215, 0.0275, -0.019, 0.043),    # neck root, 3 mm inside the neck (spec 0.031 / -0.026 / 0.050
                                            # sticks out of the neck front and, with the exponent, its diagonals)
-        (1.180, 0.150, -0.055, 0.075),     # shoulder line (acromion)
-        (1.130, 0.150, -0.085, 0.086),
+        (1.166, 0.140, -0.055, 0.075),     # shoulder line (acromion); r4 F1: lower, narrower (was 1.180, 0.150)
+        (1.130, 0.148, -0.085, 0.086),     # r4 F1: was hw 0.150
         (1.065, 0.130, -0.104, 0.085),     # armpit
         (1.040, 0.132, -0.110, 0.085),     # bust
         (0.990, 0.128, -0.106, 0.080),
@@ -117,7 +117,11 @@ class Rig:
     )
     #: The convex shoulder between the neck root and the acromion row: ``(z, hw)``; yf / yb are linear between
     #: blouse_rows[0] and blouse_rows[1].  A straight loft from the neck root would cut the trapezius.
-    blouse_shoulder_hw: tuple = ((1.215, 0.0275), (1.203, 0.083), (1.193, 0.112), (1.183, 0.130), (1.172, 0.142))
+    #: Review r4 (F1, PDF p.14 item 5: narrow shoulders sloping a little down read soft): ~17 deg off the neck,
+    #: ~35 deg at the collar's turn over the shoulder (O5), then rounding down into the sleeve (round 3:
+    #: (1.215, 0.0275), (1.203, 0.083), (1.193, 0.112), (1.183, 0.130), (1.172, 0.142)).
+    blouse_shoulder_hw: tuple = ((1.215, 0.0275), (1.197, 0.086), (1.185, 0.106), (1.172, 0.121), (1.159, 0.132),
+                                 (1.145, 0.140))
     bust_apex_x: float = 0.050               # §A/§D.1 bust apex at x +-0.050 (y -0.110)
     body_waist: tuple = (0.940, 0.105, -0.065, 0.060)   # §A body under the blouse at the waist (z, hw, yf, yb)
     body_hip: tuple = (0.780, 0.150, -0.075, 0.090)     # §A body under the skirt at the hip (z, hw, yf, yb)
@@ -142,8 +146,8 @@ class Rig:
         (1.342, 0.076, -0.0835, 0.107),    # eyes; the bridge between them (r2 F4: was yf -0.085; r3 F4: the
         #                                    recess eased back halfway, was -0.082)
         (1.333, 0.075, -0.0845, 0.1037),   # r2 F4: the nose (head.NOSE_BUMP) stands out in front of it (r3: -0.083)
-        (1.325, 0.074, -0.088, 0.100),     # cheeks fullest (just below the eyes)
-        (1.312, 0.071, -0.093, 0.093),     # nose tip (the bump is local, width +-0.006)
+        (1.325, 0.0752, -0.088, 0.100),    # cheeks fullest (just below the eyes; r4 F4: was hw 0.074)
+        (1.312, 0.0738, -0.093, 0.093),    # nose tip (the bump is local, width +-0.006; r4 F4: was hw 0.071)
         (1.300, 0.066, -0.085, 0.085),     # under the nose
         (1.286, 0.055, -0.083, 0.074),     # mouth (r2 F2: softer cheek-to-chin U, was hw 0.058)
         (1.279, 0.049, -0.0805, 0.067),    # r2 F2
@@ -228,9 +232,11 @@ class Rig:
     # =====================================================================================================
     # B.3 Brows, B.4 nose and mouth (object face_marks; nose in the skin mesh)
     # =====================================================================================================
-    brow_inner: tuple = (0.020, 1.364)       # (x, z); y -0.0874; ~18 mm above the lid line (r3 F2: 2 mm lower)
-    brow_mid: tuple = (0.039, 1.373)         # 1.5 mm of upward arch
-    brow_outer: tuple = (0.058, 1.379)       # y -0.0767; tilt about 22 deg rising outward
+    #: Review r4 (F5): the brow curve 3 mm lower (was z 1.364 / 1.373 / 1.379); head.BROW_OUTER_X ends the
+    #: brow at x 0.053 on this curve (same slope), ~15 mm (inner) to 25 mm (outer) above the lid.
+    brow_inner: tuple = (0.020, 1.361)       # (x, z); y -0.0874 (r3 F2: 2 mm lower; r4 F5: 3 mm lower)
+    brow_mid: tuple = (0.039, 1.370)         # 1.5 mm of upward arch
+    brow_outer: tuple = (0.058, 1.376)       # y -0.0767; tilt about 22 deg rising outward (curve end)
     brow_tilt_deg: float = 22.0
     brow_width: tuple = (0.0018, 0.0010)     # inner, outer end (tapering)
     brow_relief: float = 0.0008
@@ -316,9 +322,9 @@ class Rig:
         (0.022, -0.086, 1.474),    # P0 root on H1, just above/behind the band
         (0.030, -0.093, 1.463),    # P1 arches over the band
         (0.040, -0.096, 1.432),    # P2 crosses the bangs, passing their cut
-        (0.052, -0.086, 1.400),    # P3 diagonally outward over the forehead
-        (0.063, -0.074, 1.368),    # P4 crosses the outer end of the brow
-        (0.074, -0.047, 1.335),    # P5 outside the eye's outer corner, 5 mm off the cheek (r2: follows
+        (0.053, -0.086, 1.400),    # P3 diagonally outward over the forehead (r4 tech F4: x was 0.052)
+        (0.066, -0.074, 1.368),    # P4 passes outside the brow's outer end (r4 tech F4: x was 0.063)
+        (0.0785, -0.047, 1.335),   # P5 outside the eye's outer corner, 5 mm off the cheek (r2: follows
         (0.080, -0.036, 1.305),    # P6 tip, on the sidelock's front face near its inner edge  the lock back)
     )
     strand_width: float = 0.004                 # 4-6 sided section, Catmull-Rom through the points
@@ -371,9 +377,9 @@ class Rig:
         (0.000, 0.085, 1.030),     # O1 back flap, bottom centre
         (0.105, 0.061, 1.030),     # O2 back flap bottom corner (square)
         (0.105, 0.070, 1.120),     # O3 flap side, going up
-        (0.110, 0.045, 1.188),     # O4 turning forward over the shoulder
-        (0.118, 0.000, 1.192),     # O5 on top of the shoulder
-        (0.116, -0.058, 1.170),    # O6 front of the shoulder (lapel lifted 10 mm over the scarf)
+        (0.110, 0.045, 1.178),     # O4 turning forward over the shoulder (r4 F1: 10 mm lower, was 1.188)
+        (0.118, 0.000, 1.182),     # O5 on top of the shoulder (r4 F1: was 1.192)
+        (0.116, -0.058, 1.161),    # O6 front of the shoulder (lapel lifted 10 mm over the scarf; r4 F1: was 1.170)
         (0.082, -0.084, 1.136),    # O7 lift 9 mm
         (0.040, -0.097, 1.110),    # O8 lift 6 mm
         (0.000, -0.099, 1.090),    # O9 V tip (lift 1 mm; collar front surface -0.103)
@@ -430,7 +436,8 @@ class Rig:
     # =====================================================================================================
     #: Sleeve radius along the arm: ``(position, radius)`` with position 0 = shoulder joint, 0.5 = mid upper
     #: arm, 1 = elbow, 1.5 = mid forearm, 2 = wrist.
-    sleeve_radii: tuple = ((0.0, 0.045), (0.5, 0.045), (1.0, 0.043), (1.5, 0.044), (2.0, 0.044))
+    #: Review r4 (F1): 0.042 / 0.044 at the joint / mid upper arm (were 0.045 / 0.045) with the lower joint.
+    sleeve_radii: tuple = ((0.0, 0.042), (0.5, 0.044), (1.0, 0.043), (1.5, 0.044), (2.0, 0.044))
     cuff_past_wrist: float = 0.010              # cuff edge beyond the wrist joint toward the hand
     cuff_rim: float = 0.005                     # the tube closes with a rim turning in to the opening
     cuff_opening_radius: float = 0.030
@@ -501,12 +508,13 @@ class Rig:
     # =====================================================================================================
     # E. Pose (relaxed A-pose; the joint positions are binding, the angles document them)
     # =====================================================================================================
-    shoulder_joint_pos: tuple = (0.134, 0.005, 1.155)
-    acromion: tuple = (0.142, 0.005, 1.170)
+    shoulder_joint_pos: tuple = (0.126, 0.005, 1.137)   # r4 F1: lower, narrower shoulder (was 0.134, 1.155)
+    acromion: tuple = (0.140, 0.005, 1.166)      # r4 F1 (was 0.142, 1.170; the blouse_rows[1] row)
     elbow_pos: tuple = (0.224, -0.012, 0.925)
     wrist_pos: tuple = (0.292, -0.080, 0.738)
     fingertip_pos: tuple = (0.339, -0.102, 0.608)   # middle fingertip
-    arm_abduction_deg: float = 20.0             # upper arm (0.245 long) in the frontal plane
+    arm_abduction_deg: float = 25.0             # upper arm (0.234 long) in the frontal plane (r4 F1: the
+    #                                             lower, narrower joint; was 20 / 0.245)
     arm_flexion_deg: float = 4.0                # upper arm flexed forward
     elbow_bend_deg: float = 15.0                # forearm (0.210 long) bent forward
     wrist_extension_deg: float = 10.0           # hand extended back relative to the forearm
