@@ -136,6 +136,57 @@ R2_RIG = {
     # F8: a rounded almond under the flat lid, both corners closing just under the lid line
     "sclera_lower": ((0.019, 1.3480), (0.023, 1.3350), (0.030, 1.3262), (0.040, 1.3232), (0.050, 1.3248),
                      (0.057, 1.3320), (0.0612, 1.3490)),
+    # F3 / F6 / F15 (hair.py): the lock hangs ~12 mm further back and 4 mm further out at the ear line, so
+    # the cheek and jaw show in profile (overrides spec Decision 13: from the front the cheek outline shows
+    # just inside the hair); the outer edge stays at x 0.104 (straight side hair, the crown is the widest
+    # part); two more rows make the bend over the shoulder a smooth curve.
+    "sidelock_rows": (
+        (1.445, 0.0695, -0.062, 0.100, -0.031),    # F7: the inner edge passes through the bangs' end
+        (1.432, 0.0715, -0.060, 0.101, -0.029),    #     down to the cut, so no slot shows beside it
+        (1.400, 0.078, -0.054, 0.104, -0.026),
+        (1.370, 0.0785, -0.045, 0.104, -0.019),
+        (1.342, 0.079, -0.035, 0.104, -0.012),
+        (1.310, 0.077, -0.032, 0.104, -0.010),
+        (1.270, 0.076, -0.032, 0.104, -0.012),
+        (1.245, 0.0755, -0.039, 0.104, -0.019),
+        (1.220, 0.075, -0.049, 0.104, -0.029),
+        (1.200, 0.0745, -0.058, 0.104, -0.039),
+        (1.180, 0.074, -0.068, 0.104, -0.050),
+        (1.145, 0.074, -0.084, 0.104, -0.068),
+        (1.120, 0.074, -0.090, 0.104, -0.074),
+    ),
+    # F7 (hair.py): the strand crease and the outer edge's feature line start inside the dome (no
+    # horizontal line across the lock's top under the band)
+    "sidelock_crease_top_z": 1.475,
+    # F12 / F14 (hair.py): the back sheet's first row is narrower (a gentle flare over the shoulders from the
+    # curtain), its lateral edges taper in toward the hem
+    "back_sheet_rows": (
+        (1.180, 0.117, 0.090, 0.121, 0.020),
+        (1.100, 0.130, 0.099, 0.119, 0.020),
+        (1.000, 0.137, 0.099, 0.118, 0.019),
+        (0.920, 0.144, 0.099, 0.117, 0.018),
+        (0.860, 0.146, 0.100, 0.116, 0.016),
+    ),
+    # (hair.py) the stray strand's last two points follow the lock back: P5 5 mm off the cheek, P6 on the
+    # lock's front face near its inner edge
+    "strand_points": (
+        (0.022, -0.086, 1.474), (0.030, -0.093, 1.463), (0.040, -0.096, 1.432), (0.052, -0.086, 1.400),
+        (0.063, -0.074, 1.368), (0.074, -0.047, 1.335), (0.080, -0.036, 1.305),
+    ),
+    # F5 / F6 (hair.py): the dome is wider at the sides (hw >= 0.104 at z 1.45, the crown is the widest part
+    # of the front silhouette) and reaches its equator behind the band; the curtain comes out from under it
+    # tangentially at the equator (top rows: 1.6 mm inside the dome at 1.438, 0.7 mm outside its rim at
+    # 1.405, on the dome's own azimuths) and falls straight at the dome's width (ax 0.1085), so no ledge,
+    # seam or rim line shows where they meet.
+    "dome_radii": (0.1075, 0.1195, 0.123),
+    "curtain_top_rows": ((1.438, -0.0016, 0.018), (1.405, 0.0007, 0.020)),
+    "curtain_rows": (
+        (1.450, 0.012, 0.1085, 0.137, 0.020, -0.034),   # replaced by curtain_top_rows
+        (1.340, 0.012, 0.1085, 0.1365, 0.022, -0.028),
+        (1.290, 0.012, 0.1085, 0.132, 0.024, -0.022),
+        (1.250, 0.020, 0.1095, 0.128, 0.026, 0.010),
+        (1.215, 0.040, 0.1120, 0.125, 0.028, 0.060),
+    ),
 }
 
 
@@ -680,12 +731,13 @@ def _decal(rig: Rig, grid_xz, relief: float, depth: float | None = None, stack: 
 #: Round 1 (F10): 10 segments on the sclera's lower curve, 20 / 14 / 8 outline segments on iris / pupil /
 #: highlight (the outline of a column grid has 2 (cols - 1) + 2 segments; the review asked for 12 / 24 /
 #: 16 / 10, which costs ~0.1 s of the TS still frame for a difference hardly visible at drawing scale).
-#: Round 2 (F8): 14 segments on the sclera's lower curve, 24 / 18 / 10 outline segments on iris / pupil /
-#: highlight.
+#: Round 2 (F8): 14 segments on the sclera's lower curve; 22 / 16 / 8 outline segments on iris / pupil /
+#: highlight, whose grids have two rows (no crease row, see _eye_parts): the triangles they save pay for the
+#: finer outlines in castplane's hidden-line time.
 SCLERA_COLS, SCLERA_ROWS = 15, 3
-IRIS_COLS, IRIS_ROWS = 12, 3
-PUPIL_COLS, PUPIL_ROWS = 9, 3
-HIGHLIGHT_COLS = 5
+IRIS_COLS, IRIS_ROWS = 11, 2
+PUPIL_COLS, PUPIL_ROWS = 8, 2
+HIGHLIGHT_COLS = 4
 #: The sclera / iris tops stay this far under the lid band's upper edge (hidden under it).
 LID_COVER = 0.0006
 #: Stacked eye layers sink a little deeper each (sclera, iris, pupil, highlight), so their back faces never
@@ -772,8 +824,8 @@ def _eye_parts(rig: Rig, side: int, stack: DecalStack):
     lo_i, hi_i = _ellipse_columns(cx, rig.iris_center_z, 0.5 * iw, 0.5 * ih, IRIS_COLS,
                                   lo_clip=lambda x: _sclera_lo(rig, x) + 0.0004,
                                   hi_clip=lambda x: _lid_z(rig, x) - 0.0002)
-    # round 2 (F9): the iris and pupil rows are evenly spaced (no crease row): forcing the eye-line crease
-    # into the short end columns of an ellipse twisted their front quads (visible back faces)
+    # round 2 (F9): the iris and pupil grids have no crease row: forcing the eye-line crease into the short
+    # end columns of an ellipse twisted their front quads (visible back faces)
     iris = _decal(rig, column_grid(lo_i, hi_i, IRIS_ROWS), rig.iris_relief, STACK_DEPTH, stack)
     pw, ph = rig.pupil_size
     lo_p, hi_p = _ellipse_columns(cx, rig.pupil_center_z, 0.5 * pw, 0.5 * ph, PUPIL_COLS)
@@ -802,15 +854,18 @@ MOUTH_COLS = 7
 #: length (where the face turns away), so they stay inside the profile outline.
 RELIEF_TAPER_END = 0.0004
 RELIEF_TAPER_FRACTION = 0.25
+#: Round 2 (F4): the lid band (with its flick) thins over its outer 45 %, so it no longer juts out of the profile
+#: like a visor.
+LID_TAPER_FRACTION = 0.45
 
 
-def _tapered_relief(centre_xz, relief: float) -> np.ndarray:
+def _tapered_relief(centre_xz, relief: float, fraction: float = RELIEF_TAPER_FRACTION) -> np.ndarray:
     """Per-column relief along the polyline ``centre_xz`` (inner end first): ``relief`` up to the last
     :data:`RELIEF_TAPER_FRACTION` of its length, then linear down to :data:`RELIEF_TAPER_END`."""
     P = np.asarray(centre_xz, dtype=np.float64)
     s = np.concatenate([[0.0], np.cumsum(np.linalg.norm(np.diff(P, axis=0), axis=1))])
     s /= s[-1]
-    t = np.clip((s - (1.0 - RELIEF_TAPER_FRACTION)) / RELIEF_TAPER_FRACTION, 0.0, 1.0)
+    t = np.clip((s - (1.0 - fraction)) / fraction, 0.0, 1.0)
     return relief + t * (min(relief, RELIEF_TAPER_END) - relief)
 
 
@@ -851,7 +906,7 @@ def _lid_band(rig: Rig, side: int, stack: DecalStack) -> mk.Mesh:
     half = np.concatenate([hw_main, hw_arc, hw_tail])
     g = band_grid(centre_line, half)
     g[..., 0] *= side
-    return _decal(rig, g, _tapered_relief(centre_line, rig.lid_band_relief),
+    return _decal(rig, g, _tapered_relief(centre_line, rig.lid_band_relief, LID_TAPER_FRACTION),
                   rig.eye_slab_depth + 0.5 * LAYER_DEPTH_STEP, stack, shrink=("across", BAND_SHRINK))
 
 
