@@ -1240,3 +1240,25 @@ def ridge_band(border_a, border_b, normals, height: float, periodic: bool = True
         faces.append([0, U, 2 * U])
         faces.append([U - 1, 3 * U - 1, 2 * U - 1])
     return _outward(Mesh(V, faces, group))
+
+
+# --- additions by headhair r1 ---
+
+def inscribed_fan(mesh: Mesh) -> Mesh:
+    """``mesh`` with every quad's vertex order rotated so that castplane's fan diagonal (first to third
+    vertex) is the quad's *valley* diagonal (the fold bends inward, seen from outside).  On a convex surface
+    the ridge diagonal bulges out beyond the quad's own edges, so near a silhouette it can cover the
+    silhouette edge in projection and castplane's hidden-line pass drops a piece of the outline; with the
+    valley diagonal every facet stays inside its edges.  It also makes mirrored halves triangulate as
+    mirror images (symmetric outlines).  Topology, groups and vertices are unchanged."""
+    V = mesh.vertices
+    faces = []
+    for f in mesh.faces:
+        f = list(f)
+        if len(f) == 4:
+            a, b, c, d = (V[i] for i in f)
+            n = np.cross(b - a, c - a)
+            if float(n @ (d - a)) < 0.0:          # d below triangle (a, b, c): a-c is the ridge diagonal
+                f = f[1:] + f[:1]
+        faces.append(f)
+    return Mesh(V.copy(), faces, mesh.groups)
