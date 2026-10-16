@@ -22,7 +22,7 @@ from dataclasses import dataclass, field
 
 from . import body, hair, head, limbs, mannequin
 from . import meshkit as mk
-from .rig import Rig
+from .rig import SUN_TOWARDS, Rig
 
 __all__ = ["OBJECTS", "OBJECT_IDS", "MATERIALS", "REGION_OBJECTS", "MODULES", "ALL_REGIONS", "BUDGET",
            "DECIMALS", "SUN_TOWARDS", "Assembly", "AssemblyError", "build_parts", "assemble", "format_stats"]
@@ -85,8 +85,6 @@ ALL_REGIONS = tuple(r for m in MODULES for r in m.REGIONS)
 #: Web-UI budget (BRIEF §5): polygons = faces as written, triangles = castplane's fan triangulation.
 BUDGET = {"polygons": 6000, "triangles": 10000}
 
-#: Direction towards the scene's sun (viewer's upper left; normalised by the scene writer).
-SUN_TOWARDS = (-0.45, -0.55, 0.70)
 
 #: Coordinates are rounded to this many decimals (0.01 mm) before validation and writing.
 DECIMALS = 5

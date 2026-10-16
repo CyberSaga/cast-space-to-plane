@@ -72,33 +72,8 @@ NECK_TILT_DEG = 8.0                    # the axis leans forward: the top is in f
 NECK_RING_Z = (1.180, 1.215, 1.236, 1.285)   # neck sections (ends inside torso / head; few: hidden-line cost)
 NECK_BLOUSE_INSET = 0.003              # the blouse's neck-root row stays this far inside the neck
 NECK_FIT = 0.85                        # ... and its ring within this ellipse measure of the neck (~2 mm in)
-
-#: Rig changes proposed by the r1 review (F6 neck, F13 scarf tips, F14 shoulders) as ``field: (old, new)``.
-#: :func:`pending_rig` applies a change only while the rig still carries the old value, so a ``--rig``
-#: override wins and the table turns into a no-op once ``rig.py`` adopts the new values (then delete it).
-PENDING_RIG = {
-    "neck_half_width": (0.031, 0.025),
-    "neck_y": ((-0.022, 0.046), (-0.014, 0.040)),
-    "blouse_shoulder_hw": (((1.215, 0.0275), (1.202, 0.085), (1.191, 0.118), (1.180, 0.150)),
-                           # sloping to the lower, narrower acromion through one more row (a single
-                           # (1.172, 0.142) row kinks the shoulder under the collar: its stripe folds)
-                           ((1.215, 0.0275), (1.203, 0.083), (1.193, 0.112), (1.183, 0.130), (1.172, 0.142))),
-    "acromion": ((0.150, 0.005, 1.180), (0.142, 0.005, 1.170)),
-    "shoulder_joint_pos": ((0.140, 0.005, 1.155), (0.134, 0.005, 1.155)),
-    "sleeve_radii": (((0.0, 0.048), (0.5, 0.045), (1.0, 0.043), (1.5, 0.044), (2.0, 0.044)),
-                     ((0.0, 0.045), (0.5, 0.045), (1.0, 0.043), (1.5, 0.044), (2.0, 0.044))),
-    "scarf_tip_max_width": ((0.034, 0.7), (0.050, 0.65)),
-    "scarf_tip_angle_deg": (15.0, 20.0),
-    # the tip point follows the angle: root + scarf_tip_length * (sin 20, 0, -cos 20)
-    "scarf_tip_point": ((0.031, -0.116, 0.977), (0.0388, -0.116, 0.9794)),
-}
-
-
-def pending_rig(rig: Rig, table=None) -> Rig:
-    """``rig`` with the :data:`PENDING_RIG` changes whose field still holds the old value."""
-    table = PENDING_RIG if table is None else table
-    changes = {k: new for k, (old, new) in table.items() if getattr(rig, k) == old}
-    return rig.replace(**changes) if changes else rig
+#: A point inside the chest (the collar slab's and its stripe's normals point away from it).
+TORSO_CENTRE = (0.0, 0.012, 1.12)
 
 
 def _side_name(side: int) -> str:
@@ -465,7 +440,7 @@ def _collar(rig: Rig, torso: Torso):
         edge = min(v, 1.0 - v) * 5.0
         return COLLAR_EDGE_THICKNESS + (rig.collar_thickness - COLLAR_EDGE_THICKNESS) * min(1.0, edge)
 
-    col, sides = mk.thicken(grid, thick, offset="outward", away_from=(0.0, 0.012, 1.12),
+    col, sides = mk.thicken(grid, thick, offset="outward", away_from=TORSO_CENTRE,
                             groups={"front": 1, "back": 2, "rim": {"v0": 3, "v1": 4, "u0": 5, "u1": 5}},
                             return_sides=True)
     # groups: on the lapels (the dickey, the bib and the scarf lie under their edges, so the underside
@@ -482,7 +457,7 @@ def _collar(rig: Rig, torso: Torso):
         groups.append(1 if (g == 1 or not on_lapel) else 2)
     col = col.with_groups(groups)
     top = sides["front"]
-    nrm = _grid_normals(top, (0.0, 0.012, 1.12))[:, 1:3]
+    nrm = _grid_normals(top, TORSO_CENTRE)[:, 1:3]
     base = top[:, 1:3] + STRIPE_FLOAT * nrm
     stripe = mk.ridge_band(base[:, 0], base[:, 1], 0.5 * (nrm[:, 0] + nrm[:, 1]), rig.collar_stripe_relief,
                            periodic=False)
@@ -684,7 +659,6 @@ def _underskirt(rig: Rig):
 
 def build(rig: Rig):
     """Parts of :data:`REGIONS` for ``rig``."""
-    rig = pending_rig(rig)
     torso = torso_model(rig)
     parts = []
     col, stripe, left_inner = _collar(rig, torso)

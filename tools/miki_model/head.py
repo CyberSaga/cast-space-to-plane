@@ -34,47 +34,15 @@ import numpy as np
 
 from . import meshkit as mk
 from .meshkit import Part
-from .rig import Rig
+from .rig import SUN_TOWARDS, Rig
 
 __all__ = ["REGIONS", "build", "skin_surface", "face_point", "slab", "column_grid", "band_grid",
-           "head_section", "HEAD_ROWS"]
+           "head_section", "HEAD_ROWS", "SUN", "slab_faces", "oriented"]
 
 #: The mannequin regions this module replaces.
 REGIONS = ("head", "eyes", "face_marks")
 
 SIDES = (1, -1)                    # her left (+X), her right (-X)
-
-# ---------------------------------------------------------------------------------------------------------
-# Review round 1 values of rig fields (owner: head agent; rig.py is shared, so they are applied here and
-# reported as wanted rig changes).  A field is replaced only while it still has its rig.py default, so a
-# ``--rig`` override wins.
-# ---------------------------------------------------------------------------------------------------------
-R1_RIG = {
-    # F12: a small but more forward chin (the lower face sloped ~32 degrees back in profile)
-    "head_profile": tuple(
-        (z, hw, {1.262: -0.076, 1.257: -0.073, 1.255: -0.070}.get(z, yf), yb)
-        for z, hw, yf, yb in Rig.head_profile),
-    "jaw_underside": ((-0.070, 1.255), (-0.050, 1.258), (-0.038, 1.263), (-0.026, 1.272)),
-    # F10: the inner corner closes under the lid line (was a 6 mm blunt vertical edge)
-    "sclera_lower": ((0.019, 1.3478), (0.028, 1.327), (0.040, 1.323), (0.052, 1.326), (0.061, 1.3455)),
-    # F11: heavier upper lid (11-13 % of the eye width); the bottom edge stays where it was, the band grows up
-    "lid_band_height": (0.0022, 0.0045),
-    "lid_band_inner": (0.018, 1.3496),
-    "lid_band_outer": (0.062, 1.3520),
-}
-_DEFAULT_RIG = Rig()
-
-
-def apply_overrides(rig: Rig, table: dict) -> Rig:
-    """``rig`` with the fields of ``table`` that still have their rig.py default replaced."""
-    changes = {k: v for k, v in table.items() if getattr(rig, k) == getattr(_DEFAULT_RIG, k)}
-    return rig.replace(**changes) if changes else rig
-
-
-def r1_rig(rig: Rig) -> Rig:
-    """``rig`` with the head module's round-1 values (:data:`R1_RIG`); ``hair.py`` uses it too."""
-    return apply_overrides(rig, R1_RIG)
-
 
 # ---------------------------------------------------------------------------------------------------------
 # Tessellation of the skin head (module constants: they choose the mesh, not the shape, so they are not rig
@@ -198,7 +166,14 @@ def _head_mesh(rig: Rig) -> mk.Mesh:
     rings = [_head_ring(rig, z) for z in HEAD_ROWS]
     chin = rig.head_profile[-1]
     apex_chin = (0.0, chin[2] + CHIN_POLE_DY, chin[0])
-    return mk.inscribed_fan(mk.loft(rings, "flat", ("pole", apex_chin), groups=1, cap_groups=(1, 1)))
+    # Round 1 (F5): the jaw underside (the back half of every section below the nape row, down to the chin
+    # pole) is its own smooth group.  Its border on the side columns is the jaw rim from the jaw angle to the
+    # chin (PDF p.18's jaw line): it lies on the outline from the front and from above, so the outline stays
+    # one stroke at head-lowered angles, and it draws as the jaw line from below.
+    G = np.ones((len(rings) - 1, len(rings[0])), dtype=int)
+    nape_z = min(r[0] for r in rig.head_profile if r[3] is not None)
+    G[sum(z >= nape_z - 1e-9 for z in HEAD_ROWS) - 1:, :1 + len(BACK_ANGLES)] = 2
+    return mk.inscribed_fan(mk.loft(rings, "flat", ("pole", apex_chin), groups=G, cap_groups=(1, None)))
 
 
 class SkinSurface:
@@ -290,7 +265,7 @@ def smooth_face(rig: Rig, x: float, z: float, d: float = 2e-4):
 # slabs and decals
 # ---------------------------------------------------------------------------------------------------------
 
-def _slab_faces(U: int, V: int):
+def slab_faces(U: int, V: int):
     """Faces of a slab between a front and a back ``(U, V)`` grid (front vertices first, then back) and the
     kind of each face: ``("front"|"back", u, v)``, or a rim ``("v0"|"v1", u)`` / ``("u0"|"u1", v)``."""
     def f(u, v):
@@ -318,7 +293,7 @@ def _slab_faces(U: int, V: int):
     return faces, kinds
 
 
-def _oriented(m: mk.Mesh) -> mk.Mesh:
+def oriented(m: mk.Mesh) -> mk.Mesh:
     """``m`` flipped when its signed volume is negative."""
     tris, _ = m.triangles()
     Vx = m.vertices
@@ -333,7 +308,7 @@ def slab(front, back, groups=(1, 2, 2, 2, 2, 2)) -> mk.Mesh:
     F = np.asarray(front, dtype=np.float64)
     Bk = np.asarray(back, dtype=np.float64)
     U, V = F.shape[0], F.shape[1]
-    faces, kinds = _slab_faces(U, V)
+    faces, kinds = slab_faces(U, V)
     g = dict(zip(("front", "back", "v0", "v1", "u0", "u1"), groups))
     fg = []
     for k in kinds:
@@ -344,7 +319,7 @@ def slab(front, back, groups=(1, 2, 2, 2, 2, 2)) -> mk.Mesh:
             fg.append(int(val[k[1]][k[2]]))
         else:
             fg.append(int(val[k[1]]))
-    return _oriented(mk.Mesh(np.concatenate([F.reshape(-1, 3), Bk.reshape(-1, 3)]), faces, fg))
+    return oriented(mk.Mesh(np.concatenate([F.reshape(-1, 3), Bk.reshape(-1, 3)]), faces, fg))
 
 
 def classify_rims(F, B, sun=None):
@@ -361,10 +336,10 @@ def classify_rims(F, B, sun=None):
     neighbour (move the back vertex towards it)."""
     F = np.asarray(F, dtype=np.float64)
     B = np.asarray(B, dtype=np.float64)
-    L = _SUN if sun is None else np.asarray(sun, dtype=np.float64) / np.linalg.norm(sun)
+    L = SUN if sun is None else np.asarray(sun, dtype=np.float64) / np.linalg.norm(sun)
     U, V = F.shape[:2]
-    faces, kinds = _slab_faces(U, V)
-    probe = _oriented(mk.Mesh(np.concatenate([F.reshape(-1, 3), B.reshape(-1, 3)]), faces, 1))
+    faces, kinds = slab_faces(U, V)
+    probe = oriented(mk.Mesh(np.concatenate([F.reshape(-1, 3), B.reshape(-1, 3)]), faces, 1))
     fn, _ = mk.face_normals(probe)
     lit = {k: bool(fn[i] @ L > 0.0) for i, k in enumerate(kinds)}
     front_of = {"v0": lambda i: ("front", i, 0), "v1": lambda i: ("front", i, V - 2),
@@ -422,8 +397,9 @@ def band_grid(centre, half_width) -> np.ndarray:
     return np.stack([P + w[:, None] * n, P - w[:, None] * n], axis=1)
 
 
-#: Direction towards the scene's sun (``assemble.SUN_TOWARDS``), for the decal wall classification.
-_SUN = np.array((-0.45, -0.55, 0.70)) / np.linalg.norm((-0.45, -0.55, 0.70))
+#: Unit direction towards the scene's sun (:data:`rig.SUN_TOWARDS`), for the slab rim / decal wall
+#: classification (also used by ``hair.py``).
+SUN = np.asarray(SUN_TOWARDS, dtype=np.float64) / np.linalg.norm(SUN_TOWARDS)
 #: Undercut of the decal walls: the back outline is the front outline moved ``rig.decal_undercut`` towards the
 #: decal's centroid (eye layers; at most down to DECAL_SHRINK of its size: lean 60-75 degrees with the low stacked
 #: walls) or scaled by BAND_SHRINK towards each column's middle (bands: brows, lids, mouth).
@@ -431,12 +407,11 @@ DECAL_SHRINK = 0.5
 BAND_SHRINK = 0.15
 
 
-#: Clearances (m, along y) kept at every vertex, edge midpoint and quad diagonal midpoint of a decal: its
-#: front above the skin and above every decal already placed under it, its back under the skin.  The
-#: decals are flat chords over a faceted, partly concave face (the eye line is a shallow valley in the §B.1
-#: profile), so without this a layer could dip under the one below it between its vertices.  The front
-#: clearances are ``rig.decal_skin_clearance`` and ``rig.decal_layer_clearance``.
-CLEAR_BACK = 0.0002
+# Clearances (m, along y) kept at every vertex, edge midpoint and quad diagonal midpoint of a decal
+# (:func:`_clear`): its front above the skin and above every decal already placed under it, its back under
+# the skin.  The decals are flat chords over a faceted, partly concave face (the eye line is a shallow valley
+# in the §B.1 profile), so without this a layer could dip under the one below it between its vertices.  The
+# front clearances are ``rig.decal_skin_clearance`` and ``rig.decal_layer_clearance``.
 
 
 class DecalStack:
@@ -793,7 +768,6 @@ def _mouth(rig: Rig) -> mk.Mesh:
 
 def build(rig: Rig):
     """Parts of :data:`REGIONS` for ``rig``."""
-    rig = r1_rig(rig)
     parts = [Part("head.skin", "skin", skin_surface(rig).mesh, "head")]
     marks = []
     for side in SIDES:

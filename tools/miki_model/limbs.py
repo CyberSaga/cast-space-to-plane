@@ -20,7 +20,6 @@ import math
 import numpy as np
 
 from . import meshkit as mk
-from .body import pending_rig
 from .meshkit import Part
 from .rig import Rig
 
@@ -296,7 +295,6 @@ def _plane_section(mesh, mask, u0):
 
 def build(rig: Rig):
     """Parts of :data:`REGIONS` for ``rig``."""
-    rig = pending_rig(rig)                 # the r1 shoulder / sleeve changes (body.PENDING_RIG)
     parts = []
     for side in SIDES:
         s = _side_name(side)

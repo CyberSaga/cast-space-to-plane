@@ -29,7 +29,7 @@ How it is built (spec ``miki_spec.md`` §C):
   lateral faces share the outer surface's groups (silhouette-only), the clump ends are rims, and three
   strand lines (group boundaries + shallow grooves) end at the notches nearest the middle.
 
-Round 1 of the review changed rig values (:data:`R1_RIG`, applied by :func:`r1_rig`) and the dome / sidelock /
+Round 1 of the review changed rig values (now in ``rig.py``) and the dome / sidelock /
 H2 construction; every quad of the dome, sidelocks and H2 uses its valley diagonal
 (:func:`meshkit.inscribed_fan`), which closes the gaps in castplane's hidden-line outlines.
 """
@@ -44,8 +44,7 @@ import numpy as np
 from . import body as _body
 from . import mannequin as _mannequin
 from . import meshkit as mk
-from .head import _SUN, SkinSurface, _oriented, _slab_faces, apply_overrides, head_section, skin_surface, slab
-from .head import r1_rig as _head_r1_rig
+from .head import SUN, SkinSurface, head_section, oriented, skin_surface, slab, slab_faces
 from .meshkit import Part
 from .rig import Rig
 
@@ -55,65 +54,6 @@ __all__ = ["REGIONS", "build"]
 REGIONS = ("hair", "headband")
 
 SIDES = (1, -1)
-
-# ---------------------------------------------------------------------------------------------------------
-# Review round 1 values of rig fields (rig.py is shared: applied here while the field still has its rig.py
-# default, so a ``--rig`` override wins; reported as wanted rig changes).
-# ---------------------------------------------------------------------------------------------------------
-R1_RIG = {
-    # F2: a full crown whose outline flows into the side hair (with DOME_SIDE_EXPONENT: half-width 0.099 at
-    # z 1.46, 0.090 at 1.48; was 0.089 / 0.079)
-    "dome_radii": (0.104, 0.1195, 0.123),
-    # F3 / T5: the curtain crosses the dome steeply over 6 mm (two dome rings at these heights), not over 28 mm
-    "curtain_top_rows": ((1.458, -0.0025, 0.016), (1.452, 0.0025, 0.020)),
-    # F2 / T2: the side curtain continues the wider crown (ax), the front edges y_end of the rows down to
-    # CURTAIN_TUCK_MIN_Z are computed (tucked into the sidelock, F1 / T3)
-    "curtain_rows": (
-        (1.450, 0.012, 0.1055, 0.136, 0.020, -0.034),
-        (1.400, 0.012, 0.1055, 0.137, 0.020, -0.034),
-        (1.340, 0.012, 0.1055, 0.133, 0.022, -0.028),
-        (1.290, 0.012, 0.1060, 0.128, 0.024, -0.022),
-        (1.250, 0.020, 0.1080, 0.125, 0.026, 0.010),
-        (1.215, 0.040, 0.1120, 0.123, 0.028, 0.060),
-    ),
-    # F1 / F9 / T3: one fuller lock per side: inner edge kept at x 0.072-0.078, outer edge out to the
-    # front-view silhouette (0.106), rotated back at eye level (inner edge 3 mm off the skin), bowed out
-    # ~4 mm at z 1.27 and back in over the collar
-    "sidelock_rows": (
-        (1.445, 0.072, -0.060, 0.100, -0.031),
-        (1.400, 0.072, -0.068, 0.105, -0.036),
-        (1.370, 0.073, -0.065, 0.106, -0.033),
-        (1.342, 0.074, -0.047, 0.106, -0.026),
-        (1.310, 0.075, -0.043, 0.108, -0.022),
-        (1.270, 0.078, -0.042, 0.111, -0.022),
-        (1.220, 0.077, -0.054, 0.110, -0.034),
-        (1.180, 0.075, -0.068, 0.107, -0.052),
-        (1.145, 0.074, -0.086, 0.106, -0.072),
-        (1.120, 0.074, -0.092, 0.106, -0.078),
-    ),
-    "sidelock_width": 0.034,
-    "sidelock_thickness": 0.012,
-    # F4: the band's visible span ends here; behind it the band dives into the hair (BAND_DIVE)
-    "band_tuck_y": -0.035,
-    # F15: 8 irregular strips (BANGS_STRIP_WEIGHTS)
-    "bangs_strips": 8,
-    # the strand follows the sidelock, which moved back at eye level (F9)
-    "strand_points": (
-        (0.022, -0.086, 1.474), (0.030, -0.093, 1.463), (0.040, -0.096, 1.432), (0.052, -0.086, 1.400),
-        (0.063, -0.074, 1.368), (0.072, -0.056, 1.335), (0.080, -0.058, 1.305),
-    ),
-    # F8 / T4: five uneven clumps on a convex-down hem (CLUMP_WEIGHTS, HEM_*), three grooves
-    "hair_clumps": 5,
-    "clump_notch_z": 0.848,
-    "clump_tip_z": 0.830,
-    "hair_grooves": 3,
-}
-
-
-def r1_rig(rig: Rig) -> Rig:
-    """``rig`` with the head and hair modules' round-1 values."""
-    return apply_overrides(_head_r1_rig(rig), R1_RIG)
-
 
 def _side_name(side: int) -> str:
     return "l" if side > 0 else "r"
@@ -994,10 +934,10 @@ def _rims_by_light(F, B, front, g_back: int, g_rim: int) -> dict:
     lit state differs from its own (that edge is smooth: no construction ray, no hidden feature edge), so only
     the other border is a feature line; ``g_rim`` when both borders share its lit state."""
     U, V = F.shape[:2]
-    faces, kinds = _slab_faces(U, V)
-    probe = _oriented(mk.Mesh(np.concatenate([F.reshape(-1, 3), B.reshape(-1, 3)]), faces, 1))
+    faces, kinds = slab_faces(U, V)
+    probe = oriented(mk.Mesh(np.concatenate([F.reshape(-1, 3), B.reshape(-1, 3)]), faces, 1))
     fn, _ = mk.face_normals(probe)
-    lit = {k: bool(fn[i] @ _SUN > 0.0) for i, k in enumerate(kinds)}
+    lit = {k: bool(fn[i] @ SUN > 0.0) for i, k in enumerate(kinds)}
     adj = {"v0": lambda i: (i, 0), "v1": lambda i: (i, V - 2), "u0": lambda i: (0, i), "u1": lambda i: (U - 2, i)}
     out = {}
     for which, count in (("v0", U - 1), ("v1", U - 1), ("u0", V - 1), ("u1", V - 1)):
@@ -1021,7 +961,6 @@ def _rims_by_light(F, B, front, g_back: int, g_rim: int) -> dict:
 
 def build(rig: Rig):
     """Parts of :data:`REGIONS` for ``rig``."""
-    rig = r1_rig(rig)
     dome = _dome(rig)
     band, ridge = _headband(rig, dome)
     bangs = _bangs(rig, dome)
