@@ -35,7 +35,7 @@ import math
 import numpy as np
 
 from . import meshkit as mk
-from .head import SkinSurface, classify_rims, head_section, skin_surface, slab
+from .head import _SUN, SkinSurface, _oriented, _slab_faces, head_section, skin_surface, slab
 from .meshkit import Part
 from .rig import Rig
 
@@ -101,11 +101,11 @@ def _radial_hit(mesh: mk.Mesh, origin, direction):
 # ---------------------------------------------------------------------------------------------------------
 #: Azimuths (degrees, counter-clockwise from her left, +X; 270 = the front) of the dome's ring points: denser
 #: over the front, where the bangs, band and face silhouette are.
-DOME_AZIMUTHS = (0, 15, 30, 45, 60, 75, 90, 105, 120, 135, 150, 165, 180, 192, 204, 216, 228, 240, 250, 260, 270,
-                 280, 290, 300, 312, 324, 336, 348)
+DOME_AZIMUTHS = (0, 18, 36, 54, 72, 90, 108, 126, 144, 162, 180, 194, 208, 222, 236, 250, 260, 270,
+                 280, 290, 304, 318, 332, 346)
 #: Rings: constant-z rings over the crown (clean silhouettes), then rings blending down to the bottom boundary.
-DOME_FLAT_THETA = (6.0, 12.5, 19.0, 26.0, 33.0, 40.0, 47.0, 53.5)   # constant-z rings (polar angle, deg)
-DOME_BLEND = (0.4, 0.75, 1.0)       # then rings blending from the last flat ring to the bottom boundary
+DOME_FLAT_THETA = (7.0, 15.0, 23.5, 32.0, 40.5, 49.0)   # constant-z rings (polar angle, degrees)
+DOME_BLEND = (0.36, 0.70, 1.0)      # then rings blending from the last flat ring to the bottom boundary
 #: Bottom of the dome behind the headband's ends (inside the side curtain, which starts at z 1.45).
 DOME_BACK_BOTTOM_Z = 1.445
 #: In front the dome ends this far below the band centreline (under the band's lower half).
@@ -178,7 +178,7 @@ def _dome(rig: Rig) -> mk.Mesh:
 # ---------------------------------------------------------------------------------------------------------
 # headband (§C.1)
 # ---------------------------------------------------------------------------------------------------------
-BAND_POINTS = 25                    # along the band (her right end ... her left end)
+BAND_POINTS = 15                    # along the band (her right end ... her left end)
 RIDGE_SINK = 0.0002                 # the ridge's base sits this far inside the band's outer face
 BAND_SHRINK = 0.25                  # the inner face is this fraction of the band width (undercut walls)
 RIDGE_SHRINK = 0.05
@@ -205,15 +205,16 @@ def _band_frames(rig: Rig, dome: mk.Mesh):
     return P, N, Bx
 
 
-def _classified(F, B, shrink: float) -> mk.Mesh:
-    """Band slab between ``(U, 2, 3)`` grids ``F`` (outer face) and ``B`` (inner face): the inner face is
-    narrowed to ``shrink`` of its width (undercut walls: the outer face's two borders are camera silhouettes
-    from the whole front half space) and the rims are grouped by :func:`head.classify_rims` (feature lines
-    where they cost no construction ray)."""
+def _band_slab(F, B, shrink: float, single: bool) -> mk.Mesh:
+    """Band slab between ``(U, 2, 3)`` grids ``F`` (outer face) and ``B`` (inner face), the inner face
+    narrowed to ``shrink`` of its width (undercut walls).  ``single``: one smooth group (the borders draw as
+    camera silhouettes, robust thanks to the undercut; no feature edge, no ray); otherwise the outer face is
+    group 1 and the walls, ends and inner face group 2, so both borders of the outer face are feature lines
+    in every view (the unlit wall costs its border's vertices in construction rays) and no hidden edge is a
+    feature line."""
     mid = B.mean(axis=1, keepdims=True)
     B = mid + shrink * (B - mid)
-    groups, _undercut = classify_rims(F, B)
-    return slab(F, B, (1, 2, *groups))
+    return slab(F, B, (1, 1, 1, 1, 1, 1) if single else (1, 2, 2, 2, 2, 2))
 
 
 def _headband(rig: Rig, dome: mk.Mesh):
@@ -222,7 +223,7 @@ def _headband(rig: Rig, dome: mk.Mesh):
     w = 0.5 * rig.band_width
     F = np.stack([base - w * Bx + rig.band_thickness * N, base + w * Bx + rig.band_thickness * N], axis=1)
     Bk = np.stack([base - w * Bx, base + w * Bx], axis=1)
-    band = _classified(F, Bk, BAND_SHRINK)
+    band = _band_slab(F, Bk, BAND_SHRINK, single=False)
     # pink ridge over the visible span
     outer = base + rig.band_thickness * N
     xs = P[:, 0]
@@ -234,14 +235,14 @@ def _headband(rig: Rig, dome: mk.Mesh):
     bot = o - RIDGE_SINK * n
     F = np.stack([top - rw * b, top + rw * b], axis=1)
     Bk = np.stack([bot - rw * b, bot + rw * b], axis=1)
-    ridge = _classified(F, Bk, RIDGE_SHRINK)
+    ridge = _band_slab(F, Bk, RIDGE_SHRINK, single=True)
     return band, ridge
 
 
 # ---------------------------------------------------------------------------------------------------------
 # H3 bangs (§C.2)
 # ---------------------------------------------------------------------------------------------------------
-BANGS_STRIP_COLS = 3                # quads per strand strip across
+BANGS_STRIP_COLS = 2                # quads per strand strip across
 #: The bangs' outer surface starts just in front of the band's lower inner corner (the block comes out from
 #: under the band flush with it and hides the corner), leans forward to the curl start and curls back in
 #: (``rig.bangs_curl``) to the flat cut; the top row continues ``rig.bangs_top_extension`` up under the band.
@@ -335,7 +336,7 @@ def _bangs(rig: Rig, dome: mk.Mesh) -> mk.Mesh:
 #: Root rows added above the spec table: the lock rises into the dome under the band, narrowing,
 #: ``(z, x_in, y_in, x_out, y_out)`` for her left.
 SIDELOCK_ROOT_ROWS = ((1.463, 0.063, -0.051, 0.076, -0.034),)
-SIDELOCK_PROFILE = 8                # lens points (edges at 0 and 4, crease vertex at 2 on the front face)
+SIDELOCK_PROFILE_DEG = (0.0, 45.0, 90.0, 135.0, 180.0, 270.0)   # lens section: rounded front, flatter back
 SIDELOCK_INSERT_AFTER = (5, 6)      # Catmull-Rom rows inserted after these table rows (the shoulder bend)
 SIDELOCK_ROOT_THICKNESS = 0.5       # the root row is this fraction of the lock thickness (it hides in the dome)
 
@@ -370,24 +371,23 @@ def _sidelock(rig: Rig, side: int) -> mk.Mesh:
     nrm[nrm[:, 1] > 0] *= -1.0
     th = np.full(k, rig.sidelock_thickness)
     th[:n_root] *= SIDELOCK_ROOT_THICKNESS
-    m = SIDELOCK_PROFILE
-    t = 2.0 * np.pi * np.arange(m) / m
+    t = np.radians(SIDELOCK_PROFILE_DEG)                      # 0 = outer edge, 90 = front middle, 180 = inner
     prof = np.stack([np.cos(t), np.sign(np.sin(t)) * np.abs(np.sin(t)) ** 0.6], axis=1)   # lens
     rings = []
     for i in range(k):
         rings.append(mid[i] + prof[:, :1] * (0.5 * width[i]) * acr[i] + prof[:, 1:2] * (0.5 * th[i]) * nrm[i])
-    # groups: front face halves 1 (inner half) / 2 (outer half) -> the strand crease; back 3
-    G = np.zeros((k - 1, m), dtype=np.int64)
+    # groups: front inner half + back 1, front outer half 2: the crease and the outer edge are feature lines
+    m = len(t)
+    G = np.ones((k - 1, m), dtype=np.int64)
     for j in range(m):
-        a = t[j] + np.pi / m                                  # mid angle of quad j
-        if math.sin(a) > 0:                                   # front (profile +y = nrm)
-            G[:, j] = 2 if math.cos(a) > 0 else 1
-        else:
-            G[:, j] = 3
+        a0, a1 = t[j], t[(j + 1) % m] + (2.0 * np.pi if j == m - 1 else 0.0)
+        a = 0.5 * (a0 + a1)
+        if math.sin(a) > 0 and math.cos(a) > 0:               # front, outer half
+            G[:, j] = 2
     # the crease starts at sidelock_crease_top_z: above it both front halves share group 1
     zq = 0.5 * (mid[:-1, 2] + mid[1:, 2])
     G[(zq > rig.sidelock_crease_top_z)[:, None] & (G == 2)] = 1
-    mesh = mk.loft(rings, "flat", "flat", groups=G, cap_groups=(1, 4))       # root cap smooth (buried)
+    mesh = mk.loft(rings, "flat", "flat", groups=G, cap_groups=(1, 3))       # root cap smooth (buried)
     if side < 0:
         mesh = mesh.mirror_x()
     return mesh
@@ -396,7 +396,7 @@ def _sidelock(rig: Rig, side: int) -> mk.Mesh:
 # ---------------------------------------------------------------------------------------------------------
 # H5 stray strand (§C.4)
 # ---------------------------------------------------------------------------------------------------------
-STRAND_POINTS = 12
+STRAND_POINTS = 9
 STRAND_SIDES = 4
 
 
@@ -430,10 +430,11 @@ def _strand(rig: Rig, lock_l: mk.Mesh) -> mk.Mesh:
 #: Rows replacing the spec's first curtain row: the curtain starts inside the dome and emerges from under it
 #: above the headband's buried ends, ``(z, offset from the dome section, thickness)`` (the spec row at z 1.45
 #: stands 6-8 mm outside the dome and would leave a ledge).
-CURTAIN_TOP_ROWS = ((1.482, -0.002, 0.010), (1.465, 0.0025, 0.016), (1.450, 0.005, 0.020))
+CURTAIN_TOP_ROWS = ((1.478, -0.002, 0.010), (1.450, 0.0055, 0.020))
 BACK_GROOVE_DEPTH = 0.002
+BACK_STRAND_LINES = True            # the grooves are also group boundaries (4 strand lines on the back)
 BACK_BOTTOM_ROW_Z = 0.885           # last straight row above the clumps
-BACK_PLATE_ROWS = (1.180, 1.060, 0.950)
+BACK_PLATE_ROWS = (1.180, 1.010)
 BACK_CURVE = 0.025                  # the plate curves forward by this at its lateral edges (s = +-1)
 BACK_BODY_GAP = 0.008               # inner surface at least this far off the blouse / collar back
 COLLAR_LAYER = 0.005                # collar gap + thickness on the blouse back (spec D.2)
@@ -465,6 +466,8 @@ def _blouse_back(rig: Rig, x: float, z: float) -> float:
 
 
 def _back_hair(rig: Rig, dome: mk.Mesh) -> mk.Mesh:
+    """H2: one slab from inside the dome (the curtain crescents) through the back sheet plate to the
+    clumps."""
     S, zbot, notch_s = _clump_columns(rig)
     U = len(S)
     c = np.array(rig.dome_center)
@@ -484,15 +487,14 @@ def _back_hair(rig: Rig, dome: mk.Mesh) -> mk.Mesh:
         y_end = first[5] + (0.004 if off < 0 else 0.0)
         cres.append((z, c[1], hwd + off, c[1] + byd + off, t, y_end))
     cres += [tuple(r) for r in rig.curtain_rows[1:]]
-    outer_rows, inner_rows = [], []
+    rows = []
     for z, cy, axc, yb_o, t, y_end in cres:
         by = yb_o - cy
         psi_end = math.acos(np.clip((y_end - cy) / by, -1.0, 1.0))
         psi = S * psi_end
         o = np.stack([axc * np.sin(psi), cy + by * np.cos(psi), np.full(U, z)], axis=1)
         i = np.stack([(axc - t) * np.sin(psi), cy + (by - t) * np.cos(psi), np.full(U, z)], axis=1)
-        outer_rows.append(o)
-        inner_rows.append(i)
+        rows.append((o, i))
     # plate rows: x = s * hw, curving forward at the edges, kept off the body
     sheet = np.array(rig.back_sheet_rows)
 
@@ -512,19 +514,19 @@ def _back_hair(rig: Rig, dome: mk.Mesh) -> mk.Mesh:
                 y_in[k] = need
         return (np.stack([x, y_out, zz], axis=1), np.stack([x, y_in, zz], axis=1))
 
-    for z in BACK_PLATE_ROWS + (BACK_BOTTOM_ROW_Z,):
-        o, i = plate_row(z)
-        outer_rows.append(o)
-        inner_rows.append(i)
-    o, i = plate_row(rig.clump_notch_z, zbot)
-    outer_rows.append(o)
-    inner_rows.append(i)
-    Fo = np.stack(outer_rows, axis=1)                         # (U, V, 3)
-    Bi = np.stack(inner_rows, axis=1)
-    V = Fo.shape[1]
-    # grooves: the notch columns between the middle clumps sink into the outer surface below groove_top_z
+    rows += [plate_row(z) for z in BACK_PLATE_ROWS + (BACK_BOTTOM_ROW_Z,)]
+    rows.append(plate_row(rig.clump_notch_z, zbot))
     groove_s = [s for s in notch_s if abs(s) < 0.5]
     gcols = [int(np.argmin(np.abs(S - s))) for s in groove_s]
+    return _h2_slab(rig, rows, gcols)
+
+
+def _h2_slab(rig: Rig, rows, gcols) -> mk.Mesh:
+    """Slab through H2 rows ``[(outer (U, 3), inner (U, 3)), ...]`` with the strand grooves at the columns
+    ``gcols`` (2 mm deep below ``groove_top_z``) and the outer strips between them in their own groups."""
+    Fo = np.stack([o for o, _ in rows], axis=1)               # (U, V, 3)
+    Bi = np.stack([i for _, i in rows], axis=1)
+    U, V = Fo.shape[:2]
     for j in range(V):
         z = Fo[0, j, 2]
         depth = BACK_GROOVE_DEPTH * float(_smoothstep(rig.groove_top_z, rig.groove_top_z - 0.08, z))
@@ -534,14 +536,41 @@ def _back_hair(rig: Rig, dome: mk.Mesh) -> mk.Mesh:
             nrm = Fo[gc, j] - Bi[gc, j]
             nrm /= np.linalg.norm(nrm)
             Fo[gc, j] = Fo[gc, j] - depth * nrm
-    # outer strips between the strand lines (the groove columns) in their own groups
     front = np.zeros((U - 1, V - 1), dtype=np.int64)
-    edges = [0] + gcols + [U - 1]
+    edges = [0] + (list(gcols) if BACK_STRAND_LINES else []) + [U - 1]
     for k in range(len(edges) - 1):
         front[edges[k]:edges[k + 1], :] = 1 + k
     nstrips = len(edges) - 1
-    g_in, g_edge, g_clump = nstrips + 1, nstrips + 2, nstrips + 3
-    return slab(Fo, Bi, (front, g_in, g_in, g_clump, g_edge, g_edge))
+    g_in = nstrips + 1
+    rims = _rims_by_light(Fo, Bi, front, g_in, nstrips + 2)
+    return slab(Fo, Bi, (front, g_in, rims["v0"], rims["v1"], rims["u0"], rims["u1"]))
+
+
+def _rims_by_light(F, B, front, g_back: int, g_rim: int) -> dict:
+    """Groups of the ``v1`` / ``u0`` / ``u1`` rim faces of the slab between ``F`` (outer, groups ``front``
+    ``(U-1, V-1)``) and ``B`` (inner, ``g_back``): a rim face takes the group of the big face it borders whose
+    lit state differs from its own (that edge is smooth: no construction ray, no hidden feature edge), so only
+    the other border is a feature line; ``g_rim`` when both borders share its lit state."""
+    U, V = F.shape[:2]
+    faces, kinds = _slab_faces(U, V)
+    probe = _oriented(mk.Mesh(np.concatenate([F.reshape(-1, 3), B.reshape(-1, 3)]), faces, 1))
+    fn, _ = mk.face_normals(probe)
+    lit = {k: bool(fn[i] @ _SUN > 0.0) for i, k in enumerate(kinds)}
+    adj = {"v0": lambda i: (i, 0), "v1": lambda i: (i, V - 2), "u0": lambda i: (0, i), "u1": lambda i: (U - 2, i)}
+    out = {}
+    for which, count in (("v0", U - 1), ("v1", U - 1), ("u0", V - 1), ("u1", V - 1)):
+        groups = []
+        for i in range(count):
+            u, v = adj[which](i)
+            r = lit[(which, i)]
+            if r != lit[("front", u, v)]:
+                groups.append(int(front[u][v]))
+            elif r != lit[("back", u, v)]:
+                groups.append(g_back)
+            else:
+                groups.append(g_rim)
+        out[which] = groups
+    return out
 
 
 # ---------------------------------------------------------------------------------------------------------

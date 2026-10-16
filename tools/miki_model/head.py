@@ -49,16 +49,16 @@ SIDES = (1, -1)                    # her left (+X), her right (-X)
 # fields).  Rows are the section heights between the skull-top pole and the chin pole; they are dense on
 # the face (silhouette in every view, decals follow the facets) and sparse on the hair-covered skull.
 # ---------------------------------------------------------------------------------------------------------
-HEAD_ROWS = (1.476, 1.430, 1.405, 1.388, 1.372, 1.357, 1.342, 1.331, 1.321, 1.312, 1.304, 1.296,
+HEAD_ROWS = (1.445, 1.400, 1.376, 1.357, 1.342, 1.331, 1.321, 1.312, 1.304, 1.296,
              1.286, 1.278, 1.272, 1.2665, 1.2615, 1.2575)
 #: Arc-length fractions of the ring points on the front half-section, from the midline (0) to the side (1).
-FRONT_FRACTIONS = (0.0, 0.035, 0.11, 0.21, 0.32, 0.44, 0.56, 0.68, 0.79, 0.88, 0.95, 1.0)
+FRONT_FRACTIONS = (0.0, 0.025, 0.14, 0.30, 0.46, 0.60, 0.72, 0.82, 0.90, 0.96, 1.0)
 #: Angles (degrees from her left side, through the back) of the ring points on the back half-section.
-BACK_ANGLES = (18.0, 45.0, 90.0, 135.0, 162.0)
+BACK_ANGLES = (20.0, 90.0, 160.0)
 #: Nose bump (§B.4): row -> displacement (forward, m) of the midline column; the neighbouring columns
 #: (fraction 0.05, about 6 mm off the midline at the nose) move ``NOSE_SIDE`` times as much.
 NOSE_BUMP = {1.321: 0.0032, 1.312: 0.0065, 1.304: 0.0016}
-NOSE_SIDE = 0.12
+NOSE_SIDE = 0.10
 #: Chin pole (below the last ring), relative to the chin bottom landmark (y, z offsets).
 CHIN_POLE_DY = 0.002
 
@@ -156,12 +156,12 @@ def _head_ring(rig: Rig, z: float) -> np.ndarray:
 
 
 def _head_mesh(rig: Rig) -> mk.Mesh:
+    """The skin head: sections from :data:`HEAD_ROWS` [0] (under the bangs, inside the hair: the skull above
+    it is never visible, so a flat cap in the head's smooth group closes it) down to the chin pole."""
     rings = [_head_ring(rig, z) for z in HEAD_ROWS]
-    top = rig.head_profile[0]
     chin = rig.head_profile[-1]
-    apex_top = (0.0, top[2], top[0])
     apex_chin = (0.0, chin[2] + CHIN_POLE_DY, chin[0])
-    return mk.loft(rings, ("pole", apex_top), ("pole", apex_chin), groups=1)
+    return mk.loft(rings, "flat", ("pole", apex_chin), groups=1, cap_groups=(1, 1))
 
 
 class SkinSurface:
@@ -403,6 +403,15 @@ class DecalStack:
                 req = min(req, y - CLEAR_LAYER)
         return req
 
+    def top_y(self, x: float, z: float) -> float:
+        """y of the front-most surface (skin or a placed decal) at ``(x, z)``."""
+        top = self.skin.y(x, z)
+        for s in self.layers:
+            y = s.y(x, z)
+            if y is not None:
+                top = min(top, y)
+        return top
+
 
 def _samples(G):
     """Sample points of a ``(U, V, 2)`` grid with the vertices they depend on: the vertices, the edge
@@ -419,15 +428,22 @@ def _samples(G):
 
 def _clear(F, N, G, required, sign: float, rounds: int = 6):
     """Move vertices of ``F`` along their normals ``N`` until every sample's (chord) y is on the right side
-    of ``required(x, z)``: ``sign = +1`` keeps ``y <= required`` (in front), ``-1`` keeps ``y >= required``."""
-    samples = [(xz, idx, required(*xz)) for xz, idx in _samples(G)]
+    of ``required(x, z)``: ``sign = +1`` keeps ``y <= required`` (in front), ``-1`` keeps ``y >= required``.
+    A two-row grid (a band) moves whole columns, so its narrow quads never twist."""
+    V = F.shape[1]
+    samples = []
+    for xz, idx in _samples(G):
+        moved_idx = idx
+        if V == 2:
+            moved_idx = tuple(sorted({(i, j) for i, _ in idx for j in range(V)}))
+        samples.append((xz, idx, moved_idx, required(*xz)))
     for _ in range(rounds):
         moved = False
-        for xz, idx, req in samples:
+        for xz, idx, moved_idx, req in samples:
             y = sum(F[k][1] for k in idx) / len(idx)
             d = sign * (y - req)
             if d > 1e-8:
-                for k in idx:
+                for k in moved_idx:
                     n = N[k]
                     F[k] = F[k] + sign * (d + 1e-6) * n / max(0.3, -n[1])
                 moved = True
@@ -437,17 +453,16 @@ def _clear(F, N, G, required, sign: float, rounds: int = 6):
 
 def _decal(rig: Rig, grid_xz, relief: float, depth: float | None = None, stack: DecalStack | None = None,
            shrink=("centroid", DECAL_SHRINK)) -> mk.Mesh:
-    """Face decal slab from ``(U, V, 2)`` face points ``(x, z)``: the front ``relief`` above the head mesh,
-    the back ``depth`` under it (default ``rig.eye_slab_depth``).
+    """Face decal slab from ``(U, V, 2)`` face points ``(x, z)``: the front ``relief`` above the head mesh
+    (and clear of the decals already in ``stack``), the back ``depth`` behind the front-most surface under
+    it (the skin, or the decal it lies on).
 
-    The outline (front rim) must draw in every view without costing many construction rays (castplane
-    counts the vertices of feature edges between a lit and an unlit face, at most 64 per object).  So every
-    wall is undercut: the back outline is the front outline shrunk (``shrink = ("centroid", k)`` towards
-    the decal's centroid, ``("across", k)`` towards each column's middle for bands) and the walls lean in
-    under the front face, so the front rim is a camera silhouette from the whole front half space.  The rims
-    are then grouped by :func:`classify_rims`: a wall with the front's lit state gets its own group (the rim
-    is a feature line as well), a wall with the other lit state shares the front's group (no ray).  Only the
-    wall-to-wall edges where the lit state changes cost rays (about 4 vertices per decal)."""
+    The decal is one smooth group, so it costs no construction ray and draws no hidden feature edges (each
+    drawn edge costs castplane hidden-line samples); its outline must therefore be a camera silhouette in
+    every usual view.  So every wall is undercut: the back outline is the front outline shrunk (``shrink =
+    ("centroid", k)`` towards the decal's centroid, ``("across", k)`` towards each column's middle for bands)
+    and the walls lean in under the front face; with the low walls of the stacked layers the lean is 50-85
+    degrees, so the front rim is a silhouette from nearly the whole front half space."""
     depth = rig.eye_slab_depth if depth is None else depth
     G = np.asarray(grid_xz, dtype=np.float64)
     U, V = G.shape[:2]
@@ -465,35 +480,40 @@ def _decal(rig: Rig, grid_xz, relief: float, depth: float | None = None, stack: 
     if mode == "centroid":
         c = G.reshape(-1, 2).mean(axis=0)
         GB = c + k * (G - c)
-    else:
+    else:                                                     # keep the back >= 0.2 mm wide (tips)
         mid = G.mean(axis=1, keepdims=True)
-        GB = mid + k * (G - mid)
+        half = 0.5 * np.linalg.norm(G[:, -1] - G[:, 0], axis=1)
+        kk = np.maximum(k, np.minimum(1.0, 0.0001 / np.maximum(half, 1e-9)))
+        GB = mid + kk[:, None, None] * (G - mid)
     B = np.zeros((U, V, 3))
     NB = np.zeros((U, V, 3))
     for i in range(U):
         for j in range(V):
             p, n = surf.hit(*GB[i, j])
-            B[i, j] = p - depth * n
+            target = stack.top_y(*GB[i, j]) + depth              # behind the front-most surface
+            B[i, j] = p - (target - p[1]) / max(0.3, -n[1]) * n
             NB[i, j] = n
-    _clear(B, NB, GB, lambda x, z: surf.y(x, z) + CLEAR_BACK, -1.0)
+    _clear(B, NB, GB, lambda x, z: stack.top_y(x, z) + depth, -1.0)
     stack.add(F)
-    rim_groups, _undercut = classify_rims(F, B)
-    return slab(F, B, (1, 2, *rim_groups))
+    return slab(F, B, (1, 1, 1, 1, 1, 1))
 
 
 # ---------------------------------------------------------------------------------------------------------
 # eyes (§B.2)
 # ---------------------------------------------------------------------------------------------------------
 #: Columns / rows of the eye decal grids (tessellation, not shape).
-SCLERA_COLS, SCLERA_ROWS = 9, 2
-IRIS_COLS, IRIS_ROWS = 9, 2
-PUPIL_COLS, PUPIL_ROWS = 7, 2
-HIGHLIGHT_COLS = 5
+SCLERA_COLS, SCLERA_ROWS = 7, 2
+IRIS_COLS, IRIS_ROWS = 8, 2
+PUPIL_COLS, PUPIL_ROWS = 6, 2
+HIGHLIGHT_COLS = 4
 #: The sclera / iris tops stay this far under the lid band's upper edge (hidden under it).
 LID_COVER = 0.0006
 #: Stacked eye layers sink a little deeper each (sclera, iris, pupil, highlight), so their back faces never
 #: share a vertex (castplane welds coincident vertices of one object).
 LAYER_DEPTH_STEP = 0.00006
+#: The stacked eye layers (iris, pupil, highlight) reach this far behind the layer they lie on (low walls:
+#: steep undercuts); the sclera, lids, brows and mouth go eye_slab_depth under the skin.
+STACK_DEPTH = 0.00015
 
 
 def _smooth_curve(points, x):
@@ -572,13 +592,14 @@ def _eye_parts(rig: Rig, side: int, stack: DecalStack):
     lo_i, hi_i = _ellipse_columns(cx, rig.iris_center_z, 0.5 * iw, 0.5 * ih, IRIS_COLS,
                                   lo_clip=lambda x: _sclera_lo(rig, x) + 0.0004,
                                   hi_clip=lambda x: _lid_z(rig, x) - 0.0002)
-    iris = _decal(rig, column_grid(lo_i, hi_i, IRIS_ROWS), rig.iris_relief, d0 + LAYER_DEPTH_STEP, stack)
+    iris = _decal(rig, column_grid(lo_i, hi_i, IRIS_ROWS), rig.iris_relief, STACK_DEPTH, stack)
     pw, ph = rig.pupil_size
     lo_p, hi_p = _ellipse_columns(cx, rig.pupil_center_z, 0.5 * pw, 0.5 * ph, PUPIL_COLS)
-    pupil = _decal(rig, column_grid(lo_p, hi_p, PUPIL_ROWS), rig.pupil_relief, d0 + 2 * LAYER_DEPTH_STEP, stack)
+    pupil = _decal(rig, column_grid(lo_p, hi_p, PUPIL_ROWS), rig.pupil_relief, STACK_DEPTH + LAYER_DEPTH_STEP, stack)
     r = 0.5 * rig.highlight_diameter
     lo_h, hi_h = _ellipse_columns(cx + rig.highlight_dx, rig.highlight_z, r, r, HIGHLIGHT_COLS, eps=0.25)
-    highlight = _decal(rig, column_grid(lo_h, hi_h, 2), rig.highlight_relief, d0 + 3 * LAYER_DEPTH_STEP, stack)
+    highlight = _decal(rig, column_grid(lo_h, hi_h, 2), rig.highlight_relief, STACK_DEPTH + 2 * LAYER_DEPTH_STEP,
+                        stack)
     return [Part(f"head.sclera_{s}", "eye_white", sclera, "eyes"),
             Part(f"head.iris_{s}", "iris", iris, "eyes"),
             Part(f"head.pupil_{s}", "pupil", pupil, "eyes"),
@@ -588,11 +609,11 @@ def _eye_parts(rig: Rig, side: int, stack: DecalStack):
 # ---------------------------------------------------------------------------------------------------------
 # face marks (§B.2 lids, §B.3 brows, §B.4 mouth)
 # ---------------------------------------------------------------------------------------------------------
-LID_COLS = 8                       # main band columns (the flick adds its own)
+LID_COLS = 7                       # main band columns (the flick adds its own)
 FLICK_BEND_RADIUS = 0.0022         # the lid band turns down into the flick on this radius (no fold)
-BROW_COLS = 7
-LOWER_LID_COLS = 6
-MOUTH_COLS = 11
+BROW_COLS = 5
+LOWER_LID_COLS = 4
+MOUTH_COLS = 7
 
 
 def _line_intersection(p, d, q, e):
@@ -620,15 +641,15 @@ def _lid_band(rig: Rig, side: int, stack: DecalStack) -> mk.Mesh:
     a1 = math.atan2(-n2[1], -n2[0])
     if a1 > a0:
         a1 -= 2 * math.pi
-    k_arc = 4
+    k_arc = 3
     arc = [centre + R * np.array([math.cos(a), math.sin(a)]) for a in np.linspace(a0, a1, k_arc + 1)[1:]]
     main_x = np.linspace(x0, t1[0], LID_COLS)
     main = np.stack([main_x, z0 + (main_x - x0) * d1[1] / d1[0]], axis=1)
-    tail = [t2 + t * (tip - t2) for t in (0.40, 0.75, 1.0)]
+    tail = [t2 + t * (tip - t2) for t in (0.55, 1.0)]
     centre_line = np.concatenate([main, np.array(arc), np.array(tail)])
     hw_main = _lid_band_half(rig, main_x)
     hw_arc = np.linspace(hw_main[-1], 0.5 * rig.lid_flick_width, k_arc + 1)[1:]
-    hw_tail = 0.5 * rig.lid_flick_width * np.array([0.80, 0.50, 0.20])
+    hw_tail = 0.5 * rig.lid_flick_width * np.array([0.65, 0.20])
     half = np.concatenate([hw_main, hw_arc, hw_tail])
     g = band_grid(centre_line, half)
     g[..., 0] *= side
