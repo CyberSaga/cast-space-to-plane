@@ -162,10 +162,11 @@ export class ObserverPane {
 
   /** Show `scene` (a second build of the `scene3d` group: three.js objects belong to one scene each). Its receiver
    * plates are see-through here (opacity {@link RECEIVER_OPACITY}, no depth write; this build's own materials, so the
-   * drawing pane is unchanged): a board, frame or frustum below a receiver stays visible (§5.6.5). */
-  set_scene(scene: Scene, A: StageA): void {
+   * drawing pane is unchanged): a board, frame or frustum below a receiver stays visible (§5.6.5). `colours`: the
+   * objects' display colours, the same as the drawing pane's 3D view (`build_scene3d`). */
+  set_scene(scene: Scene, A: StageA, colours?: ReadonlyMap<string, number>): void {
     this.stage.replace_group(() => {
-      const group = build_scene3d(scene, A);
+      const group = build_scene3d(scene, A, colours);
       for (const c of group.children) {
         if (typeof c.userData[RECEIVER_ID_KEY] !== "string") continue;
         const mats = (c as THREE.Mesh).material;
