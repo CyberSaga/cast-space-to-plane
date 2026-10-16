@@ -438,6 +438,7 @@ BACK_PLATE_ROWS = (1.180, 1.010)
 BACK_CURVE = 0.025                  # the plate curves forward by this at its lateral edges (s = +-1)
 BACK_BODY_GAP = 0.008               # inner surface at least this far off the blouse / collar back
 COLLAR_LAYER = 0.005                # collar gap + thickness on the blouse back (spec D.2)
+BACK_EDGE_TAPER = 0.4               # thickness of the lateral edges (s = +-1), fraction of the row thickness
 
 
 def _clump_columns(rig: Rig):
@@ -527,6 +528,8 @@ def _h2_slab(rig: Rig, rows, gcols) -> mk.Mesh:
     Fo = np.stack([o for o, _ in rows], axis=1)               # (U, V, 3)
     Bi = np.stack([i for _, i in rows], axis=1)
     U, V = Fo.shape[:2]
+    for k in (0, U - 1):                                      # thin lateral edges: a lock edge, not a board
+        Fo[k] = Bi[k] + BACK_EDGE_TAPER * (Fo[k] - Bi[k])
     for j in range(V):
         z = Fo[0, j, 2]
         depth = BACK_GROOVE_DEPTH * float(_smoothstep(rig.groove_top_z, rig.groove_top_z - 0.08, z))
