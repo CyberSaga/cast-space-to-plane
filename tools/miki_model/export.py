@@ -56,7 +56,9 @@ SCENE_SETTINGS = {
     "up": "z",
     "lights": [{"id": "sun", "type": "directional", "direction": None}],
     "receivers": [{"id": "ground", "type": "plane", "normal": [0, 0, 1], "offset": 0}],
-    "camera": {"position": [1.7, -3.4, 1.25], "target": [0.0, 0.0, 0.8], "roll_deg": 0, "focal_length_mm": 50,
+    # r2 F13: 65 mm aimed a little right of her (target x 0.12) and lower (0.76): the figure fills ~75 % of the
+    # frame height (was 57 % at 50 mm) and her ground shadow, which falls to the right, stays in the frame
+    "camera": {"position": [1.7, -3.4, 1.25], "target": [0.12, 0.0, 0.76], "roll_deg": 0, "focal_length_mm": 65,
                "frame_mm": [24, 36], "shift_mm": [0.0, 0.0], "near_m": 0.05},
     "output": {"canvas_mm": [182, 273], "layers": ["objects", "cast_shadow"], "hidden_lines": True,
                "hidden_style": "omit", "png_dpi": 200},

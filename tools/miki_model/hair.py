@@ -44,7 +44,7 @@ import numpy as np
 from . import body as _body
 from . import mannequin as _mannequin
 from . import meshkit as mk
-from .head import SUN, SkinSurface, adopt_r2, head_section, oriented, skin_surface, slab, slab_faces
+from .head import SUN, SkinSurface, head_section, oriented, skin_surface, slab, slab_faces
 from .meshkit import Part
 from .rig import Rig
 
@@ -275,7 +275,7 @@ def _dome(rig: Rig) -> mk.Mesh:
 # ---------------------------------------------------------------------------------------------------------
 BAND_POINTS = 15                    # along the band (her right end ... her left end)
 RIDGE_SINK = 0.0002                 # the ridge's base sits this far inside the band's outer face
-BAND_SHRINK = 0.25                  # the inner face is this fraction of the band width (undercut walls)
+HEADBAND_SHRINK = 0.25              # the inner face is this fraction of the band width (undercut walls)
 RIDGE_SHRINK = 0.05
 
 
@@ -324,7 +324,7 @@ def _headband(rig: Rig, dome: mk.Mesh):
     w = 0.5 * rig.band_width
     F = np.stack([base - w * Bx + rig.band_thickness * N, base + w * Bx + rig.band_thickness * N], axis=1)
     Bk = np.stack([base - w * Bx, base + w * Bx], axis=1)
-    band = _band_slab(F, Bk, BAND_SHRINK, single=False)
+    band = _band_slab(F, Bk, HEADBAND_SHRINK, single=False)
     # pink ridge along the band, ending one path point before the band's buried ends
     outer = base + rig.band_thickness * N
     keep = np.zeros(len(P), dtype=bool)
@@ -464,7 +464,9 @@ def _outfit_triangles(rig: Rig, names: tuple) -> np.ndarray:
     for p in parts:
         V = np.asarray(p.mesh.vertices, dtype=np.float64)
         tris.extend(V[[f[0], f[k], f[k + 1]]] for f in p.mesh.faces for k in range(1, len(f) - 1))
-    return np.array(tris)
+    T = np.array(tris)
+    T.flags.writeable = False          # lru_cache shares this array between callers: keep it read-only
+    return T
 
 
 def _outfit_y(T: np.ndarray, x: float, z: float, front: bool):
@@ -989,7 +991,6 @@ def _rims_by_light(F, B, front, g_back: int, g_rim: int) -> dict:
 
 def build(rig: Rig):
     """Parts of :data:`REGIONS` for ``rig``."""
-    rig = adopt_r2(rig)
     dome = _dome(rig)
     band, ridge = _headband(rig, dome)
     bangs = _bangs(rig, dome)

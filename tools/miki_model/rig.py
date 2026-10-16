@@ -137,14 +137,17 @@ class Rig:
         (1.420, 0.082, -0.089, 0.113),     # forehead
         (1.400, 0.083, -0.091, 0.115),     # widest skull, forehead front
         (1.380, 0.082, -0.090, 0.114),     # brow ridge (very soft)
-        (1.360, 0.079, -0.087, 0.111),
-        (1.342, 0.076, -0.085, 0.107),     # eyes; the bridge between them
+        (1.360, 0.079, -0.085, 0.111),     # r2 F4: recessed eye area (was yf -0.087)
+        (1.342, 0.076, -0.082, 0.107),     # eyes; the bridge between them (r2 F4: was yf -0.085)
+        (1.333, 0.075, -0.083, 0.1037),    # r2 F4: the nose (head.NOSE_BUMP) stands out in front of it
         (1.325, 0.074, -0.088, 0.100),     # cheeks fullest (just below the eyes)
         (1.312, 0.071, -0.093, 0.093),     # nose tip (the bump is local, width +-0.006)
         (1.300, 0.066, -0.085, 0.085),     # under the nose
-        (1.286, 0.058, -0.083, 0.074),     # mouth
-        (1.272, 0.046, -0.078, 0.060),     # jaw narrows fast; back = nape into the neck
-        (1.262, 0.030, -0.076, None),      # r1 F12: a more forward chin
+        (1.286, 0.055, -0.083, 0.074),     # mouth (r2 F2: softer cheek-to-chin U, was hw 0.058)
+        (1.279, 0.049, -0.0805, 0.067),    # r2 F2
+        (1.272, 0.041, -0.078, 0.060),     # jaw narrows fast (r2 F2: was hw 0.046); below 1.296 the head
+        #                                    is head.JAW_RINGS (jaw rim, underside into the neck, nape)
+        (1.262, 0.027, -0.076, None),      # r1 F12: a more forward chin (r2 F2: was hw 0.030)
         (1.257, 0.016, -0.073, None),      # small rounded chin
         (1.255, 0.000, -0.070, None),      # chin bottom
     )
@@ -153,6 +156,9 @@ class Rig:
     face_center_offset_z: tuple = (1.33, 1.40)   # linear in between
     jaw_underside: tuple = ((-0.070, 1.255), (-0.050, 1.258), (-0.038, 1.263), (-0.026, 1.272))  # §B.1 (y, z)
     nape: tuple = (0.050, 1.27)              # §B.1 (y, z): the back of the head curves into the nape below 1.30
+    #                                        (r2 F1: the head mesh no longer reads jaw_underside / nape; its jaw
+    #                                        is head.JAW_RINGS on body._neck_section.  The mannequin and
+    #                                        head.head_section below the last back row still use them.)
     #: Face-surface y at the feature points (§B.1), ``(x, z, y)``: place features on the surface with these.
     face_surface_points: tuple = (
         (0.040, 1.342, -0.0805),           # eye centre
@@ -190,7 +196,9 @@ class Rig:
     highlight_dx: float = -0.008             # highlight x = eye centre x + this on BOTH eyes (towards -x)
     highlight_z: float = 1.3445
     #: Lower sclera boundary (x, z), inner corner -> outer corner; the upper boundary is the lid line.
-    sclera_lower: tuple = ((0.019, 1.3478), (0.028, 1.327), (0.040, 1.323), (0.052, 1.326), (0.061, 1.3455))
+    #: r2 F8: a rounded almond under the flat lid, both corners closing just under the lid line.
+    sclera_lower: tuple = ((0.019, 1.3480), (0.023, 1.3350), (0.030, 1.3262), (0.040, 1.3232), (0.050, 1.3248),
+                           (0.057, 1.3320), (0.0612, 1.3490))
     eye_slab_depth: float = 0.0003           # every eye / mark slab's back face sits this far below the skin
     decal_skin_clearance: float = 0.0004     # decal front faces at least this far off the skin ...
     decal_layer_clearance: float = 0.0002    # ... and off the decal below them (stacked layers)
@@ -199,7 +207,8 @@ class Rig:
     iris_relief: float = 0.0010
     pupil_relief: float = 0.0013
     highlight_relief: float = 0.0016
-    lid_band_relief: float = 0.0018          # face_marks; overlaps the top of sclera and iris
+    lid_band_relief: float = 0.0014          # face_marks; overlaps the top of sclera and iris (r2 F4: was
+    #                                          1.8 mm; thinner reads less like a visor in profile)
     lower_lid_relief: float = 0.0010         # face_marks
     lid_band_inner: tuple = (0.018, 1.3496)  # upper-lid band (x, z) ends; thick, flat, dark
     lid_band_outer: tuple = (0.062, 1.3520)
@@ -239,8 +248,9 @@ class Rig:
     hair_thickness: tuple = (0.018, 0.017, 0.0165, 0.022)   # §C over the scalp: crown, front under the band,
     #                                                         sides above the ears, back of the skull
     dome_center: tuple = (0.0, 0.012, 1.405)    # §C/§C.5 H1: offset ellipsoid
-    dome_radii: tuple = (0.104, 0.1195, 0.123)  # x, y towards the front, z (r1 F2: fuller crown; the sides
-    #                                            are superelliptic, hair.DOME_SIDE_EXPONENT)
+    dome_radii: tuple = (0.1075, 0.1195, 0.123)  # x, y towards the front, z (r1 F2: fuller crown; the sides
+    #                                            are superelliptic, hair.DOME_SIDE_EXPONENT; r2 F6: x 0.104 ->
+    #                                            0.1075, the crown is the widest part of the front silhouette)
     dome_back_radius: float = 0.125             # y towards the back
     dome_bottom_z: float = 1.43                 # closed by a flat cap buried inside the skull
     hairline_z: float = 1.440                   # §C hidden under the bangs, 8 mm above the cut
@@ -276,20 +286,27 @@ class Rig:
     sidelock_thickness: float = 0.012
     #: Edge positions (centre of the thickness) for her left: ``(z, x_in, y_in, x_out, y_out)``; the last row
     #: is the straight horizontal cut.
-    sidelock_rows: tuple = (                  # r1 F1 / F9 / T3: outer edge out to the front-view silhouette
-        (1.445, 0.072, -0.060, 0.100, -0.031),   # root, merged into H1/H2
-        (1.400, 0.072, -0.068, 0.105, -0.036),   # covers the forehead corner / temple
-        (1.370, 0.073, -0.065, 0.106, -0.033),
-        (1.342, 0.074, -0.047, 0.106, -0.026),   # inner edge 3 mm off the skin at the eye level
-        (1.310, 0.075, -0.043, 0.108, -0.022),
-        (1.270, 0.078, -0.042, 0.111, -0.022),   # beside the jaw, bowed out ~4 mm
-        (1.220, 0.077, -0.054, 0.110, -0.034),   # starts to come forward over the shoulder
-        (1.180, 0.075, -0.068, 0.107, -0.052),   # >= 12 mm in front of the collar / shoulder
-        (1.145, 0.074, -0.086, 0.106, -0.072),   # lies on the collar lapel
-        (1.120, 0.074, -0.092, 0.106, -0.078),   # straight horizontal cut
+    #: r2 F3 / F6 / F15: the lock hangs ~12 mm further back and 4 mm further out at the ear line, so the
+    #: cheek and jaw show in profile (overrides spec Decision 13: from the front the cheek outline shows just
+    #: inside the hair); the outer edge stays at x 0.104 (straight side hair, the crown is the widest part);
+    #: rows 1.245 / 1.220 / 1.200 make the bend over the shoulder a smooth curve.
+    sidelock_rows: tuple = (
+        (1.445, 0.0695, -0.062, 0.100, -0.031),  # root, merged into H1/H2; r2 F7: the inner edge passes
+        (1.432, 0.0715, -0.060, 0.101, -0.029),  #   through the bangs' end down to the cut (no slot beside it)
+        (1.400, 0.078, -0.054, 0.104, -0.026),   # covers the forehead corner / temple
+        (1.370, 0.0785, -0.045, 0.104, -0.019),
+        (1.342, 0.079, -0.035, 0.104, -0.012),   # eye level
+        (1.310, 0.077, -0.032, 0.104, -0.010),
+        (1.270, 0.076, -0.032, 0.104, -0.012),   # beside the jaw
+        (1.245, 0.0755, -0.039, 0.104, -0.019),
+        (1.220, 0.075, -0.049, 0.104, -0.029),   # starts to come forward over the shoulder
+        (1.200, 0.0745, -0.058, 0.104, -0.039),
+        (1.180, 0.074, -0.068, 0.104, -0.050),   # in front of the collar / shoulder
+        (1.145, 0.074, -0.084, 0.104, -0.068),   # lies on the collar lapel
+        (1.120, 0.074, -0.090, 0.104, -0.074),   # straight horizontal cut
     )
     sidelock_crease_x: float = 0.086            # one shallow strand crease on the front face, from z 1.43
-    sidelock_crease_top_z: float = 1.43
+    sidelock_crease_top_z: float = 1.475        # r2 F7: inside the dome (no line across the lock's top)
     # -- C.4 stray strand (H5): exactly one, on her LEFT (+x) -------------------------------------------------
     strand_points: tuple = (
         (0.022, -0.086, 1.474),    # P0 root on H1, just above/behind the band
@@ -297,8 +314,8 @@ class Rig:
         (0.040, -0.096, 1.432),    # P2 crosses the bangs, passing their cut
         (0.052, -0.086, 1.400),    # P3 diagonally outward over the forehead
         (0.063, -0.074, 1.368),    # P4 crosses the outer end of the brow
-        (0.072, -0.056, 1.335),    # P5 outside the eye's outer corner, on the sidelock (r1 F9)
-        (0.080, -0.058, 1.305),    # P6 tip, on the sidelock's front face
+        (0.074, -0.047, 1.335),    # P5 outside the eye's outer corner, 5 mm off the cheek (r2: follows
+        (0.080, -0.036, 1.305),    # P6 tip, on the sidelock's front face near its inner edge  the lock back)
     )
     strand_width: float = 0.004                 # 4-6 sided section, Catmull-Rom through the points
     strand_thickness: float = 0.002
@@ -307,28 +324,30 @@ class Rig:
     #: Crescent rows for z >= 1.215: ``(z, cy, ax, outer back y, t, y_end)``: outer contour = ellipse centre
     #: ``(0, cy)``, semi-axes ``ax`` and ``outer back y - cy``; inner = outer offset by ``t``; blunt end faces
     #: at the curtain's front edge ``y_end``.
-    curtain_rows: tuple = (                   # r1 F2 / T2: ax continues the wider crown
-        (1.450, 0.012, 0.1055, 0.136, 0.020, -0.034),   # starts under H1, behind the sidelock root
-        (1.400, 0.012, 0.1055, 0.137, 0.020, -0.034),   # covers the ear zone
-        (1.340, 0.012, 0.1055, 0.133, 0.022, -0.028),   # y_end of the rows down to 1.28: computed (tucked
-        (1.290, 0.012, 0.1060, 0.128, 0.024, -0.022),   #   into the sidelock, hair.py)
-        (1.250, 0.020, 0.1080, 0.125, 0.026, 0.010),    # behind the jaw; neck shows between curtain and sidelock
-        (1.215, 0.040, 0.1120, 0.123, 0.028, 0.060),    # goes behind the shoulders
+    curtain_rows: tuple = (                   # r1 F2 / T2: ax continues the wider crown; r2 F5 / F6: falls
+        #                                       straight at the dome's width (ax 0.1085), the 1.400 row dropped
+        (1.450, 0.012, 0.1085, 0.137, 0.020, -0.034),   # replaced by curtain_top_rows
+        (1.340, 0.012, 0.1085, 0.1365, 0.022, -0.028),  # y_end of the rows down to 1.28: computed (tucked
+        (1.290, 0.012, 0.1085, 0.132, 0.024, -0.022),   #   into the sidelock, hair.py)
+        (1.250, 0.020, 0.1095, 0.128, 0.026, 0.010),    # behind the jaw; neck shows between curtain and sidelock
+        (1.215, 0.040, 0.1120, 0.125, 0.028, 0.060),    # goes behind the shoulders
     )
     #: Back sheet rows for z <= 1.18: ``(z, hw, midline inner y, midline outer y, thickness)``; blunt lateral
     #: faces at +-hw; the inner surface is the blouse / collar back + back_sheet_gap where that is closer.
     back_sheet_rows: tuple = (
-        (1.180, 0.122, 0.090, 0.121, 0.020),
+        (1.180, 0.117, 0.090, 0.121, 0.020),            # r2 F14: was hw 0.122 (gentle flare from the curtain)
         (1.100, 0.130, 0.099, 0.119, 0.020),
         (1.000, 0.137, 0.099, 0.118, 0.019),
-        (0.920, 0.143, 0.099, 0.117, 0.018),
-        (0.860, 0.150, 0.100, 0.116, 0.016),            # end of the flat part
+        (0.920, 0.144, 0.099, 0.117, 0.018),            # r2 F12: the lateral edges taper in toward the hem
+        (0.860, 0.146, 0.100, 0.116, 0.016),            # end of the flat part
     )
     back_sheet_gap: float = 0.008
     hair_outfit_gap: float = 0.003              # sidelocks in front of / back sheet behind the collar, scarf, ring
     #: Curtain rows that come out from under the dome, replacing the first curtain row (whose z 1.45 stands
     #: 6-8 mm outside the dome): ``(z, offset from the dome H1 outward, thickness)``.
-    curtain_top_rows: tuple = ((1.458, -0.0025, 0.016), (1.452, 0.0025, 0.020))   # r1 F3: steep 6 mm crossing
+    #: r2 F5: out from under the dome tangentially at its equator, on the dome's own azimuths (r1: steep 6 mm
+    #: crossing at 1.458 / 1.452).
+    curtain_top_rows: tuple = ((1.438, -0.0016, 0.018), (1.405, 0.0007, 0.020))
     hair_clumps: int = 5                        # r1 F8: five uneven clumps on a convex-down hem (hair.CLUMP_WEIGHTS)
     clump_notch_z: float = 0.848
     clump_tip_z: float = 0.830                  # the centre tip (the outer tips are higher, hair.HEM_*)
@@ -376,12 +395,14 @@ class Rig:
     scarf_thickness: tuple = (0.010, 0.006)     # at S0, at S4 (the S0 ring itself: scarf_start_thickness)
     scarf_start_thickness: float = 0.007        # spec 0.010 at S0: the ribbon start must stay under the lapel
     scarf_tuck_z: tuple = (-0.006, -0.003)      # S0, S1 lowered this much (their ribbon edge poked through the lapel)
-    ring_center: tuple = (0.0, -0.112, 1.072)   # rounded box (material collar), top at z 1.084
-    ring_size: tuple = (0.036, 0.016, 0.024)    # x, y (from -0.104 to -0.120), z
+    ring_center: tuple = (0.0, -0.112, 1.070)   # rounded box (material collar), top at z 1.086 (r2 F11: taller)
+    ring_size: tuple = (0.034, 0.016, 0.032)    # x, y (from -0.104 to -0.120), z (r2 F11: was 0.036 x 0.024)
     ring_corner_radius: float = 0.005
-    ring_stripe_z: tuple = (1.068, 1.076)       # two pink stripes (material uniform), centre z
-    ring_stripe_height: float = 0.003
+    ring_stripe_z: tuple = (1.064, 1.074)       # two pink stripes (material uniform), centre z (r2 F11)
+    ring_stripe_height: float = 0.004           # r2 F11: was 0.003
     ring_stripe_relief: float = 0.0006
+    stripe_float: float = 0.00025               # decal bands (collar stripe, ring stripes, cuff stripes) float
+    #                                            this far above the surface they decorate
     scarf_tip_thickness: float = 0.004          # flat blades 1-2 mm off the blouse front
     scarf_tip_root: tuple = (0.008, -0.116, 1.064)   # tip B (her left, in front); tip A: scarf_tip_root_right
     scarf_tip_root_right: tuple = (-0.008, -0.113, 1.064)   # tip A (her right, behind)

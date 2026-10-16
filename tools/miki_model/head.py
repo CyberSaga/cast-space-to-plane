@@ -103,104 +103,6 @@ def _side_name(side: int) -> str:
 
 
 # ---------------------------------------------------------------------------------------------------------
-# Review round 2: rig values of the head and hair builders.  rig.py belongs to the merge step, so the new
-# values live here until it adopts them; :func:`adopt_r2` applies each one only while the rig still holds
-# the round-1 default of that field (a ``--rig`` override of the field wins).
-# ---------------------------------------------------------------------------------------------------------
-R2_RIG = {
-    # F2 / F4: a softer cheek-to-chin U (hw 1.286 0.058 -> 0.055, new row 1.279, 1.272 0.046 -> 0.041,
-    # 1.262 0.030 -> 0.027) and a recessed eye area (yf 1.360 -0.087 -> -0.085, 1.342 -0.085 -> -0.082,
-    # new row 1.333 at -0.083) in front of which the nose (NOSE_BUMP) stands out.
-    "head_profile": (
-        (1.510, 0.000, 0.012, 0.012),
-        (1.500, 0.035, -0.032, 0.056),
-        (1.480, 0.057, -0.057, 0.081),
-        (1.460, 0.069, -0.073, 0.097),
-        (1.440, 0.077, -0.083, 0.107),
-        (1.420, 0.082, -0.089, 0.113),
-        (1.400, 0.083, -0.091, 0.115),
-        (1.380, 0.082, -0.090, 0.114),
-        (1.360, 0.079, -0.085, 0.111),
-        (1.342, 0.076, -0.082, 0.107),
-        (1.333, 0.075, -0.083, 0.1037),
-        (1.325, 0.074, -0.088, 0.100),
-        (1.312, 0.071, -0.093, 0.093),
-        (1.300, 0.066, -0.085, 0.085),
-        (1.286, 0.055, -0.083, 0.074),
-        (1.279, 0.049, -0.0805, 0.067),
-        (1.272, 0.041, -0.078, 0.060),
-        (1.262, 0.027, -0.076, None),
-        (1.257, 0.016, -0.073, None),
-        (1.255, 0.000, -0.070, None),
-    ),
-    # F4: a thinner lid band (relief 1.8 -> 1.4 mm; still over the iris, 1.0) reads less like a visor in
-    # profile
-    "lid_band_relief": 0.0014,
-    # F8: a rounded almond under the flat lid, both corners closing just under the lid line
-    "sclera_lower": ((0.019, 1.3480), (0.023, 1.3350), (0.030, 1.3262), (0.040, 1.3232), (0.050, 1.3248),
-                     (0.057, 1.3320), (0.0612, 1.3490)),
-    # F3 / F6 / F15 (hair.py): the lock hangs ~12 mm further back and 4 mm further out at the ear line, so
-    # the cheek and jaw show in profile (overrides spec Decision 13: from the front the cheek outline shows
-    # just inside the hair); the outer edge stays at x 0.104 (straight side hair, the crown is the widest
-    # part); two more rows make the bend over the shoulder a smooth curve.
-    "sidelock_rows": (
-        (1.445, 0.0695, -0.062, 0.100, -0.031),    # F7: the inner edge passes through the bangs' end
-        (1.432, 0.0715, -0.060, 0.101, -0.029),    #     down to the cut, so no slot shows beside it
-        (1.400, 0.078, -0.054, 0.104, -0.026),
-        (1.370, 0.0785, -0.045, 0.104, -0.019),
-        (1.342, 0.079, -0.035, 0.104, -0.012),
-        (1.310, 0.077, -0.032, 0.104, -0.010),
-        (1.270, 0.076, -0.032, 0.104, -0.012),
-        (1.245, 0.0755, -0.039, 0.104, -0.019),
-        (1.220, 0.075, -0.049, 0.104, -0.029),
-        (1.200, 0.0745, -0.058, 0.104, -0.039),
-        (1.180, 0.074, -0.068, 0.104, -0.050),
-        (1.145, 0.074, -0.084, 0.104, -0.068),
-        (1.120, 0.074, -0.090, 0.104, -0.074),
-    ),
-    # F7 (hair.py): the strand crease and the outer edge's feature line start inside the dome (no
-    # horizontal line across the lock's top under the band)
-    "sidelock_crease_top_z": 1.475,
-    # F12 / F14 (hair.py): the back sheet's first row is narrower (a gentle flare over the shoulders from the
-    # curtain), its lateral edges taper in toward the hem
-    "back_sheet_rows": (
-        (1.180, 0.117, 0.090, 0.121, 0.020),
-        (1.100, 0.130, 0.099, 0.119, 0.020),
-        (1.000, 0.137, 0.099, 0.118, 0.019),
-        (0.920, 0.144, 0.099, 0.117, 0.018),
-        (0.860, 0.146, 0.100, 0.116, 0.016),
-    ),
-    # (hair.py) the stray strand's last two points follow the lock back: P5 5 mm off the cheek, P6 on the
-    # lock's front face near its inner edge
-    "strand_points": (
-        (0.022, -0.086, 1.474), (0.030, -0.093, 1.463), (0.040, -0.096, 1.432), (0.052, -0.086, 1.400),
-        (0.063, -0.074, 1.368), (0.074, -0.047, 1.335), (0.080, -0.036, 1.305),
-    ),
-    # F5 / F6 (hair.py): the dome is wider at the sides (hw >= 0.104 at z 1.45, the crown is the widest part
-    # of the front silhouette) and reaches its equator behind the band; the curtain comes out from under it
-    # tangentially at the equator (top rows: 1.6 mm inside the dome at 1.438, 0.7 mm outside its rim at
-    # 1.405, on the dome's own azimuths) and falls straight at the dome's width (ax 0.1085), so no ledge,
-    # seam or rim line shows where they meet.
-    "dome_radii": (0.1075, 0.1195, 0.123),
-    "curtain_top_rows": ((1.438, -0.0016, 0.018), (1.405, 0.0007, 0.020)),
-    "curtain_rows": (
-        (1.450, 0.012, 0.1085, 0.137, 0.020, -0.034),   # replaced by curtain_top_rows
-        (1.340, 0.012, 0.1085, 0.1365, 0.022, -0.028),
-        (1.290, 0.012, 0.1085, 0.132, 0.024, -0.022),
-        (1.250, 0.020, 0.1095, 0.128, 0.026, 0.010),
-        (1.215, 0.040, 0.1120, 0.125, 0.028, 0.060),
-    ),
-}
-
-
-def adopt_r2(rig: Rig) -> Rig:
-    """``rig`` with the :data:`R2_RIG` values of the fields that still hold their ``Rig()`` defaults."""
-    base = Rig()
-    changes = {k: v for k, v in R2_RIG.items() if getattr(rig, k) == getattr(base, k) and getattr(rig, k) != v}
-    return rig.replace(**changes) if changes else rig
-
-
-# ---------------------------------------------------------------------------------------------------------
 # skin head
 # ---------------------------------------------------------------------------------------------------------
 
@@ -419,7 +321,7 @@ class SkinSurface:
 @functools.lru_cache(maxsize=4)
 def skin_surface(rig: Rig) -> SkinSurface:
     """The skin head mesh of ``rig`` with its ray caster (cached per rig)."""
-    return SkinSurface(_head_mesh(adopt_r2(rig)))
+    return SkinSurface(_head_mesh(rig))
 
 
 def face_point(rig: Rig, x: float, z: float, offset: float = 0.0) -> np.ndarray:
@@ -963,7 +865,6 @@ def _mouth(rig: Rig) -> mk.Mesh:
 
 def build(rig: Rig):
     """Parts of :data:`REGIONS` for ``rig``."""
-    rig = adopt_r2(rig)
     parts = [Part("head.skin", "skin", skin_surface(rig).mesh, "head")]
     marks = []
     for side in SIDES:

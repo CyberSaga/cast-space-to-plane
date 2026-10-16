@@ -38,7 +38,6 @@ SLEEVE_START = 0.010               # the round sleeve cap is centred this far do
 #                                    the joint its 0.048 radius would rise 2 cm above the shoulder and through
 #                                    the collar (O5); r1 had 0.025, where its top only grazed the blouse's
 #                                    shoulder and the arc over the sleeve top drew dashed in side views (r2 F5)
-STRIPE_FLOAT = 0.00025             # cuff stripes float this far above the sleeve
 LEG_POINTS = 10
 SOCK_POINTS = 12
 LEG_Z = (0.720, 0.700, 0.500, 0.420, 0.370)          # the leg ends inside the sock
@@ -53,7 +52,8 @@ SHOE_OPENING_FLOOR = 0.030
 STRAP_FLOAT = 0.0009               # the strap's chords cross the faceted upper: float it a little higher
 STRAP_CLEARANCE = 0.0008           # ... and every chord of its borders at least this far above the upper (r2 F5)
 SHOE_STRAP_U = 0.122                # saddle strap centre from the heel back (spec: y ~ -0.07)
-SHOE_STRAP_POINTS = 17             # points along each strap border (r2 F5: 11 sagged up to 0.9 mm under the upper)
+SHOE_STRAP_POINTS = 13             # points along each strap border (r2 F5: 11 sagged up to 0.9 mm under the upper;
+#                                    r2 merge F8: 17 -> 13 for hidden-line time, lift_band_borders keeps >= 0.56 mm)
 #: Hand sections (review r1, T8): the wrist is narrower than the heel of the palm (a ~7 mm step each side
 #: within 15 mm) and the mitten tapers toward the fingertips (distances before scaling to hand_length).
 HAND_WRIST = (0.0215, 0.0135)      # half-width, half-thickness at the wrist (and inside the sleeve)
@@ -111,7 +111,7 @@ def _sleeve(rig: Rig, side: int):
     groups = [1] * (len(Pp) - 1) + [2, 2]
     sleeve = mk.loft(rings, ("dome", rad[0], 1), "flat", groups=groups, cap_groups=(None, 2))
     stripes = []
-    R = rad[-1] + STRIPE_FLOAT
+    R = rad[-1] + rig.stripe_float
     for d0, d1_ in rig.cuff_stripes:
         lo, hi = (C - d * d2 + R * (ct * Bc + st * Nc) for d in (d0, d1_))
         stripes.append(mk.ridge_band(lo, hi, ct * Bc + st * Nc, rig.cuff_stripe_relief))
