@@ -6,8 +6,9 @@ the castplane objects (:data:`~miki_model.assemble.OBJECTS`, spatially compact g
 material of every part (:data:`~miki_model.assemble.MATERIALS`).
 
 * :func:`scene_text` / :func:`write_scene`: the scene of BRIEF §6 (sun, ground, 3/4 front camera) with one
-  ``mesh`` object per castplane object and inline ``data``; the structure is indented, every ``data`` block
-  is compact on one line.  :func:`check_scene` loads it with ``castplane.load_scene`` (lazy import).
+  ``mesh`` object per castplane object and inline ``data``, each with ``display_color`` (lower-case
+  ``"#rrggbb"`` of its dominant material, :func:`~miki_model.assemble.display_color`; read only by the web
+  UI's 3D views, ignored by the core); the structure is indented, every ``data`` block is compact on one line.  :func:`check_scene` loads it with ``castplane.load_scene`` (lazy import).
 * :func:`write_obj`: ``mtllib``, one ``o <object>`` per object and a ``usemtl <material>`` per part block
   (castplane's OBJ reader ignores ``usemtl``), ``s`` per smooth group (group ids made unique across objects;
   vertices ordered so that the whole file is also safe as a single castplane mesh).  The MTL has every
@@ -28,7 +29,7 @@ import struct
 import numpy as np
 
 from . import meshkit as mk
-from .assemble import MATERIALS, OBJECTS
+from .assemble import MATERIALS, OBJECTS, display_color
 from .rig import SUN_TOWARDS
 
 __all__ = ["SCENE_SETTINGS", "DESCRIPTION", "scene_dict", "scene_text", "write_scene", "check_scene",
@@ -38,7 +39,8 @@ DESCRIPTION = (
     "Hanabishi Miki (Hayate the Combat Butler) as a drawing reference: a 1.51 m anime schoolgirl (5.9 heads) in "
     "a relaxed A-pose, standing at the origin on the ground (z = 0) and facing -Y (her left hand on +X). "
     f"{len(OBJECTS)} mesh objects, each a spatially compact group of parts (" + ", ".join(o for o, _ in OBJECTS)
-    + ") so hidden-line removal stays fast; colours are per-part materials in examples/meshes/miki.obj/.mtl/.glb. "
+    + ") so hidden-line removal stays fast; each object's display_color (its dominant material) colours it in the web "
+    "UI's 3D views and is ignored by the drawing; per-part colours are the materials in examples/meshes/miki.obj/.mtl/.glb. "
     "Smooth groups turn the designed lines (bang cut, headband, collar, cuffs, hems) into feature edges and leave "
     "the rest to silhouettes. In the web UI choose it from the Example menu, orbit the board around her (the "
     "front button looks along +y at her face) and untick the 'labels' layer: every mesh vertex is labelled. "
@@ -82,7 +84,9 @@ def scene_dict(assembly, description: str = DESCRIPTION) -> dict:
     out = {"description": description}
     for k in ("version", "units", "up"):
         out[k] = s[k]
-    out["objects"] = assembly.objects()
+    # each object: id, type, display_color (web 3D views only; the core ignores it), data
+    out["objects"] = [{"id": o["id"], "type": o["type"], "display_color": display_color(o["id"]), "data": o["data"]}
+                      for o in assembly.objects()]
     for k in ("lights", "receivers", "camera", "output"):
         out[k] = s[k]
     return out

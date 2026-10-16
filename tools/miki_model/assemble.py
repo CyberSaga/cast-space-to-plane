@@ -18,13 +18,14 @@ statistics.
 from __future__ import annotations
 
 import dataclasses
+import re
 from dataclasses import dataclass, field
 
 from . import body, hair, head, limbs, mannequin
 from . import meshkit as mk
 from .rig import SUN_TOWARDS, Rig
 
-__all__ = ["OBJECTS", "OBJECT_IDS", "MATERIALS", "REGION_OBJECTS", "MODULES", "ALL_REGIONS", "BUDGET",
+__all__ = ["OBJECTS", "OBJECT_IDS", "MATERIALS", "DISPLAY_MATERIALS", "display_color", "REGION_OBJECTS", "MODULES", "ALL_REGIONS", "BUDGET",
            "DECIMALS", "SUN_TOWARDS", "Assembly", "AssemblyError", "build_parts", "assemble", "format_stats"]
 
 #: The castplane objects in their fixed order (= index in the web UI's 3D palette) with what each holds.
@@ -67,6 +68,22 @@ MATERIALS = {
     "shoes": "#6b4a3a",
 }
 
+#: Display material of each object (its dominant material): ``display_color(oid)`` is that material's colour,
+#: written as the object's optional ``display_color`` key in examples/miki.json.  The web UI's 3D views draw
+#: the object in it (instead of the index palette); castplane's core ignores the key (contract §2.0).
+DISPLAY_MATERIALS = {
+    "hair": "hair", "head": "skin", "eyes": "iris", "headband": "headband", "scarf": "scarf",
+    "sidelocks": "hair", "blouse": "uniform", "collar": "collar", "back_hair": "hair", "arm_l": "uniform",
+    "face_marks": "face_marks", "arm_r": "uniform", "legs": "skin", "socks": "socks", "skirt": "skirt",
+    "shoes": "shoes", "ring": "collar", "neck": "skin",
+}
+
+
+def display_color(oid: str) -> str:
+    """Lower-case ``"#rrggbb"`` display colour of object ``oid`` (:data:`DISPLAY_MATERIALS`)."""
+    return MATERIALS[DISPLAY_MATERIALS[oid]].lower()
+
+
 #: Default object of a part by its region (``Part.obj`` overrides it: e.g. ``hair`` parts that are
 #: sidelocks go to ``sidelocks``, the back hair to ``back_hair``, the scarf ring to ``ring``).  ``None``:
 #: the region has no default and every part must set ``obj`` (``arms`` / ``hands`` go to ``arm_l`` or
@@ -94,6 +111,9 @@ DECIMALS = 5
 
 assert set(mannequin.REGIONS) == set(ALL_REGIONS), "mannequin regions and module REGIONS disagree"
 assert set(REGION_OBJECTS) == set(ALL_REGIONS), "REGION_OBJECTS must name every region"
+assert tuple(DISPLAY_MATERIALS) == OBJECT_IDS, "DISPLAY_MATERIALS must list every object in OBJECTS order"
+assert set(DISPLAY_MATERIALS.values()) <= set(MATERIALS)
+assert all(re.fullmatch(r"#[0-9a-f]{6}", c) for c in MATERIALS.values()), "MATERIALS: lower-case #rrggbb"
 assert set(REGION_OBJECTS.values()) - {None} <= set(OBJECT_IDS)
 
 
