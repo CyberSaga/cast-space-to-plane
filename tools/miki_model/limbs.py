@@ -42,7 +42,7 @@ LEG_POINTS = 10
 SOCK_POINTS = 12
 LEG_Z = (0.720, 0.700, 0.500, 0.420, 0.370)          # the leg ends inside the sock
 SOCK_Z = (0.025, 0.065, 0.200, 0.320, 0.385)          # from inside the shoe to the sock top
-SHOE_POINTS = 12
+SHOE_OUTLINE_DEG = (0.0, 20.0, 42.0, 68.0, 98.0, 130.0, 158.0, 180.0)   # one side, toe -> heel
 SHOE_ANKLE_U = 0.040               # the shoe axis passes under the ankle centre this far from the heel back
 #                                    (spec: heel back at x 0.082 would put the ankle 1 cm off the shoe axis)
 #: Sole half-width factor B(u) along the foot (u from the heel back); half-width = B * sin(theta).
@@ -156,9 +156,9 @@ def _hand(rig: Rig, side: int):
     # thumb: a lobe from the index side of the palm base, lying forward along the index finger and
     # slightly toward the palm (the palm direction is the rotated centreline, not the chord)
     a_palm = _unit(path[3] - path[1])
-    base = path[1] + 0.008 * a_palm + 0.012 * w + 0.002 * p
-    d_a = _unit(0.80 * a_palm + 0.55 * w + 0.10 * p)
-    d_b = _unit(0.95 * a_palm + 0.12 * w + 0.22 * p)
+    base = path[1] + 0.010 * a_palm + 0.019 * w + 0.002 * p
+    d_a = _unit(0.95 * a_palm + 0.25 * w + 0.10 * p)
+    d_b = _unit(0.97 * a_palm + 0.02 * w + 0.20 * p)
     q1 = base + 0.024 * d_a
     q2 = q1 + 0.5 * (rig.thumb_length - 0.024) * d_b
     q3 = q1 + (rig.thumb_length - 0.024) * d_b
@@ -199,9 +199,11 @@ def _sock(rig: Rig, side: int):
 
 def _shoe(rig: Rig, side: int):
     L = rig.shoe_length
-    n = SHOE_POINTS
+    n = 2 * len(SHOE_OUTLINE_DEG) - 2
     uc, a = 0.5 * L, 0.5 * L
-    th = 2.0 * np.pi * np.arange(n) / n                    # 0 = toe, pi/2 = +v (outward for her left)
+    # outline angles, denser at the toe and the heel (a round toe, not a 12-gon point); 0 = toe
+    half = np.radians(SHOE_OUTLINE_DEG)
+    th = np.concatenate([half, 2.0 * np.pi - half[1:-1][::-1]])
     u = uc + a * np.cos(th)
     Bu = np.interp(u, [q[0] for q in SHOE_WIDTH], [q[1] for q in SHOE_WIDTH])
     v = Bu * np.sin(th)
