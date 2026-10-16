@@ -52,7 +52,9 @@ SIDES = (1, -1)                    # her left (+X), her right (-X)
 HEAD_ROWS = (1.445, 1.400, 1.380, 1.360, 1.342, 1.333, 1.325, 1.312, 1.304, 1.296,
              1.286, 1.278, 1.272, 1.2665, 1.2615, 1.2575)
 #: Arc-length fractions of the ring points on the front half-section, from the midline (0) to the side (1).
-FRONT_FRACTIONS = (0.0, 0.025, 0.165, 0.266, 0.349, 0.426, 0.502, 0.584, 0.679, 0.797, 0.90, 1.0)
+#: 0.738 splits the jaw-corner column: without it the jaw outline folds behind the cheek facet above the
+#: jaw underside and shows a gap in front views from eye height.
+FRONT_FRACTIONS = (0.0, 0.025, 0.165, 0.266, 0.349, 0.426, 0.502, 0.584, 0.679, 0.738, 0.797, 0.90, 1.0)
 #: Angles (degrees from her left side, through the back) of the ring points on the back half-section.
 BACK_ANGLES = (20.0, 90.0, 160.0)
 #: Nose bump (§B.4): row -> displacement (forward, m) of the midline column; the neighbouring columns
