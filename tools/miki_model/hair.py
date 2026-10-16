@@ -151,8 +151,10 @@ DOME_CAP_APEX = (0.0, 0.020, 1.440)
 #: ellipses at the front and back (exponent 2 + (DOME_SIDE_EXPONENT - 2) cos^2(azimuth)); the extra fullness
 #: fades in between the polar angles DOME_SIDE_FADE (degrees), so the crown top stays round: the outline
 #: is a rounded rectangle that flows into the side hair.
-DOME_SIDE_EXPONENT = 2.6
-DOME_SIDE_FADE = (30.0, 60.0)
+#: Round 4 (F6): exponent 2.8 (was 2.6) faded in from 28 to 55 degrees (was 30 ... 60): the crown is ~3 mm
+#: fuller at z 1.48 (hw 0.0925 -> ~0.096), a rounded rectangle rather than a gothic arch over the side hair.
+DOME_SIDE_EXPONENT = 2.8
+DOME_SIDE_FADE = (28.0, 55.0)
 #: Round 1 (F4): the band ends here (was y -0.005) ...
 BAND_END_Y = -0.013                 # round 2 (F6 tech): 2 mm further into the hair (was -0.015)
 #: ... and from ``rig.band_tuck_y`` back to its end it dives this much deeper into the hair (its end is
@@ -345,10 +347,11 @@ def _headband(rig: Rig, dome: mk.Mesh):
     F = np.stack([base - w * Bx + rig.band_thickness * N, base + w * Bx + rig.band_thickness * N], axis=1)
     Bk = np.stack([base - w * Bx, base + w * Bx], axis=1)
     band = _band_slab(F, Bk, HEADBAND_SHRINK, single=False)
-    # pink ridge along the band, ending one path point before the band's buried ends
+    # pink ridge along the band, ending one path point before the band's buried ends.  Round 4 (F7): that
+    # point was only ~1 mm under the dome, so the ridge's flat end showed as a cut end in front of the side
+    # hair at az +-50; the ridge now runs to the band's ends, buried with them (BAND_DIVE).
     outer = base + rig.band_thickness * N
-    keep = np.zeros(len(P), dtype=bool)
-    keep[1:-1] = True
+    keep = np.ones(len(P), dtype=bool)
     k0, k1 = int(np.nonzero(keep)[0][0]), int(np.nonzero(keep)[0][-1])
     o, n, b = outer[k0:k1 + 1], N[k0:k1 + 1], Bx[k0:k1 + 1]
     rw = 0.5 * rig.band_ridge_width
@@ -647,10 +650,14 @@ def _sidelock(rig: Rig, side: int) -> mk.Mesh:
 # ---------------------------------------------------------------------------------------------------------
 STRAND_POINTS = 9
 STRAND_SIDES = 4
+#: Round 4 (tech F4): lateral (x) shift of the rig's strand points P0 ... P6: P4 / P5 move out 3 / 4.5 mm, so
+#: the strand passes outside the (shortened) brow's outer end and the lid's outer corner (spec I.12) instead of
+#: crossing them.  Wanted as a rig change (``strand_points``).
+STRAND_DX = (0.0, 0.0, 0.0, 0.001, 0.003, 0.0045, 0.0)
 
 
 def _strand(rig: Rig, lock_l: mk.Mesh) -> mk.Mesh:
-    pts = [np.array(p) for p in rig.strand_points]
+    pts = [np.array(p) + np.array([dx, 0.0, 0.0]) for p, dx in zip(rig.strand_points, STRAND_DX)]
     # the tip lies on the sidelock's front face (§C.4 P6): find that face along +y
     tip = pts[-1]
     lock = SkinSurface(lock_l)
@@ -714,6 +721,8 @@ CURTAIN_TUCK_MIN_Z = 1.28
 #: curtain lies outside the lock, so in profile it covers the lock's back 3 mm and no skin shows between
 #: them): the lock is the front-most hair from the band to its cut with the side hair behind it.
 CURTAIN_FRONT_Y = ((1.290, -0.014), (1.340, -0.015), (1.405, -0.029), (1.425, -0.031), (1.452, -0.034))
+#: Round 4 (tech F1): the lateral strips' twisted quads are split down to the plate row at this height.
+PLATE_SPLIT_MIN_Z = 1.17
 #: Thickness of the plate's lateral edges (fraction of the row thickness; round 1, T2: was 0.4).
 BACK_EDGE_TAPER = 0.7
 
@@ -928,6 +937,15 @@ def _h2_slab(rig: Rig, rows, gcols, n_cres: int) -> mk.Mesh:
     # front strip folds sharply and its split diagonals would draw as a fan of outlines)
     _faces, kinds = slab_faces(U, V)
     only = [k[0] == "front" and Fo[0, k[2] + 1, 2] >= CURTAIN_TUCK_MIN_Z for k in kinds]
+    # round 4 (tech F1): ... and every face of the plate's lateral strips (the outer and inner faces of the
+    # first / last column and the lateral faces) from the crescent rows into the plate (row z >= PLATE_SPLIT_MIN_Z),
+    # where the crescent turns into the plate and those quads twist by up to 105 degrees: a twisted lateral quad
+    # hid a 1.4 mm piece of the back hair's outline at the shoulder (az 120 / 240).
+    for i, k in enumerate(kinds):
+        if k[0] == "front" or k[0] == "back" and k[1] in (0, U - 2) or k[0] in ("u0", "u1"):
+            v = k[2] if k[0] in ("front", "back") else k[1]
+            if Fo[0, v + 1, 2] >= PLATE_SPLIT_MIN_Z and Fo[0, v, 2] < CURTAIN_TUCK_MIN_Z:
+                only[i] = True
     return mk.split_twisted(mesh, TWIST_SPLIT_DEG, only=only)
 
 
