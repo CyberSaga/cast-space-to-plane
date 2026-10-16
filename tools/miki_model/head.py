@@ -133,6 +133,9 @@ R2_RIG = {
         (1.257, 0.016, -0.073, None),
         (1.255, 0.000, -0.070, None),
     ),
+    # F4: a thinner lid band (relief 1.8 -> 1.4 mm; still over the iris, 1.0) reads less like a visor in
+    # profile
+    "lid_band_relief": 0.0014,
     # F8: a rounded almond under the flat lid, both corners closing just under the lid line
     "sclera_lower": ((0.019, 1.3480), (0.023, 1.3350), (0.030, 1.3262), (0.040, 1.3232), (0.050, 1.3248),
                      (0.057, 1.3320), (0.0612, 1.3490)),
