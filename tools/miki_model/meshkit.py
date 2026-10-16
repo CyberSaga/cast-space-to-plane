@@ -1244,6 +1244,22 @@ def ridge_band(border_a, border_b, normals, height: float, periodic: bool = True
 
 # --- additions by headhair r1 ---
 
+#: Relative height below which a quad counts as planar in :func:`_below_fan` (see there).
+PLANAR_REL = 1e-9
+
+
+def _below_fan(a, b, c, d) -> bool:
+    """True iff quad corner ``d`` lies below the plane of triangle ``(a, b, c)`` (seen from outside), so the
+    fan diagonal ``a``-``c`` is the quad's ridge.  A (near-)planar quad, ``|n . (d - a)| <= PLANAR_REL |n| |d - a|``,
+    is not below: its sign there is rounding noise that the BLAS kernel picks (a Haswell and an AVX-512 build
+    rotate different faces), and either diagonal gives the same surface, so keeping the given order makes the
+    generated files the same on every build."""
+    n = np.cross(b - a, c - a)
+    w = d - a
+    h = float(n @ w)
+    return h < 0.0 and abs(h) > PLANAR_REL * float(np.linalg.norm(n)) * float(np.linalg.norm(w))
+
+
 def inscribed_fan(mesh: Mesh) -> Mesh:
     """``mesh`` with every quad's vertex order rotated so that castplane's fan diagonal (first to third
     vertex) is the quad's *valley* diagonal (the fold bends inward, seen from outside).  On a convex surface
@@ -1256,9 +1272,7 @@ def inscribed_fan(mesh: Mesh) -> Mesh:
     for f in mesh.faces:
         f = list(f)
         if len(f) == 4:
-            a, b, c, d = (V[i] for i in f)
-            n = np.cross(b - a, c - a)
-            if float(n @ (d - a)) < 0.0:          # d below triangle (a, b, c): a-c is the ridge diagonal
+            if _below_fan(*(V[i] for i in f)):    # d below triangle (a, b, c): a-c is the ridge diagonal
                 f = f[1:] + f[:1]
         faces.append(f)
     return Mesh(V.copy(), faces, mesh.groups)
@@ -1278,9 +1292,7 @@ def fan_fold(mesh: Mesh, ridge) -> Mesh:
     for k, f in enumerate(mesh.faces):
         f = list(f)
         if len(f) == 4:
-            a, b, c, d = (V[i] for i in f)
-            n = np.cross(b - a, c - a)
-            is_ridge = float(n @ (d - a)) < 0.0   # d below triangle (a, b, c): a-c is the ridge diagonal
+            is_ridge = _below_fan(*(V[i] for i in f))   # d below triangle (a, b, c): a-c is the ridge diagonal
             if is_ridge != bool(ridge[k]):
                 f = f[1:] + f[:1]
         faces.append(f)
