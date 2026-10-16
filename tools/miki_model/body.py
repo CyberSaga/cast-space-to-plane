@@ -57,6 +57,14 @@ COLLAR_EDGE_THICKNESS = 0.0030        # the 4 mm collar thins to this at its out
 STRIPE_FLOAT = 0.00025                 # decal bands float this far above the surface they decorate
 NECK_POINTS = 14
 RING_POINTS = 8                        # scarf ring (and its stripes) section points
+#: Review r2 (F11, frame-001 / the user's drawing): the ring is a prominent band about as wide as the scarf
+#: there and taller than it is wide, with two clearly separate 4 mm stripes.  These replace the rig's
+#: ``ring_size`` (0.036, 0.016, 0.024), ``ring_center`` z 1.072, ``ring_stripe_z`` (1.068, 1.076) and
+#: ``ring_stripe_height`` 0.003 (requested rig change: adopt these values there and drop the constants).
+RING_SIZE = (0.034, 0.016, 0.032)      # x, y, z: from z 1.054 to 1.086
+RING_CENTER_Z = 1.070
+RING_STRIPE_Z = (1.064, 1.074)         # stripe centres
+RING_STRIPE_HEIGHT = 0.004
 BIB_COLUMNS = 13
 BIB_SINK = 0.002                       # the bib's top row lies this far inside the neck surface
 BIB_UNDER_COLLAR = 0.009               # the bib reaches this far under the collar inner edge (6 mm left blouse
@@ -376,6 +384,16 @@ def _collar_edges(rig: Rig, n1=2, n2=5, n3=6):
     return outer, inn, lift
 
 
+def _fold_band(band: mk.Mesh) -> mk.Mesh:
+    """A :func:`meshkit.ridge_band` with its two top quads per step folded on their ridge diagonal and its
+    bottom quad on the valley diagonal (review r2, F4): where the collar top twists along a long step (the
+    back flap's side edge, 34 mm per step, and the shoulder turn) the bottom quad's fan otherwise bulged up
+    through the 0.8 mm ridge and its back face showed (magenta) at the flap's lower side corner."""
+    U = band.n_vertices // 3
+    ridge = [not (len(f) == 4 and all(i < U or i >= 2 * U for i in f)) for f in band.faces]
+    return mk.fan_fold(band, ridge)
+
+
 def _collar(rig: Rig, torso: Torso):
     """The collar slab (underside on the blouse + gap, 4 mm thick, thinner at the edges), the floating pink
     stripe band, and the left inner edge (for the bib)."""
@@ -455,12 +473,15 @@ def _collar(rig: Rig, torso: Torso):
     for g, u in zip(col.groups, face_col):
         on_lapel = lapel[u] and lapel[u + 1]
         groups.append(1 if (g == 1 or not on_lapel) else 2)
-    col = col.with_groups(groups)
+    # review r2 (F5): the top quads' fan diagonals were ridges; seen from the side their facets bulged over
+    # the inner edge's silhouette at the nape and chopped it into dashes.  Top faces fold on the valley
+    # diagonal (every facet inside its edges), the underside on the ridge (away from the top: no crossing)
+    col = mk.fan_fold(col, [g == 2 for g in col.groups]).with_groups(groups)
     top = sides["front"]
     nrm = _grid_normals(top, TORSO_CENTRE)[:, 1:3]
     base = top[:, 1:3] + STRIPE_FLOAT * nrm
-    stripe = mk.ridge_band(base[:, 0], base[:, 1], 0.5 * (nrm[:, 0] + nrm[:, 1]), rig.collar_stripe_relief,
-                           periodic=False)
+    stripe = _fold_band(mk.ridge_band(base[:, 0], base[:, 1], 0.5 * (nrm[:, 0] + nrm[:, 1]),
+                                      rig.collar_stripe_relief, periodic=False))
     left_inner = np.array([torso.onto(p, 0.0) for p in _collar_edges(rig)[1]])
     return col, stripe, left_inner
 
@@ -511,16 +532,16 @@ def _ribbon(rig: Rig, torso: Torso, side: int):
 
 
 def _ring(rig: Rig):
-    c = np.array(rig.ring_center)
-    w, d, h = rig.ring_size
+    c = np.array([rig.ring_center[0], rig.ring_center[1], RING_CENTER_Z])
+    w, d, h = RING_SIZE
     r = rig.ring_corner_radius
     n = RING_POINTS
     zs = (c[2] - (0.5 * h - r), c[2] + (0.5 * h - r))
     rings = [mk.rounded_rect_ring(w, d, r, n, (c[0], c[1], z)) for z in zs]
     box = mk.loft(rings, ("dome", r, 1), ("dome", r, 1))
     stripes = []
-    for zc in rig.ring_stripe_z:
-        hh = 0.5 * rig.ring_stripe_height
+    for zc in RING_STRIPE_Z:
+        hh = 0.5 * RING_STRIPE_HEIGHT
         g = STRIPE_FLOAT
         lo, hi = (mk.rounded_rect_ring(w + 2 * g, d + 2 * g, r + g, n, (c[0], c[1], zc + dz)) for dz in (-hh, hh))
         out = 0.5 * (lo + hi) - np.array([c[0], c[1], zc])

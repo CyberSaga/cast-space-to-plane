@@ -34,9 +34,10 @@ SIDES = (1, -1)
 # Module constants (numbers the rig does not carry; see the report for the rig changes they suggest)
 # ---------------------------------------------------------------------------------------------------
 SLEEVE_POINTS = 10                 # sleeve section polygon (the cuff stripes reuse it)
-SLEEVE_START = 0.025               # the round sleeve cap is centred this far down the upper arm: centred on
+SLEEVE_START = 0.010               # the round sleeve cap is centred this far down the upper arm: centred on
 #                                    the joint its 0.048 radius would rise 2 cm above the shoulder and through
-#                                    the collar (O5); here its top meets the blouse's shoulder at the acromion
+#                                    the collar (O5); r1 had 0.025, where its top only grazed the blouse's
+#                                    shoulder and the arc over the sleeve top drew dashed in side views (r2 F5)
 STRIPE_FLOAT = 0.00025             # cuff stripes float this far above the sleeve
 LEG_POINTS = 10
 SOCK_POINTS = 12
@@ -50,8 +51,9 @@ SHOE_OPENING = (0.045, 0.052, 0.041, 0.0345)   # opening centre u, forward / bac
 SHOE_TOPLINE_FRONT_Z = 0.063       # throat height (back / sides: rig.shoe_topline_z)
 SHOE_OPENING_FLOOR = 0.030
 STRAP_FLOAT = 0.0009               # the strap's chords cross the faceted upper: float it a little higher
+STRAP_CLEARANCE = 0.0008           # ... and every chord of its borders at least this far above the upper (r2 F5)
 SHOE_STRAP_U = 0.122                # saddle strap centre from the heel back (spec: y ~ -0.07)
-SHOE_STRAP_POINTS = 11             # points along each strap border (7 sagged ~1.4 mm under the upper: dashed lines)
+SHOE_STRAP_POINTS = 17             # points along each strap border (r2 F5: 11 sagged up to 0.9 mm under the upper)
 #: Hand sections (review r1, T8): the wrist is narrower than the heel of the palm (a ~7 mm step each side
 #: within 15 mm) and the mitten tapers toward the fingertips (distances before scaling to hand_length).
 HAND_WRIST = (0.0215, 0.0135)      # half-width, half-thickness at the wrist (and inside the sleeve)
@@ -245,7 +247,14 @@ def _shoe(rig: Rig, side: int):
     out = mid - np.array([su, 0.0, 0.0])
     nrm *= np.sign(np.einsum("ij,ij->i", nrm, out))[:, None]
     nrm /= np.linalg.norm(nrm, axis=1)[:, None]
-    strap = mk.ridge_band(A_ + STRAP_FLOAT * nrm, B_ + STRAP_FLOAT * nrm, nrm, rig.strap_relief, periodic=False)
+    # review r2 (F5): the straight chords between the resampled border points sagged up to 0.9 mm under the
+    # faceted upper and the hidden-line pass chopped both borders into dashes; lift the stations until every
+    # chord clears the upper by STRAP_CLEARANCE, and fold the band's quads apart (top ridge / bottom valley)
+    lift = STRAP_FLOAT + mk.lift_band_borders(shoe, A_ + STRAP_FLOAT * nrm, B_ + STRAP_FLOAT * nrm, nrm,
+                                              STRAP_CLEARANCE)
+    strap = mk.ridge_band(A_ + lift[:, None] * nrm, B_ + lift[:, None] * nrm, nrm, rig.strap_relief, periodic=False)
+    U = strap.n_vertices // 3
+    strap = mk.fan_fold(strap, [not (len(f) == 4 and all(i < U or i >= 2 * U for i in f)) for f in strap.faces])
     # place: local (u, v, z) -> world; the axis passes under the ankle centre at u = rig.shoe_ankle_u
     f = rig.foot_dir(side)
     perp = np.array([-f[1], f[0], 0.0])                    # det [f, perp, z] = +1 (the shoe is symmetric in v)
