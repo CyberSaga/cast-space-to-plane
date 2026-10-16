@@ -20,6 +20,7 @@ import * as THREE from "three";
 import { LAYER_IDS, compose, dumps, load_scene, load_scene_text, project_scene, shadow_geometry, write_svg } from "castplane";
 import type { CameraRecord, GeometryDocument, Scene, StageA, Vec2 } from "castplane";
 
+import { display_colours, display_colours_text } from "./colours.js";
 import { EXAMPLES } from "./examples.js";
 import { camera_block_text, json_blob, ordered_layers, scene_blob, svg_blob } from "./download.js";
 import { QUICK_EQUATIONS } from "./equation.js";
@@ -63,6 +64,8 @@ interface FrameRecord {
 interface State {
   scene: Scene | null;
   sceneName: string;
+  /** The loaded raw scene's display colours by object id (`colours.ts`; the validated scene drops the key, §2.0). */
+  colours: Map<string, number>;
   A: StageA | null;
   /** The plane-mode session of the loaded scene (M10, §5.7.7): the rig, undo, pivot, readouts. */
   plane: PlaneSession | null;
@@ -88,6 +91,7 @@ interface State {
 const state: State = {
   scene: null,
   sceneName: "",
+  colours: new Map(),
   A: null,
   plane: null,
   layersChecked: new Set(TOGGLES.layers),
@@ -143,7 +147,9 @@ function show_error(message: string | null): void {
 }
 
 // ---------------------------------------------------------------------------- loading
-function load(name: string, make: () => Scene): boolean {
+/** Load a scene: `make` validates it; `colours` are the display colours of the same raw data
+ * (`colours.ts::display_colours`), read by the caller because the validated scene does not carry them (§2.0). */
+function load(name: string, make: () => Scene, colours: Map<string, number>): boolean {
   let scene: Scene;
   let A: StageA;
   let stage_a_ms: number;
@@ -159,6 +165,7 @@ function load(name: string, make: () => Scene): boolean {
   show_error(null);
   state.scene = scene;
   state.sceneName = name;
+  state.colours = colours;
   state.A = A;
   state.timings.stage_a_ms = stage_a_ms;
   // §5.7.7: the rig of the load rule (scene-centre pivot); the scene camera itself is rendered until the first change
@@ -175,8 +182,8 @@ function load(name: string, make: () => Scene): boolean {
   state.rec = null;
   state.full_svg_length = 0;
   state.frames = [];
-  view.replace_group(() => build_scene3d(scene, A));
-  observer?.set_scene(scene, A);
+  view.replace_group(() => build_scene3d(scene, A, colours));
+  observer?.set_scene(scene, A, colours);
   // the layer, "Hidden lines" and "3D view" checkboxes are page-level (toggles.ts): the scene's output.layers and
   // output.hidden_lines do not reset them; the hidden style still comes from the scene
   hiddenStyle.value = scene.output.hidden_style ?? "dashed";
@@ -188,7 +195,7 @@ function load(name: string, make: () => Scene): boolean {
 }
 
 function load_text(name: string, text: string): boolean {
-  const ok = load(name, () => load_scene_text(text));
+  const ok = load(name, () => load_scene_text(text), display_colours_text(text));
   if (ok) examplesSelect.value = "";
   return ok;
 }
@@ -208,7 +215,7 @@ function load_file(file: File): void {
 fill_examples(examplesSelect, EXAMPLES.map((e) => e.name));
 examplesSelect.addEventListener("change", () => {
   const ex = EXAMPLES.find((e) => e.name === examplesSelect.value);
-  if (ex !== undefined) load(ex.name, () => load_scene(ex.data));
+  if (ex !== undefined) load(ex.name, () => load_scene(ex.data), display_colours(ex.data));
 });
 fileInput.addEventListener("change", () => {
   const f = fileInput.files?.[0];
@@ -343,7 +350,10 @@ $<HTMLButtonElement>("dl-json").addEventListener("click", () => {
   if (state.doc !== null) save(json_blob(state.doc, state.sceneName));
 });
 $<HTMLButtonElement>("dl-scene").addEventListener("click", () => {
-  if (state.scene !== null && state.plane !== null) save(scene_blob(state.scene, state.plane.block(), state.sceneName, hiddenLines.checked, hidden_style()));
+  // the loaded scene's display colours go back into the file (the core ignores them, §2.0)
+  if (state.scene !== null && state.plane !== null) {
+    save(scene_blob(state.scene, state.plane.block(), state.sceneName, hiddenLines.checked, hidden_style(), state.colours));
+  }
 });
 $<HTMLButtonElement>("copy-camera").addEventListener("click", () => {
   if (state.scene === null || state.plane === null) return;
@@ -480,7 +490,7 @@ function set_observer(on: boolean): void {
   if (on && observer === null) {
     observer = new ObserverPane(ui.observerCanvas, ui.observerLabels);
     observer.attach_input(ui.observerPane, request_observer_render, handle_input);
-    if (state.scene !== null && state.A !== null) observer.set_scene(state.scene, state.A);
+    if (state.scene !== null && state.A !== null) observer.set_scene(state.scene, state.A, state.colours);
   }
   layout();
   sync_controls();
@@ -568,7 +578,7 @@ function frame(): void {
     const ex = EXAMPLES.find((e) => e.name === name);
     if (ex === undefined) throw new Error(`unknown example ${name}`);
     examplesSelect.value = name;
-    return load(name, () => load_scene(ex.data)); // false: the error panel shows why, the previous scene stays
+    return load(name, () => load_scene(ex.data), display_colours(ex.data)); // false: the error panel shows why, the previous scene stays
   },
   load_text,
   get frames() { return state.frames.slice(); },
@@ -696,5 +706,5 @@ layout();
 const first = EXAMPLES.find((e) => e.name === "basic") ?? EXAMPLES[0];
 if (first !== undefined) {
   examplesSelect.value = first.name;
-  load(first.name, () => load_scene(first.data));
+  load(first.name, () => load_scene(first.data), display_colours(first.data));
 }
