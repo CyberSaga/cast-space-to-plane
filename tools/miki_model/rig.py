@@ -28,10 +28,14 @@ import numpy as np
 
 __all__ = ["Rig", "DEFAULT_RIG", "SUN_TOWARDS"]
 
-#: Direction towards the scene's sun (BRIEF §6; normalised by the scene writer).  The single source for the
-#: scene light (``export``), the shaded previews and the lit / unlit classification of slab rims and decal
-#: walls (``head``, ``hair``), which keeps the construction rays per object under castplane's cap of 64.
-SUN_TOWARDS = (-0.45, -0.55, 0.70)
+#: Direction towards the scene's sun (normalised by the scene writer).  The single source for the scene
+#: light (``export``), the shaded previews and the lit / unlit classification of slab rims and decal walls
+#: (``head``, ``hair``), which keeps the construction rays per object under castplane's cap of 64.
+#: Review round 1 (F7 / T10): the same azimuth as before (upper left front of the scene camera), elevation
+#: 58 deg (was 44.6): the ground shadow shortens to ~0.6 x her height and stays inside the scene camera's
+#: frame, receding to her left-back.  (A sun from her right side, elevation 56 deg, threw the shadow parallel
+#: to the picture plane and out of the frame.)
+SUN_TOWARDS = (-0.45, -0.55, 1.14)
 
 
 def _tuplify(value):
@@ -268,7 +272,7 @@ class Rig:
     bangs_curl: tuple = (0.004, 0.002)          # the bottom 4 mm curl 2 mm toward the forehead
     bangs_strips: int = 8                       # r1 F15: 8 irregular strips (7 strand lines, hair.BANGS_STRIP_WEIGHTS)
     # -- C.3 sidelocks (H4) ---------------------------------------------------------------------------------
-    sidelock_width: float = 0.034               # r1 F1: one fuller lens per side (edge table spans 0.028-0.034)
+    sidelock_width: float = 0.034               # r1 F1: one fuller lens per side (edge table chords 0.035-0.046)
     sidelock_thickness: float = 0.012
     #: Edge positions (centre of the thickness) for her left: ``(z, x_in, y_in, x_out, y_out)``; the last row
     #: is the straight horizontal cut.

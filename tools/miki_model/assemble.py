@@ -30,7 +30,7 @@ __all__ = ["OBJECTS", "OBJECT_IDS", "MATERIALS", "REGION_OBJECTS", "MODULES", "A
 #: The castplane objects in their fixed order (= index in the web UI's 3D palette) with what each holds.
 OBJECTS = (
     ("hair", "dome H1, bangs H3, stray strand H5"),
-    ("head", "head + face skin, neck + decollete bib"),
+    ("head", "head + face skin"),
     ("eyes", "sclera, iris, pupil, highlight"),
     ("headband", "band, pink centre ridge"),
     ("scarf", "ribbons, tips"),
@@ -46,6 +46,7 @@ OBJECTS = (
     ("skirt", "skirt, under-skirt block"),
     ("shoes", "shoes x2"),
     ("ring", "scarf ring, its two pink stripes"),
+    ("neck", "neck + decollete bib"),
 )
 OBJECT_IDS = tuple(oid for oid, _ in OBJECTS)
 
@@ -70,11 +71,13 @@ MATERIALS = {
 #: sidelocks go to ``sidelocks``, the back hair to ``back_hair``, the scarf ring to ``ring``).  ``None``:
 #: the region has no default and every part must set ``obj`` (``arms`` / ``hands`` go to ``arm_l`` or
 #: ``arm_r`` by side: one compact object per arm keeps the hidden-line pass from testing hand-to-hand
-#: image rectangles).
+#: image rectangles).  The neck and the bib are their own compact object (review round 1, appended so the
+#: other indices keep their palette colours): the head's image rectangle then ends at the chin and the
+#: blouse's triangles are not tested by the collar / neck samples twice.
 REGION_OBJECTS = {
     "head": "head", "eyes": "eyes", "face_marks": "face_marks",
     "hair": "hair", "headband": "headband",
-    "neck": "head", "torso": "blouse", "collar": "collar", "scarf": "scarf", "skirt": "skirt",
+    "neck": "neck", "torso": "blouse", "collar": "collar", "scarf": "scarf", "skirt": "skirt",
     "arms": None, "hands": None, "legs": "legs", "socks": "socks", "shoes": "shoes",
 }
 

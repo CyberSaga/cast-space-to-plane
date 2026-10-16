@@ -28,8 +28,8 @@ import os
 import numpy as np
 
 from . import meshkit as mk
-from .assemble import MATERIALS, SUN_TOWARDS
-from .rig import Rig
+from .assemble import MATERIALS
+from .rig import SUN_TOWARDS, Rig
 
 __all__ = ["PRESETS", "BODY_PRESETS", "HEAD_PRESETS", "camera_for", "render_shaded", "shaded_views", "with_context",
            "contact_sheet", "side_by_side", "write_shaded_previews", "castplane_views", "write_line_previews"]
