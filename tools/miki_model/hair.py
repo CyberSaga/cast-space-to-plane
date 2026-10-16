@@ -44,7 +44,7 @@ import numpy as np
 from . import body as _body
 from . import mannequin as _mannequin
 from . import meshkit as mk
-from .head import SUN, SkinSurface, head_section, oriented, skin_surface, slab, slab_faces
+from .head import SUN, SkinSurface, adopt_r2, head_section, oriented, skin_surface, slab, slab_faces
 from .meshkit import Part
 from .rig import Rig
 
@@ -961,6 +961,7 @@ def _rims_by_light(F, B, front, g_back: int, g_rim: int) -> dict:
 
 def build(rig: Rig):
     """Parts of :data:`REGIONS` for ``rig``."""
+    rig = adopt_r2(rig)
     dome = _dome(rig)
     band, ridge = _headband(rig, dome)
     bangs = _bangs(rig, dome)
