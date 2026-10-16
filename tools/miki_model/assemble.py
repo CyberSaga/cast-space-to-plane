@@ -1,4 +1,4 @@
-"""Parts -> the 17 castplane mesh objects of the Miki model (fixed order), with validation and statistics.
+"""Parts -> the 18 castplane mesh objects of the Miki model (fixed order), with validation and statistics.
 
 Flow: :func:`build_parts` asks each part module (``head``, ``hair``, ``body``, ``limbs``) for its parts;
 a module whose ``build(rig)`` returns ``None`` is replaced by the mannequin parts of its ``REGIONS``.

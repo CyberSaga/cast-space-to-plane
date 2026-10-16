@@ -49,8 +49,6 @@ TORSO_RING_POINTS = 18                 # points per blouse section
 TORSO_SKIP_ROWS = (0.990,)             # rig rows the loft leaves out (linear between their neighbours)
 TORSO_NECK_INSET = 0.004               # the blouse's top ring sits this far inside the neck
 COLLAR_END_WIDTH = 0.004               # each lapel ends at the V tip with this width (the halves don't touch)
-COLLAR_STRIPE_SMOOTHING = 0            # Laplacian passes on the stripe border rows (shoulder turn)
-COLLAR_SMOOTH_ABOVE_Z = 1.10           # ... only where the outer edge is above this (flap top, shoulder)
 COLLAR_LAPEL_Y = -0.03                 # collar columns in front of this are the lapels (feature-line edges)
 COLLAR_SHOULDER_ROUNDING = 12         # moving-average half window (samples of 400) rounding the O3-O5 turn
 COLLAR_EDGE_THICKNESS = 0.0030        # the 4 mm collar thins to this at its outer / inner edges
@@ -74,12 +72,6 @@ NECK_TILT_DEG = 8.0                    # the axis leans forward: the top is in f
 NECK_RING_Z = (1.180, 1.215, 1.236, 1.285)   # neck sections (ends inside torso / head; few: hidden-line cost)
 NECK_BLOUSE_INSET = 0.003              # the blouse's neck-root row stays this far inside the neck
 NECK_FIT = 0.85                        # ... and its ring within this ellipse measure of the neck (~2 mm in)
-#: Scarf ribbon start (review r3, F7): ``rig.scarf_path`` S0 (0.120, -0.052, 1.176) lies on the collar's outer
-#: edge at O6 and its 45 mm wide end stuck 17 mm out past the collar onto the sleeve cap as a square yellow flap.
-#: The ribbon starts here instead, inside the collar outline, and SCARF_START_WIDTH wide, so it stays under the
-#: lapel at the shoulder and shows only below the lapel edge, running into the V (ref2, ref3, frame-001).
-SCARF_START = ((0.092, -0.064, 1.172), (0.098, -0.070, 1.150))
-SCARF_START_WIDTH = 0.030
 #: A point inside the chest (the collar slab's and its stripe's normals point away from it).
 TORSO_CENTRE = (0.0, 0.012, 1.12)
 
@@ -428,19 +420,6 @@ def _collar(rig: Rig, torso: Torso, under: mk.Mesh | None = None):
         k = min(1.0, 0.62 * w / reach)
         Q1[j] = outer[j] + k * s_out * off[j]
         Q2[j] = outer[j] + k * s_in * off[j]
-    # where the outline turns toward the neck over the shoulder (O3 - O5) its radius is below the 18 mm
-    # offset and the offset rows fold: smooth them along the collar (the square O2 corners stay fixed)
-    corner = np.array(rig.collar_outer[1])
-    corners = [j for j in range(U) if np.linalg.norm(np.abs(outer[j]) - np.abs(corner)) < 1e-6]
-    fixed = {0, U - 1} | {j + d for j in corners for d in (-1, 0, 1)}
-    fixed |= {j for j in range(U) if outer[j][2] < COLLAR_SMOOTH_ABOVE_Z}
-    for Q in (Q1, Q2):
-        for _ in range(COLLAR_STRIPE_SMOOTHING):
-            S = Q.copy()
-            for j in range(1, U - 1):
-                if j not in fixed:
-                    S[j] = 0.5 * Q[j] + 0.25 * (Q[j - 1] + Q[j + 1])
-            Q[:] = S
     P = np.zeros((U, len(vfrac), 3))
     G = np.zeros((U, len(vfrac)))
     for j in range(U):
@@ -559,11 +538,11 @@ def _dickey(rig: Rig, torso: Torso):
 # ---------------------------------------------------------------------------------------------------
 
 def _ribbon(rig: Rig, torso: Torso, side: int):
-    S = np.array(tuple(SCARF_START) + tuple(rig.scarf_path[len(SCARF_START):])) * [side, 1.0, 1.0]
+    S = np.array(rig.scarf_path) * [side, 1.0, 1.0]
     n = len(S)
     s = np.linspace(0.0, 1.0, n)
     w = np.interp(s, [0.0, 0.8, 1.0], [rig.scarf_width[0], rig.scarf_width[1], rig.scarf_width[1]])
-    w[0] = SCARF_START_WIDTH
+    w[0] = rig.scarf_start_width                        # review r3 (F7): stays under the lapel
     th = np.interp(s, [0.0, 0.8, 1.0], [rig.scarf_thickness[0], rig.scarf_thickness[1], rig.scarf_thickness[1]])
     th[0] = rig.scarf_start_thickness
     for k, dz in enumerate(rig.scarf_tuck_z):            # S0, S1 lowered under the lifted lapel

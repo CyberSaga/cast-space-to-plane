@@ -65,30 +65,6 @@ def _side_name(side: int) -> str:
     return "l" if side > 0 else "r"
 
 
-#: Round 3: rig values this module uses in place of ``rig.py``'s (the review's rig changes; ``rig.py`` is
-#: shared, so they live here until they are moved there).
-#: F5: the sidelock's inner edge comes in and forward over the cheek (``rig.sidelock_rows`` rows
-#: ``z -> (x_in, y_in)``), 3 mm off the skin (head.head_section) at 1.40 ... 1.342, so from the front it covers the
-#: cheek outline (PDF p.21 item 1; the lock's edge was 3 mm outside it), then hangs straight past the cheek; in
-#: profile ~37 mm of face still shows in front of it.
-SIDELOCK_INNER_PATCH = {1.370: (0.0788, -0.045), 1.342: (0.0745, -0.045), 1.310: (0.0745, -0.045),
-                        1.270: (0.0750, -0.041)}
-#: Tech F1 / F10: the curtain comes out of the dome at a steeper angle (its top row 4.5 mm inside the dome,
-#: 1 mm outside it at 1.405) while the dome tucks inside the curtain (:data:`DOME_BACK_INSET`), so the two
-#: outlines cross once (~1.445) instead of running within 1 mm of each other (a dashed crown outline).
-CURTAIN_TOP_ROWS = ((1.452, -0.0045, 0.018), (1.405, 0.0010, 0.020))
-
-
-@functools.lru_cache(maxsize=8)
-def hair_rig(rig: Rig) -> Rig:
-    """``rig`` with :data:`SIDELOCK_INNER_PATCH` and :data:`CURTAIN_TOP_ROWS` applied (idempotent)."""
-    rows = []
-    for z, xi, yi, xo, yo in rig.sidelock_rows:
-        xi, yi = SIDELOCK_INNER_PATCH.get(round(z, 4), (xi, yi))
-        rows.append((z, xi, yi, xo, yo))
-    return rig.replace(sidelock_rows=tuple(rows), curtain_top_rows=CURTAIN_TOP_ROWS)
-
-
 def _smoothstep(e0: float, e1: float, x):
     t = np.clip((np.asarray(x, dtype=np.float64) - e0) / (e1 - e0), 0.0, 1.0)
     return t * t * (3.0 - 2.0 * t)
@@ -598,8 +574,6 @@ SIDELOCK_ROOT_INSET = 0.005
 SIDELOCK_PROFILE = ((1.0, True), (0.6, True), (0.0, True), (-0.6, True), (-1.0, True), (0.0, False))
 SIDELOCK_FRONT_SHARE = 0.58
 SIDELOCK_FULLNESS = 0.8
-#: Catmull-Rom rows inserted after these table rows (round 2, F15: none, the table has the shoulder-bend rows)
-SIDELOCK_INSERT_AFTER = ()
 SIDELOCK_ROOT_THICKNESS = 0.5       # the root row is this fraction of the lock thickness (it hides in the dome)
 
 
@@ -617,25 +591,11 @@ def _sidelock_root_row(rig: Rig):
     return tuple(out)
 
 
-def _cr_insert(P, after):
-    """Rows ``P`` with a Catmull-Rom midpoint inserted after each index in ``after`` (sorted)."""
-    P = np.asarray(P, dtype=np.float64)
-    Q = np.concatenate([2 * P[:1] - P[1:2], P, 2 * P[-1:] - P[-2:-1]])
-    out = []
-    for i in range(len(P)):
-        out.append(P[i])
-        if i in after:
-            p0, p1, p2, p3 = Q[i], Q[i + 1], Q[i + 2], Q[i + 3]
-            out.append(0.5 * p1 + 0.5 * p2 + 0.125 * (p1 - p0) - 0.125 * (p3 - p2))
-    return np.array(out)
-
-
 def _sidelock(rig: Rig, side: int) -> mk.Mesh:
     rows = np.array((_sidelock_root_row(rig),) + tuple(rig.sidelock_rows))
     n_root = 1
-    ins = [n_root + k for k in SIDELOCK_INSERT_AFTER]
-    inner = _cr_insert(np.stack([rows[:, 1], rows[:, 2], rows[:, 0]], axis=1), ins)
-    outer = _cr_insert(np.stack([rows[:, 3], rows[:, 4], rows[:, 0]], axis=1), ins)
+    inner = np.stack([rows[:, 1], rows[:, 2], rows[:, 0]], axis=1)
+    outer = np.stack([rows[:, 3], rows[:, 4], rows[:, 0]], axis=1)
     k = len(inner)
     mid = 0.5 * (inner + outer)
     d = outer - inner
@@ -721,30 +681,26 @@ def _strand(rig: Rig, lock_l: mk.Mesh) -> mk.Mesh:
 BACK_GROOVE_DEPTH = 0.002
 BACK_STRAND_LINES = True            # the grooves are also group boundaries (strand lines on the back)
 BACK_BOTTOM_ROW_Z = 0.885           # last straight row above the clumps
-BACK_PLATE_ROWS = (1.180, 1.100, 1.010)   # 1.100: the spec row over the collar flap (merge fit)
+BACK_PLATE_ROWS = (1.180, 1.100)   # 1.100: the spec row over the collar flap (merge fit); round 3 (perf F3):
+#                                   the 1.010 row dropped (the plate hangs straight from 1.10 to 0.885)
 BACK_CURVE = 0.025                  # the plate curves forward by this at its lateral edges (s = +-1)
-#: Round 1 (T2): a transition row between the last crescent row (1.215) and the plate (1.18), so the
-#: curtain's outer edge and the plate's lateral edge form one continuous line.
-BACK_TRANSITION_Z = None
 #: Round 1 (F8 / T4): the hem.  Clumps of these relative widths (her right to her left) over the notch-row
-#: half-width HEM_HALF_WIDTH; each tip is a CLUMP_TIP_FLAT wide blunt end (0: a single tip vertex) on a
-#: convex-down hem (z rig.clump_tip_z at the middle, HEM_TIP_OUTER_Z at the outer clumps, quadratic in x);
+#: half-width HEM_HALF_WIDTH; each tip is a single vertex on a convex-down hem (z rig.clump_tip_z at the middle, HEM_TIP_OUTER_Z at the outer clumps, quadratic in x);
 #: the notches stand NOTCH_DEPTHS above the higher of their two tips; the lateral edges come in to
 #: EDGE_BOTTOM (x, z).  (The review asked for 3 mm blunt tips; a tip pair costs two H2 columns, ~0.04 s of
 #: the TS still frame for all five, so the tips are single vertices on shallow 25-35 degree slopes.)
 CLUMP_WEIGHTS = (0.9, 1.15, 1.0, 1.2, 0.85)
 HEM_HALF_WIDTH = 0.146             # round 2 (F12): the lateral edges taper in over the last 10 cm
 HEM_TIP_OUTER_Z = 0.842          # tip z of the outer clumps (the middle one: rig.clump_tip_z)
-CLUMP_TIP_FLAT = 0.0
 NOTCH_DEPTHS = (0.010, 0.014, 0.012, 0.009)
 EDGE_BOTTOM = (0.137, 0.851)
 #: Round 2 (F12): the plate's outer surface is this much prouder at the midline than at the lateral edges (a
 #: rounded cross-section; the thickness grows by it at the midline, quadratic in S).
 BACK_ROUND = 0.004
 #: Round 1 (T2): the column whose crescent point is at psi = +-90 degrees (the extreme-x vertex of every
-#: curtain row whose front edge comes forward past the side), and extra columns for a finer crescent.
+#: curtain row whose front edge comes forward past the side).  Round 3 (perf F3): no extra column at
+#: S = +-0.95 any more: the curtain's front edge now ends ~10-15 degrees past the side (CURTAIN_FRONT_Y).
 CRESCENT_SIDE_S = 0.90
-EXTRA_COLUMNS_S = (0.95,)
 #: Round 1 (F1): the curtain thins to CURTAIN_END_THICKNESS over the last CURTAIN_TAPER_DEG of its crescent
 #: (the end face is in the outer surface's group).
 CURTAIN_END_THICKNESS = 0.006
@@ -778,10 +734,7 @@ def _clump_columns(rig: Rig):
 
     pts = [(-EDGE_BOTTOM[0], EDGE_BOTTOM[1]), (EDGE_BOTTOM[0], EDGE_BOTTOM[1])]
     for xc in centres:
-        if CLUMP_TIP_FLAT > 0.0:
-            pts += [(xc - 0.5 * CLUMP_TIP_FLAT, tip_z(xc)), (xc + 0.5 * CLUMP_TIP_FLAT, tip_z(xc))]
-        else:
-            pts.append((xc, tip_z(xc)))
+        pts.append((xc, tip_z(xc)))
     notches = b[1:-1]
     depths = (NOTCH_DEPTHS + (NOTCH_DEPTHS[-1],) * len(notches))[:len(notches)]
     for k, xn in enumerate(notches):
@@ -792,8 +745,7 @@ def _clump_columns(rig: Rig):
     ks = np.array([p[0] / W for p in key])
     ks[0], ks[-1] = -1.0, 1.0
     S = list(ks)
-    for s in (CRESCENT_SIDE_S,) + tuple(EXTRA_COLUMNS_S):
-        S += [s, -s]
+    S += [CRESCENT_SIDE_S, -CRESCENT_SIDE_S]
     S = np.array(sorted(set(round(float(s), 9) for s in S)))
     bx = np.interp(S, ks, kx)                  # the extra columns keep their order between the key points
     bz = np.interp(bx, kx, kz)
@@ -932,11 +884,6 @@ def _back_hair(rig: Rig, dome: mk.Mesh) -> mk.Mesh:
         return (np.stack([x, y_out, zz], axis=1), np.stack([x, y_in, zz], axis=1))
 
     n_fixed = len(rows)
-    first_plate = plate_row(BACK_PLATE_ROWS[0])
-    last_cres = rows[-1]
-    if BACK_TRANSITION_Z is not None:
-        a = (last_cres[0][0, 2] - BACK_TRANSITION_Z) / (last_cres[0][0, 2] - BACK_PLATE_ROWS[0])
-        rows.append(tuple((1.0 - a) * lc + a * fp for lc, fp in zip(last_cres, first_plate)))
     rows += [plate_row(z) for z in BACK_PLATE_ROWS + (BACK_BOTTOM_ROW_Z,)]
     rows.append(plate_row(rig.clump_notch_z, bottom[:, 1], bottom[:, 0]))
     rows = _fit_back_rows(rig, rows, n_fixed)
@@ -1018,7 +965,6 @@ def _rims_by_light(F, B, front, g_back: int, g_rim: int) -> dict:
 
 def build(rig: Rig):
     """Parts of :data:`REGIONS` for ``rig``."""
-    rig = hair_rig(rig)
     dome = _dome(rig)
     band, ridge = _headband(rig, dome)
     bangs = _bangs(rig, dome)

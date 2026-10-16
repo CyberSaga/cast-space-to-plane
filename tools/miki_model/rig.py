@@ -22,11 +22,12 @@ from __future__ import annotations
 
 import dataclasses
 import math
+import warnings
 from dataclasses import dataclass
 
 import numpy as np
 
-__all__ = ["Rig", "DEFAULT_RIG", "SUN_TOWARDS"]
+__all__ = ["Rig", "DEFAULT_RIG", "SUN_TOWARDS", "SPEC_ONLY_FIELDS", "MANNEQUIN_ONLY_FIELDS"]
 
 #: Direction towards the scene's sun (normalised by the scene writer).  The single source for the scene
 #: light (``export``), the shaded previews and the lit / unlit classification of slab rims and decal walls
@@ -138,8 +139,9 @@ class Rig:
         (1.400, 0.083, -0.091, 0.115),     # widest skull, forehead front
         (1.380, 0.082, -0.090, 0.114),     # brow ridge (very soft)
         (1.360, 0.079, -0.085, 0.111),     # r2 F4: recessed eye area (was yf -0.087)
-        (1.342, 0.076, -0.082, 0.107),     # eyes; the bridge between them (r2 F4: was yf -0.085)
-        (1.333, 0.075, -0.083, 0.1037),    # r2 F4: the nose (head.NOSE_BUMP) stands out in front of it
+        (1.342, 0.076, -0.0835, 0.107),    # eyes; the bridge between them (r2 F4: was yf -0.085; r3 F4: the
+        #                                    recess eased back halfway, was -0.082)
+        (1.333, 0.075, -0.0845, 0.1037),   # r2 F4: the nose (head.NOSE_BUMP) stands out in front of it (r3: -0.083)
         (1.325, 0.074, -0.088, 0.100),     # cheeks fullest (just below the eyes)
         (1.312, 0.071, -0.093, 0.093),     # nose tip (the bump is local, width +-0.006)
         (1.300, 0.066, -0.085, 0.085),     # under the nose
@@ -147,8 +149,8 @@ class Rig:
         (1.279, 0.049, -0.0805, 0.067),    # r2 F2
         (1.272, 0.041, -0.078, 0.060),     # jaw narrows fast (r2 F2: was hw 0.046); below 1.296 the head
         #                                    is head.JAW_RINGS (jaw rim, underside into the neck, nape)
-        (1.262, 0.027, -0.076, None),      # r1 F12: a more forward chin (r2 F2: was hw 0.030)
-        (1.257, 0.016, -0.073, None),      # small rounded chin
+        (1.262, 0.021, -0.076, None),      # r1 F12: a more forward chin (r2 F2: was hw 0.030; r3 F3: 0.027)
+        (1.257, 0.008, -0.073, None),      # small rounded chin (r3 F3: narrower, was hw 0.016)
         (1.255, 0.000, -0.070, None),      # chin bottom
     )
     face_front_exponent: float = 3.0         # §B.1 front half of a head section: |x/hw|^3 + |(y-c)/(c-yf)|^3 = 1
@@ -186,19 +188,21 @@ class Rig:
     eye_inner_x: float = 0.019               # inner corner (chord width 0.042, inner-corner gap 0.038)
     eye_outer_x: float = 0.061
     eye_full_z: tuple = (1.323, 1.363)       # full eye height 0.040 if the lid were up
-    eye_lid_z: float = 1.351                 # visible opening: lower lid 1.323 up to this flat upper-lid line
+    eye_lid_z: float = 1.3465                # visible opening: lower lid 1.323 up to this flat upper-lid line
+    #                                          (r3 F2: pressed down 4.5 mm, was 1.351: half-lidded, PDF p.15)
     eye_lid_rise: float = 0.001              # the lid line rises this much from inner to outer end (~1.5 deg)
     iris_size: tuple = (0.026, 0.031)        # ellipse width x height
-    iris_center_z: float = 1.3375            # its top 2.5 mm is hidden under the lid band
-    pupil_size: tuple = (0.012, 0.016)
+    iris_center_z: float = 1.3375            # its top ~9 mm (29 %) is hidden under the lid band (r3 F2)
+    pupil_size: tuple = (0.011, 0.016)       # r3 F9: spec B.2 (was 0.012 wide)
     pupil_center_z: float = 1.337
     highlight_diameter: float = 0.005
     highlight_dx: float = -0.008             # highlight x = eye centre x + this on BOTH eyes (towards -x)
-    highlight_z: float = 1.3445
+    highlight_z: float = 1.341               # r3 F2: under the lowered lid (was 1.3445)
     #: Lower sclera boundary (x, z), inner corner -> outer corner; the upper boundary is the lid line.
     #: r2 F8: a rounded almond under the flat lid, both corners closing just under the lid line.
-    sclera_lower: tuple = ((0.019, 1.3480), (0.023, 1.3350), (0.030, 1.3262), (0.040, 1.3232), (0.050, 1.3248),
-                           (0.057, 1.3320), (0.0612, 1.3490))
+    #: r3 F2: the corners move down with the lid (were z 1.3480 / 1.3490).
+    sclera_lower: tuple = ((0.019, 1.3435), (0.023, 1.3350), (0.030, 1.3262), (0.040, 1.3232), (0.050, 1.3248),
+                           (0.057, 1.3320), (0.0612, 1.3445))
     eye_slab_depth: float = 0.0003           # every eye / mark slab's back face sits this far below the skin
     decal_skin_clearance: float = 0.0004     # decal front faces at least this far off the skin ...
     decal_layer_clearance: float = 0.0002    # ... and off the decal below them (stacked layers)
@@ -210,13 +214,13 @@ class Rig:
     lid_band_relief: float = 0.0014          # face_marks; overlaps the top of sclera and iris (r2 F4: was
     #                                          1.8 mm; thinner reads less like a visor in profile)
     lower_lid_relief: float = 0.0010         # face_marks
-    lid_band_inner: tuple = (0.018, 1.3496)  # upper-lid band (x, z) ends; thick, flat, dark
-    lid_band_outer: tuple = (0.062, 1.3520)
+    lid_band_inner: tuple = (0.018, 1.3451)  # upper-lid band (x, z) ends; thick, flat, dark (r3 F2: 4.5 mm
+    lid_band_outer: tuple = (0.062, 1.3475)  #   lower with the lid line, were z 1.3496 / 1.3520)
     lid_band_height: tuple = (0.0022, 0.0045)  # z height at the inner end, in the middle (r1 F11: heavier lid)
     lid_flick_length: float = 0.007          # downward lash flick at the outer end
     lid_flick_width: float = 0.002
     lid_flick_angle_deg: float = 60.0        # below horizontal, pointing down and outward
-    lid_flick_tip: tuple = (0.064, 1.343)    # (x, z)
+    lid_flick_tip: tuple = (0.0625, 1.3385)  # (x, z) (r3 F2 / F8: was (0.064, 1.343); on the front of the cheek)
     lower_lid_width: float = 0.001           # lower-lid mark: band along the outer 60 % of the lower sclera edge
     lower_lid_offset: float = 0.0004         # outside the sclera edge
     lower_lid_x: tuple = (0.036, 0.058)
@@ -224,9 +228,9 @@ class Rig:
     # =====================================================================================================
     # B.3 Brows, B.4 nose and mouth (object face_marks; nose in the skin mesh)
     # =====================================================================================================
-    brow_inner: tuple = (0.020, 1.366)       # (x, z); y -0.0874; 15 mm above the lid line
-    brow_mid: tuple = (0.039, 1.375)         # 1.5 mm of upward arch
-    brow_outer: tuple = (0.058, 1.381)       # y -0.0767; tilt about 22 deg rising outward
+    brow_inner: tuple = (0.020, 1.364)       # (x, z); y -0.0874; ~18 mm above the lid line (r3 F2: 2 mm lower)
+    brow_mid: tuple = (0.039, 1.373)         # 1.5 mm of upward arch
+    brow_outer: tuple = (0.058, 1.379)       # y -0.0767; tilt about 22 deg rising outward
     brow_tilt_deg: float = 22.0
     brow_width: tuple = (0.0018, 0.0010)     # inner, outer end (tapering)
     brow_relief: float = 0.0008
@@ -294,10 +298,10 @@ class Rig:
         (1.445, 0.0695, -0.062, 0.100, -0.031),  # root, merged into H1/H2; r2 F7: the inner edge passes
         (1.432, 0.0715, -0.060, 0.101, -0.029),  #   through the bangs' end down to the cut (no slot beside it)
         (1.400, 0.078, -0.054, 0.104, -0.026),   # covers the forehead corner / temple
-        (1.370, 0.0785, -0.045, 0.104, -0.019),
-        (1.342, 0.079, -0.035, 0.104, -0.012),   # eye level
-        (1.310, 0.077, -0.032, 0.104, -0.010),
-        (1.270, 0.076, -0.032, 0.104, -0.012),   # beside the jaw
+        (1.370, 0.0788, -0.045, 0.104, -0.019),  # r3 F5: inner edges 1.370 ... 1.270 in and forward over the
+        (1.342, 0.0745, -0.045, 0.104, -0.012),  #   cheek, 3 mm off the skin, so from the front the lock covers
+        (1.310, 0.0745, -0.045, 0.104, -0.010),  #   the cheek outline (were (0.0785, -0.045), (0.079, -0.035),
+        (1.270, 0.0750, -0.041, 0.104, -0.012),  #   (0.077, -0.032), (0.076, -0.032)); beside the jaw
         (1.245, 0.0755, -0.039, 0.104, -0.019),
         (1.220, 0.075, -0.049, 0.104, -0.029),   # starts to come forward over the shoulder
         (1.200, 0.0745, -0.058, 0.104, -0.039),
@@ -327,8 +331,8 @@ class Rig:
     curtain_rows: tuple = (                   # r1 F2 / T2: ax continues the wider crown; r2 F5 / F6: falls
         #                                       straight at the dome's width (ax 0.1085), the 1.400 row dropped
         (1.450, 0.012, 0.1085, 0.137, 0.020, -0.034),   # replaced by curtain_top_rows
-        (1.340, 0.012, 0.1085, 0.1365, 0.022, -0.028),  # y_end of the rows down to 1.28: computed (tucked
-        (1.290, 0.012, 0.1085, 0.132, 0.024, -0.022),   #   into the sidelock, hair.py)
+        (1.340, 0.012, 0.1085, 0.1365, 0.022, -0.028),  # y_end of the rows down to 1.28: not read (r3 F1:
+        (1.290, 0.012, 0.1085, 0.132, 0.024, -0.022),   #   hair.CURTAIN_FRONT_Y, just behind the lock's front)
         (1.250, 0.020, 0.1095, 0.128, 0.026, 0.010),    # behind the jaw; neck shows between curtain and sidelock
         (1.215, 0.040, 0.1120, 0.125, 0.028, 0.060),    # goes behind the shoulders
     )
@@ -347,7 +351,9 @@ class Rig:
     #: 6-8 mm outside the dome): ``(z, offset from the dome H1 outward, thickness)``.
     #: r2 F5: out from under the dome tangentially at its equator, on the dome's own azimuths (r1: steep 6 mm
     #: crossing at 1.458 / 1.452).
-    curtain_top_rows: tuple = ((1.438, -0.0016, 0.018), (1.405, 0.0007, 0.020))
+    #: r3 F1 / F10: leaves the dome more steeply (top row 4.5 mm inside it; were (1.438, -0.0016), (1.405,
+    #: 0.0007)) while the dome tucks inside the curtain (hair.DOME_BACK_INSET).
+    curtain_top_rows: tuple = ((1.452, -0.0045, 0.018), (1.405, 0.0010, 0.020))
     hair_clumps: int = 5                        # r1 F8: five uneven clumps on a convex-down hem (hair.CLUMP_WEIGHTS)
     clump_notch_z: float = 0.848
     clump_tip_z: float = 0.830                  # the centre tip (the outer tips are higher, hair.HEM_*)
@@ -387,11 +393,15 @@ class Rig:
     dickey_lift: float = 0.0019                 # the dickey's back face above the blouse: clears the bib, so its
                                                 # top edge draws
     #: Scarf ribbon path S0..S5 (§D.3), centre of the thickness, her left; S0 hidden under the collar.
+    #: r3 F7: S0 / S1 inside the collar outline (were (0.120, -0.052, 1.176), (0.110, -0.064, 1.150): the
+    #: 45 mm start stuck 17 mm out past the collar onto the sleeve cap); see scarf_start_width.
     scarf_path: tuple = (
-        (0.120, -0.052, 1.176), (0.110, -0.064, 1.150), (0.080, -0.085, 1.120),
+        (0.092, -0.064, 1.172), (0.098, -0.070, 1.150), (0.080, -0.085, 1.120),
         (0.044, -0.098, 1.098), (0.012, -0.104, 1.080), (0.006, -0.110, 1.070),
     )
-    scarf_width: tuple = (0.045, 0.018)         # lens section width at S0, at S4 (in the chest surface)
+    scarf_width: tuple = (0.045, 0.018)         # lens section width at S0, at S4 (in the chest surface); the
+    #                                             interpolation runs from these, then S0 is scarf_start_width
+    scarf_start_width: float = 0.030            # r3 F7: the S0 ring only (stays under the lapel at the shoulder)
     scarf_thickness: tuple = (0.010, 0.006)     # at S0, at S4 (the S0 ring itself: scarf_start_thickness)
     scarf_start_thickness: float = 0.007        # spec 0.010 at S0: the ribbon start must stay under the lapel
     scarf_tuck_z: tuple = (-0.006, -0.003)      # S0, S1 lowered this much (their ribbon edge poked through the lapel)
@@ -526,6 +536,12 @@ class Rig:
         unknown = sorted(set(values) - names)
         if unknown:
             raise KeyError(f"unknown rig keys: {unknown}")
+        unread = sorted(set(values) & SPEC_ONLY_FIELDS)
+        if unread:
+            warnings.warn(f"rig keys not read by the model builders (spec only): {unread}", stacklevel=2)
+        context = sorted(set(values) & MANNEQUIN_ONLY_FIELDS)
+        if context:
+            warnings.warn(f"rig keys read only by the mannequin (--context parts): {context}", stacklevel=2)
         return cls(**{k: _tuplify(v) for k, v in values.items()})
 
     @staticmethod
@@ -719,6 +735,26 @@ class Rig:
     def heel_point(self, side: int) -> np.ndarray:
         """Back of the shoe sole on the ground: ``(+-shoe_heel_x, shoe_heel_y, 0)``."""
         return np.array([side * self.shoe_heel_x, self.shoe_heel_y, 0.0])
+
+
+#: Rig fields that no builder of the detailed model reads (review r3, F7): spec values (``miki_spec.md``) kept
+#: for reference.  The builders take these shapes from their own tables or module constants instead (e.g.
+#: ``hair.BACK_GROOVE_DEPTH``, the pose in ``limbs``), so a ``--rig`` override of one of them changes
+#: nothing; :meth:`Rig.from_dict` warns about it.
+SPEC_ONLY_FIELDS = frozenset((
+    "acromion", "arm_abduction_deg", "arm_flexion_deg", "band_end_bury", "band_plane_y0", "band_tilt_deg",
+    "body_hip", "body_waist", "brow_tilt_deg", "bust_apex_x", "cuff_rim", "ear_center", "ear_height",
+    "elbow_bend_deg", "face_surface_points", "groove_depth", "hair_half_width_temples", "hair_thickness",
+    "head_depth_y", "lid_flick_length", "mouth_y", "nape", "nose_bridge_z", "nose_proud", "scarf_tip_angle_deg",
+    "scarf_tip_cut_deg", "shoe_instep", "shoe_toe_y", "sidelock_crease_x", "sidelock_width", "strap_y",
+    "underskirt_z", "wrist_extension_deg",
+))
+#: Rig fields read only by :mod:`mannequin` (the grey ``--context`` placeholder parts), not by the detailed
+#: model; :meth:`Rig.from_dict` warns about them too.
+MANNEQUIN_ONLY_FIELDS = frozenset((
+    "band_visible_x", "bangs_outer_y", "bangs_top_z", "dome_bottom_z", "eye_full_z", "hairline_z", "leg_top_z",
+    "nose_half_width", "shoe_ball_width", "shoe_heel_width",
+))
 
 
 DEFAULT_RIG = Rig()

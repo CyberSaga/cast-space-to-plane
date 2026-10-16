@@ -37,7 +37,7 @@ from .meshkit import Part
 from .rig import SUN_TOWARDS, Rig
 
 __all__ = ["REGIONS", "build", "skin_surface", "face_point", "slab", "column_grid", "band_grid",
-           "head_section", "HEAD_ROWS", "SUN", "slab_faces", "oriented", "head_rig"]
+           "head_section", "HEAD_ROWS", "SUN", "slab_faces", "oriented"]
 
 #: The mannequin regions this module replaces.
 REGIONS = ("head", "eyes", "face_marks")
@@ -62,7 +62,7 @@ BACK_ANGLES = (20.0, 90.0, 160.0)
 #: (fraction 0.05, about 6 mm off the midline at the nose) move ``NOSE_SIDE`` times as much.
 #: Round 2 (F4): a clear nose point (was 0.0032 / 0.0065 / 0.0018), 6 mm ahead of the brow.
 #: Round 3 (F4): that read as a 36 mm beak in 3/4 and profile; now a small point (tip y -0.093 = the spec's
-#: nose_tip, ~8 mm ahead of the eye bridge, which is eased back halfway, see :data:`PROFILE_PATCH`).
+#: nose_tip, ~8 mm ahead of the eye bridge, which is eased back halfway, ``rig.head_profile`` 1.342 / 1.333).
 NOSE_BUMP = {1.325: 0.0005, 1.312: 0.0065, 1.304: 0.0015}
 NOSE_SIDE = 0.10
 #: Round 2 (F1 / F2): the lower head.  Every ring below :data:`HEAD_ROWS` is the face's front half-section
@@ -112,41 +112,6 @@ def _side_name(side: int) -> str:
     return "l" if side > 0 else "r"
 
 
-#: Round 3: rig values this module uses in place of ``rig.py``'s (the review's rig changes; ``rig.py`` is
-#: shared, so they live here until they are moved there).  F2: the flat upper lid pressed down 4.5 mm (it
-#: hides the top ~29 % of the full 0.031 iris: the half-lidded smug look of PDF p.15), the sclera's corners
-#: and the lash flick with it (F8: the flick ends at x 0.0625, on the front of the cheek), the highlight under
-#: the lid and the brows 2 mm lower (close to the eye).  F9: a narrower pupil (spec B.2 0.011 x 0.016).
-RIG_OVERRIDES = (
-    ("eye_lid_z", 1.3465),
-    ("lid_band_inner", (0.018, 1.3451)),
-    ("lid_band_outer", (0.062, 1.3475)),
-    ("lid_flick_tip", (0.0625, 1.3385)),
-    ("sclera_lower", ((0.019, 1.3435), (0.023, 1.3350), (0.030, 1.3262), (0.040, 1.3232), (0.050, 1.3248),
-                      (0.057, 1.3320), (0.0612, 1.3445))),
-    ("pupil_size", (0.011, 0.016)),
-    ("highlight_z", 1.341),
-    ("brow_inner", (0.020, 1.364)),
-    ("brow_mid", (0.039, 1.373)),
-    ("brow_outer", (0.058, 1.379)),
-)
-#: Round 3: ``rig.head_profile`` rows replaced, ``z -> (hw, yf)``.  F4: the eye recess eased back halfway
-#: (1.342 / 1.333); F3: a narrower chin (1.262 / 1.257, was hw 0.027 / 0.016).
-PROFILE_PATCH = {1.342: (0.076, -0.0835), 1.333: (0.075, -0.0845), 1.262: (0.021, -0.076), 1.257: (0.008, -0.073)}
-
-
-@functools.lru_cache(maxsize=8)
-def head_rig(rig: Rig) -> Rig:
-    """``rig`` with :data:`RIG_OVERRIDES` and :data:`PROFILE_PATCH` applied (idempotent)."""
-    rows = []
-    for z, hw, yf, yb in rig.head_profile:
-        key = round(z, 4)
-        if key in PROFILE_PATCH:
-            hw, yf = PROFILE_PATCH[key]
-        rows.append((z, hw, yf, yb))
-    return rig.replace(head_profile=tuple(rows), **dict(RIG_OVERRIDES))
-
-
 # ---------------------------------------------------------------------------------------------------------
 # skin head
 # ---------------------------------------------------------------------------------------------------------
@@ -182,7 +147,6 @@ def _jaw_y(rig: Rig, z: float) -> float:
 def head_section(rig: Rig, z: float):
     """``(hw, yf, yb, c)`` of the skin head section at ``z`` without the nose ridge; below the nape row the
     back ``yb`` is the jaw underside and ``c`` the middle of the section."""
-    rig = head_rig(rig)
     rows = _base_profile(rig)
     hw = _interp_rows(rows, z, 1)
     yf = _interp_rows(rows, z, 2)
@@ -368,14 +332,9 @@ class SkinSurface:
         return np.array([x, float(y[j]), z]), n / np.linalg.norm(n)
 
 
-def skin_surface(rig: Rig) -> SkinSurface:
-    """The skin head mesh of ``rig`` (with this module's overrides, :func:`head_rig`) with its ray caster
-    (cached per rig)."""
-    return _skin_surface(head_rig(rig))
-
-
 @functools.lru_cache(maxsize=4)
-def _skin_surface(rig: Rig) -> SkinSurface:
+def skin_surface(rig: Rig) -> SkinSurface:
+    """The skin head mesh of ``rig`` with its ray caster (cached per rig)."""
     return SkinSurface(_head_mesh(rig))
 
 
@@ -694,9 +653,12 @@ def _decal(rig: Rig, grid_xz, relief: float, depth: float | None = None, stack: 
 #: Round 2 (F8): 14 segments on the sclera's lower curve; 22 / 16 / 8 outline segments on iris / pupil /
 #: highlight, whose grids have two rows (no crease row, see _eye_parts): the triangles they save pay for the
 #: finer outlines in castplane's hidden-line time.
-SCLERA_COLS, SCLERA_ROWS = 15, 3
-IRIS_COLS, IRIS_ROWS = 11, 2
-PUPIL_COLS, PUPIL_ROWS = 9, 2               # round 3 (F9): 18 outline segments (was 8: 16)
+#: Round 3 (perf F3): the face decals' outline samples are the most expensive in the TS still frame (every one
+#: is tested against all the head objects; ~3400 triangle tests per sample, each edge >= 8 samples), so the
+#: eye outlines have fewer, longer edges (were 15 / 11 / 9 columns): -1.0 M of 25.4 M triangle tests.
+SCLERA_COLS, SCLERA_ROWS = 12, 3
+IRIS_COLS, IRIS_ROWS = 9, 2
+PUPIL_COLS, PUPIL_ROWS = 7, 2
 HIGHLIGHT_COLS = 4
 #: The sclera / iris tops stay this far under the lid band's upper edge (hidden under it).
 LID_COVER = 0.0006
@@ -944,7 +906,6 @@ def _mouth(rig: Rig) -> mk.Mesh:
 
 def build(rig: Rig):
     """Parts of :data:`REGIONS` for ``rig``."""
-    rig = head_rig(rig)
     parts = [Part("head.skin", "skin", skin_surface(rig).mesh, "head")]
     marks = []
     for side in SIDES:
