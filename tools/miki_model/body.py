@@ -54,6 +54,9 @@ COLLAR_SMOOTH_ABOVE_Z = 1.10           # ... only where the outer edge is above 
 COLLAR_LAPEL_Y = -0.03                 # collar columns in front of this are the lapels (feature-line edges)
 COLLAR_SHOULDER_ROUNDING = 12         # moving-average half window (samples of 400) rounding the O3-O5 turn
 COLLAR_EDGE_THICKNESS = 0.0030        # the 4 mm collar thins to this at its outer / inner edges
+COLLAR_BIB_CLEARANCE = 0.0006        # the collar's inner edge underside clears the bib's top by this (r3 F4)
+COLLAR_BIB_PASSES = 8                 # ... raised in up to this many passes
+COLLAR_RAISED_MIN_THICKNESS = 0.0012  # ... and the slab there thins to keep its top: at least this thick
 NECK_POINTS = 14
 RING_POINTS = 8                        # scarf ring (and its stripes) section points
 BIB_COLUMNS = 13
@@ -71,6 +74,12 @@ NECK_TILT_DEG = 8.0                    # the axis leans forward: the top is in f
 NECK_RING_Z = (1.180, 1.215, 1.236, 1.285)   # neck sections (ends inside torso / head; few: hidden-line cost)
 NECK_BLOUSE_INSET = 0.003              # the blouse's neck-root row stays this far inside the neck
 NECK_FIT = 0.85                        # ... and its ring within this ellipse measure of the neck (~2 mm in)
+#: Scarf ribbon start (review r3, F7): ``rig.scarf_path`` S0 (0.120, -0.052, 1.176) lies on the collar's outer
+#: edge at O6 and its 45 mm wide end stuck 17 mm out past the collar onto the sleeve cap as a square yellow flap.
+#: The ribbon starts here instead, inside the collar outline, and SCARF_START_WIDTH wide, so it stays under the
+#: lapel at the shoulder and shows only below the lapel edge, running into the V (ref2, ref3, frame-001).
+SCARF_START = ((0.092, -0.064, 1.172), (0.098, -0.070, 1.150))
+SCARF_START_WIDTH = 0.030
 #: A point inside the chest (the collar slab's and its stripe's normals point away from it).
 TORSO_CENTRE = (0.0, 0.012, 1.12)
 
@@ -385,9 +394,9 @@ def _fold_band(band: mk.Mesh) -> mk.Mesh:
     return mk.fan_fold(band, ridge)
 
 
-def _collar(rig: Rig, torso: Torso):
+def _collar(rig: Rig, torso: Torso, under: mk.Mesh | None = None):
     """The collar slab (underside on the blouse + gap, 4 mm thick, thinner at the edges), the floating pink
-    stripe band, and the left inner edge (for the bib)."""
+    stripe band, and the left inner edge (for the bib).  ``under``: the bib, which the inner edge clears."""
     outer, inner, lift = _collar_edges(rig)
     mirror = np.array([-1.0, 1.0, 1.0])
     outer = np.concatenate([outer[:0:-1] * mirror, outer])
@@ -449,7 +458,22 @@ def _collar(rig: Rig, torso: Torso):
         edge = min(v, 1.0 - v) * 5.0
         return COLLAR_EDGE_THICKNESS + (rig.collar_thickness - COLLAR_EDGE_THICKNESS) * min(1.0, edge)
 
-    col, sides = mk.thicken(grid, thick, offset="outward", away_from=TORSO_CENTRE,
+    T = np.array([[thick(j / (U - 1.0), i / (len(vfrac) - 1.0)) for i in range(len(vfrac))] for j in range(U)])
+    if under is not None:                               # review r3 (F4): the inner edge clears the bib
+        grid0 = grid
+        for _ in range(COLLAR_BIB_PASSES):
+            rise = _inner_edge_raise(grid[:, -1], under)
+            if not np.any(rise > 1e-6):
+                break
+            G[:, -1] += rise
+            G[:, -2] += 0.5 * rise
+            grid = lay_on(torso, P, G)
+        # the top stays where it was: the raised underside thins the slab (no taller inner wall)
+        for i in (-1, -2):
+            up = np.linalg.norm(grid[:, i] - grid0[:, i], axis=1)
+            T[:, i] = np.maximum(COLLAR_RAISED_MIN_THICKNESS, T[:, i] - up)
+
+    col, sides = mk.thicken(grid, T, offset="outward", away_from=TORSO_CENTRE,
                             groups={"front": 1, "back": 2, "rim": {"v0": 3, "v1": 4, "u0": 5, "u1": 5}},
                             return_sides=True)
     # groups: on the lapels (the dickey, the bib and the scarf lie under their edges, so the underside
@@ -477,6 +501,40 @@ def _collar(rig: Rig, torso: Torso):
     return col, stripe, left_inner
 
 
+def _inner_edge_raise(edge, under: mk.Mesh, samples: int = 7):
+    """Per collar column, how much more the underside's inner edge (points ``edge``, column order) must rise so
+    that each of its chords clears the top of ``under`` (the bib) by COLLAR_BIB_CLEARANCE (review r3, F4).
+    The bib reaches 9 mm under the collar and its chords are lifted 1.3 - 3 mm off the blouse there, while the
+    collar's inner edge chords (up to 36 mm long beside the neck) sag to 1.2 mm: the bib cut through the inner
+    wall, hid the wall's lower edge (the outline beside the neck) in the front views and chopped the lapel's
+    inner edge into dashes.  A chord sample's deficit goes to both of its columns."""
+    U = len(edge)
+    pts, dirs, owners = [], [], []
+    for j in range(U - 1):
+        t = edge[j + 1] - edge[j]
+        for s in np.linspace(0.0, 1.0, samples):
+            q = edge[j] + s * t
+            d = np.cross(t, (0.0, 0.0, 1.0))
+            d = np.cross(d, t)                            # "up", perpendicular to the chord
+            d = d / np.linalg.norm(d) if np.linalg.norm(d) > 1e-12 else np.array([0.0, 0.0, 1.0])
+            if d[2] < 0:
+                d = -d
+            pts.append(q)
+            dirs.append(d)
+            owners.append((j, j + 1))
+    probe = 0.01
+    pts, dirs = np.array(pts), np.array(dirs)
+    c = mk.surface_clearance(under, pts + probe * dirs, dirs)   # from above: the top face of the bib
+    need = np.zeros(U)
+    for own, cv in zip(owners, c):
+        if not np.isfinite(cv) or cv < 0.0:
+            continue
+        deficit = COLLAR_BIB_CLEARANCE - (cv - probe)     # cv - probe = height of the edge above the bib top
+        for j in own:
+            need[j] = max(need[j], deficit)
+    return need
+
+
 def _dickey(rig: Rig, torso: Torso):
     """White V filler (1.5 mm), 1.1 mm above the blouse, its top edge horizontal at bib_bottom_z, its
     corners and point tucked under the lapels."""
@@ -501,10 +559,11 @@ def _dickey(rig: Rig, torso: Torso):
 # ---------------------------------------------------------------------------------------------------
 
 def _ribbon(rig: Rig, torso: Torso, side: int):
-    S = np.array(rig.scarf_path) * [side, 1.0, 1.0]
+    S = np.array(tuple(SCARF_START) + tuple(rig.scarf_path[len(SCARF_START):])) * [side, 1.0, 1.0]
     n = len(S)
     s = np.linspace(0.0, 1.0, n)
     w = np.interp(s, [0.0, 0.8, 1.0], [rig.scarf_width[0], rig.scarf_width[1], rig.scarf_width[1]])
+    w[0] = SCARF_START_WIDTH
     th = np.interp(s, [0.0, 0.8, 1.0], [rig.scarf_thickness[0], rig.scarf_thickness[1], rig.scarf_thickness[1]])
     th[0] = rig.scarf_start_thickness
     for k, dz in enumerate(rig.scarf_tuck_z):            # S0, S1 lowered under the lifted lapel
@@ -675,9 +734,10 @@ def build(rig: Rig):
     """Parts of :data:`REGIONS` for ``rig``."""
     torso = torso_model(rig)
     parts = []
-    col, stripe, left_inner = _collar(rig, torso)
+    bib = _bib(rig, torso, np.array([torso.onto(p, 0.0) for p in _collar_edges(rig)[1]]))
+    col, stripe, left_inner = _collar(rig, torso, under=bib)
     parts.append(Part("body.neck", "skin", _neck(rig), "neck"))
-    parts.append(Part("body.bib", "skin", _bib(rig, torso, left_inner), "neck"))
+    parts.append(Part("body.bib", "skin", bib, "neck"))
     parts.append(Part("body.blouse", "uniform", _blouse(rig, torso), "torso"))
     parts.append(Part("body.collar", "collar", col, "collar"))
     parts.append(Part("body.collar_stripe", "uniform", stripe, "collar"))
