@@ -20,6 +20,7 @@ import math
 import numpy as np
 
 from . import meshkit as mk
+from .body import pending_rig
 from .meshkit import Part
 from .rig import Rig
 
@@ -49,8 +50,14 @@ SHOE_WIDTH = ((0.0, 0.060), (0.020, 0.056), (0.050, 0.0455), (0.100, 0.0435), (0
 SHOE_OPENING = (0.045, 0.052, 0.041, 0.0345)   # opening centre u, forward / back / lateral semi-axes
 SHOE_TOPLINE_FRONT_Z = 0.063       # throat height (back / sides: rig.shoe_topline_z)
 SHOE_OPENING_FLOOR = 0.030
-STRAP_FLOAT = 0.0006               # the strap's chords cross the faceted upper: float it a little higher
+STRAP_FLOAT = 0.0009               # the strap's chords cross the faceted upper: float it a little higher
 SHOE_STRAP_U = 0.122                # saddle strap centre from the heel back (spec: y ~ -0.07)
+SHOE_STRAP_POINTS = 11             # points along each strap border (7 sagged ~1.4 mm under the upper: dashed lines)
+#: Hand sections (review r1, T8): the wrist is narrower than the heel of the palm (a ~7 mm step each side
+#: within 15 mm) and the mitten tapers toward the fingertips (distances before scaling to hand_length).
+HAND_WRIST = (0.0215, 0.0135)      # half-width, half-thickness at the wrist (and inside the sleeve)
+HAND_PALM_HEEL = (0.015, 0.0285)   # distance from the wrist, half-width: the heel of the palm
+HAND_FINGER_HALF_WIDTH = (0.029, 0.021)   # middle of the fingers, fingertips
 
 
 def _side_name(side: int) -> str:
@@ -126,7 +133,8 @@ def _hand(rig: Rig, side: int):
     # centreline in the (a, p) plane: palm straight, fingers curled toward the palm
     c1, c2 = (math.radians(x) for x in rig.finger_curl_deg)
     pl, fl = rig.palm_length, rig.finger_length
-    pts2 = [(-rig.wrist_in_sleeve, 0.0), (0.0, 0.0), (0.035, 0.0), (pl, 0.0)]
+    pts2 = [(-rig.wrist_in_sleeve, 0.0), (0.0, 0.0), (HAND_PALM_HEEL[0], 0.0), (0.035, 0.0), (pl, 0.0)]
+    i_wrist, i_palm = 1, 4
     ang = c1
     x, y = pl, 0.0
     for seg, dang in ((0.5 * fl, c1), (0.5 * fl, c2)):
@@ -142,8 +150,9 @@ def _hand(rig: Rig, side: int):
     pts2 = np.stack([cr * pts2[:, 0] - sr * pts2[:, 1], sr * pts2[:, 0] + cr * pts2[:, 1]], axis=1) * k
     path = np.array([W + q[0] * a0 + q[1] * p for q in pts2])
     # section half sizes (width along w, thickness along p) per station
-    half_w = np.array([0.024, 0.025, 0.031, 0.5 * rig.palm_width + 0.001, 0.030, 0.0255])
-    half_t = np.array([0.016, 0.0155, 0.5 * rig.palm_thickness, 0.0105, 0.0090, 0.5 * rig.finger_tip_thickness])
+    ww, wt = HAND_WRIST
+    half_w = np.array([ww, ww, HAND_PALM_HEEL[1], 0.031, 0.5 * rig.palm_width + 0.001, *HAND_FINGER_HALF_WIDTH])
+    half_t = np.array([wt, wt, 0.0125, 0.5 * rig.palm_thickness, 0.0105, 0.0090, 0.5 * rig.finger_tip_thickness])
     # thickness direction along the curl
     tang = np.gradient(path, axis=0)
     nrm = np.array([np.cross(w, t) for t in tang])
@@ -152,8 +161,8 @@ def _hand(rig: Rig, side: int):
                        ("dome", 0.5 * rig.finger_tip_thickness, 1), cap_groups=(1, None))
     # thumb: a lobe from the index side of the palm base, lying forward along the index finger and
     # slightly toward the palm (the palm direction is the rotated centreline, not the chord)
-    a_palm = _unit(path[3] - path[1])
-    base = path[1] + 0.010 * a_palm + 0.019 * w + 0.002 * p
+    a_palm = _unit(path[i_palm] - path[i_wrist])
+    base = path[i_wrist] + 0.010 * a_palm + 0.019 * w + 0.002 * p
     d_a = _unit(0.95 * a_palm + 0.25 * w + 0.10 * p)
     d_b = _unit(0.97 * a_palm + 0.02 * w + 0.20 * p)
     q1 = base + 0.024 * d_a
@@ -229,7 +238,7 @@ def _shoe(rig: Rig, side: int):
     su = SHOE_STRAP_U
     hw = 0.5 * rig.strap_width
     secs = [_plane_section(shoe, upper, su + k * hw) for k in (-1.0, 1.0)]
-    m = 7
+    m = SHOE_STRAP_POINTS
     A_, B_ = (mk.resample_polyline(sec, m) for sec in secs)
     mid = 0.5 * (A_ + B_)
     tang = np.gradient(mid, axis=0)
@@ -287,6 +296,7 @@ def _plane_section(mesh, mask, u0):
 
 def build(rig: Rig):
     """Parts of :data:`REGIONS` for ``rig``."""
+    rig = pending_rig(rig)                 # the r1 shoulder / sleeve changes (body.PENDING_RIG)
     parts = []
     for side in SIDES:
         s = _side_name(side)

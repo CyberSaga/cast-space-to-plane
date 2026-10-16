@@ -55,12 +55,50 @@ COLLAR_LAPEL_Y = -0.03                 # collar columns in front of this are the
 COLLAR_SHOULDER_ROUNDING = 12         # moving-average half window (samples of 400) rounding the O3-O5 turn
 COLLAR_EDGE_THICKNESS = 0.0030        # the 4 mm collar thins to this at its outer / inner edges
 STRIPE_FLOAT = 0.00025                 # decal bands float this far above the surface they decorate
-NECK_POINTS = 16
+NECK_POINTS = 14
 RING_POINTS = 8                        # scarf ring (and its stripes) section points
 BIB_COLUMNS = 13
 BIB_SINK = 0.002                       # the bib's top row lies this far inside the neck surface
+BIB_UNDER_COLLAR = 0.009               # the bib reaches this far under the collar inner edge (6 mm left blouse
+#                                        showing between two columns at the lapel after the r1 shoulder change)
 SKIRT_FACING_INSET = 0.007             # the facing's top ring inside the pleated surface
 UNDERSKIRT = ((0.950, 0.100, -0.060, 0.055), (0.780, 0.150, -0.075, 0.090), (0.700, 0.157, -0.081, 0.092))
+#: The neck (review r1, F6 / T6): ``rig.neck_half_width`` is its half-width at the head end; toward the base it
+#: widens by this extra half-width ``(z, extra)`` (a 12 % taper with most of it in the last 15 mm: the flare
+#: into the trapezius, continued under the blouse).  The depth semi-axis scales with the half-width.
+NECK_FLARE = ((1.180, 0.0050), (1.205, 0.0045), (1.215, 0.0030), (1.228, 0.0012), (1.245, 0.0))
+NECK_BASE_Z = 1.215                    # ``rig.neck_y`` is the neck's front / back at this height (its root)
+NECK_TILT_DEG = 8.0                    # the axis leans forward: the top is in front of the base
+NECK_RING_Z = (1.180, 1.215, 1.236, 1.285)   # neck sections (ends inside torso / head; few: hidden-line cost)
+NECK_BLOUSE_INSET = 0.003              # the blouse's neck-root row stays this far inside the neck
+NECK_FIT = 0.85                        # ... and its ring within this ellipse measure of the neck (~2 mm in)
+
+#: Rig changes proposed by the r1 review (F6 neck, F13 scarf tips, F14 shoulders) as ``field: (old, new)``.
+#: :func:`pending_rig` applies a change only while the rig still carries the old value, so a ``--rig``
+#: override wins and the table turns into a no-op once ``rig.py`` adopts the new values (then delete it).
+PENDING_RIG = {
+    "neck_half_width": (0.031, 0.025),
+    "neck_y": ((-0.022, 0.046), (-0.014, 0.040)),
+    "blouse_shoulder_hw": (((1.215, 0.0275), (1.202, 0.085), (1.191, 0.118), (1.180, 0.150)),
+                           # sloping to the lower, narrower acromion through one more row (a single
+                           # (1.172, 0.142) row kinks the shoulder under the collar: its stripe folds)
+                           ((1.215, 0.0275), (1.203, 0.083), (1.193, 0.112), (1.183, 0.130), (1.172, 0.142))),
+    "acromion": ((0.150, 0.005, 1.180), (0.142, 0.005, 1.170)),
+    "shoulder_joint_pos": ((0.140, 0.005, 1.155), (0.134, 0.005, 1.155)),
+    "sleeve_radii": (((0.0, 0.048), (0.5, 0.045), (1.0, 0.043), (1.5, 0.044), (2.0, 0.044)),
+                     ((0.0, 0.045), (0.5, 0.045), (1.0, 0.043), (1.5, 0.044), (2.0, 0.044))),
+    "scarf_tip_max_width": ((0.034, 0.7), (0.050, 0.65)),
+    "scarf_tip_angle_deg": (15.0, 20.0),
+    # the tip point follows the angle: root + scarf_tip_length * (sin 20, 0, -cos 20)
+    "scarf_tip_point": ((0.031, -0.116, 0.977), (0.0388, -0.116, 0.9794)),
+}
+
+
+def pending_rig(rig: Rig, table=None) -> Rig:
+    """``rig`` with the :data:`PENDING_RIG` changes whose field still holds the old value."""
+    table = PENDING_RIG if table is None else table
+    changes = {k: new for k, (old, new) in table.items() if getattr(rig, k) == old}
+    return rig.replace(**changes) if changes else rig
 
 
 def _side_name(side: int) -> str:
@@ -195,9 +233,13 @@ def lay_on(torso: Torso, P, gap, margin=0.0006, passes=6):
         for j in range(U - 1):
             for i in range(V - 1):
                 quad = [(j, i), (j + 1, i), (j + 1, i + 1), (j, i + 1)]
-                tests = [(quad, 0.25 * sum(grid[a, b] for a, b in quad))]
+                centre = 0.25 * sum(grid[a, b] for a, b in quad)
+                tests = [(quad, centre)]
                 tests += [([quad[k], quad[(k + 1) % 4]], 0.5 * (grid[quad[k]] + grid[quad[(k + 1) % 4]]))
                           for k in range(4)]
+                # the quarter points (centre -> corner): on a strongly curved patch (the shoulder turn
+                # under the bib) the surface can rise between the centre and the edge midpoints
+                tests += [(quad, 0.5 * (centre + grid[c])) for c in quad]
                 for corners, c in tests:
                     d = margin - sd(c)
                     if d > 0:
@@ -213,15 +255,24 @@ def lay_on(torso: Torso, P, gap, margin=0.0006, passes=6):
 def torso_model(rig: Rig) -> Torso:
     """The blouse rows: the rig's rows with the convex shoulder of ``rig.blouse_shoulder_hw`` in between."""
     br = list(rig.blouse_rows)
-    y0, y1 = rig.neck_y
-    # the neck-root row inside the neck's front / back (a no-op for the rig's own row; guards overrides)
-    br[0] = (br[0][0], br[0][1], max(br[0][2], y0 + 0.003), min(br[0][3], y1 - 0.003))
-    top, sh = br[0], br[1]
+    # the neck-root row inside the neck (half-width, front and back NECK_BLOUSE_INSET inside)
+    a, cy, b = _neck_section(rig, br[0][0])
+    k = NECK_BLOUSE_INSET
+    br[0] = (br[0][0], min(br[0][1], a - k), max(br[0][2], cy - b + k), min(br[0][3], cy + b - k))
+    # the blouse section is a superellipse about y = 0, the neck an ellipse about cy: narrow the row until
+    # its whole ring lies inside the neck (ellipse measure <= NECK_FIT)
+    for _ in range(40):
+        R = Torso([br[0]], rig.torso_exponent).ring(br[0][0], 72)
+        if float(np.max((R[:, 0] / a) ** 2 + ((R[:, 1] - cy) / b) ** 2)) <= NECK_FIT:
+            break
+        br[0] = (br[0][0], br[0][1] - 0.0005, br[0][2], br[0][3])
     rows = []
-    for z, hw in rig.blouse_shoulder_hw:
-        t = (top[0] - z) / (top[0] - sh[0])
-        rows.append((z, hw, top[2] + t * (sh[2] - top[2]), top[3] + t * (sh[3] - top[3])))
-    rows += [r for r in br[2:] if r[0] not in TORSO_SKIP_ROWS]
+    for z, hw in rig.blouse_shoulder_hw:            # yf / yb linear in z through the table's rows
+        if z >= br[0][0] - 1e-9:
+            hw = min(hw, br[0][1])
+        rows.append((z, hw, _interp(br, z, 2), _interp(br, z, 3)))
+    last = rig.blouse_shoulder_hw[-1][0]
+    rows += [r for r in br[2:] if r[0] not in TORSO_SKIP_ROWS and r[0] < last - 1e-9]
     return Torso(rows, rig.torso_exponent)
 
 
@@ -229,17 +280,31 @@ def torso_model(rig: Rig) -> Torso:
 # neck + bib (object head, skin)
 # ---------------------------------------------------------------------------------------------------
 
-def _neck(rig: Rig):
+def _neck_section(rig: Rig, z):
+    """``(half-width, centre y, depth semi-axis)`` of the elliptic neck section at ``z``: tapered toward the
+    head (:data:`NECK_FLARE`), its axis leaning forward by :data:`NECK_TILT_DEG` about ``NECK_BASE_Z``."""
     y0, y1 = rig.neck_y
-    cy, b = 0.5 * (y0 + y1), 0.5 * (y1 - y0)
-    rings = [mk.ellipse_ring(rig.neck_half_width, b, NECK_POINTS, (0.0, cy, z)) for z in rig.neck_z]
+    zs, extra = zip(*NECK_FLARE)
+    base = rig.neck_half_width + float(np.interp(NECK_BASE_Z, zs, extra))
+    a = rig.neck_half_width + float(np.interp(z, zs, extra))
+    b = 0.5 * (y1 - y0) * a / base
+    cy = 0.5 * (y0 + y1) - math.tan(math.radians(NECK_TILT_DEG)) * (z - NECK_BASE_Z)
+    return a, cy, b
+
+
+def _neck(rig: Rig):
+    z0, z1 = rig.neck_z
+    zs = [z for z in NECK_RING_Z if z0 - 1e-9 <= z <= z1 + 1e-9]
+    zs = sorted(set([z0] + zs + [z1]))
+    rings = []
+    for z in zs:
+        a, cy, b = _neck_section(rig, z)
+        rings.append(mk.ellipse_ring(a, b, NECK_POINTS, (0.0, cy, z)))
     return mk.loft(rings, "flat", "flat", cap_groups=(1, 1))
 
 
 def _neck_point(rig: Rig, phi, z, sink=0.0):
-    y0, y1 = rig.neck_y
-    cy, b = 0.5 * (y0 + y1), 0.5 * (y1 - y0)
-    a = rig.neck_half_width
+    a, cy, b = _neck_section(rig, z)
     return np.array([(a - sink) * math.cos(phi), cy + (b - sink) * math.sin(phi), z])
 
 
@@ -247,8 +312,8 @@ def _bib(rig: Rig, torso: Torso, inner_edge):
     """Skin sheet filling the collar's V opening: columns around the front half of the neck, each from
     inside the neck out to under the collar's inner edge (or under the dickey's top edge at the front),
     lying ``bib_lift`` above the blouse."""
-    cy = 0.5 * sum(rig.neck_y)
-    ie = np.asarray(inner_edge)                       # her left inner edge I3 ... I7 (dense), on the blouse
+    cy = _neck_section(rig, torso.rows[0][0])[1]
+    ie = np.asarray(inner_edge)                     # her left inner edge I3 ... I7 (dense), on the blouse
     az = np.arctan2(ie[:, 1] - cy, ie[:, 0])
     phis = np.radians(np.linspace(8.0, -188.0, BIB_COLUMNS))
     rows = []
@@ -259,7 +324,7 @@ def _bib(rig: Rig, torso: Torso, inner_edge):
         order = np.argsort(az)                        # the inner edge interpolated by azimuth
         e = np.array([np.interp(a, az[order], ie[order, c]) for c in range(3)])
         e[0] *= side
-        out = e + 0.006 * np.array([math.cos(phi), math.sin(phi), -0.6])   # 6 mm under the collar
+        out = e + BIB_UNDER_COLLAR * np.array([math.cos(phi), math.sin(phi), -0.6])   # under the collar
         if out[2] < bottom:
             out = out + (bottom - out[2]) / (e[2] + 0.02 - out[2]) * (e + np.array([0, 0, 0.02]) - out)
             out[2] = bottom
@@ -279,13 +344,12 @@ def _bib(rig: Rig, torso: Torso, inner_edge):
 
 def _blouse(rig: Rig, torso: Torso):
     n = TORSO_RING_POINTS
-    y0, y1 = rig.neck_y
     top_z = rig.neck_base_z + 0.027
-    neck_ring = mk.ellipse_ring(rig.neck_half_width - TORSO_NECK_INSET, 0.5 * (y1 - y0) - TORSO_NECK_INSET, n,
-                                (0.0, 0.5 * (y0 + y1), top_z))
+    a, cy, b = _neck_section(rig, top_z)
+    neck_ring = mk.ellipse_ring(a - TORSO_NECK_INSET, b - TORSO_NECK_INSET, n, (0.0, cy, top_z))
     rings = [neck_ring] + [torso.ring(r[0], n) for r in torso.rows]
     groups = [1] * (len(rings) - 1)
-    apex = (0.0, 0.5 * (y0 + y1), top_z + 0.004)
+    apex = (0.0, cy, top_z + 0.004)
     return mk.loft(rings, ("pole", apex), "flat", groups=groups)       # flat hem disc: its own group
 
 
@@ -491,8 +555,9 @@ def _ring(rig: Rig):
 
 
 def _tip(rig: Rig, torso: Torso, side: int):
-    """A flat 4 mm blade below the ring: root inside the ring, 15 deg outward, widest 0.034 at 70 %,
-    a 45 deg oblique cut with the point on the outer side (spec §D.3)."""
+    """A flat 4 mm blade below the ring: root inside the ring, ``scarf_tip_angle_deg`` outward (toward
+    ``scarf_tip_point``), widest ``scarf_tip_max_width`` (a broad fan), a 45 deg oblique cut with the point on
+    the outer side (spec §D.3)."""
     if side > 0:
         root, point, front = np.array(rig.scarf_tip_root), np.array(rig.scarf_tip_point), rig.scarf_tip_front_offset
     else:
@@ -619,6 +684,7 @@ def _underskirt(rig: Rig):
 
 def build(rig: Rig):
     """Parts of :data:`REGIONS` for ``rig``."""
+    rig = pending_rig(rig)
     torso = torso_model(rig)
     parts = []
     col, stripe, left_inner = _collar(rig, torso)
