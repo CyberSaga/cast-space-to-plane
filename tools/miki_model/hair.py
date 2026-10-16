@@ -20,12 +20,18 @@ How it is built (spec ``miki_spec.md`` §C):
 * **H3 bangs** (§C.2): a slab of even thickness on the forehead, from under the band's lower edge to the flat
   cut at ``bangs_cut_z``, six strips (five strand lines), the bottom 4 mm curling in, the cut face and the end
   faces in their own groups.
-* **H4 sidelocks** (§C.3): lens-section ribbons swept through the spec's edge table, their roots rising into
-  the dome under the band; the cut face and a central strand crease are feature lines.
+* **H4 sidelocks** (§C.3): sharp-edged lens-section ribbons swept through the spec's edge table, their roots
+  rising into the dome under the band; the cut face, a central strand crease and the outer edge are feature
+  lines, the inner edge draws only as a silhouette.
 * **H5 strand** (§C.4): one thin swept strand on her left.
-* **H2 side curtain + back sheet** (§C.6): one slab from inside the dome down to seven pointed clumps; the
-  curtain's front edges, the lateral edges and the clump ends are rims in their own groups, and four strand
-  lines (group boundaries + shallow grooves) end at the notches between the middle clumps.
+* **H2 side curtain + back sheet** (§C.6): one slab from inside the dome down to five uneven clumps on a
+  convex-down hem; the curtain's front edges taper and end inside the sidelocks, the front end faces and the
+  lateral faces share the outer surface's groups (silhouette-only), the clump ends are rims, and three
+  strand lines (group boundaries + shallow grooves) end at the notches nearest the middle.
+
+Round 1 of the review changed rig values (:data:`R1_RIG`, applied by :func:`r1_rig`) and the dome / sidelock /
+H2 construction; every quad of the dome, sidelocks and H2 uses its valley diagonal
+(:func:`meshkit.inscribed_fan`), which closes the gaps in castplane's hidden-line outlines.
 """
 
 from __future__ import annotations
@@ -38,7 +44,8 @@ import numpy as np
 from . import body as _body
 from . import mannequin as _mannequin
 from . import meshkit as mk
-from .head import _SUN, SkinSurface, _oriented, _slab_faces, head_section, skin_surface, slab
+from .head import _SUN, SkinSurface, _oriented, _slab_faces, apply_overrides, head_section, skin_surface, slab
+from .head import r1_rig as _head_r1_rig
 from .meshkit import Part
 from .rig import Rig
 
@@ -48,6 +55,64 @@ __all__ = ["REGIONS", "build"]
 REGIONS = ("hair", "headband")
 
 SIDES = (1, -1)
+
+# ---------------------------------------------------------------------------------------------------------
+# Review round 1 values of rig fields (rig.py is shared: applied here while the field still has its rig.py
+# default, so a ``--rig`` override wins; reported as wanted rig changes).
+# ---------------------------------------------------------------------------------------------------------
+R1_RIG = {
+    # F2: a full crown whose outline flows into the side hair (with DOME_SIDE_EXPONENT: half-width 0.099 at
+    # z 1.46, 0.090 at 1.48; was 0.089 / 0.079)
+    "dome_radii": (0.104, 0.1195, 0.123),
+    # F3 / T5: the curtain crosses the dome steeply over 6 mm (two dome rings at these heights), not over 28 mm
+    "curtain_top_rows": ((1.458, -0.0025, 0.016), (1.452, 0.0025, 0.020)),
+    # F2 / T2: the side curtain continues the wider crown (ax), the front edges y_end of the rows down to
+    # CURTAIN_TUCK_MIN_Z are computed (tucked into the sidelock, F1 / T3)
+    "curtain_rows": (
+        (1.450, 0.012, 0.1055, 0.136, 0.020, -0.034),
+        (1.400, 0.012, 0.1055, 0.137, 0.020, -0.034),
+        (1.340, 0.012, 0.1055, 0.133, 0.022, -0.028),
+        (1.290, 0.012, 0.1060, 0.128, 0.024, -0.022),
+        (1.250, 0.020, 0.1080, 0.125, 0.026, 0.010),
+        (1.215, 0.040, 0.1120, 0.123, 0.028, 0.060),
+    ),
+    # F1 / F9 / T3: one fuller lock per side: inner edge kept at x 0.072-0.078, outer edge out to the
+    # front-view silhouette (0.106), rotated back at eye level (inner edge 3 mm off the skin), bowed out
+    # ~4 mm at z 1.27 and back in over the collar
+    "sidelock_rows": (
+        (1.445, 0.072, -0.060, 0.100, -0.031),
+        (1.400, 0.072, -0.068, 0.105, -0.036),
+        (1.370, 0.073, -0.065, 0.106, -0.033),
+        (1.342, 0.074, -0.047, 0.106, -0.026),
+        (1.310, 0.075, -0.043, 0.108, -0.022),
+        (1.270, 0.078, -0.042, 0.111, -0.022),
+        (1.220, 0.077, -0.054, 0.110, -0.034),
+        (1.180, 0.075, -0.068, 0.107, -0.052),
+        (1.145, 0.074, -0.086, 0.106, -0.072),
+        (1.120, 0.074, -0.092, 0.106, -0.078),
+    ),
+    "sidelock_width": 0.034,
+    "sidelock_thickness": 0.012,
+    # F4: the band's visible span ends here; behind it the band dives into the hair (BAND_DIVE)
+    "band_tuck_y": -0.035,
+    # F15: 8 irregular strips (BANGS_STRIP_WEIGHTS)
+    "bangs_strips": 8,
+    # the strand follows the sidelock, which moved back at eye level (F9)
+    "strand_points": (
+        (0.022, -0.086, 1.474), (0.030, -0.093, 1.463), (0.040, -0.096, 1.432), (0.052, -0.086, 1.400),
+        (0.063, -0.074, 1.368), (0.072, -0.056, 1.335), (0.080, -0.058, 1.305),
+    ),
+    # F8 / T4: five uneven clumps on a convex-down hem (CLUMP_WEIGHTS, HEM_*), three grooves
+    "hair_clumps": 5,
+    "clump_notch_z": 0.848,
+    "clump_tip_z": 0.830,
+    "hair_grooves": 3,
+}
+
+
+def r1_rig(rig: Rig) -> Rig:
+    """``rig`` with the head and hair modules' round-1 values."""
+    return apply_overrides(_head_r1_rig(rig), R1_RIG)
 
 
 def _side_name(side: int) -> str:
@@ -104,48 +169,109 @@ def _radial_hit(mesh: mk.Mesh, origin, direction):
 # ---------------------------------------------------------------------------------------------------------
 #: Azimuths (degrees, counter-clockwise from her left, +X; 270 = the front) of the dome's ring points: denser
 #: over the front, where the bangs, band and face silhouette are.
-DOME_AZIMUTHS = (0, 18, 36, 54, 72, 90, 108, 126, 144, 162, 180, 194, 208, 222, 236, 250, 260, 270,
-                 280, 290, 304, 318, 332, 346)
+#: Round 1 (F16): 26 azimuths (was 24), still densest over the front; the quads use their valley diagonals
+#: (:func:`meshkit.inscribed_fan`), which closes the crown outline's gaps.
+DOME_AZIMUTHS = (0, 15, 30, 45, 60, 75, 90, 105, 120, 135, 150, 165, 180, 195, 210, 225, 240, 250, 260, 270,
+                 280, 290, 300, 315, 330, 345)
 #: Rings: constant-z rings over the crown (clean silhouettes), then rings blending down to the bottom boundary.
-DOME_FLAT_THETA = (7.0, 15.0, 23.5, 32.0, 40.5, 49.0)   # constant-z rings (polar angle, degrees)
-DOME_BLEND = (0.36, 0.70, 1.0)      # then rings blending from the last flat ring to the bottom boundary
-#: Bottom of the dome behind the headband's ends (inside the side curtain, which starts at z 1.45).
-DOME_BACK_BOTTOM_Z = 1.445
+DOME_FLAT_THETA = (8.0, 18.0, 28.0, 38.5, 49.0)   # constant-z rings (polar angle, degrees)
+#: Round 1 (F3 / F16): the blend rings lie at these heights behind the band (constant z there, so the
+#: curtain, whose rows sit at 1.458 and 1.452, crosses the dome along a level seam); in front they blend to
+#: the band line.  The last one is the bottom boundary.
+DOME_BLEND_BACK_Z = (1.472, 1.458, 1.452)
+#: Bottom of the dome behind the headband's visible span (inside the side curtain; round 1: 1.452, the
+#: curtain row that stands 2.5 mm out, so no piece of the dome's rim pokes through the curtain's chords).
+DOME_BACK_BOTTOM_Z = 1.452
 #: In front the dome ends this far below the band centreline (under the band's lower half).
 DOME_BAND_DROP = 0.002
 #: The fan closing the dome underneath ends here (inside the skull).
 DOME_CAP_APEX = (0.0, 0.020, 1.440)
+#: Round 1 (F2): the dome's vertical sections are superellipses of this exponent at the sides (x), plain
+#: ellipses at the front and back (exponent 2 + (DOME_SIDE_EXPONENT - 2) cos^2(azimuth)); the extra fullness
+#: fades in between the polar angles DOME_SIDE_FADE (degrees), so the crown top stays round: the outline
+#: is a rounded rectangle that flows into the side hair.
+DOME_SIDE_EXPONENT = 2.6
+DOME_SIDE_FADE = (30.0, 60.0)
+#: Round 1 (F4): the band ends here (was y -0.005) ...
+BAND_END_Y = -0.015
+#: ... and from ``rig.band_tuck_y`` back to its end it dives this much deeper into the hair (its end is
+#: buried >= 4 mm under the hair surface, no end cap shows).
+BAND_DIVE = 0.0075
 
 
 def _band_line(rig: Rig) -> np.ndarray:
-    """The headband centreline from her right end to her left end (spec points mirrored)."""
+    """The headband centreline from her right end to her left end (spec points mirrored, ending at
+    :data:`BAND_END_Y`)."""
     cl = np.array(rig.band_centreline)
+    cl = cl[cl[:, 1] <= BAND_END_Y + 1e-9]
     return np.concatenate([cl[:0:-1] * np.array([-1.0, 1.0, 1.0]), cl])
 
 
+def _dome_exponent(theta: float, phi: float) -> float:
+    fade = float(_smoothstep(math.radians(DOME_SIDE_FADE[0]), math.radians(DOME_SIDE_FADE[1]), theta))
+    return 2.0 + (DOME_SIDE_EXPONENT - 2.0) * fade * math.cos(phi) ** 2
+
+
 def _ellipsoid(rig: Rig, theta, phi) -> np.ndarray:
-    """Point of the §C top-hair ellipsoid at polar angle ``theta`` (from +Z) and azimuth ``phi`` (radians)."""
+    """Point of the H1 dome at polar angle ``theta`` (from +Z) and azimuth ``phi`` (radians): the §C
+    top-hair ellipsoid made fuller at the sides (:data:`DOME_SIDE_EXPONENT`)."""
     c = np.array(rig.dome_center)
     ax, ayf, az = rig.dome_radii
     ay = rig.dome_back_radius if math.sin(phi) > 0 else ayf
-    s = math.sin(theta)
-    return c + np.array([ax * s * math.cos(phi), ay * s * math.sin(phi), az * math.cos(theta)])
+    ct = math.cos(theta)
+    e = _dome_exponent(theta, phi)
+    r = max(0.0, 1.0 - abs(ct) ** e) ** (1.0 / e)
+    return c + np.array([ax * r * math.cos(phi), ay * r * math.sin(phi), az * ct])
 
 
-def _ellipsoid_normal(rig: Rig, p) -> np.ndarray:
+def _dome_angles(rig: Rig, p):
+    """``(theta, phi)`` of the dome point ``p`` (inverse of :func:`_ellipsoid` for points on it)."""
     c = np.array(rig.dome_center)
     ax, ayf, az = rig.dome_radii
     d = np.asarray(p, dtype=np.float64) - c
-    r = np.array([ax, rig.dome_back_radius if d[1] > 0 else ayf, az])
-    n = d / r ** 2
-    return n / np.linalg.norm(n)
+    ay = rig.dome_back_radius if d[1] > 0 else ayf
+    return math.acos(float(np.clip(d[2] / az, -1.0, 1.0))), math.atan2(d[1] / ay, d[0] / ax)
+
+
+def _ellipsoid_normal(rig: Rig, p) -> np.ndarray:
+    """Outward unit normal of the dome surface at (or near) ``p`` (numerical)."""
+    th, ph = _dome_angles(rig, p)
+    h = 1e-4
+    dt = _ellipsoid(rig, th + h, ph) - _ellipsoid(rig, th - h, ph)
+    dp = _ellipsoid(rig, th, ph + h) - _ellipsoid(rig, th, ph - h)
+    n = np.cross(dt, dp)
+    n /= np.linalg.norm(n)
+    c = np.array(rig.dome_center)
+    return n if n @ (np.asarray(p) - c) > 0 else -n
+
+
+def _dome_section_point(rig: Rig, z: float, psi: float):
+    """Point of the dome's horizontal section at height ``z`` at the crescent angle ``psi`` (0 = straight
+    back, +pi/2 = her left side, past pi/2 towards the front; negative = her right) and the section's
+    outward horizontal unit normal there."""
+    c = np.array(rig.dome_center)
+    th = math.acos(float(np.clip((z - c[2]) / rig.dome_radii[2], -1.0, 1.0)))
+
+    def pt(a):
+        return _ellipsoid(rig, th, math.pi / 2 - a)
+
+    p = pt(psi)
+    h = 1e-4
+    t = pt(psi + h) - pt(psi - h)
+    n = np.array([t[1], -t[0], 0.0])
+    n /= np.linalg.norm(n)
+    if n @ (p - np.array([0.0, c[1], p[2]])) < 0:
+        n = -n
+    return p, n
 
 
 def _dome_bottom_z(rig: Rig, phi: float) -> float:
-    """z of the dome's bottom boundary at azimuth ``phi``: the band centre in front, else
-    :data:`DOME_BACK_BOTTOM_Z`."""
+    """z of the dome's bottom boundary at azimuth ``phi``: the band centre over the band's visible span
+    (round 1: up to ``rig.band_tuck_y``, so behind it the dome's lower rings stay level and the curtain
+    crosses them along a level seam), else :data:`DOME_BACK_BOTTOM_Z`."""
     c = np.array(rig.dome_center)
     band = _band_line(rig)
+    band = band[band[:, 1] <= rig.band_tuck_y + 1e-9]
     az_band = np.unwrap(np.arctan2(band[:, 1] - c[1], band[:, 0]))      # her right end ... her left end
     a = math.atan2(math.sin(phi), math.cos(phi))
     # bring a into the band's azimuth range (around -pi/2)
@@ -170,12 +296,14 @@ def _dome(rig: Rig) -> mk.Mesh:
         theta_b.append(math.acos(np.clip((zb - c[2]) / az, -1.0, 1.0)))
     rings = []
     th0 = math.radians(DOME_FLAT_THETA[-1])
+    th_back = math.acos(np.clip((DOME_BACK_BOTTOM_Z - c[2]) / az, -1.0, 1.0))
     for th in DOME_FLAT_THETA:
         rings.append(np.array([_ellipsoid(rig, math.radians(th), phi) for phi in phis]))
-    for t in DOME_BLEND:
+    for zb in DOME_BLEND_BACK_Z:
+        t = (math.acos(np.clip((zb - c[2]) / az, -1.0, 1.0)) - th0) / (th_back - th0)
         rings.append(np.array([_ellipsoid(rig, th0 + t * (tb - th0), phi) for tb, phi in zip(theta_b, phis)]))
     top = c + np.array([0.0, 0.0, az])
-    return mk.loft(rings, ("pole", top), ("pole", DOME_CAP_APEX), groups=1, cap_groups=(1, 1))
+    return mk.inscribed_fan(mk.loft(rings, ("pole", top), ("pole", DOME_CAP_APEX), groups=1, cap_groups=(1, 1)))
 
 
 # ---------------------------------------------------------------------------------------------------------
@@ -220,17 +348,23 @@ def _band_slab(F, B, shrink: float, single: bool) -> mk.Mesh:
     return slab(F, B, (1, 1, 1, 1, 1, 1) if single else (1, 2, 2, 2, 2, 2))
 
 
+def _band_embed(rig: Rig, P) -> np.ndarray:
+    """Depth of the band's inner face under the dome at the points ``P``: ``rig.band_embed`` over the
+    visible span, diving :data:`BAND_DIVE` deeper from ``rig.band_tuck_y`` back to the ends."""
+    return rig.band_embed + BAND_DIVE * _smoothstep(rig.band_tuck_y, BAND_END_Y, P[:, 1])
+
+
 def _headband(rig: Rig, dome: mk.Mesh):
     P, N, Bx = _band_frames(rig, dome)
-    base = P - rig.band_embed * N
+    base = P - _band_embed(rig, P)[:, None] * N
     w = 0.5 * rig.band_width
     F = np.stack([base - w * Bx + rig.band_thickness * N, base + w * Bx + rig.band_thickness * N], axis=1)
     Bk = np.stack([base - w * Bx, base + w * Bx], axis=1)
     band = _band_slab(F, Bk, BAND_SHRINK, single=False)
-    # pink ridge over the visible span
+    # pink ridge along the band, ending one path point before the band's buried ends
     outer = base + rig.band_thickness * N
-    xs = P[:, 0]
-    keep = np.abs(xs) <= rig.band_visible_x
+    keep = np.zeros(len(P), dtype=bool)
+    keep[1:-1] = True
     k0, k1 = int(np.nonzero(keep)[0][0]), int(np.nonzero(keep)[0][-1])
     o, n, b = outer[k0:k1 + 1], N[k0:k1 + 1], Bx[k0:k1 + 1]
     rw = 0.5 * rig.band_ridge_width
@@ -245,18 +379,20 @@ def _headband(rig: Rig, dome: mk.Mesh):
 # ---------------------------------------------------------------------------------------------------------
 # H3 bangs (§C.2)
 # ---------------------------------------------------------------------------------------------------------
-BANGS_STRIP_COLS = 2                # quads per strand strip across
+BANGS_STRIP_COLS = 1                # quads per strand strip across (round 1: 1, flat facets per strand)
 #: The bangs' outer surface starts just in front of the band's lower inner corner (the block comes out from
 #: under the band flush with it and hides the corner), leans forward to the curl start and curls back in
 #: (``rig.bangs_curl``) to the flat cut; the top row continues ``rig.bangs_top_extension`` up under the band.
 BANGS_UNDER_BAND = 0.0005
 BANGS_END_X = 0.072                 # vertical end faces (= rig.bangs_half_width)
+#: Round 1 (F15): relative widths of the strips, her right to her left (irregular strand lines).
+BANGS_STRIP_WEIGHTS = (1.0, 0.7, 1.2, 0.8, 1.1, 0.9, 1.3, 0.8)
 
 
 def _band_x_frames(rig: Rig, dome: mk.Mesh):
     """Interpolators over x of the band's lower inner corner, its outward normal and across direction."""
     P, N, Bx = _band_frames(rig, dome)
-    corner = P - rig.band_embed * N - 0.5 * rig.band_width * Bx
+    corner = P - _band_embed(rig, P)[:, None] * N - 0.5 * rig.band_width * Bx
     order = np.argsort(P[:, 0])
     xs = P[order, 0]
 
@@ -297,12 +433,18 @@ def _bangs(rig: Rig, dome: mk.Mesh) -> mk.Mesh:
                 hi = mid
         return 0.5 * (lo + hi)
 
-    # columns at equal arc length along the outer cut line
+    # strip borders at the BANGS_STRIP_WEIGHTS fractions of arc length along the outer cut line, each strip
+    # split into BANGS_STRIP_COLS equal columns
     dense = np.linspace(-BANGS_END_X, BANGS_END_X, 145)
     pts = np.array([outer_cut(column_at(x))[0] for x in dense])
     s = np.concatenate([[0.0], np.cumsum(np.linalg.norm(np.diff(pts, axis=0), axis=1))])
     ncol = rig.bangs_strips * BANGS_STRIP_COLS + 1
-    xs = np.interp(np.linspace(0.0, s[-1], ncol), s, dense)
+    wts = np.array(BANGS_STRIP_WEIGHTS[:rig.bangs_strips] if len(BANGS_STRIP_WEIGHTS) >= rig.bangs_strips
+                   else (1.0,) * rig.bangs_strips, dtype=np.float64)
+    borders = np.concatenate([[0.0], np.cumsum(wts)]) / wts.sum()
+    fr = np.concatenate([np.linspace(borders[k], borders[k + 1], BANGS_STRIP_COLS + 1)[:-1]
+                         for k in range(len(wts))] + [[1.0]])
+    xs = np.interp(fr * s[-1], s, dense)
     xs[0], xs[-1] = -BANGS_END_X, BANGS_END_X
     rows = 4                                                  # under-band top, band edge, curl start, cut
     F = np.zeros((ncol, rows, 3))
@@ -328,9 +470,10 @@ def _bangs(rig: Rig, dome: mk.Mesh) -> mk.Mesh:
     for i in range(ncol - 1):
         front[i, :] = 1 + i // BANGS_STRIP_COLS               # strips 1..6: 5 strand lines
     nstrip = rig.bangs_strips
-    g_back, g_cut, g_end = nstrip + 1, nstrip + 2, nstrip + 3
-    # rims: v0 = top (hidden under the band), v1 = the cut, u0 / u1 = the end faces
-    return slab(F, Bk, (front, g_back, g_back, g_cut, g_end, g_end))
+    g_back, g_cut = nstrip + 1, nstrip + 2
+    # rims: v0 = top (hidden under the band), v1 = the cut, u0 / u1 = the end faces in their strip's group
+    # (round 1, T5: they draw only as silhouettes, no hook at the ends)
+    return slab(F, Bk, (front, g_back, g_back, g_cut, 1, nstrip))
 
 
 # ---------------------------------------------------------------------------------------------------------
@@ -434,12 +577,41 @@ def _fit_rows(rows, deficit, movable, axis_sign, across: int = 0):
 # ---------------------------------------------------------------------------------------------------------
 # H4 sidelocks (§C.3)
 # ---------------------------------------------------------------------------------------------------------
-#: Root rows added above the spec table: the lock rises into the dome under the band, narrowing,
-#: ``(z, x_in, y_in, x_out, y_out)`` for her left.
-SIDELOCK_ROOT_ROWS = ((1.463, 0.063, -0.051, 0.076, -0.034),)
-SIDELOCK_PROFILE_DEG = (0.0, 45.0, 90.0, 135.0, 180.0, 270.0)   # lens section: rounded front, flatter back
+#: Root row added above the spec table (round 1, T3): the lock rises into the dome under the band to
+#: SIDELOCK_ROOT_Z, its edges SIDELOCK_ROOT_INSET inside the dome surface (the root cap never shows).
+SIDELOCK_ROOT_Z = 1.466
+SIDELOCK_ROOT_INSET = 0.005
+#: Round 1 (F1): a sharp-edged lens section, ``(u across the width -1..1 (1 = outer edge), front side?)``;
+#: front v = SIDELOCK_FRONT_SHARE * thickness * (1 - u^2)^SIDELOCK_FULLNESS, back the rest.  The edges are
+#: real ridges (~60 degrees), so in front-ish views the silhouette runs along the edge itself: one line per
+#: edge instead of an edge wall plus its silhouette.
+SIDELOCK_PROFILE = ((1.0, True), (0.6, True), (0.0, True), (-0.6, True), (-1.0, True), (0.0, False))
+SIDELOCK_FRONT_SHARE = 0.58
+SIDELOCK_FULLNESS = 0.8
 SIDELOCK_INSERT_AFTER = (5, 6)      # Catmull-Rom rows inserted after these table rows (the shoulder bend)
 SIDELOCK_ROOT_THICKNESS = 0.5       # the root row is this fraction of the lock thickness (it hides in the dome)
+
+
+def _sidelock_root_row(rig: Rig):
+    """``(z, x_in, y_in, x_out, y_out)`` of the root row: the first table row's edges carried up to
+    :data:`SIDELOCK_ROOT_Z` along their dome azimuths, :data:`SIDELOCK_ROOT_INSET` inside the dome."""
+    c = np.array(rig.dome_center)
+    z0, xi, yi, xo, yo = rig.sidelock_rows[0]
+    out = [SIDELOCK_ROOT_Z]
+    for x, y in ((xi, yi), (xo, yo)):
+        psi = math.atan2(x, y - c[1])
+        p, n = _dome_section_point(rig, SIDELOCK_ROOT_Z, psi)
+        q = p - SIDELOCK_ROOT_INSET * n
+        out += [float(q[0]), float(q[1])]
+    return tuple(out)
+
+
+def _sidelock_section(rig: Rig, z: float):
+    """``(inner (2,), outer (2,))`` edge points of the lock's table rows interpolated at ``z`` (before the
+    outfit fit; her left)."""
+    rows = np.array(rig.sidelock_rows)[::-1]
+    return (np.array([np.interp(z, rows[:, 0], rows[:, 1]), np.interp(z, rows[:, 0], rows[:, 2])]),
+            np.array([np.interp(z, rows[:, 0], rows[:, 3]), np.interp(z, rows[:, 0], rows[:, 4])]))
 
 
 def _cr_insert(P, after):
@@ -456,8 +628,8 @@ def _cr_insert(P, after):
 
 
 def _sidelock(rig: Rig, side: int) -> mk.Mesh:
-    rows = np.array(SIDELOCK_ROOT_ROWS + tuple(rig.sidelock_rows))
-    n_root = len(SIDELOCK_ROOT_ROWS)
+    rows = np.array((_sidelock_root_row(rig),) + tuple(rig.sidelock_rows))
+    n_root = 1
     ins = [n_root + k for k in SIDELOCK_INSERT_AFTER]
     inner = _cr_insert(np.stack([rows[:, 1], rows[:, 2], rows[:, 0]], axis=1), ins)
     outer = _cr_insert(np.stack([rows[:, 3], rows[:, 4], rows[:, 0]], axis=1), ins)
@@ -472,11 +644,12 @@ def _sidelock(rig: Rig, side: int) -> mk.Mesh:
     nrm[nrm[:, 1] > 0] *= -1.0
     th = np.full(k, rig.sidelock_thickness)
     th[:n_root] *= SIDELOCK_ROOT_THICKNESS
-    t = np.radians(SIDELOCK_PROFILE_DEG)                      # 0 = outer edge, 90 = front middle, 180 = inner
-    prof = np.stack([np.cos(t), np.sign(np.sin(t)) * np.abs(np.sin(t)) ** 0.6], axis=1)   # lens
+    pu = np.array([u for u, _ in SIDELOCK_PROFILE])
+    share = np.array([SIDELOCK_FRONT_SHARE if f else SIDELOCK_FRONT_SHARE - 1.0 for _, f in SIDELOCK_PROFILE])
+    pv = share * (1.0 - pu ** 2) ** SIDELOCK_FULLNESS     # x thickness: front > 0, back < 0, 0 at the edges
     rings = []
     for i in range(k):
-        rings.append(mid[i] + prof[:, :1] * (0.5 * width[i]) * acr[i] + prof[:, 1:2] * (0.5 * th[i]) * nrm[i])
+        rings.append(mid[i] + (pu * 0.5 * width[i])[:, None] * acr[i] + (pv * th[i])[:, None] * nrm[i])
     # fit (merge step): the lower rows lie on the lapel / scarf, so move them forward until the lock stays
     # rig.hair_outfit_gap in front of the outfit; checked on both sides (the locks stay mirror images)
     T = _outfit_triangles(rig, OUTFIT_FRONT)
@@ -489,13 +662,13 @@ def _sidelock(rig: Rig, side: int) -> mk.Mesh:
     movable = [bool(r[0, 2] < SIDELOCK_FIT_TOP_Z) for r in rings]
     shift = _fit_rows(rings, deficit, movable, -1.0)
     rings = [r - np.array([0.0, 1.0, 0.0]) * shift[i].max() for i, r in enumerate(rings)]   # rigid per row
-    # groups: front inner half + back 1, front outer half 2: the crease and the outer edge are feature lines
-    m = len(t)
+    # groups: front inner half + back 1, front outer half 2: the central crease and the (sharp) outer edge
+    # are feature lines, the inner edge draws only as a silhouette
+    m = len(SIDELOCK_PROFILE)
     G = np.ones((k - 1, m), dtype=np.int64)
     for j in range(m):
-        a0, a1 = t[j], t[(j + 1) % m] + (2.0 * np.pi if j == m - 1 else 0.0)
-        a = 0.5 * (a0 + a1)
-        if math.sin(a) > 0 and math.cos(a) > 0:               # front, outer half
+        (u0, f0), (u1, f1) = SIDELOCK_PROFILE[j], SIDELOCK_PROFILE[(j + 1) % m]
+        if f0 and f1 and min(u0, u1) >= 0.0:                  # front, outer half
             G[:, j] = 2
     # the crease starts at sidelock_crease_top_z: above it both front halves share group 1
     zq = 0.5 * (mid[:-1, 2] + mid[1:, 2])
@@ -503,7 +676,7 @@ def _sidelock(rig: Rig, side: int) -> mk.Mesh:
     mesh = mk.loft(rings, "flat", "flat", groups=G, cap_groups=(1, 3))       # root cap smooth (buried)
     if side < 0:
         mesh = mesh.mirror_x()
-    return mesh
+    return mk.inscribed_fan(mesh)
 
 
 # ---------------------------------------------------------------------------------------------------------
@@ -543,24 +716,79 @@ def _strand(rig: Rig, lock_l: mk.Mesh) -> mk.Mesh:
 #: The curtain starts inside the dome and emerges from under it above the headband's buried ends:
 #: ``rig.curtain_top_rows`` replace the spec's first curtain row.
 BACK_GROOVE_DEPTH = 0.002
-BACK_STRAND_LINES = True            # the grooves are also group boundaries (4 strand lines on the back)
+BACK_STRAND_LINES = True            # the grooves are also group boundaries (strand lines on the back)
 BACK_BOTTOM_ROW_Z = 0.885           # last straight row above the clumps
 BACK_PLATE_ROWS = (1.180, 1.100, 1.010)   # 1.100: the spec row over the collar flap (merge fit)
 BACK_CURVE = 0.025                  # the plate curves forward by this at its lateral edges (s = +-1)
-BACK_EDGE_TAPER = 0.4               # thickness of the lateral edges (s = +-1), fraction of the row thickness
+#: Round 1 (T2): a transition row between the last crescent row (1.215) and the plate (1.18), so the
+#: curtain's outer edge and the plate's lateral edge form one continuous line.
+BACK_TRANSITION_Z = None
+#: Round 1 (F8 / T4): the hem.  Clumps of these relative widths (her right to her left) over the notch-row
+#: half-width HEM_HALF_WIDTH; each tip is a CLUMP_TIP_FLAT wide blunt end (0: a single tip vertex) on a
+#: convex-down hem (z rig.clump_tip_z at the middle, HEM_TIP_OUTER_Z at the outer clumps, quadratic in x);
+#: the notches stand NOTCH_DEPTHS above the higher of their two tips; the lateral edges come in to
+#: EDGE_BOTTOM (x, z).  (The review asked for 3 mm blunt tips; a tip pair costs two H2 columns, ~0.04 s of
+#: the TS still frame for all five, so the tips are single vertices on shallow 25-35 degree slopes.)
+CLUMP_WEIGHTS = (0.9, 1.15, 1.0, 1.2, 0.85)
+HEM_HALF_WIDTH = 0.150
+HEM_TIP_OUTER_Z = 0.842          # tip z of the outer clumps (the middle one: rig.clump_tip_z)
+CLUMP_TIP_FLAT = 0.0
+NOTCH_DEPTHS = (0.010, 0.014, 0.012, 0.009)
+EDGE_BOTTOM = (0.140, 0.851)
+#: Round 1 (T2): the column whose crescent point is at psi = +-90 degrees (the extreme-x vertex of every
+#: curtain row whose front edge comes forward past the side), and extra columns for a finer crescent.
+CRESCENT_SIDE_S = 0.90
+EXTRA_COLUMNS_S = (0.95,)
+#: Round 1 (F1): the curtain thins to CURTAIN_END_THICKNESS over the last CURTAIN_TAPER_DEG of its crescent
+#: (its front edge tucks into the sidelock; the end face is in the outer surface's group).
+CURTAIN_END_THICKNESS = 0.006
+CURTAIN_TAPER_DEG = 30.0
+#: Curtain rows at or above this height end inside the sidelock (their y_end is computed), but no further
+#: forward than CURTAIN_END_MIN_Y (at the temple the lock stands 4 cm in front of the curtain's side; a
+#: curtain reaching that far forward is never seen but is no longer culled by castplane's depth test for
+#: the face's hidden-line samples, which costs ~0.1 s of the TS still frame).
+CURTAIN_TUCK_MIN_Z = 1.28
+CURTAIN_END_MIN_Y = -0.038
+#: Thickness of the plate's lateral edges (fraction of the row thickness; round 1, T2: was 0.4).
+BACK_EDGE_TAPER = 0.7
 
 
 def _clump_columns(rig: Rig):
-    """Column parameters ``s`` (-1 = her right edge ... +1 = her left edge) and the bottom-row ``z`` of
-    each: edges, the 7 clump tips and the 6 notches between them."""
-    hw = rig.back_sheet_rows[-1][1]
-    tips = np.array(rig.clump_tip_x)
-    notches = 0.5 * (tips[1:] + tips[:-1])
-    xs = np.concatenate([[-hw], tips, notches, [hw]])
-    zs = np.concatenate([[rig.clump_notch_z], np.full(len(tips), rig.clump_tip_z),
-                         np.full(len(notches), rig.clump_notch_z), [rig.clump_notch_z]])
-    order = np.argsort(xs)
-    return xs[order] / hw, zs[order], notches / hw
+    """Columns of H2: ``(S, bottom (U, 2), notch_s, notch_cols)``: the column parameters ``S`` (-1 = her right
+    edge ... +1 = her left edge; ``x = S * hw`` on the plate rows), the ``(x, z)`` of each column on the
+    bottom (hem) row, and the S of the notches."""
+    W = HEM_HALF_WIDTH
+    w = np.array(CLUMP_WEIGHTS[:rig.hair_clumps] if len(CLUMP_WEIGHTS) >= rig.hair_clumps
+                 else (1.0,) * rig.hair_clumps, dtype=np.float64)
+    b = -W + 2.0 * W * np.concatenate([[0.0], np.cumsum(w)]) / w.sum()      # clump borders (notches)
+    centres = 0.5 * (b[1:] + b[:-1])
+    edge_x = centres[-1] if abs(centres[-1]) > abs(centres[0]) else -centres[0]
+
+    def tip_z(x):
+        return rig.clump_tip_z + (HEM_TIP_OUTER_Z - rig.clump_tip_z) * (x / edge_x) ** 2
+
+    pts = [(-EDGE_BOTTOM[0], EDGE_BOTTOM[1]), (EDGE_BOTTOM[0], EDGE_BOTTOM[1])]
+    for xc in centres:
+        if CLUMP_TIP_FLAT > 0.0:
+            pts += [(xc - 0.5 * CLUMP_TIP_FLAT, tip_z(xc)), (xc + 0.5 * CLUMP_TIP_FLAT, tip_z(xc))]
+        else:
+            pts.append((xc, tip_z(xc)))
+    notches = b[1:-1]
+    depths = (NOTCH_DEPTHS + (NOTCH_DEPTHS[-1],) * len(notches))[:len(notches)]
+    for k, xn in enumerate(notches):
+        pts.append((xn, max(tip_z(centres[k]), tip_z(centres[k + 1])) + depths[k]))
+    key = sorted(pts)
+    kx = np.array([p[0] for p in key])
+    kz = np.array([p[1] for p in key])
+    ks = np.array([p[0] / W for p in key])
+    ks[0], ks[-1] = -1.0, 1.0
+    S = list(ks)
+    for s in (CRESCENT_SIDE_S,) + tuple(EXTRA_COLUMNS_S):
+        S += [s, -s]
+    S = np.array(sorted(set(round(float(s), 9) for s in S)))
+    bx = np.interp(S, ks, kx)                  # the extra columns keep their order between the key points
+    bz = np.interp(bx, kx, kz)
+    return S, np.stack([bx, bz], axis=1), notches / W
 
 
 def _blouse_back(rig: Rig, x: float, z: float) -> float:
@@ -593,45 +821,114 @@ def _fit_back_rows(rig: Rig, rows, n_fixed: int):
     return [(o + shift[r][:, None] * dy, i + shift[r][:, None] * dy) for r, (o, i) in enumerate(rows)]
 
 
+def _crescent_psi(S, psi_end: float) -> np.ndarray:
+    """Crescent angle of each column: ``|S| <= CRESCENT_SIDE_S`` spans 0..90 degrees and the rest
+    90 degrees..``psi_end`` when the row's front edge comes forward past the side; else linear in S."""
+    a = np.abs(S)
+    if psi_end > 0.5 * math.pi + 1e-9:
+        p = np.where(a <= CRESCENT_SIDE_S, a / CRESCENT_SIDE_S * 0.5 * math.pi,
+                     0.5 * math.pi + (a - CRESCENT_SIDE_S) / (1.0 - CRESCENT_SIDE_S) * (psi_end - 0.5 * math.pi))
+    else:
+        p = a * psi_end
+    return np.sign(S) * p
+
+
+def _crescent_thickness(t: float, psi, psi_end: float) -> np.ndarray:
+    """Thickness along a crescent row: ``t``, thinning to :data:`CURTAIN_END_THICKNESS` over the last
+    :data:`CURTAIN_TAPER_DEG` before a front edge that comes forward past the side."""
+    if psi_end <= 0.5 * math.pi + 1e-9:
+        return np.full(len(psi), t)
+    span = min(math.radians(CURTAIN_TAPER_DEG), psi_end - 0.5 * math.pi)
+    k = _smoothstep(psi_end - span, psi_end, np.abs(psi))
+    return t - (t - min(t, CURTAIN_END_THICKNESS)) * k
+
+
+def _tucked_psi_end(rig: Rig, z: float, ellipse) -> float:
+    """Crescent angle at which the middle of the curtain's (tapered) front end lies on the sidelock's
+    middle surface at height ``z`` (the end face is buried in the lock).  ``ellipse(psi, inset)`` gives the
+    crescent point ``inset`` inside the outer surface."""
+    inner, outer = _sidelock_section(rig, z)
+    d = outer - inner
+    w = float(np.linalg.norm(d))
+    acr = d / w
+    nrm = np.array([acr[1], -acr[0]])
+    if nrm[1] > 0:
+        nrm = -nrm                                           # forward
+    th = rig.sidelock_thickness
+    best = None
+    prev = None
+    for psi in np.radians(np.linspace(92.0, 160.0, 341)):
+        q = ellipse(psi, 0.5 * CURTAIN_END_THICKNESS)
+        s = float((q - inner) @ acr) / w
+        u = 2.0 * s - 1.0
+        midv = (SIDELOCK_FRONT_SHARE - 0.5) * th * max(0.0, 1.0 - u * u) ** SIDELOCK_FULLNESS
+        g = float((q - inner) @ nrm) - midv
+        if prev is not None and prev < 0.0 <= g and 0.1 < s < 0.95:
+            best = psi
+            break
+        if ellipse(psi, 0.0)[1] < CURTAIN_END_MIN_Y:
+            best = psi
+            break
+        prev = g
+    if best is None:
+        raise mk.MeshError(f"curtain row z {z}: no crossing with the sidelock")
+    return float(best)
+
+
 def _back_hair(rig: Rig, dome: mk.Mesh) -> mk.Mesh:
     """H2: one slab from inside the dome (the curtain crescents) through the back sheet plate to the
     clumps."""
-    S, zbot, notch_s = _clump_columns(rig)
+    S, bottom, notch_s = _clump_columns(rig)
     U = len(S)
-    c = np.array(rig.dome_center)
-    ax_d, ayf_d, az_d = rig.dome_radii
-    ayb_d = rig.dome_back_radius
 
-    def dome_section(z):
-        q = max(0.0, 1.0 - ((z - c[2]) / az_d) ** 2)
-        r = math.sqrt(q)
-        return ax_d * r, ayb_d * r
+    def ellipse_fn(cy, axc, by):
+        def f(psi, inset):
+            return np.array([(axc - inset) * math.sin(psi), cy + (by - inset) * math.cos(psi)])
+        return f
 
-    # crescent rows (z, cy, ax, back y, t, y_end): the rows emerging from the dome, then the spec table
+    def dome_fn(z, off):
+        def f(psi, inset):
+            p, n = _dome_section_point(rig, z, psi)
+            return (p + (off - inset) * n)[:2]
+        return f
+
+    # crescent rows (z, outline(psi, inset), t, psi_end): the rows emerging from the dome, then the table
+    table = [tuple(r) for r in rig.curtain_rows[1:]]
     cres = []
-    first = rig.curtain_rows[0]
+    for z, cy, axc, yb_o, t, y_end in table:
+        f = ellipse_fn(cy, axc, yb_o - cy)
+        if z >= CURTAIN_TUCK_MIN_Z:
+            pe = _tucked_psi_end(rig, z, f)
+        else:
+            pe = math.acos(float(np.clip((y_end - cy) / (yb_o - cy), -1.0, 1.0)))
+        cres.append((z, f, t, pe))
+    top_pe = cres[0][3]
+    top = []
     for z, off, t in rig.curtain_top_rows:
-        hwd, byd = dome_section(z)
-        y_end = first[5] + (0.004 if off < 0 else 0.0)
-        cres.append((z, c[1], hwd + off, c[1] + byd + off, t, y_end))
-    cres += [tuple(r) for r in rig.curtain_rows[1:]]
+        f = dome_fn(z, off)
+        if off >= 0.0:
+            pe = _tucked_psi_end(rig, z, f)
+        else:                                  # inside the dome: end a little behind the tucked rows
+            pe = top_pe - math.radians(3.0)
+        top.append((z, f, t, pe))
     rows = []
-    for z, cy, axc, yb_o, t, y_end in cres:
-        by = yb_o - cy
-        psi_end = math.acos(np.clip((y_end - cy) / by, -1.0, 1.0))
-        psi = S * psi_end
-        o = np.stack([axc * np.sin(psi), cy + by * np.cos(psi), np.full(U, z)], axis=1)
-        i = np.stack([(axc - t) * np.sin(psi), cy + (by - t) * np.cos(psi), np.full(U, z)], axis=1)
-        rows.append((o, i))
+    for z, f, t, pe in top + cres:
+        psi = _crescent_psi(S, pe)
+        tt = _crescent_thickness(t, psi, pe)
+        o = np.array([f(p, 0.0) for p in np.abs(psi)])
+        i = np.array([f(p, ti) for p, ti in zip(np.abs(psi), tt)])
+        o[:, 0] *= np.sign(S)
+        i[:, 0] *= np.sign(S)
+        rows.append((np.column_stack([o, np.full(U, z)]), np.column_stack([i, np.full(U, z)])))
     # plate rows: x = s * hw, curving forward at the edges, kept off the body
     sheet = np.array(rig.back_sheet_rows)
 
-    def plate_row(z, zs_row=None):
+    def plate_row(z, zs_row=None, xs_row=None):
         hw = float(np.interp(z, sheet[::-1, 0], sheet[::-1, 1]))
         yi = float(np.interp(z, sheet[::-1, 0], sheet[::-1, 2]))
         yo = float(np.interp(z, sheet[::-1, 0], sheet[::-1, 3]))
         zz = np.full(U, z) if zs_row is None else zs_row
-        x = S * hw
+        x = S * hw if xs_row is None else xs_row
         curve = BACK_CURVE * S ** 2
         y_in = yi - curve
         y_out = yo - curve
@@ -643,22 +940,30 @@ def _back_hair(rig: Rig, dome: mk.Mesh) -> mk.Mesh:
         return (np.stack([x, y_out, zz], axis=1), np.stack([x, y_in, zz], axis=1))
 
     n_fixed = len(rows)
+    first_plate = plate_row(BACK_PLATE_ROWS[0])
+    last_cres = rows[-1]
+    if BACK_TRANSITION_Z is not None:
+        a = (last_cres[0][0, 2] - BACK_TRANSITION_Z) / (last_cres[0][0, 2] - BACK_PLATE_ROWS[0])
+        rows.append(tuple((1.0 - a) * lc + a * fp for lc, fp in zip(last_cres, first_plate)))
     rows += [plate_row(z) for z in BACK_PLATE_ROWS + (BACK_BOTTOM_ROW_Z,)]
-    rows.append(plate_row(rig.clump_notch_z, zbot))
+    rows.append(plate_row(rig.clump_notch_z, bottom[:, 1], bottom[:, 0]))
     rows = _fit_back_rows(rig, rows, n_fixed)
-    groove_s = [s for s in notch_s if abs(s) < 0.5]
-    gcols = [int(np.argmin(np.abs(S - s))) for s in groove_s]
-    return _h2_slab(rig, rows, gcols)
+    groove_s = sorted(notch_s, key=lambda s: (abs(s), s))[:rig.hair_grooves]
+    gcols = sorted(int(np.argmin(np.abs(S - s))) for s in groove_s)
+    n_cres = len(top) + len(cres)
+    return _h2_slab(rig, rows, gcols, n_cres)
 
 
-def _h2_slab(rig: Rig, rows, gcols) -> mk.Mesh:
+def _h2_slab(rig: Rig, rows, gcols, n_cres: int) -> mk.Mesh:
     """Slab through H2 rows ``[(outer (U, 3), inner (U, 3)), ...]`` with the strand grooves at the columns
-    ``gcols`` (2 mm deep below ``groove_top_z``) and the outer strips between them in their own groups."""
+    ``gcols`` (2 mm deep below ``groove_top_z``) and the outer strips between them in their own groups.  The
+    first ``n_cres`` rows are curtain crescents (their end columns are the front edges, already tapered)."""
     Fo = np.stack([o for o, _ in rows], axis=1)               # (U, V, 3)
     Bi = np.stack([i for _, i in rows], axis=1)
     U, V = Fo.shape[:2]
-    for k in (0, U - 1):                                      # thin lateral edges: a lock edge, not a board
-        Fo[k] = Bi[k] + BACK_EDGE_TAPER * (Fo[k] - Bi[k])
+    for k in (0, U - 1):                                      # plate: thinner lateral edges
+        for j in range(n_cres, V):
+            Fo[k, j] = Bi[k, j] + BACK_EDGE_TAPER * (Fo[k, j] - Bi[k, j])
     for j in range(V):
         z = Fo[0, j, 2]
         depth = BACK_GROOVE_DEPTH * float(_smoothstep(rig.groove_top_z, rig.groove_top_z - 0.08, z))
@@ -675,7 +980,12 @@ def _h2_slab(rig: Rig, rows, gcols) -> mk.Mesh:
     nstrips = len(edges) - 1
     g_in = nstrips + 1
     rims = _rims_by_light(Fo, Bi, front, g_in, nstrips + 2)
-    return slab(Fo, Bi, (front, g_in, rims["v0"], rims["v1"], rims["u0"], rims["u1"]))
+    # round 1 (F1 / T2): the front end faces of the curtain and the plate's lateral faces are in the outer
+    # surface's group: they draw only as silhouettes (no blunt end lines, one continuous outer edge)
+    u0 = [int(front[0][v]) for v in range(V - 1)]
+    u1 = [int(front[U - 2][v]) for v in range(V - 1)]
+    return mk.inscribed_fan(slab(Fo, Bi, (front, g_in, rims["v0"], rims["v1"], u0, u1)))
+
 
 
 def _rims_by_light(F, B, front, g_back: int, g_rim: int) -> dict:
@@ -711,6 +1021,7 @@ def _rims_by_light(F, B, front, g_back: int, g_rim: int) -> dict:
 
 def build(rig: Rig):
     """Parts of :data:`REGIONS` for ``rig``."""
+    rig = r1_rig(rig)
     dome = _dome(rig)
     band, ridge = _headband(rig, dome)
     bangs = _bangs(rig, dome)

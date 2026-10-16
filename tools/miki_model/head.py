@@ -45,12 +45,47 @@ REGIONS = ("head", "eyes", "face_marks")
 SIDES = (1, -1)                    # her left (+X), her right (-X)
 
 # ---------------------------------------------------------------------------------------------------------
+# Review round 1 values of rig fields (owner: head agent; rig.py is shared, so they are applied here and
+# reported as wanted rig changes).  A field is replaced only while it still has its rig.py default, so a
+# ``--rig`` override wins.
+# ---------------------------------------------------------------------------------------------------------
+R1_RIG = {
+    # F12: a small but more forward chin (the lower face sloped ~32 degrees back in profile)
+    "head_profile": tuple(
+        (z, hw, {1.262: -0.076, 1.257: -0.073, 1.255: -0.070}.get(z, yf), yb)
+        for z, hw, yf, yb in Rig.head_profile),
+    "jaw_underside": ((-0.070, 1.255), (-0.050, 1.258), (-0.038, 1.263), (-0.026, 1.272)),
+    # F10: the inner corner closes under the lid line (was a 6 mm blunt vertical edge)
+    "sclera_lower": ((0.019, 1.3478), (0.028, 1.327), (0.040, 1.323), (0.052, 1.326), (0.061, 1.3455)),
+    # F11: heavier upper lid (11-13 % of the eye width); the bottom edge stays where it was, the band grows up
+    "lid_band_height": (0.0022, 0.0045),
+    "lid_band_inner": (0.018, 1.3496),
+    "lid_band_outer": (0.062, 1.3520),
+}
+_DEFAULT_RIG = Rig()
+
+
+def apply_overrides(rig: Rig, table: dict) -> Rig:
+    """``rig`` with the fields of ``table`` that still have their rig.py default replaced."""
+    changes = {k: v for k, v in table.items() if getattr(rig, k) == getattr(_DEFAULT_RIG, k)}
+    return rig.replace(**changes) if changes else rig
+
+
+def r1_rig(rig: Rig) -> Rig:
+    """``rig`` with the head module's round-1 values (:data:`R1_RIG`); ``hair.py`` uses it too."""
+    return apply_overrides(rig, R1_RIG)
+
+
+# ---------------------------------------------------------------------------------------------------------
 # Tessellation of the skin head (module constants: they choose the mesh, not the shape, so they are not rig
 # fields).  Rows are the section heights between the skull-top pole and the chin pole; they are dense on
 # the face (silhouette in every view, decals follow the facets) and sparse on the hair-covered skull.
 # ---------------------------------------------------------------------------------------------------------
 HEAD_ROWS = (1.445, 1.400, 1.380, 1.360, 1.342, 1.333, 1.325, 1.312, 1.304, 1.296,
-             1.286, 1.278, 1.272, 1.2665, 1.2615, 1.2575)
+             1.286, 1.278, 1.272, 1.2708, 1.2665, 1.2615, 1.2575)
+#: Round 1 (T1): the ring at 1.2708 spreads the turn from the face into the jaw underside (the section's
+#: centre jumps from the face offset to the middle of the jaw there), and the quads use their valley
+#: diagonals (:func:`meshkit.inscribed_fan`): together they close the jaw outline in front views.
 #: Arc-length fractions of the ring points on the front half-section, from the midline (0) to the side (1).
 #: 0.738 splits the jaw-corner column: without it the jaw outline folds behind the cheek facet above the
 #: jaw underside and shows a gap in front views from eye height.
@@ -163,7 +198,7 @@ def _head_mesh(rig: Rig) -> mk.Mesh:
     rings = [_head_ring(rig, z) for z in HEAD_ROWS]
     chin = rig.head_profile[-1]
     apex_chin = (0.0, chin[2] + CHIN_POLE_DY, chin[0])
-    return mk.loft(rings, "flat", ("pole", apex_chin), groups=1, cap_groups=(1, 1))
+    return mk.inscribed_fan(mk.loft(rings, "flat", ("pole", apex_chin), groups=1, cap_groups=(1, 1)))
 
 
 class SkinSurface:
@@ -495,6 +530,7 @@ def _decal(rig: Rig, grid_xz, relief: float, depth: float | None = None, stack: 
     depth = rig.eye_slab_depth if depth is None else depth
     G = np.asarray(grid_xz, dtype=np.float64)
     U, V = G.shape[:2]
+    rel = np.broadcast_to(np.asarray(relief, dtype=np.float64), (U,))     # per column (tapered marks)
     surf = skin_surface(rig)
     stack = DecalStack(rig) if stack is None else stack
     F = np.zeros((U, V, 3))
@@ -502,7 +538,7 @@ def _decal(rig: Rig, grid_xz, relief: float, depth: float | None = None, stack: 
     for i in range(U):
         for j in range(V):
             p, n = smooth_face(rig, *G[i, j])
-            F[i, j] = p + relief * n
+            F[i, j] = p + rel[i] * n
             N[i, j] = n
     _clear(F, N, G, stack.required_front_y, +1.0)
     mode, k = shrink
@@ -533,9 +569,12 @@ def _decal(rig: Rig, grid_xz, relief: float, depth: float | None = None, stack: 
 # eyes (§B.2)
 # ---------------------------------------------------------------------------------------------------------
 #: Columns / rows of the eye decal grids (tessellation, not shape).
-SCLERA_COLS, SCLERA_ROWS = 7, 3
-IRIS_COLS, IRIS_ROWS = 8, 3
-PUPIL_COLS, PUPIL_ROWS = 6, 3
+#: Round 1 (F10): 10 segments on the sclera's lower curve, 20 / 14 / 8 outline segments on iris / pupil /
+#: highlight (the outline of a column grid has 2 (cols - 1) + 2 segments; the review asked for 12 / 24 /
+#: 16 / 10, which costs ~0.1 s of the TS still frame for a difference hardly visible at drawing scale).
+SCLERA_COLS, SCLERA_ROWS = 11, 3
+IRIS_COLS, IRIS_ROWS = 10, 3
+PUPIL_COLS, PUPIL_ROWS = 7, 3
 HIGHLIGHT_COLS = 4
 #: The sclera / iris tops stay this far under the lid band's upper edge (hidden under it).
 LID_COVER = 0.0006
@@ -647,6 +686,22 @@ LOWER_LID_COLS = 5
 MOUTH_COLS = 7
 
 
+#: Round 1 (F17): the brow and the lid band thin to this relief over the outer RELIEF_TAPER_FRACTION of their
+#: length (where the face turns away), so they stay inside the profile outline.
+RELIEF_TAPER_END = 0.0004
+RELIEF_TAPER_FRACTION = 0.25
+
+
+def _tapered_relief(centre_xz, relief: float) -> np.ndarray:
+    """Per-column relief along the polyline ``centre_xz`` (inner end first): ``relief`` up to the last
+    :data:`RELIEF_TAPER_FRACTION` of its length, then linear down to :data:`RELIEF_TAPER_END`."""
+    P = np.asarray(centre_xz, dtype=np.float64)
+    s = np.concatenate([[0.0], np.cumsum(np.linalg.norm(np.diff(P, axis=0), axis=1))])
+    s /= s[-1]
+    t = np.clip((s - (1.0 - RELIEF_TAPER_FRACTION)) / RELIEF_TAPER_FRACTION, 0.0, 1.0)
+    return relief + t * (min(relief, RELIEF_TAPER_END) - relief)
+
+
 def _line_intersection(p, d, q, e):
     """Intersection of the 2D lines ``p + s d`` and ``q + t e``."""
     M = np.array([[d[0], -e[0]], [d[1], -e[1]]])
@@ -684,8 +739,8 @@ def _lid_band(rig: Rig, side: int, stack: DecalStack) -> mk.Mesh:
     half = np.concatenate([hw_main, hw_arc, hw_tail])
     g = band_grid(centre_line, half)
     g[..., 0] *= side
-    return _decal(rig, g, rig.lid_band_relief, rig.eye_slab_depth + 0.5 * LAYER_DEPTH_STEP, stack,
-                  shrink=("across", BAND_SHRINK))
+    return _decal(rig, g, _tapered_relief(centre_line, rig.lid_band_relief),
+                  rig.eye_slab_depth + 0.5 * LAYER_DEPTH_STEP, stack, shrink=("across", BAND_SHRINK))
 
 
 def _brow(rig: Rig, side: int) -> mk.Mesh:
@@ -697,9 +752,10 @@ def _brow(rig: Rig, side: int) -> mk.Mesh:
     half = 0.5 * (w0 + (w1 - w0) * t)
     half[0] *= 0.75                                           # slightly rounded stroke ends
     half[-1] *= 0.6
-    g = band_grid(np.stack([xs, zs], axis=1), half)
+    centre = np.stack([xs, zs], axis=1)
+    g = band_grid(centre, half)
     g[..., 0] *= side
-    return _decal(rig, g, rig.brow_relief, shrink=("across", BAND_SHRINK))
+    return _decal(rig, g, _tapered_relief(centre, rig.brow_relief), shrink=("across", BAND_SHRINK))
 
 
 def _lower_lid(rig: Rig, side: int, stack: DecalStack) -> mk.Mesh:
@@ -737,6 +793,7 @@ def _mouth(rig: Rig) -> mk.Mesh:
 
 def build(rig: Rig):
     """Parts of :data:`REGIONS` for ``rig``."""
+    rig = r1_rig(rig)
     parts = [Part("head.skin", "skin", skin_surface(rig).mesh, "head")]
     marks = []
     for side in SIDES:
