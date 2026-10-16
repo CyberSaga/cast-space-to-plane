@@ -1134,3 +1134,109 @@ def feature_silhouette_vertices(mesh: Mesh, light_dir, smooth_angle_deg: float =
         if not smooth:
             out.update((a, b))
     return np.array(sorted(out), dtype=np.int64)
+
+
+# --- additions by body ---------------------------------------------------------------------------------
+# Helpers added by the body / limbs builder (body.py, limbs.py).  Appended only; nothing above is changed.
+
+def catmull_rom(points, n: int, alpha: float = 0.5) -> np.ndarray:
+    """``n`` points at equal arc length on the open centripetal Catmull-Rom spline through ``points``
+    (both end points kept; the end tangents mirror the neighbouring segment)."""
+    P = np.asarray(points, dtype=np.float64)
+    if P.shape[0] < 3:
+        return resample_polyline(P, n)
+    Q = np.concatenate([2 * P[:1] - P[1:2], P, 2 * P[-1:] - P[-2:-1]], axis=0)
+    dense = []
+    for i in range(1, Q.shape[0] - 2):
+        p0, p1, p2, p3 = Q[i - 1], Q[i], Q[i + 1], Q[i + 2]
+        t0 = 0.0
+        t1 = t0 + max(float(np.linalg.norm(p1 - p0)), 1e-12) ** alpha
+        t2 = t1 + max(float(np.linalg.norm(p2 - p1)), 1e-12) ** alpha
+        t3 = t2 + max(float(np.linalg.norm(p3 - p2)), 1e-12) ** alpha
+        for t in np.linspace(t1, t2, 24, endpoint=False):
+            a1 = (t1 - t) / (t1 - t0) * p0 + (t - t0) / (t1 - t0) * p1
+            a2 = (t2 - t) / (t2 - t1) * p1 + (t - t1) / (t2 - t1) * p2
+            a3 = (t3 - t) / (t3 - t2) * p2 + (t - t2) / (t3 - t2) * p3
+            b1 = (t2 - t) / (t2 - t0) * a1 + (t - t0) / (t2 - t0) * a2
+            b2 = (t3 - t) / (t3 - t1) * a2 + (t - t1) / (t3 - t1) * a3
+            dense.append((t2 - t) / (t2 - t1) * b1 + (t - t1) / (t2 - t1) * b2)
+    dense.append(P[-1])
+    return resample_polyline(np.array(dense), n)
+
+
+def polyline_at(points, fractions) -> np.ndarray:
+    """Points at the given arc-length fractions (0..1) of the open polyline ``points``."""
+    P = np.asarray(points, dtype=np.float64)
+    seg = np.linalg.norm(np.diff(P, axis=0), axis=1)
+    s = np.concatenate([[0.0], np.cumsum(seg)]) / seg.sum()
+    f = np.asarray(fractions, dtype=np.float64)
+    return np.stack([np.interp(f, s, P[:, k]) for k in range(P.shape[1])], axis=1)
+
+
+def strip_plate(side_a, side_b, normal, thickness: float, offset: str = "centre", tip: bool = True,
+                group: int = 1) -> Mesh:
+    """Closed plate between two polylines ``side_a`` / ``side_b`` ``(n, 3)`` running from the plate's
+    root to its far end; with ``tip=True`` their last points coincide (a pointed or obliquely cut end:
+    the last face is a triangle and the tip is one edge across the thickness).  ``normal`` (3,) or
+    ``(n, 3)`` is the thickness direction per station; ``offset`` as in :func:`thicken`.  Every face has
+    ``group`` (the outline draws as a silhouette).  Faces are quads and triangles."""
+    A = np.asarray(side_a, dtype=np.float64)
+    B = np.asarray(side_b, dtype=np.float64)
+    n = A.shape[0]
+    N = np.array(np.broadcast_to(np.asarray(normal, dtype=np.float64), (n, 3)))
+    N /= np.linalg.norm(N, axis=1)[:, None]
+    a, b = {"centre": (0.5, 0.5), "outward": (1.0, 0.0), "inward": (0.0, 1.0)}[offset]
+    m = n - 1 if tip else n
+    top = np.concatenate([A + a * thickness * N, B[:m] + a * thickness * N[:m]])
+    bot = np.concatenate([A - b * thickness * N, B[:m] - b * thickness * N[:m]])
+    V = np.concatenate([top, bot])
+    nt = top.shape[0]
+
+    def ia(i, k=0):
+        return k * nt + i
+
+    def ib(i, k=0):
+        return k * nt + (n + i if i < m else n - 1)
+
+    faces = []
+    for i in range(n - 1):
+        last = tip and i == n - 2
+        if last:
+            faces.append([ia(i), ia(i + 1), ib(i)])
+            faces.append([ia(i, 1), ib(i, 1), ia(i + 1, 1)])
+            faces.append([ib(i), ia(i + 1), ia(i + 1, 1), ib(i, 1)])
+        else:
+            faces.append([ia(i), ia(i + 1), ib(i + 1), ib(i)])
+            faces.append([ia(i, 1), ib(i, 1), ib(i + 1, 1), ia(i + 1, 1)])
+            faces.append([ib(i), ib(i + 1), ib(i + 1, 1), ib(i, 1)])
+        faces.append([ia(i), ia(i, 1), ia(i + 1, 1), ia(i + 1)])
+    faces.append([ia(0), ib(0), ib(0, 1), ia(0, 1)])
+    if not tip:
+        faces.append([ia(n - 1), ia(n - 1, 1), ib(n - 1, 1), ib(n - 1)])
+    return _outward(Mesh(V, faces, group))
+
+
+def ridge_band(border_a, border_b, normals, height: float, periodic: bool = True, group: int = 1) -> Mesh:
+    """Thin decal band with a flat triangular section (3 faces per station step): the two borders
+    ``(U, 3)`` lie on (or just above) the decorated surface and the ridge rises ``height`` along
+    ``normals`` ``(U, 3)`` midway between them.  Seen from almost any side both borders are camera
+    silhouettes (the bottom face looks away), and the ridge edge is not, so one group draws the stripe's
+    two border lines.  ``periodic`` closes the band around (a ring); otherwise the ends get triangles."""
+    A = np.asarray(border_a, dtype=np.float64)
+    B = np.asarray(border_b, dtype=np.float64)
+    Nn = np.asarray(normals, dtype=np.float64)
+    Nn = Nn / np.linalg.norm(Nn, axis=1)[:, None]
+    U = A.shape[0]
+    R = 0.5 * (A + B) + height * Nn
+    V = np.concatenate([A, R, B])
+    faces = []
+    steps = U if periodic else U - 1
+    for j in range(steps):
+        k = (j + 1) % U
+        faces.append([j, k, U + k, U + j])
+        faces.append([U + j, U + k, 2 * U + k, 2 * U + j])
+        faces.append([2 * U + j, 2 * U + k, k, j])
+    if not periodic:
+        faces.append([0, U, 2 * U])
+        faces.append([U - 1, 3 * U - 1, 2 * U - 1])
+    return _outward(Mesh(V, faces, group))
