@@ -371,7 +371,7 @@ def _collar(rig: Rig, torso: Torso):
         bis = segs[0] + segs[-1]
         bis /= np.linalg.norm(bis)
         off[j] = bis / max(0.5, float(np.dot(bis, segs[0])))
-    vfrac = (0.0, None, None, 0.6, 1.0)
+    vfrac = (0.0, None, None, 0.4, 0.72, 1.0)
     Q1, Q2 = np.zeros((U, 3)), np.zeros((U, 3))
     for j in range(U):
         w = float(np.linalg.norm(inner[j] - outer[j]))
