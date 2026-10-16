@@ -91,7 +91,10 @@ JAW_RINGS = (
 #: Round 3 (F3): per jaw ring, how far its rim (side) points rise above ``zf``; the front points rise by
 #: ``lift * (|x| / hw)^2`` (the midline stays on the profile), so from the front the outline narrows into a
 #: small rounded chin.
-JAW_RIM_LIFT = (0.0015, 0.0026, 0.003, 0.0012, 0.0006, 0.0, 0.0)   # outline 47 -> 15 degrees, chin ~19 mm wide
+#: Round 4 (F15): the side points of the first five rings rise 2 mm more (were 0.0015, 0.0026, 0.003, 0.0012,
+#: 0.0006): seen from below (az 15, el -35) the jaw line was still a nearly flat bar with a step at the near jaw
+#: corner; now it bows up toward the jaw angles (PDF p.18's U).
+JAW_RIM_LIFT = (0.0035, 0.0046, 0.005, 0.0032, 0.0026, 0.0, 0.0)   # outline 47 -> 15 degrees, chin ~19 mm wide
 #: P20 lies at the given z on the neck, JUNCTION_INSET inside its surface: about level (1.265) where the
 #: rim descends from the jaw angle (so the strips from the rim into the neck do not twist), then rising to
 #: the throat.  The inside-the-neck midline points start at JAW_INSIDE_START_Z.
@@ -129,9 +132,17 @@ def _interp_rows(rows, z, col):
     raise ValueError(z)
 
 
+#: Round 4 (F4): fuller cheeks just below the eyes (PDF p.17, spec I.10): the half-widths of these
+#: ``rig.head_profile`` rows (were 0.074 / 0.071), so the face is ~0.0747 wide at 1.320 and ~0.0726 at 1.310
+#: (were 0.0728 / 0.0702) and then tapers quickly to the small chin; the cheek stays inside the sidelocks'
+#: inner edges (x 0.0745, 4.5 cm further forward).  Wanted as a rig change (``head_profile``).
+CHEEK_HW = {1.325: 0.0752, 1.312: 0.0738}
+
+
 def _base_profile(rig: Rig):
-    """The §B.1 profile with the nose row's front replaced by its neighbours' mean (the nose is a bump)."""
-    rows = list(rig.head_profile)
+    """The §B.1 profile with the nose row's front replaced by its neighbours' mean (the nose is a bump) and
+    the cheek rows widened (:data:`CHEEK_HW`)."""
+    rows = [(z, CHEEK_HW.get(round(z, 4), hw), yf, yb) for z, hw, yf, yb in rig.head_profile]
     nz = rig.nose_tip[2]
     for k, (z, hw, yf, yb) in enumerate(rows):
         if abs(z - nz) < 1e-9 and 0 < k < len(rows) - 1:
@@ -836,10 +847,17 @@ def _lid_band(rig: Rig, side: int, stack: DecalStack) -> mk.Mesh:
                   rig.eye_slab_depth + 0.5 * LAYER_DEPTH_STEP, stack, shrink=("across", BAND_SHRINK))
 
 
+#: Round 4 (F5): shorter brows closer to the eyes (PDF p.15): the rig's brow curve moved down by BROW_DROP and
+#: ending at x = BROW_OUTER_X (was rig.brow_outer x 0.058: 38.6 mm long, 18-31 mm above the lid), same slope.
+#: Wanted as a rig change (``brow_inner`` / ``brow_mid`` / ``brow_outer``).
+BROW_DROP = 0.003
+BROW_OUTER_X = 0.053
+
+
 def _brow(rig: Rig, side: int) -> mk.Mesh:
     pts = np.array([rig.brow_inner, rig.brow_mid, rig.brow_outer])
-    xs = np.linspace(pts[0, 0], pts[-1, 0], BROW_COLS)
-    zs = _smooth_curve(pts, xs)
+    xs = np.linspace(pts[0, 0], min(BROW_OUTER_X, pts[-1, 0]), BROW_COLS)
+    zs = _smooth_curve(pts, xs) - BROW_DROP
     t = (xs - xs[0]) / (xs[-1] - xs[0])
     w0, w1 = rig.brow_width
     half = 0.5 * (w0 + (w1 - w0) * t)
@@ -868,7 +886,9 @@ def _lower_lid(rig: Rig, side: int, stack: DecalStack) -> mk.Mesh:
 #: Round 3 (tech F6): a tiny nose mark (the anime nose of frame-000: a short dash under the tip, slightly to her
 #: left, the side away from the sun), ``(x, z)`` ends and its half height; a decal like the mouth, so the
 #: front view shows a nose too.
-NOSE_MARK = ((-0.0010, 1.3070), (0.0030, 1.3062))
+#: Round 4 (F3): 3 mm long, centred on the midline and ~4 mm lower (was x -0.001 ... 0.003 at z 1.307), under
+#: the bump's lower contour: at az 50-60 the dash crossed that contour into a small 'x'.
+NOSE_MARK = ((-0.0015, 1.3030), (0.0015, 1.3024))
 NOSE_MARK_HALF = 0.0005
 NOSE_MARK_COLS = 3
 
