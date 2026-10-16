@@ -62,11 +62,17 @@ BIB_SINK = 0.002                       # the bib's top row lies this far inside 
 BIB_UNDER_COLLAR = 0.009               # the bib reaches this far under the collar inner edge (6 mm left blouse
 #                                        showing between two columns at the lapel after the r1 shoulder change)
 SKIRT_FACING_INSET = 0.007             # the facing's top ring inside the pleated surface
+SKIRT_TWIST_SPLIT_DEG = 1.0            # pleat quads twisted more than this become two triangles (r4 F5)
 UNDERSKIRT = ((0.950, 0.100, -0.060, 0.055), (0.780, 0.150, -0.075, 0.090), (0.700, 0.157, -0.081, 0.092))
 #: The neck (review r1, F6 / T6): ``rig.neck_half_width`` is its half-width at the head end; toward the base it
 #: widens by this extra half-width ``(z, extra)`` (a 12 % taper with most of it in the last 15 mm: the flare
 #: into the trapezius, continued under the blouse).  The depth semi-axis scales with the half-width.
-NECK_FLARE = ((1.180, 0.0050), (1.205, 0.0045), (1.215, 0.0030), (1.228, 0.0012), (1.245, 0.0))
+#: Review r4 (F14, PDF p.14 item 4: a slimmer neck): the flare is 40 % of round 3's (root half-width 0.0262,
+#: was 0.028; 0.027 at the bottom inside the blouse, was 0.030).
+NECK_FLARE = ((1.180, 0.0020), (1.205, 0.0018), (1.215, 0.0012), (1.228, 0.0005), (1.245, 0.0))
+#: The depth semi-axis is ``rig.neck_y``'s half-depth times ``a / (rig.neck_half_width + NECK_DEPTH_FLARE)``:
+#: round 3's root flare, so the head end (where head.py's jaw joins the neck) keeps its round-3 section.
+NECK_DEPTH_FLARE = 0.0030
 NECK_BASE_Z = 1.215                    # ``rig.neck_y`` is the neck's front / back at this height (its root)
 NECK_TILT_DEG = 8.0                    # the axis leans forward: the top is in front of the base
 NECK_RING_Z = (1.180, 1.215, 1.236, 1.285)   # neck sections (ends inside torso / head; few: hidden-line cost)
@@ -74,6 +80,46 @@ NECK_BLOUSE_INSET = 0.003              # the blouse's neck-root row stays this f
 NECK_FIT = 0.85                        # ... and its ring within this ellipse measure of the neck (~2 mm in)
 #: A point inside the chest (the collar slab's and its stripe's normals point away from it).
 TORSO_CENTRE = (0.0, 0.012, 1.12)
+
+#: Review r4 (F1): narrow, sloping shoulders (ref1 / frame-000, ref3, the user's drawing; PDF p.14 item 5: square,
+#: wide shoulders look stiff, narrowed and sloping a little down they read soft).  The round-3 shoulder rose only
+#: ~12 deg from the neck to a square sleeve-cap corner 0.358 wide.  ``(rig field, round-3 value, round-4 value)``:
+#: :func:`shoulder_rig` uses the round-4 value wherever the rig still holds the round-3 one (so a ``--rig``
+#: override wins, and once rig.py adopts these values the substitution is a no-op; see the report's rig change
+#: requests).  body.py and limbs.py both build from ``shoulder_rig(rig)``.
+R4_SHOULDER = (
+    ("blouse_rows",
+     ((1.215, 0.0275, -0.019, 0.043), (1.180, 0.150, -0.055, 0.075), (1.130, 0.150, -0.085, 0.086),
+      (1.065, 0.130, -0.104, 0.085), (1.040, 0.132, -0.110, 0.085), (0.990, 0.128, -0.106, 0.080),
+      (0.940, 0.122, -0.098, 0.076), (0.900, 0.130, -0.100, 0.080)),
+     ((1.215, 0.0275, -0.019, 0.043), (1.166, 0.140, -0.055, 0.075), (1.130, 0.148, -0.085, 0.086),
+      (1.065, 0.130, -0.104, 0.085), (1.040, 0.132, -0.110, 0.085), (0.990, 0.128, -0.106, 0.080),
+      (0.940, 0.122, -0.098, 0.076), (0.900, 0.130, -0.100, 0.080))),
+    # (z, hw) of the convex shoulder from the neck root to the acromion: ~17 deg off the neck, ~35 deg at
+    # the collar's turn over the shoulder (O5), then rounding down into the sleeve
+    ("blouse_shoulder_hw",
+     ((1.215, 0.0275), (1.203, 0.083), (1.193, 0.112), (1.183, 0.130), (1.172, 0.142)),
+     ((1.215, 0.0275), (1.197, 0.086), (1.185, 0.106), (1.172, 0.121), (1.159, 0.132),
+      (1.145, 0.140))),
+    ("shoulder_joint_pos", (0.134, 0.005, 1.155), (0.126, 0.005, 1.137)),
+    ("sleeve_radii",
+     ((0.0, 0.045), (0.5, 0.045), (1.0, 0.043), (1.5, 0.044), (2.0, 0.044)),
+     ((0.0, 0.042), (0.5, 0.044), (1.0, 0.043), (1.5, 0.044), (2.0, 0.044))),
+    # O4 - O6 follow the lower shoulder (the collar is cast onto the blouse; these steer the casting rays)
+    ("collar_outer",
+     ((0.000, 0.085, 1.030), (0.105, 0.061, 1.030), (0.105, 0.070, 1.120), (0.110, 0.045, 1.188),
+      (0.118, 0.000, 1.192), (0.116, -0.058, 1.170), (0.082, -0.084, 1.136), (0.040, -0.097, 1.110),
+      (0.000, -0.099, 1.090)),
+     ((0.000, 0.085, 1.030), (0.105, 0.061, 1.030), (0.105, 0.070, 1.120), (0.110, 0.045, 1.178),
+      (0.118, 0.000, 1.182), (0.116, -0.058, 1.161), (0.082, -0.084, 1.136), (0.040, -0.097, 1.110),
+      (0.000, -0.099, 1.090))),
+)
+
+
+def shoulder_rig(rig: Rig) -> Rig:
+    """``rig`` with the :data:`R4_SHOULDER` values in place of the round-3 values it still holds."""
+    changes = {name: new for name, old, new in R4_SHOULDER if getattr(rig, name) == old}
+    return rig.replace(**changes) if changes else rig
 
 
 def _side_name(side: int) -> str:
@@ -260,7 +306,7 @@ def _neck_section(rig: Rig, z):
     head (:data:`NECK_FLARE`), its axis leaning forward by :data:`NECK_TILT_DEG` about ``NECK_BASE_Z``."""
     y0, y1 = rig.neck_y
     zs, extra = zip(*NECK_FLARE)
-    base = rig.neck_half_width + float(np.interp(NECK_BASE_Z, zs, extra))
+    base = rig.neck_half_width + NECK_DEPTH_FLARE
     a = rig.neck_half_width + float(np.interp(z, zs, extra))
     b = 0.5 * (y1 - y0) * a / base
     cy = 0.5 * (y0 + y1) - math.tan(math.radians(NECK_TILT_DEG)) * (z - NECK_BASE_Z)
@@ -380,10 +426,14 @@ def _fold_band(band: mk.Mesh) -> mk.Mesh:
     """A :func:`meshkit.ridge_band` with its two top quads per step folded on their ridge diagonal and its
     bottom quad on the valley diagonal (review r2, F4): where the collar top twists along a long step (the
     back flap's side edge, 34 mm per step, and the shoulder turn) the bottom quad's fan otherwise bulged up
-    through the 0.8 mm ridge and its back face showed (magenta) at the flap's lower side corner."""
-    U = band.n_vertices // 3
-    ridge = [not (len(f) == 4 and all(i < U or i >= 2 * U for i in f)) for f in band.faces]
-    return mk.fan_fold(band, ridge)
+    through the 0.8 mm ridge and its back face showed (magenta) at the flap's lower side corner.
+
+    Review r4: the bottom quad now folds on its ridge diagonal too (bulging down, toward the collar top it
+    floats over; its fan triangles stay >= 0.22 mm above the collar).  On the r4 shoulder's steeper, more
+    twisted turn the valley-folded bottom bulged up through the top faces at the front of the shoulder and
+    showed its back (magenta) in the low head views (up to 17 px per view); all-ridge shows none in 40 head
+    views and 7 flap / shoulder views."""
+    return mk.fan_fold(band, [True] * band.n_faces)
 
 
 def _collar(rig: Rig, torso: Torso, under: mk.Mesh | None = None):
@@ -692,7 +742,12 @@ def _skirt(rig: Rig):
         faces.append([v(3, j), v(3, j + 1), v(4, j + 1), v(4, j)])                  # inner facing
         faces.append([ceil, v(4, j), v(4, j + 1)])                                  # ceiling
         groups += [1, ab, ab, 4, 4, 4]           # waist cap: group 1 (half its rim is a hidden feature)
-    return mk._outward(mk.Mesh(V, faces, groups))
+    skirt = mk._outward(mk.Mesh(V, faces, groups))
+    # review r4 (F5): the pleat faces twist (depth 0 at pleat_top_z, pleat_depth at the hem); castplane
+    # decides a polygon's facing by its Newell normal but occludes with its fan triangles, so near the
+    # skirt's side outline a crease lost ~10 mm or drew dotted.  Split those quads into their two fan
+    # triangles (same diagonal, same shape; +32 polygons).
+    return mk.split_twisted(skirt, SKIRT_TWIST_SPLIT_DEG, only=[k % 6 == 2 for k in range(len(faces))])
 
 
 def _underskirt(rig: Rig):
@@ -711,6 +766,7 @@ def _underskirt(rig: Rig):
 
 def build(rig: Rig):
     """Parts of :data:`REGIONS` for ``rig``."""
+    rig = shoulder_rig(rig)
     torso = torso_model(rig)
     parts = []
     bib = _bib(rig, torso, np.array([torso.onto(p, 0.0) for p in _collar_edges(rig)[1]]))
