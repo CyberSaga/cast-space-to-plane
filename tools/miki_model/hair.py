@@ -44,7 +44,7 @@ import numpy as np
 from . import body as _body
 from . import mannequin as _mannequin
 from . import meshkit as mk
-from .head import SUN, SkinSurface, head_section, oriented, skin_surface, slab, slab_faces
+from .head import SUN, SkinSurface, adopt_r2, head_section, oriented, skin_surface, slab, slab_faces
 from .meshkit import Part
 from .rig import Rig
 
@@ -111,17 +111,27 @@ def _radial_hit(mesh: mk.Mesh, origin, direction):
 #: over the front, where the bangs, band and face silhouette are.
 #: Round 1 (F16): 26 azimuths (was 24), still densest over the front; the quads use their valley diagonals
 #: (:func:`meshkit.inscribed_fan`), which closes the crown outline's gaps.
-DOME_AZIMUTHS = (0, 15, 30, 45, 60, 75, 90, 105, 120, 135, 150, 165, 180, 195, 210, 225, 240, 250, 260, 270,
-                 280, 290, 300, 315, 330, 345)
+#: Round 2 (F3 tech / F5): the azimuths of the front half (180 ... 360 degrees: 12-degree steps, 10 over the
+#: face); the back half (0 ... 180) uses the side curtain's column angles (:func:`_dome_azimuths`), so the
+#: curtain's top rows run parallel to the dome's facets and the curtain covers the dome's rim at a constant
+#: small offset (no sawtooth seam where they cross, no piece of the rim poking through).
+DOME_FRONT_AZIMUTHS = tuple(range(192, 241, 12)) + (250, 260, 270, 280, 290) + tuple(range(300, 360, 12))
 #: Rings: constant-z rings over the crown (clean silhouettes), then rings blending down to the bottom boundary.
 DOME_FLAT_THETA = (8.0, 18.0, 28.0, 38.5, 49.0)   # constant-z rings (polar angle, degrees)
 #: Round 1 (F3 / F16): the blend rings lie at these heights behind the band (constant z there, so the
 #: curtain, whose rows sit at 1.458 and 1.452, crosses the dome along a level seam); in front they blend to
 #: the band line.  The last one is the bottom boundary.
-DOME_BLEND_BACK_Z = (1.472, 1.458, 1.452)
+#: Round 2 (F5): behind the band's visible span the dome now reaches its equator (DOME_BACK_BOTTOM_Z), where
+#: the curtain comes out from under it tangentially (rig.curtain_top_rows).
+DOME_BLEND_BACK_Z = (1.466, 1.436, 1.405)
 #: Bottom of the dome behind the headband's visible span (inside the side curtain; round 1: 1.452, the
 #: curtain row that stands 2.5 mm out, so no piece of the dome's rim pokes through the curtain's chords).
-DOME_BACK_BOTTOM_Z = 1.452
+DOME_BACK_BOTTOM_Z = 1.405
+#: ... reached DOME_BOTTOM_RAMP_DEG (azimuth) behind the end of the band's visible span (smoothstep from the
+#: band line).
+DOME_BOTTOM_RAMP_DEG = 25.0
+#: The dome ends along the band line over |x| <= DOME_BAND_SPAN_X (just past the bangs' ends, BANGS_END_X).
+DOME_BAND_SPAN_X = 0.073
 #: In front the dome ends this far below the band centreline (under the band's lower half).
 DOME_BAND_DROP = 0.002
 #: The fan closing the dome underneath ends here (inside the skull).
@@ -133,7 +143,7 @@ DOME_CAP_APEX = (0.0, 0.020, 1.440)
 DOME_SIDE_EXPONENT = 2.6
 DOME_SIDE_FADE = (30.0, 60.0)
 #: Round 1 (F4): the band ends here (was y -0.005) ...
-BAND_END_Y = -0.015
+BAND_END_Y = -0.013                 # round 2 (F6 tech): 2 mm further into the hair (was -0.015)
 #: ... and from ``rig.band_tuck_y`` back to its end it dives this much deeper into the hair (its end is
 #: buried >= 4 mm under the hair surface, no end cap shows).
 BAND_DIVE = 0.0075
@@ -206,12 +216,13 @@ def _dome_section_point(rig: Rig, z: float, psi: float):
 
 
 def _dome_bottom_z(rig: Rig, phi: float) -> float:
-    """z of the dome's bottom boundary at azimuth ``phi``: the band centre over the band's visible span
-    (round 1: up to ``rig.band_tuck_y``, so behind it the dome's lower rings stay level and the curtain
-    crosses them along a level seam), else :data:`DOME_BACK_BOTTOM_Z`."""
+    """z of the dome's bottom boundary at azimuth ``phi``: the band centre over the bangs (round 2: up to
+    :data:`DOME_BAND_SPAN_X`; the bangs come out from under the band there), then down to
+    :data:`DOME_BACK_BOTTOM_Z` (the dome covers the temple, where the sidelock's root comes out through its
+    surface, and the curtain's top)."""
     c = np.array(rig.dome_center)
     band = _band_line(rig)
-    band = band[band[:, 1] <= rig.band_tuck_y + 1e-9]
+    band = band[np.abs(band[:, 0]) <= DOME_BAND_SPAN_X + 1e-9]
     az_band = np.unwrap(np.arctan2(band[:, 1] - c[1], band[:, 0]))      # her right end ... her left end
     a = math.atan2(math.sin(phi), math.cos(phi))
     # bring a into the band's azimuth range (around -pi/2)
@@ -220,16 +231,29 @@ def _dome_bottom_z(rig: Rig, phi: float) -> float:
     while a < az_band.min() - math.pi:
         a += 2 * math.pi
     lo, hi = min(az_band[0], az_band[-1]), max(az_band[0], az_band[-1])
-    if not lo <= a <= hi:
-        return DOME_BACK_BOTTOM_Z
     order = np.argsort(az_band)
-    return float(np.interp(a, az_band[order], band[order, 2])) - DOME_BAND_DROP
+    if lo <= a <= hi:
+        return float(np.interp(a, az_band[order], band[order, 2])) - DOME_BAND_DROP
+    d_lo = (lo - a) % (2 * math.pi)
+    d_hi = (a - hi) % (2 * math.pi)
+    edge = lo if d_lo < d_hi else hi
+    z_edge = float(np.interp(edge, az_band[order], band[order, 2])) - DOME_BAND_DROP
+    k = float(_smoothstep(0.0, math.radians(DOME_BOTTOM_RAMP_DEG), min(d_lo, d_hi)))
+    return z_edge + k * (DOME_BACK_BOTTOM_Z - z_edge)
+
+
+def _dome_azimuths(rig: Rig):
+    """Dome ring azimuths (degrees, ascending): the curtain's back columns (crescent angle psi = |S| /
+    CRESCENT_SIDE_S * 90 degrees, azimuth 90 - psi) and :data:`DOME_FRONT_AZIMUTHS`."""
+    S = _clump_columns(rig)[0]
+    back = [round(90.0 - float(s) / CRESCENT_SIDE_S * 90.0, 6) for s in S if abs(s) <= CRESCENT_SIDE_S + 1e-9]
+    return tuple(sorted(set(back))) + DOME_FRONT_AZIMUTHS
 
 
 def _dome(rig: Rig) -> mk.Mesh:
     c = np.array(rig.dome_center)
     az = rig.dome_radii[2]
-    phis = np.radians(DOME_AZIMUTHS)
+    phis = np.radians(_dome_azimuths(rig))
     theta_b = []
     for phi in phis:
         zb = _dome_bottom_z(rig, phi)
@@ -528,7 +552,8 @@ SIDELOCK_ROOT_INSET = 0.005
 SIDELOCK_PROFILE = ((1.0, True), (0.6, True), (0.0, True), (-0.6, True), (-1.0, True), (0.0, False))
 SIDELOCK_FRONT_SHARE = 0.58
 SIDELOCK_FULLNESS = 0.8
-SIDELOCK_INSERT_AFTER = (5, 6)      # Catmull-Rom rows inserted after these table rows (the shoulder bend)
+#: Catmull-Rom rows inserted after these table rows (round 2, F15: none, the table has the shoulder-bend rows)
+SIDELOCK_INSERT_AFTER = ()
 SIDELOCK_ROOT_THICKNESS = 0.5       # the root row is this fraction of the lock thickness (it hides in the dome)
 
 
@@ -670,11 +695,14 @@ BACK_TRANSITION_Z = None
 #: EDGE_BOTTOM (x, z).  (The review asked for 3 mm blunt tips; a tip pair costs two H2 columns, ~0.04 s of
 #: the TS still frame for all five, so the tips are single vertices on shallow 25-35 degree slopes.)
 CLUMP_WEIGHTS = (0.9, 1.15, 1.0, 1.2, 0.85)
-HEM_HALF_WIDTH = 0.150
+HEM_HALF_WIDTH = 0.146             # round 2 (F12): the lateral edges taper in over the last 10 cm
 HEM_TIP_OUTER_Z = 0.842          # tip z of the outer clumps (the middle one: rig.clump_tip_z)
 CLUMP_TIP_FLAT = 0.0
 NOTCH_DEPTHS = (0.010, 0.014, 0.012, 0.009)
-EDGE_BOTTOM = (0.140, 0.851)
+EDGE_BOTTOM = (0.137, 0.851)
+#: Round 2 (F12): the plate's outer surface is this much prouder at the midline than at the lateral edges (a
+#: rounded cross-section; the thickness grows by it at the midline, quadratic in S).
+BACK_ROUND = 0.004
 #: Round 1 (T2): the column whose crescent point is at psi = +-90 degrees (the extreme-x vertex of every
 #: curtain row whose front edge comes forward past the side), and extra columns for a finer crescent.
 CRESCENT_SIDE_S = 0.90
@@ -871,7 +899,7 @@ def _back_hair(rig: Rig, dome: mk.Mesh) -> mk.Mesh:
         x = S * hw if xs_row is None else xs_row
         curve = BACK_CURVE * S ** 2
         y_in = yi - curve
-        y_out = yo - curve
+        y_out = yo - curve + BACK_ROUND * (1.0 - S ** 2)
         for k in range(U):
             need = _blouse_back(rig, x[k], zz[k]) + rig.back_sheet_gap
             if y_in[k] < need:
@@ -961,6 +989,7 @@ def _rims_by_light(F, B, front, g_back: int, g_rim: int) -> dict:
 
 def build(rig: Rig):
     """Parts of :data:`REGIONS` for ``rig``."""
+    rig = adopt_r2(rig)
     dome = _dome(rig)
     band, ridge = _headband(rig, dome)
     bangs = _bangs(rig, dome)
