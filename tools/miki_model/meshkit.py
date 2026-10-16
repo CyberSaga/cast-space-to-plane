@@ -1262,3 +1262,90 @@ def inscribed_fan(mesh: Mesh) -> Mesh:
                 f = f[1:] + f[:1]
         faces.append(f)
     return Mesh(V.copy(), faces, mesh.groups)
+
+
+# --- additions by body r2 ---
+
+def fan_fold(mesh: Mesh, ridge) -> Mesh:
+    """``mesh`` with each quad's vertex order rotated so that castplane's fan diagonal (first to third
+    vertex) is the quad's *ridge* diagonal (the fold bulges outward, seen from outside) where ``ridge[k]`` is
+    true and its *valley* diagonal elsewhere (as :func:`inscribed_fan`).  A thin closed band laid on a
+    twisting surface (a decal stripe) can otherwise intersect itself: the twisted bottom quad's fan bulges up
+    through the top faces and shows its back.  Bottom faces folded inward (valley) and top faces folded
+    outward (ridge) keep the two sides apart.  Topology, groups and vertices are unchanged."""
+    V = mesh.vertices
+    faces = []
+    for k, f in enumerate(mesh.faces):
+        f = list(f)
+        if len(f) == 4:
+            a, b, c, d = (V[i] for i in f)
+            n = np.cross(b - a, c - a)
+            is_ridge = float(n @ (d - a)) < 0.0   # d below triangle (a, b, c): a-c is the ridge diagonal
+            if is_ridge != bool(ridge[k]):
+                f = f[1:] + f[:1]
+        faces.append(f)
+    return Mesh(V.copy(), faces, mesh.groups)
+
+
+def surface_clearance(mesh: Mesh, points, directions) -> np.ndarray:
+    """Signed height of each point ``(P, 3)`` above the (fan-triangulated) surface ``mesh``, measured along
+    the line through it with unit ``directions`` ``(P, 3)`` (its "up"): the hit nearest to the point wins;
+    positive when the surface lies below (``-direction``), negative when the point is under the surface;
+    ``nan`` when the line misses the mesh."""
+    P = np.asarray(points, dtype=np.float64)
+    D = np.asarray(directions, dtype=np.float64)
+    tris, _ = triangulate(mesh.faces)
+    a, b, c = (mesh.vertices[tris[:, k]] for k in range(3))
+    e1, e2 = b - a, c - a                                         # (T, 3)
+    out = np.full(len(P), np.nan)
+    for i in range(len(P)):
+        d = -D[i]
+        h = np.cross(d, e2)
+        det = np.einsum("ij,ij->i", e1, h)
+        ok = np.abs(det) > 1e-14
+        f = np.where(ok, 1.0 / np.where(ok, det, 1.0), 0.0)
+        s = P[i] - a
+        u = f * np.einsum("ij,ij->i", s, h)
+        q = np.cross(s, e1)
+        v = f * (q @ d)
+        t = f * np.einsum("ij,ij->i", e2, q)
+        hit = ok & (u >= 0.0) & (v >= 0.0) & (u + v <= 1.0)
+        if hit.any():
+            th = t[hit]
+            out[i] = float(th[np.argmin(np.abs(th))])
+    return out
+
+
+def lift_band_borders(mesh: Mesh, border_a, border_b, up, clearance: float, samples: int = 7,
+                      passes: int = 12) -> np.ndarray:
+    """Per-station lift ``(U,)`` along ``up`` ``(U, 3)`` that keeps both straight-chord borders of a decal band
+    (``border_a`` / ``border_b`` ``(U, 3)``, stations in order) at least ``clearance`` above ``mesh`` at every
+    one of ``samples`` points per chord: a coarse band's chords sag through a curved, faceted surface, which
+    hides pieces of its border lines (dashed outlines).  Lifts only grow; deterministic."""
+    A = np.asarray(border_a, dtype=np.float64)
+    B = np.asarray(border_b, dtype=np.float64)
+    N = np.asarray(up, dtype=np.float64)
+    N = N / np.linalg.norm(N, axis=1)[:, None]
+    U = len(A)
+    lift = np.zeros(U)
+    ss = np.linspace(0.0, 1.0, samples)
+    for _ in range(passes):
+        bump = np.zeros(U)
+        for X in (A, B):
+            Q = X + lift[:, None] * N
+            pts, dirs, owners = [], [], []
+            for j in range(U - 1):
+                for s in ss:
+                    pts.append(Q[j] + s * (Q[j + 1] - Q[j]))
+                    d = (1.0 - s) * N[j] + s * N[j + 1]
+                    dirs.append(d / np.linalg.norm(d))
+                    owners.append(j)
+            h = surface_clearance(mesh, np.array(pts), np.array(dirs))
+            for j, hv in zip(owners, h):
+                if np.isfinite(hv) and hv < clearance:
+                    bump[j] = max(bump[j], clearance - hv)
+                    bump[j + 1] = max(bump[j + 1], clearance - hv)
+        if not np.any(bump > 1e-7):
+            break
+        lift += bump
+    return lift
