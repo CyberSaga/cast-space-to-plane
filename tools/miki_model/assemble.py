@@ -35,12 +35,12 @@ OBJECTS = (
     ("headband", "band, pink centre ridge"),
     ("scarf", "ribbons, tips"),
     ("sidelocks", "sidelocks H4 x2"),
-    ("blouse", "torso / blouse, sleeves with cuff rims"),
+    ("blouse", "torso / blouse"),
     ("collar", "collar, dickey, collar pink stripe"),
     ("back_hair", "side curtain + back sheet H2"),
-    ("hands", "hands x2"),
+    ("arm_l", "her left sleeve with its cuff rim, 2 cuff white stripes, hand + thumb"),
     ("face_marks", "brows, upper-lid bands, lower-lid marks, mouth"),
-    ("cuffs", "cuff white stripes x4"),
+    ("arm_r", "her right sleeve with its cuff rim, 2 cuff white stripes, hand + thumb"),
     ("legs", "legs x2"),
     ("socks", "socks x2"),
     ("skirt", "skirt, under-skirt block"),
@@ -67,13 +67,15 @@ MATERIALS = {
 }
 
 #: Default object of a part by its region (``Part.obj`` overrides it: e.g. ``hair`` parts that are
-#: sidelocks go to ``sidelocks``, the back hair to ``back_hair``, the scarf ring to ``ring``, the cuff
-#: stripes of ``arms`` to ``cuffs``).
+#: sidelocks go to ``sidelocks``, the back hair to ``back_hair``, the scarf ring to ``ring``).  ``None``:
+#: the region has no default and every part must set ``obj`` (``arms`` / ``hands`` go to ``arm_l`` or
+#: ``arm_r`` by side: one compact object per arm keeps the hidden-line pass from testing hand-to-hand
+#: image rectangles).
 REGION_OBJECTS = {
     "head": "head", "eyes": "eyes", "face_marks": "face_marks",
     "hair": "hair", "headband": "headband",
     "neck": "head", "torso": "blouse", "collar": "collar", "scarf": "scarf", "skirt": "skirt",
-    "arms": "blouse", "hands": "hands", "legs": "legs", "socks": "socks", "shoes": "shoes",
+    "arms": None, "hands": None, "legs": "legs", "socks": "socks", "shoes": "shoes",
 }
 
 #: Part modules in assembly order (each defines ``REGIONS`` and ``build(rig)``).
@@ -91,7 +93,7 @@ DECIMALS = 5
 
 assert set(mannequin.REGIONS) == set(ALL_REGIONS), "mannequin regions and module REGIONS disagree"
 assert set(REGION_OBJECTS) == set(ALL_REGIONS), "REGION_OBJECTS must name every region"
-assert set(REGION_OBJECTS.values()) <= set(OBJECT_IDS)
+assert set(REGION_OBJECTS.values()) - {None} <= set(OBJECT_IDS)
 
 
 class AssemblyError(ValueError):
@@ -149,9 +151,9 @@ def _resolve(p: mk.Part, where: str) -> mk.Part:
                             f"one of {list(MATERIALS)}")
     obj = p.obj
     if not obj:
-        if not p.region:
-            raise AssemblyError(f"part {p.name!r} ({where}) has neither obj nor region: set obj= to one of "
-                                f"{list(OBJECT_IDS)}")
+        if not p.region or REGION_OBJECTS.get(p.region, "") is None:
+            raise AssemblyError(f"part {p.name!r} ({where}) has no obj and its region {p.region!r} has no default "
+                                f"object: set obj= to one of {list(OBJECT_IDS)}")
         obj = REGION_OBJECTS[p.region]
     if obj not in OBJECT_IDS:
         raise AssemblyError(f"part {p.name!r} ({where}) has unknown object {obj!r}; one of {list(OBJECT_IDS)}")

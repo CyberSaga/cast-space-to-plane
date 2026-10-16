@@ -2,8 +2,8 @@
 
 Part contract (see ``assemble.py`` and the toolkit guide): :func:`build` takes the
 :class:`~miki_model.rig.Rig` and returns a list of :class:`~miki_model.meshkit.Part` covering **all** of
-:data:`REGIONS`.  Objects / materials: sleeves -> blouse (uniform); cuff white stripes -> ``obj="cuffs"``
-(collar); hands -> hands (skin); legs -> legs (skin); socks -> socks (socks); shoes -> shoes (shoes).
+:data:`REGIONS`.  Objects / materials: each side's sleeve (uniform), its two cuff white stripes (collar), hand
+and thumb (skin) -> ``obj="arm_l"`` / ``obj="arm_r"``; legs -> legs (skin); socks -> socks (socks); shoes -> shoes (shoes).
 
 Lines (spec §F): the sleeve is one smooth group and its cuff (5 mm rim turning in to the opening + the
 recessed disc) another, so the cuff rim always draws; the cuff stripes are single-group bands floating
@@ -43,14 +43,11 @@ SOCK_POINTS = 12
 LEG_Z = (0.720, 0.700, 0.500, 0.420, 0.370)          # the leg ends inside the sock
 SOCK_Z = (0.025, 0.065, 0.200, 0.320, 0.385)          # from inside the shoe to the sock top
 SHOE_OUTLINE_DEG = (0.0, 20.0, 42.0, 68.0, 98.0, 130.0, 158.0, 180.0)   # one side, toe -> heel
-SHOE_ANKLE_U = 0.040               # the shoe axis passes under the ankle centre this far from the heel back
-#                                    (spec: heel back at x 0.082 would put the ankle 1 cm off the shoe axis)
 #: Sole half-width factor B(u) along the foot (u from the heel back); half-width = B * sin(theta).
 SHOE_WIDTH = ((0.0, 0.060), (0.020, 0.056), (0.050, 0.0455), (0.100, 0.0435), (0.155, 0.0455),
               (0.195, 0.054), (0.225, 0.066))
 SHOE_OPENING = (0.045, 0.052, 0.041, 0.0345)   # opening centre u, forward / back / lateral semi-axes
 SHOE_TOPLINE_FRONT_Z = 0.063       # throat height (back / sides: rig.shoe_topline_z)
-SHOE_HEEL_SOLE = 0.022             # sole + heel block height at the back (front: rig.shoe_sole)
 SHOE_OPENING_FLOOR = 0.030
 STRAP_FLOAT = 0.0006               # the strap's chords cross the faceted upper: float it a little higher
 SHOE_STRAP_U = 0.122                # saddle strap centre from the heel back (spec: y ~ -0.07)
@@ -207,7 +204,7 @@ def _shoe(rig: Rig, side: int):
     u = uc + a * np.cos(th)
     Bu = np.interp(u, [q[0] for q in SHOE_WIDTH], [q[1] for q in SHOE_WIDTH])
     v = Bu * np.sin(th)
-    sole = rig.shoe_sole + (SHOE_HEEL_SOLE - rig.shoe_sole) * np.clip((0.085 - u) / 0.035, 0.0, 1.0)
+    sole = rig.shoe_sole + (rig.shoe_heel_height - rig.shoe_sole) * np.clip((0.085 - u) / 0.035, 0.0, 1.0)
     uo, af, ab, al = SHOE_OPENING
     # topline loop: the point of the opening ellipse in the direction of each outline point
     phi = np.arctan2(v / al, np.where(u >= uo, (u - uo) / af, (u - uo) / ab))
@@ -241,11 +238,11 @@ def _shoe(rig: Rig, side: int):
     nrm *= np.sign(np.einsum("ij,ij->i", nrm, out))[:, None]
     nrm /= np.linalg.norm(nrm, axis=1)[:, None]
     strap = mk.ridge_band(A_ + STRAP_FLOAT * nrm, B_ + STRAP_FLOAT * nrm, nrm, rig.strap_relief, periodic=False)
-    # place: local (u, v, z) -> world; the axis passes under the ankle centre at u = SHOE_ANKLE_U
+    # place: local (u, v, z) -> world; the axis passes under the ankle centre at u = rig.shoe_ankle_u
     f = rig.foot_dir(side)
     perp = np.array([-f[1], f[0], 0.0])                    # det [f, perp, z] = +1 (the shoe is symmetric in v)
     A = rig.ankle(side)
-    origin = np.array([A[0], A[1], 0.0]) - SHOE_ANKLE_U * f
+    origin = np.array([A[0], A[1], 0.0]) - rig.shoe_ankle_u * f
     M = np.stack([f, perp, np.array([0.0, 0.0, 1.0])], axis=1)
     return shoe.transform(M, origin), strap.transform(M, origin)
 
@@ -294,14 +291,14 @@ def build(rig: Rig):
     for side in SIDES:
         s = _side_name(side)
         sleeve, stripes = _sleeve(rig, side)
-        parts.append(Part(f"limbs.sleeve_{s}", "uniform", sleeve, "arms"))
+        parts.append(Part(f"limbs.sleeve_{s}", "uniform", sleeve, "arms", obj=f"arm_{s}"))
         for k, band in enumerate(stripes):
-            parts.append(Part(f"limbs.cuff_stripe_{s}{k}", "collar", band, "arms", obj="cuffs"))
+            parts.append(Part(f"limbs.cuff_stripe_{s}{k}", "collar", band, "arms", obj=f"arm_{s}"))
     for side in SIDES:
         s = _side_name(side)
         hand, thumb = _hand(rig, side)
-        parts.append(Part(f"limbs.hand_{s}", "skin", hand, "hands"))
-        parts.append(Part(f"limbs.thumb_{s}", "skin", thumb, "hands"))
+        parts.append(Part(f"limbs.hand_{s}", "skin", hand, "hands", obj=f"arm_{s}"))
+        parts.append(Part(f"limbs.thumb_{s}", "skin", thumb, "hands", obj=f"arm_{s}"))
     for side in SIDES:
         parts.append(Part(f"limbs.leg_{_side_name(side)}", "skin", _leg(rig, side), "legs"))
     for side in SIDES:

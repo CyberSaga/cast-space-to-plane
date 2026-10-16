@@ -30,10 +30,13 @@ How it is built (spec ``miki_spec.md`` §C):
 
 from __future__ import annotations
 
+import functools
 import math
 
 import numpy as np
 
+from . import body as _body
+from . import mannequin as _mannequin
 from . import meshkit as mk
 from .head import _SUN, SkinSurface, _oriented, _slab_faces, head_section, skin_surface, slab
 from .meshkit import Part
@@ -331,6 +334,104 @@ def _bangs(rig: Rig, dome: mk.Mesh) -> mk.Mesh:
 
 
 # ---------------------------------------------------------------------------------------------------------
+# Fit to the outfit (merge step): the hair rests on the collar / scarf that body.py builds
+# ---------------------------------------------------------------------------------------------------------
+#: body.py parts the sidelocks must stay in front of / the back sheet behind (probed along y).
+OUTFIT_FRONT = ("body.collar", "body.collar_stripe", "body.dickey", "body.bib", "body.blouse",
+                "body.scarf_ribbon_l", "body.scarf_ribbon_r", "body.scarf_tip_l", "body.scarf_tip_r", "body.ring")
+OUTFIT_BACK = ("body.collar", "body.collar_stripe", "body.blouse")
+OUTFIT_PROBE_STEPS = 8              # samples per span between two loft rows when checking the chords
+SIDELOCK_FIT_TOP_Z = 1.25           # sidelock rows below this are moved forward off the collar / scarf
+
+
+@functools.lru_cache(maxsize=4)
+def _outfit_triangles(rig: Rig, names: tuple) -> np.ndarray:
+    """Triangles ``(T, 3, 3)`` of the outfit parts ``names`` (body.py, or the mannequin's torso/collar/scarf
+    when body.py is not written)."""
+    parts = _body.build(rig)
+    if parts is None:                  # mannequin: every torso / collar / scarf part
+        parts = _mannequin.build(rig, ["torso", "collar", "scarf"])
+    else:
+        parts = [p for p in parts if p.name in names]
+    tris = []
+    for p in parts:
+        V = np.asarray(p.mesh.vertices, dtype=np.float64)
+        tris.extend(V[[f[0], f[k], f[k + 1]]] for f in p.mesh.faces for k in range(1, len(f) - 1))
+    return np.array(tris)
+
+
+def _outfit_y(T: np.ndarray, x: float, z: float, front: bool):
+    """Most forward (``front``: smallest y < 0) or most backward (largest y > 0) crossing of the line
+    ``(x, *, z)`` with the triangles ``T``; ``None`` when the line misses them."""
+    a, b, c = T[:, 0], T[:, 1], T[:, 2]
+    d = (b[:, 0] - a[:, 0]) * (c[:, 2] - a[:, 2]) - (b[:, 2] - a[:, 2]) * (c[:, 0] - a[:, 0])
+    w0 = (c[:, 0] - b[:, 0]) * (z - b[:, 2]) - (c[:, 2] - b[:, 2]) * (x - b[:, 0])
+    w1 = (a[:, 0] - c[:, 0]) * (z - c[:, 2]) - (a[:, 2] - c[:, 2]) * (x - c[:, 0])
+    w2 = (b[:, 0] - a[:, 0]) * (z - a[:, 2]) - (b[:, 2] - a[:, 2]) * (x - a[:, 0])
+    ok = np.abs(d) > 1e-14
+    s = np.where(d < 0, -1.0, 1.0)
+    m = ok & (w0 * s >= 0) & (w1 * s >= 0) & (w2 * s >= 0)
+    if not m.any():
+        return None
+    y = (w0[m] * a[m, 1] + w1[m] * b[m, 1] + w2[m] * c[m, 1]) / d[m]
+    y = y[y < 0] if front else y[y > 0]
+    if not len(y):
+        return None
+    return float(y.min()) if front else float(y.max())
+
+
+def _fit_rows(rows, deficit, movable, axis_sign, across: int = 0):
+    """Shift loft rows along y so ``deficit(p) <= 0`` holds at every row point and along the chords
+    between consecutive rows (:data:`OUTFIT_PROBE_STEPS` samples per span) and, with ``across > 0``, at
+    ``across`` samples between neighbouring columns too (a non-periodic sheet).
+
+    ``rows`` is a list of ``(K, 3)`` point arrays (per-column shifts), ``movable[r]`` says whether row
+    ``r`` may move and ``axis_sign`` is the y direction of a positive shift (-1 forward for the sidelocks,
+    +1 backward for the back sheet).  Returns the shifts ``(R, K)`` (>= 0, in the ``axis_sign``
+    direction).  A deficit inside a cell is shared by its corners by their bilinear weights, or carried by
+    the movable row alone."""
+    R = len(rows)
+    K = len(rows[0])
+    total = np.zeros((R, K))
+    ts = np.linspace(0.0, 1.0, OUTFIT_PROBE_STEPS + 1)
+    us = np.linspace(0.0, 1.0, across + 2)[:-1] if across else np.zeros(1)
+    dy = np.array([0.0, 1.0, 0.0])
+    for _ in range(60):
+        cur = [rows[r] + axis_sign * total[r][:, None] * dy for r in range(R)]
+        shift = np.zeros((R, K))
+        worst = 0.0
+        for r in range(R - 1):
+            if not (movable[r] or movable[r + 1]):
+                continue
+            for t in ts:
+                P = (1.0 - t) * cur[r] + t * cur[r + 1]
+                for k in range(K):
+                    for u in us:
+                        if u > 0.0 and k == K - 1:
+                            continue
+                        q = P[k] if u == 0.0 else (1.0 - u) * P[k] + u * P[k + 1]
+                        d = deficit(q)
+                        if d <= 0.0:
+                            continue
+                        worst = max(worst, d)
+                        d += 1e-4
+                        for kk, wu in ((k, 1.0 - u), (k + 1, u)):
+                            if wu <= 0.0:
+                                continue
+                            if movable[r] and movable[r + 1]:
+                                shift[r, kk] = max(shift[r, kk], d * (1.0 - t) * wu)
+                                shift[r + 1, kk] = max(shift[r + 1, kk], d * t * wu)
+                            elif movable[r + 1]:
+                                shift[r + 1, kk] = max(shift[r + 1, kk], d * wu / max(t, 0.25))
+                            else:
+                                shift[r, kk] = max(shift[r, kk], d * wu / max(1.0 - t, 0.25))
+        if worst <= 0.0:
+            break
+        total += shift
+    return total
+
+
+# ---------------------------------------------------------------------------------------------------------
 # H4 sidelocks (§C.3)
 # ---------------------------------------------------------------------------------------------------------
 #: Root rows added above the spec table: the lock rises into the dome under the band, narrowing,
@@ -376,6 +477,18 @@ def _sidelock(rig: Rig, side: int) -> mk.Mesh:
     rings = []
     for i in range(k):
         rings.append(mid[i] + prof[:, :1] * (0.5 * width[i]) * acr[i] + prof[:, 1:2] * (0.5 * th[i]) * nrm[i])
+    # fit (merge step): the lower rows lie on the lapel / scarf, so move them forward until the lock stays
+    # rig.hair_outfit_gap in front of the outfit; checked on both sides (the locks stay mirror images)
+    T = _outfit_triangles(rig, OUTFIT_FRONT)
+
+    def deficit(p):
+        ys = [_outfit_y(T, sx * p[0], p[2], True) for sx in (1.0, -1.0)]
+        ys = [y for y in ys if y is not None]
+        return p[1] - (min(ys) - rig.hair_outfit_gap) if ys else 0.0
+
+    movable = [bool(r[0, 2] < SIDELOCK_FIT_TOP_Z) for r in rings]
+    shift = _fit_rows(rings, deficit, movable, -1.0)
+    rings = [r - np.array([0.0, 1.0, 0.0]) * shift[i].max() for i, r in enumerate(rings)]   # rigid per row
     # groups: front inner half + back 1, front outer half 2: the crease and the outer edge are feature lines
     m = len(t)
     G = np.ones((k - 1, m), dtype=np.int64)
@@ -427,17 +540,13 @@ def _strand(rig: Rig, lock_l: mk.Mesh) -> mk.Mesh:
 # ---------------------------------------------------------------------------------------------------------
 # H2 side curtain + back sheet (§C.6)
 # ---------------------------------------------------------------------------------------------------------
-#: Rows replacing the spec's first curtain row: the curtain starts inside the dome and emerges from under it
-#: above the headband's buried ends, ``(z, offset from the dome section, thickness)`` (the spec row at z 1.45
-#: stands 6-8 mm outside the dome and would leave a ledge).
-CURTAIN_TOP_ROWS = ((1.478, -0.002, 0.010), (1.450, 0.0055, 0.020))
+#: The curtain starts inside the dome and emerges from under it above the headband's buried ends:
+#: ``rig.curtain_top_rows`` replace the spec's first curtain row.
 BACK_GROOVE_DEPTH = 0.002
 BACK_STRAND_LINES = True            # the grooves are also group boundaries (4 strand lines on the back)
 BACK_BOTTOM_ROW_Z = 0.885           # last straight row above the clumps
-BACK_PLATE_ROWS = (1.180, 1.010)
+BACK_PLATE_ROWS = (1.180, 1.100, 1.010)   # 1.100: the spec row over the collar flap (merge fit)
 BACK_CURVE = 0.025                  # the plate curves forward by this at its lateral edges (s = +-1)
-BACK_BODY_GAP = 0.008               # inner surface at least this far off the blouse / collar back
-COLLAR_LAYER = 0.005                # collar gap + thickness on the blouse back (spec D.2)
 BACK_EDGE_TAPER = 0.4               # thickness of the lateral edges (s = +-1), fraction of the row thickness
 
 
@@ -455,15 +564,33 @@ def _clump_columns(rig: Rig):
 
 
 def _blouse_back(rig: Rig, x: float, z: float) -> float:
-    """Back surface y of the blouse (+ the collar where the back flap covers it) at ``(x, z)``."""
+    """Back surface y of the blouse at ``(x, z)`` (the collar is probed on its mesh, see
+    :func:`_fit_back_rows`)."""
     hw, yf, yb = rig.blouse_section(z)
     e = rig.torso_exponent
     u = min(1.0, abs(x) / hw)
-    y = yb * (1.0 - u ** e) ** (1.0 / e)
-    o1, o2 = rig.collar_outer[0], rig.collar_outer[1]
-    if o1[2] <= z <= rig.collar_inner[0][2] + 0.01 and abs(x) <= o2[0]:
-        y += COLLAR_LAYER
-    return y
+    return yb * (1.0 - u ** e) ** (1.0 / e)
+
+
+def _fit_back_rows(rig: Rig, rows, n_fixed: int):
+    """Move the plate rows (after the first ``n_fixed`` crescent rows) back until the inner surface stays
+    ``rig.back_sheet_gap`` off the blouse and ``rig.hair_outfit_gap`` off the collar flap and its stripe (their
+    meshes), at the rows and along the chords between them; the outer surface moves with it."""
+    T = _outfit_triangles(rig, OUTFIT_BACK)
+
+    def deficit(p):
+        need = _blouse_back(rig, p[0], p[2]) + rig.back_sheet_gap
+        for sx in (1.0, -1.0):                     # both sides: the sheet stays symmetric
+            y = _outfit_y(T, sx * p[0], p[2], False)
+            if y is not None:
+                need = max(need, y + rig.hair_outfit_gap)
+        return need - p[1]
+
+    inner = [i for _, i in rows]
+    movable = [r >= n_fixed for r in range(len(rows))]
+    shift = _fit_rows(inner, deficit, movable, 1.0, across=2)
+    dy = np.array([0.0, 1.0, 0.0])
+    return [(o + shift[r][:, None] * dy, i + shift[r][:, None] * dy) for r, (o, i) in enumerate(rows)]
 
 
 def _back_hair(rig: Rig, dome: mk.Mesh) -> mk.Mesh:
@@ -483,7 +610,7 @@ def _back_hair(rig: Rig, dome: mk.Mesh) -> mk.Mesh:
     # crescent rows (z, cy, ax, back y, t, y_end): the rows emerging from the dome, then the spec table
     cres = []
     first = rig.curtain_rows[0]
-    for z, off, t in CURTAIN_TOP_ROWS:
+    for z, off, t in rig.curtain_top_rows:
         hwd, byd = dome_section(z)
         y_end = first[5] + (0.004 if off < 0 else 0.0)
         cres.append((z, c[1], hwd + off, c[1] + byd + off, t, y_end))
@@ -509,14 +636,16 @@ def _back_hair(rig: Rig, dome: mk.Mesh) -> mk.Mesh:
         y_in = yi - curve
         y_out = yo - curve
         for k in range(U):
-            need = _blouse_back(rig, x[k], zz[k]) + BACK_BODY_GAP
+            need = _blouse_back(rig, x[k], zz[k]) + rig.back_sheet_gap
             if y_in[k] < need:
                 y_out[k] += need - y_in[k]
                 y_in[k] = need
         return (np.stack([x, y_out, zz], axis=1), np.stack([x, y_in, zz], axis=1))
 
+    n_fixed = len(rows)
     rows += [plate_row(z) for z in BACK_PLATE_ROWS + (BACK_BOTTOM_ROW_Z,)]
     rows.append(plate_row(rig.clump_notch_z, zbot))
+    rows = _fit_back_rows(rig, rows, n_fixed)
     groove_s = [s for s in notch_s if abs(s) < 0.5]
     gcols = [int(np.argmin(np.abs(S - s))) for s in groove_s]
     return _h2_slab(rig, rows, gcols)

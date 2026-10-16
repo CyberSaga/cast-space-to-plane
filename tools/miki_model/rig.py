@@ -95,7 +95,8 @@ class Rig:
     #: O1 = 0.085 at z 1.030 and §C.6's "blouse back 0.086 at z 1.10" agree).  The blouse is loose: from the
     #: bust down it drapes straight.
     blouse_rows: tuple = (
-        (1.215, 0.031, -0.026, 0.050),     # neck root
+        (1.215, 0.0275, -0.019, 0.043),    # neck root, 3 mm inside the neck (spec 0.031 / -0.026 / 0.050
+                                           # sticks out of the neck front and, with the exponent, its diagonals)
         (1.180, 0.150, -0.055, 0.075),     # shoulder line (acromion)
         (1.130, 0.150, -0.085, 0.086),
         (1.065, 0.130, -0.104, 0.085),     # armpit
@@ -104,6 +105,9 @@ class Rig:
         (0.940, 0.122, -0.098, 0.076),     # waist (blouse)
         (0.900, 0.130, -0.100, 0.080),     # hem
     )
+    #: The convex shoulder between the neck root and the acromion row: ``(z, hw)``; yf / yb are linear between
+    #: blouse_rows[0] and blouse_rows[1].  A straight loft from the neck root would cut the trapezius.
+    blouse_shoulder_hw: tuple = ((1.215, 0.0275), (1.202, 0.085), (1.191, 0.118), (1.180, 0.150))
     bust_apex_x: float = 0.050               # §A/§D.1 bust apex at x +-0.050 (y -0.110)
     body_waist: tuple = (0.940, 0.105, -0.065, 0.060)   # §A body under the blouse at the waist (z, hw, yf, yb)
     body_hip: tuple = (0.780, 0.150, -0.075, 0.090)     # §A body under the skirt at the hip (z, hw, yf, yb)
@@ -154,7 +158,8 @@ class Rig:
     neck_y: tuple = (-0.022, 0.046)          # front / back y (centre 0.012)
     neck_z: tuple = (1.180, 1.285)           # from inside the torso to inside the head
     bib_bottom_z: float = 1.165              # §B.1 décolleté bib fills the collar V down to here (neck shell)
-    bib_lift: float = 0.001                  # bib above the blouse surface
+    bib_lift: float = 0.0015                 # bib above the blouse surface (spec 1 mm: the chords between the
+                                             # bib's columns sag ~1 mm on the curved chest)
     ear_center: tuple = (0.078, 0.010, 1.335)   # §B.1 ears are NOT modelled; the hair must cover this zone
     ear_height: float = 0.040
 
@@ -177,6 +182,9 @@ class Rig:
     #: Lower sclera boundary (x, z), inner corner -> outer corner; the upper boundary is the lid line.
     sclera_lower: tuple = ((0.019, 1.3435), (0.028, 1.327), (0.040, 1.323), (0.052, 1.326), (0.061, 1.3455))
     eye_slab_depth: float = 0.0003           # every eye / mark slab's back face sits this far below the skin
+    decal_skin_clearance: float = 0.0004     # decal front faces at least this far off the skin ...
+    decal_layer_clearance: float = 0.0002    # ... and off the decal below them (stacked layers)
+    decal_undercut: float = 0.0022           # decal walls: the back outline is the front one moved in this much
     sclera_relief: float = 0.0006            # front face above the skin, per layer
     iris_relief: float = 0.0010
     pupil_relief: float = 0.0013
@@ -306,6 +314,10 @@ class Rig:
         (0.860, 0.150, 0.100, 0.116, 0.016),            # end of the flat part
     )
     back_sheet_gap: float = 0.008
+    hair_outfit_gap: float = 0.003              # sidelocks in front of / back sheet behind the collar, scarf, ring
+    #: Curtain rows that come out from under the dome, replacing the first curtain row (whose z 1.45 stands
+    #: 6-8 mm outside the dome): ``(z, offset from the dome H1 outward, thickness)``.
+    curtain_top_rows: tuple = ((1.478, -0.002, 0.010), (1.450, 0.0055, 0.020))
     hair_clumps: int = 7                        # shallow pointed clumps across the width, blunt lower faces
     clump_notch_z: float = 0.860
     clump_tip_z: float = 0.830
@@ -340,14 +352,20 @@ class Rig:
     collar_stripe_inset: float = 0.010          # its outer border inside the outer edge
     collar_stripe_relief: float = 0.0008
     dickey_thickness: float = 0.0015            # white V filler (material collar), 1 mm above the blouse
-    dickey_corners: tuple = ((0.024, -0.066, 1.165), (0.0, -0.0985, 1.096))  # mid-thickness (mirror the first)
+    #: Mid-thickness corners (mirror the first): top corner x 0.034 (spec 0.024 lies inside the V and does not
+    #: tuck under the lapels), bottom point z 1.087 under the collar's V tip (spec 1.096).
+    dickey_corners: tuple = ((0.034, -0.066, 1.165), (0.0, -0.0985, 1.087))
+    dickey_lift: float = 0.0019                 # the dickey's back face above the blouse: clears the bib, so its
+                                                # top edge draws
     #: Scarf ribbon path S0..S5 (§D.3), centre of the thickness, her left; S0 hidden under the collar.
     scarf_path: tuple = (
         (0.120, -0.052, 1.176), (0.110, -0.064, 1.150), (0.080, -0.085, 1.120),
         (0.044, -0.098, 1.098), (0.012, -0.104, 1.080), (0.006, -0.110, 1.070),
     )
     scarf_width: tuple = (0.045, 0.018)         # lens section width at S0, at S4 (in the chest surface)
-    scarf_thickness: tuple = (0.010, 0.006)     # at S0, at S4
+    scarf_thickness: tuple = (0.010, 0.006)     # at S0, at S4 (the S0 ring itself: scarf_start_thickness)
+    scarf_start_thickness: float = 0.007        # spec 0.010 at S0: the ribbon start must stay under the lapel
+    scarf_tuck_z: tuple = (-0.006, -0.003)      # S0, S1 lowered this much (their ribbon edge poked through the lapel)
     ring_center: tuple = (0.0, -0.112, 1.072)   # rounded box (material collar), top at z 1.084
     ring_size: tuple = (0.036, 0.016, 0.024)    # x, y (from -0.104 to -0.120), z
     ring_corner_radius: float = 0.005
@@ -375,7 +393,7 @@ class Rig:
     cuff_rim: float = 0.005                     # the tube closes with a rim turning in to the opening
     cuff_opening_radius: float = 0.030
     cuff_recess: float = 0.010                  # recessed disc this far inside
-    cuff_stripes: tuple = ((0.012, 0.020), (0.028, 0.036))   # white stripes (object cuffs, material collar),
+    cuff_stripes: tuple = ((0.012, 0.020), (0.028, 0.036))   # white stripes (objects arm_l / arm_r, material collar),
     cuff_stripe_relief: float = 0.0008                       # distances from the cuff edge
     hand_length: float = 0.140                  # wrist to middle fingertip; one closed mitten (material skin)
     palm_length: float = 0.075
@@ -408,6 +426,8 @@ class Rig:
     pleat_depth: float = 0.010                  # valley radially inside the crest at the hem
     pleat_top_z: float = 0.780                  # depth tapers to 0 here; smooth yoke above
     underskirt_z: tuple = (0.700, 0.950)        # bloomers block with the body hip shape (body_hip)
+    skirt_ceiling_z: float = 0.702              # one shell, not a thick tube: a short inner facing rises from the
+                                                # hem to here, where a ceiling closes it (just above the under-skirt)
 
     # =====================================================================================================
     # D.6 Legs, socks, shoes
@@ -422,10 +442,14 @@ class Rig:
     shoe_toe_y: float = -0.175
     shoe_ball_width: float = 0.084
     shoe_heel_width: float = 0.062
-    shoe_heel_x: float = 0.082                  # heel centres at x +-0.082
+    shoe_heel_x: float = 0.071                  # heel centres at x +-0.071: the shoe axis passes under the ankle
+                                                # (spec 0.082 puts the ankle 1 cm off the axis and the sock pokes
+                                                # out of the shoe's inner side)
+    shoe_ankle_u: float = 0.040                 # ... this far in front of the heel back
     shoe_toe_out_deg: float = 8.0
     shoe_sole: float = 0.012                    # sole slab, its own smooth group
-    shoe_heel_height: float = 0.025             # heel block at the back
+    shoe_heel_height: float = 0.022             # sole height at the heel (no separate heel block: the sole line
+                                                # rises from shoe_sole at the front; spec block 0.025)
     shoe_instep: float = 0.075
     shoe_topline_z: float = 0.055               # opening rim around the ankle
     strap_width: float = 0.012                  # saddle strap across the instep at y ~ strap_y, 1 mm proud

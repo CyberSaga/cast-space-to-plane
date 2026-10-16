@@ -45,7 +45,6 @@ SIDES = (1, -1)
 #: Convex shoulder slope of the blouse between the neck root (1.215) and the acromion (1.180), as
 #: ``(z, hw)``: through the collar's I3 (x 0.042 at z 1.213) and O5 (x 0.118 at z 1.191) (spec §D.2);
 #: yf / yb are interpolated linearly between the rig's 1.215 and 1.180 rows.
-SHOULDER_HW = ((1.215, 0.0275), (1.202, 0.085), (1.191, 0.118), (1.180, 0.150))
 TORSO_RING_POINTS = 18                 # points per blouse section
 TORSO_SKIP_ROWS = (0.990,)             # rig rows the loft leaves out (linear between their neighbours)
 TORSO_NECK_INSET = 0.004               # the blouse's top ring sits this far inside the neck
@@ -57,17 +56,10 @@ COLLAR_SHOULDER_ROUNDING = 12         # moving-average half window (samples of 4
 COLLAR_EDGE_THICKNESS = 0.0030        # the 4 mm collar thins to this at its outer / inner edges
 STRIPE_FLOAT = 0.00025                 # decal bands float this far above the surface they decorate
 NECK_POINTS = 16
-SCARF_START_THICKNESS = 0.007          # spec 0.010 at S0: the ribbon start must stay under the lapel
-SCARF_TUCK_Z = (-0.006, -0.003)        # S0, S1 lowered (their ribbon edge poked through the lapel)
 RING_POINTS = 8                        # scarf ring (and its stripes) section points
 BIB_COLUMNS = 13
-BIB_LIFT = 0.0015                      # spec 1 mm: the chords between columns sag ~1 mm on the curved chest
-DICKEY_LIFT = 0.0019                   # the dickey's back face: above the bib, so its top edge draws
 BIB_SINK = 0.002                       # the bib's top row lies this far inside the neck surface
-DICKEY_CORNER_X = 0.034                # dickey top corners pushed under the lapels (spec 0.024 lies in the V)
-DICKEY_BOTTOM_Z = 1.087                # dickey bottom point under the collar's V tip (spec 1.096)
 SKIRT_FACING_INSET = 0.007             # the facing's top ring inside the pleated surface
-SKIRT_CEILING_Z = 0.702                # the skirt's inner facing closes here, just above the under-skirt's bottom
 UNDERSKIRT = ((0.950, 0.100, -0.060, 0.055), (0.780, 0.150, -0.075, 0.090), (0.700, 0.157, -0.081, 0.092))
 
 
@@ -219,14 +211,14 @@ def lay_on(torso: Torso, P, gap, margin=0.0006, passes=6):
 
 
 def torso_model(rig: Rig) -> Torso:
-    """The blouse rows: the rig's rows with the convex shoulder of :data:`SHOULDER_HW` in between."""
+    """The blouse rows: the rig's rows with the convex shoulder of ``rig.blouse_shoulder_hw`` in between."""
     br = list(rig.blouse_rows)
     y0, y1 = rig.neck_y
-    # the neck-root row inside the neck's front / back (the rig's yf -0.026 sticks 4 mm out of the neck)
+    # the neck-root row inside the neck's front / back (a no-op for the rig's own row; guards overrides)
     br[0] = (br[0][0], br[0][1], max(br[0][2], y0 + 0.003), min(br[0][3], y1 - 0.003))
     top, sh = br[0], br[1]
     rows = []
-    for z, hw in SHOULDER_HW:
+    for z, hw in rig.blouse_shoulder_hw:
         t = (top[0] - z) / (top[0] - sh[0])
         rows.append((z, hw, top[2] + t * (sh[2] - top[2]), top[3] + t * (sh[3] - top[3])))
     rows += [r for r in br[2:] if r[0] not in TORSO_SKIP_ROWS]
@@ -274,10 +266,10 @@ def _bib(rig: Rig, torso: Torso, inner_edge):
         # the top row lies on the blouse inside the neck (no fin standing out of the neck surface)
         # the top row: inside the neck at the height where the blouse meets the neck, so the bib leaves
         # the neck flush with the blouse (no fin standing out of the neck surface)
-        inner = _neck_point(rig, phi, torso.rows[0][0] + BIB_LIFT, BIB_SINK)
+        inner = _neck_point(rig, phi, torso.rows[0][0] + rig.bib_lift, BIB_SINK)
         rows.append([inner] + [inner + t * (out - inner) for t in (0.15, 0.4, 0.7, 1.0)])
     P = np.array(rows)
-    grid = np.concatenate([P[:, :1], lay_on(torso, P[:, 1:], BIB_LIFT, margin=0.0013)], axis=1)
+    grid = np.concatenate([P[:, :1], lay_on(torso, P[:, 1:], rig.bib_lift, margin=0.0013)], axis=1)
     return mk.thicken(grid, 0.0015, offset="inward", away_from=(0.0, cy, 1.15), groups="single")
 
 
@@ -437,17 +429,17 @@ def _collar(rig: Rig, torso: Torso):
 def _dickey(rig: Rig, torso: Torso):
     """White V filler (1.5 mm), 1.1 mm above the blouse, its top edge horizontal at bib_bottom_z, its
     corners and point tucked under the lapels."""
-    zt, zb = rig.bib_bottom_z, DICKEY_BOTTOM_Z
+    zt, zb = rig.bib_bottom_z, rig.dickey_corners[1][2]
     zs = np.linspace(zt, zb, 5)
     cols = []
     for u in np.linspace(-1.0, 1.0, 5):
         col = []
         for z in zs:
             t = (zt - z) / (zt - zb)
-            half = DICKEY_CORNER_X * (1.0 - t) + 0.003 * t
+            half = rig.dickey_corners[0][0] * (1.0 - t) + 0.003 * t
             hw, yf, yb = torso.section(z)
             p = np.array([u * half, yf, z])
-            col.append(torso.onto(p, DICKEY_LIFT))
+            col.append(torso.onto(p, rig.dickey_lift))
         cols.append(col)
     grid = np.array(cols)
     return mk.thicken(grid, rig.dickey_thickness, offset="outward", away_from=(0.0, 0.0, 1.13), groups="single")
@@ -463,8 +455,8 @@ def _ribbon(rig: Rig, torso: Torso, side: int):
     s = np.linspace(0.0, 1.0, n)
     w = np.interp(s, [0.0, 0.8, 1.0], [rig.scarf_width[0], rig.scarf_width[1], rig.scarf_width[1]])
     th = np.interp(s, [0.0, 0.8, 1.0], [rig.scarf_thickness[0], rig.scarf_thickness[1], rig.scarf_thickness[1]])
-    th[0] = SCARF_START_THICKNESS
-    for k, dz in enumerate(SCARF_TUCK_Z):            # S0, S1 lowered under the lifted lapel
+    th[0] = rig.scarf_start_thickness
+    for k, dz in enumerate(rig.scarf_tuck_z):            # S0, S1 lowered under the lifted lapel
         S[k, 2] += dz
     P = S.copy()
     for k in range(n - 1):                           # S5 stays inside the ring
@@ -552,7 +544,7 @@ def _tip(rig: Rig, torso: Torso, side: int):
 def _skirt(rig: Rig):
     """Pleated skirt shell (spec §D.5): smooth from the waist (0.95) down to pleat_top_z, below it 16 knife
     pleats (crest / valley sawtooth, depth 0 at pleat_top_z -> pleat_depth at the hem), a 3 mm
-    hem rim and a short inner facing that rises to SKIRT_CEILING_Z, where a ceiling closes the shell level
+    hem rim and a short inner facing that rises to ``rig.skirt_ceiling_z``, where a ceiling closes the shell level
     with the under-skirt's bottom (from below the legs and the under-skirt still show).  Groups: the two
     faces of each pleat 1 / 2 from the waist to the hem (the pressed pleat lines run up to the blouse
     hem; above pleat_top_z they lie on the smooth surface), the hidden waist cap 3, hem rim + facing +
@@ -587,12 +579,12 @@ def _skirt(rig: Rig):
 
     zw, zp, zh = rig.skirt_waist_z, rig.pleat_top_z, rig.skirt_hem_z
     # the facing's top ring: on the straight pleated section of the mesh (not the curved rows) + inset
-    t = (zp - SKIRT_CEILING_Z) / (zp - zh)
+    t = (zp - rig.skirt_ceiling_z) / (zp - zh)
     mid = (1.0 - t) * ring(zp, 0.0) + t * ring(zh, 0.0)
     # (7 mm in: the twisted pleat quads' fan triangles dip up to ~3 mm inside the bilinear surface)
-    ceil_ring = np.column_stack([offset(mid[:, :2], SKIRT_FACING_INSET), np.full(M, SKIRT_CEILING_Z)])
+    ceil_ring = np.column_stack([offset(mid[:, :2], SKIRT_FACING_INSET), np.full(M, rig.skirt_ceiling_z)])
     rings = [ring(zw, 0.0), ring(zp, 0.0), ring(zh, 0.0), ring(zh, rig.skirt_thickness), ceil_ring]
-    V = np.concatenate(rings + [np.array([[0.0, 0.0, zw + 0.002], [0.0, 0.005, SKIRT_CEILING_Z + 0.004]])])
+    V = np.concatenate(rings + [np.array([[0.0, 0.0, zw + 0.002], [0.0, 0.005, rig.skirt_ceiling_z + 0.004]])])
     top, ceil = 5 * M, 5 * M + 1
 
     def v(r, j):

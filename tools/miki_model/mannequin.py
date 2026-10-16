@@ -421,7 +421,8 @@ def arms(rig: Rig):
             np.linalg.norm(c - e) / np.linalg.norm(rig.wrist(side) - e))])
         rad = np.array([rig.sleeve_radius(p) for p in pos])
         sleeve = mk.sweep(path, width=2 * rad, n_profile=12, start="round", end="flat")   # cuff rim drawn
-        parts.append(Part(f"mannequin.sleeve_{_side_name(side)}", "uniform", sleeve, "arms"))
+        parts.append(Part(f"mannequin.sleeve_{_side_name(side)}", "uniform", sleeve, "arms",
+                          obj=f"arm_{_side_name(side)}"))
         d = rig.forearm_dir(side)
         R = rig.sleeve_radius(2.0)
         for k, (d0, d1) in enumerate(rig.cuff_stripes):
@@ -429,7 +430,7 @@ def arms(rig: Rig):
                                (R + rig.cuff_stripe_relief, d1 - d0), (R - 0.002, d1 - d0)], 16, closed=True,
                               groups=[1, 1, 1, 1])
             parts.append(Part(f"mannequin.cuff_{_side_name(side)}{k}", "collar", _local(band, c - d1 * d, d),
-                              "arms", obj="cuffs"))
+                              "arms", obj=f"arm_{_side_name(side)}"))
     return parts
 
 
@@ -444,7 +445,8 @@ def hands(rig: Rig):
         hand = mk.superellipsoid((0.0, 0.0, 0.0), (0.5 * rig.palm_thickness, 0.5 * rig.palm_width, 0.5 * length),
                                  12, 8, 2.4, 2.2)
         parts.append(Part(f"mannequin.hand_{_side_name(side)}", "skin",
-                          _local(hand, start + 0.5 * length * d, d, x_hint=palm_normal), "hands"))
+                          _local(hand, start + 0.5 * length * d, d, x_hint=palm_normal), "hands",
+                          obj=f"arm_{_side_name(side)}"))
     return parts
 
 

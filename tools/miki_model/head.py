@@ -389,20 +389,18 @@ def band_grid(centre, half_width) -> np.ndarray:
 
 #: Direction towards the scene's sun (``assemble.SUN_TOWARDS``), for the decal wall classification.
 _SUN = np.array((-0.45, -0.55, 0.70)) / np.linalg.norm((-0.45, -0.55, 0.70))
-#: Undercut of the decal walls: the back outline is the front outline moved DECAL_UNDERCUT towards the decal's
-#: centroid (eye layers; at most down to DECAL_SHRINK of its size: lean 60-75 degrees with the low stacked
+#: Undercut of the decal walls: the back outline is the front outline moved ``rig.decal_undercut`` towards the
+#: decal's centroid (eye layers; at most down to DECAL_SHRINK of its size: lean 60-75 degrees with the low stacked
 #: walls) or scaled by BAND_SHRINK towards each column's middle (bands: brows, lids, mouth).
 DECAL_SHRINK = 0.5
-DECAL_UNDERCUT = 0.0022
 BAND_SHRINK = 0.15
 
 
 #: Clearances (m, along y) kept at every vertex, edge midpoint and quad diagonal midpoint of a decal: its
 #: front above the skin and above every decal already placed under it, its back under the skin.  The
 #: decals are flat chords over a faceted, partly concave face (the eye line is a shallow valley in the §B.1
-#: profile), so without this a layer could dip under the one below it between its vertices.
-CLEAR_SKIN = 0.0004
-CLEAR_LAYER = 0.0002
+#: profile), so without this a layer could dip under the one below it between its vertices.  The front
+#: clearances are ``rig.decal_skin_clearance`` and ``rig.decal_layer_clearance``.
 CLEAR_BACK = 0.0002
 
 
@@ -411,6 +409,8 @@ class DecalStack:
 
     def __init__(self, rig: Rig):
         self.skin = skin_surface(rig)
+        self.clear_skin = rig.decal_skin_clearance
+        self.clear_layer = rig.decal_layer_clearance
         self.layers = []
 
     def add(self, F):
@@ -425,11 +425,11 @@ class DecalStack:
         self.layers.append(SkinSurface(m))
 
     def required_front_y(self, x: float, z: float) -> float:
-        req = self.skin.y(x, z) - CLEAR_SKIN
+        req = self.skin.y(x, z) - self.clear_skin
         for s in self.layers:
             y = s.y(x, z)
             if y is not None:
-                req = min(req, y - CLEAR_LAYER)
+                req = min(req, y - self.clear_layer)
         return req
 
     def top_y(self, x: float, z: float) -> float:
@@ -509,7 +509,7 @@ def _decal(rig: Rig, grid_xz, relief: float, depth: float | None = None, stack: 
     if mode == "centroid":
         c = G.reshape(-1, 2).mean(axis=0)
         r = np.linalg.norm(G - c, axis=2, keepdims=True)
-        kk = np.maximum(k, 1.0 - DECAL_UNDERCUT / np.maximum(r, 1e-9))          # move in by DECAL_UNDERCUT
+        kk = np.maximum(k, 1.0 - rig.decal_undercut / np.maximum(r, 1e-9))     # move in by decal_undercut
         GB = c + kk * (G - c)
     else:                                                     # keep the back >= 0.2 mm wide (tips)
         mid = G.mean(axis=1, keepdims=True)

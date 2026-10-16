@@ -1,0 +1,92 @@
+# Miki model materials (tools/make_miki_model.py)
+
+newmtl hair
+Kd 0.72549 0.764706 0.901961
+Ka 0 0 0
+Ks 0 0 0
+d 1
+illum 1
+
+newmtl skin
+Kd 0.984314 0.890196 0.839216
+Ka 0 0 0
+Ks 0 0 0
+d 1
+illum 1
+
+newmtl eye_white
+Kd 1.0 1.0 1.0
+Ka 0 0 0
+Ks 0 0 0
+d 1
+illum 1
+
+newmtl iris
+Kd 0.498039 0.701961 0.658824
+Ka 0 0 0
+Ks 0 0 0
+d 1
+illum 1
+
+newmtl pupil
+Kd 0.184314 0.360784 0.341176
+Ka 0 0 0
+Ks 0 0 0
+d 1
+illum 1
+
+newmtl headband
+Kd 0.956863 0.862745 0.909804
+Ka 0 0 0
+Ks 0 0 0
+d 1
+illum 1
+
+newmtl scarf
+Kd 0.964706 0.768627 0.32549
+Ka 0 0 0
+Ks 0 0 0
+d 1
+illum 1
+
+newmtl socks
+Kd 0.94902 0.941176 0.956863
+Ka 0 0 0
+Ks 0 0 0
+d 1
+illum 1
+
+newmtl uniform
+Kd 0.909804 0.4 0.478431
+Ka 0 0 0
+Ks 0 0 0
+d 1
+illum 1
+
+newmtl skirt
+Kd 0.960784 0.72549 0.776471
+Ka 0 0 0
+Ks 0 0 0
+d 1
+illum 1
+
+newmtl collar
+Kd 0.980392 0.980392 0.980392
+Ka 0 0 0
+Ks 0 0 0
+d 1
+illum 1
+
+newmtl face_marks
+Kd 0.294118 0.203922 0.203922
+Ka 0 0 0
+Ks 0 0 0
+d 1
+illum 1
+
+newmtl shoes
+Kd 0.419608 0.290196 0.227451
+Ka 0 0 0
+Ks 0 0 0
+d 1
+illum 1
