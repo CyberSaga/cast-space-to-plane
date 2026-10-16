@@ -29,7 +29,7 @@ per-group vertex normals (GLB export, preview shading).
 from __future__ import annotations
 
 import math
-from dataclasses import dataclass, field
+from dataclasses import KW_ONLY, dataclass, field
 
 import numpy as np
 
@@ -159,14 +159,23 @@ class Mesh:
 
 @dataclass
 class Part:
-    """One named piece of the model: ``name`` (unique), ``material`` (one of the object ids of
-    ``assemble.OBJECTS``), ``mesh`` (closed shells), optional ``region`` (the region it belongs to, used by
-    ``--only``; empty = the region list of the module that built it)."""
+    """One named piece of the model.
+
+    * ``name``: unique in the whole model (prefix it with the module, e.g. ``hair.sidelock_l``);
+    * ``material``: its colour, a key of ``assemble.MATERIALS`` (``hair``, ``skin``, ``iris``, ...);
+    * ``mesh``: closed shells;
+    * ``region``: the region it belongs to (``--only`` filters by it; empty = every region of the module
+      that built it);
+    * ``obj`` (keyword only): the castplane object it goes into, one of ``assemble.OBJECT_IDS``; empty =
+      ``assemble.REGION_OBJECTS[region]`` (so most parts need not set it; the ring, the neck, the
+      sidelocks, the back hair and the cuff stripes do)."""
 
     name: str
     material: str
     mesh: Mesh
     region: str = ""
+    _: KW_ONLY
+    obj: str = ""
 
 
 def merge(*meshes: Mesh) -> Mesh:

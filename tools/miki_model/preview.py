@@ -2,7 +2,7 @@
 
 Two independent "eyes" for builders and reviewers:
 
-* :func:`render_shaded` — a numpy z-buffer rasteriser (Pillow only saves the image): object colours,
+* :func:`render_shaded` — a numpy z-buffer rasteriser (Pillow only saves the image): part material colours,
   Lambert shading with normals smoothed inside each smooth group, dark outlines from object / smooth
   group / depth / normal discontinuities, an optional ground plane, and **visible back faces painted
   magenta** (an inverted or open shell shows up immediately).  :func:`shaded_views`,
@@ -28,7 +28,7 @@ import os
 import numpy as np
 
 from . import meshkit as mk
-from .assemble import OBJECT_COLOURS, SUN_TOWARDS
+from .assemble import MATERIALS, SUN_TOWARDS
 from .rig import Rig
 
 __all__ = ["PRESETS", "BODY_PRESETS", "HEAD_PRESETS", "camera_for", "render_shaded", "shaded_views", "with_context",
@@ -75,7 +75,7 @@ def _framing(kind: str, rig: Rig, bbox):
         z0 = rig.waist_z - 0.05
         return np.array([0.0, 0.0, 0.5 * (z0 + hi[2])]), (hi[2] - z0) * 1.12
     if kind == "head":
-        return (np.array([0.0, rig.head_center_y, rig.chin_z + 0.52 * rig.head_height]), 1.55 * rig.head_height)
+        return (np.array([0.0, float(rig.head_center[1]), rig.chin_z + 0.52 * rig.head_height]), 1.55 * rig.head_height)
     raise ValueError(f"unknown framing {kind!r}")
 
 
@@ -102,14 +102,15 @@ def camera_for(preset, rig: Rig | None = None, bbox=None) -> dict:
 # ---------------------------------------------------------------------------
 
 def _drawables(model):
-    """``[(mesh, (r, g, b), label)]`` from an Assembly, a Part list or ``(mesh, colour, label)`` tuples."""
+    """``[(mesh, (r, g, b), label)]`` from an Assembly (one per part, coloured by its material), a Part list
+    or ``(mesh, colour, label)`` tuples."""
     if hasattr(model, "meshes"):
-        items = [(m, OBJECT_COLOURS[oid], oid) for oid, m in model.meshes.items()]
+        items = [(p.mesh, MATERIALS[p.material], p.name) for p in model.parts]
     else:
         items = []
         for it in model:
             if isinstance(it, mk.Part):
-                items.append((it.mesh, OBJECT_COLOURS.get(it.material, "#cccccc"), it.name))
+                items.append((it.mesh, MATERIALS.get(it.material, "#cccccc"), it.name))
             else:
                 items.append(tuple(it))
     out = []
@@ -267,7 +268,7 @@ def with_context(model, rig: Rig | None = None, colour: str = "#d4d4d8"):
     rig = Rig() if rig is None else rig
     covered = set(model.sources)
     rest = [r for r in mannequin.REGIONS if r not in covered]
-    items = [(m, OBJECT_COLOURS[oid], oid) for oid, m in model.meshes.items()]
+    items = [(p.mesh, MATERIALS[p.material], p.name) for p in model.parts]
     items += [(p.mesh, colour, "context:" + p.name) for p in mannequin.build(rig, rest)]
     return items
 

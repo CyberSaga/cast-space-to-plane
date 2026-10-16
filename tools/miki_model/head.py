@@ -5,7 +5,9 @@ Part contract (see ``assemble.py`` and the toolkit guide): :func:`build` takes t
 :data:`REGIONS` (each part's ``region`` should name one of them, so ``--only`` can filter), or ``None``
 while the module is not written yet: ``assemble`` then uses the mannequin parts of those regions.
 Part names are unique across the model.
-Materials (object ids) used here: skin (head, ears), eyes (whites + irises), face_marks (brows, mouth).
+Objects / materials (``Part(name, material, mesh, region, obj=...)``, see ``assemble.OBJECTS``): head + face ->
+head (skin; no ears); sclera, highlight -> eyes (eye_white), iris -> eyes (iris), pupil -> eyes (pupil); brows,
+lid bands, lower-lid marks, mouth -> face_marks (face_marks).
 Every part mesh must be closed shells that pass ``meshkit.validate``.
 """
 

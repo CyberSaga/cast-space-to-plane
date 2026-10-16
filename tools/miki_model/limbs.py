@@ -5,7 +5,9 @@ Part contract (see ``assemble.py`` and the toolkit guide): :func:`build` takes t
 :data:`REGIONS` (each part's ``region`` should name one of them, so ``--only`` can filter), or ``None``
 while the module is not written yet: ``assemble`` then uses the mannequin parts of those regions.
 Part names are unique across the model.
-Materials (object ids) used here: uniform (sleeves), collar (cuff stripes), skin (hands, legs), socks, shoes.
+Objects / materials (``Part(name, material, mesh, region, obj=...)``, see ``assemble.OBJECTS``): sleeves with
+cuff rims -> blouse (uniform); cuff stripes -> ``obj="cuffs"`` (collar); hands -> hands (skin); legs -> legs
+(skin); socks -> socks (socks); shoes -> shoes (shoes).
 Every part mesh must be closed shells that pass ``meshkit.validate``.
 """
 

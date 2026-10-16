@@ -3,6 +3,6 @@
 Modules: :mod:`meshkit` (mesh type, closed-shell builders, validation), :mod:`rig` (all proportions),
 :mod:`mannequin` (placeholder parts for every region), :mod:`head` / :mod:`hair` / :mod:`body` /
 :mod:`limbs` (the detailed parts; ``build(rig)`` returns ``None`` until written), :mod:`assemble`
-(parts -> the ten castplane objects), :mod:`export` (scene JSON, OBJ + MTL, GLB) and :mod:`preview`
+(parts -> the 17 compact castplane objects, per-part materials), :mod:`export` (scene JSON, OBJ + MTL, GLB) and :mod:`preview`
 (shaded and castplane line renders).  Geometry modules import numpy and the standard library only.
 """
