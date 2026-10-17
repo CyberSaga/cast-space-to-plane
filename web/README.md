@@ -11,7 +11,7 @@ npm run -w ts build        # the core package "castplane" the UI imports
 npm run -w web dev         # vite dev server
 npm run -w web build       # tsc type check + vite build -> web/dist (static, base './')
 npm run -w web preview     # serve web/dist locally
-npm run -w web test        # orbit / download / colours / rig / equation / observer / plane unit tests (node:test, web/test/; 113 tests)
+npm run -w web test        # orbit / download / colours / rig / equation / observer / plane unit tests (node:test, web/test/; 114 tests)
 ```
 
 ![web UI](../docs/images/web_ui.png)

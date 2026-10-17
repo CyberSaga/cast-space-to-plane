@@ -64,8 +64,12 @@ for (const [name, get] of MESH_SCENES) {
     assert.equal(faces.length, meshes.length);
     assert.equal(groups.length, meshes.length);
     for (const t of [...faces, ...groups]) assert.match(t, /^[[\]\s,0-9]+$/, `not integers: ${t.slice(0, 60)}`);
-    // the layout is dumps' (indent 1): one index per line
-    assert.ok(faces[0]!.startsWith("[\n"), faces[0]!.slice(0, 40));
+    // the layout is Python's json.dumps(indent=1) at the depth of `data.faces` (4: root, objects, object, data)
+    meshes.forEach((m, i) => {
+      const at_depth = (v: unknown): string => JSON.stringify(v, null, 1).replace(/\n/g, "\n" + " ".repeat(4));
+      assert.equal(faces[i], at_depth(m.data!.faces), `${m.id}: faces layout`);
+      assert.equal(groups[i], at_depth(m.data!.smooth_groups), `${m.id}: smooth_groups layout`);
+    });
     assert.doesNotMatch(text, /"(node|path)": null/);
     const parsed = JSON.parse(text) as Raw;
     parsed.objects.forEach((o, i) => {
@@ -127,5 +131,14 @@ test("scene_blob of a scene without mesh objects is dumps({...scene, objects, ca
       const output = { ...sc.output, hidden_lines: true, hidden_style: "omit" as const };
       assert.equal(scene_blob(sc, cam, name, true, "omit").text, dumps({ ...sc, camera: cam, output }) + "\n", name);
     }
+  }
+});
+
+test("scene_blob refuses a mesh scene whose text holds the integer placeholder (an object id equal to it)", () => {
+  for (const id of ['a"\u0000castplane-int:0', "\u0000castplane-int:0"]) {
+    const raw = read("ts", "test", "fixtures", "mesh_demo.expanded.json");
+    raw.objects[0]!.id = id;
+    const sc = load_scene(raw);
+    assert.throws(() => scene_blob(sc, sc.camera, "mesh_demo"), /reserved placeholder/, JSON.stringify(id));
   }
 });

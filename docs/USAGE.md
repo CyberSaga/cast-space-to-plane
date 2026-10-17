@@ -706,7 +706,7 @@ node ts/build/bench/camera_only.js --gate both --reps 20   # 規格 §8 基準�
 node ts/scripts/render.mjs examples/basic.json out/        # 開發工具：out/basic.svg 與 out/basic.json
 python3 tools/compare_svg.py                               # 開發工具：逐案例比對兩個實作的 SVG 文字
 npm run -w web build && npm run -w web preview             # 網頁 UI（靜態檔，web/dist）
-npm run -w web test                                        # orbit / download / rig / equation / observer / plane 單元測試
+npm run -w web test                                        # orbit / download / colours / rig / equation / observer / plane 單元測試
 ```
 
 `npm test` 與 `npm run build` 會依 ts → web 的順序執行兩個 workspace。Python 的 `tests/test_ts_port.py` 檢查兩邊共用的檔案：版本、`rules.json` 與比對常數、`INT_KEYS`、核心不碰 node API、npm 版本釘選。PATH 上有 node 時，它也會建置並執行移植的整套測試；單獨執行 TypeScript 一致性執行器，要求每個案例各有一個通過的測試、沒有失敗、略過或 todo；比對全部九個範例（含 M4–M6 的 `wall_and_ground`、`mesh_demo`、`two_lights`，以及角色範例 `miki`，其 18 個內嵌網格物件、隱藏線開啟）的 SVG（逐位元組）與 JSON；並跑網頁的單元測試。
