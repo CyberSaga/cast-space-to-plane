@@ -41,6 +41,7 @@ castplane render examples/wall_and_ground.json -o out --hidden-lines   # M4：�
 castplane render examples/mesh_demo.json -o out     # 場景裡的 mesh 物件以 path 引用 OBJ 檔（M5）
 castplane import tests/fixtures/meshes/box_split.obj -o box.json   # 網格檔 → 場景檔（OBJ、glTF / GLB、STL、PLY）
 castplane render examples/two_lights.json -o out    # M6：兩盞點光源，每個光源一個子群組，本影疊在最上面
+castplane render examples/miki.json -o out          # 角色參考模型：18 個內嵌網格物件、隱藏線開啟（約 4 秒），見 examples/README.md
 castplane import tests/fixtures/step/cylinder.step -o pillar.json  # STEP 檔 → 場景檔（M8：圓柱、球、圓錐、方塊）
 ```
 
@@ -86,7 +87,9 @@ B = castplane.project_scene(scene, A, camera=camera, umbra=False)   # umbra[].po
 - 工具列預設：horizon、objects、form_shadow、cast_shadow、labels 與「Hidden lines」勾選，construction（作圖線）與「3D view」不勾選；這是頁面層級的狀態，載入場景不會改變它；
 - 消隱開關與虛線／省略樣式選單；
 - 作圖線稿每個影格由移植的核心重新寫出 SVG，疊在 3D 畫面上；
-- 可下載 SVG、JSON，以及帶目前相機的場景檔（Python 命令列可重現同一張圖）。
+- 可下載 SVG、JSON，以及帶目前相機的場景檔（Python 命令列可重現同一張圖；含網格物件的場景也可以，面的索引寫成整數）。
+- 物件的選用鍵 `display_color`（`"#rrggbb"`，D81）：3D 畫面與旁觀視角用它替物件上色，沒有就用調色盤；只影響網頁顯示，核心與輸出忽略它。
+- 角色範例：範例選單的 `miki` 是花菱美希（《ハヤテのごとく!》）的參考模型，18 個內嵌網格物件，供畫畫練習時繞著她轉、看透視與影子；由 `python3 tools/make_miki_model.py` 產生（細節見 [`examples/README.md`](examples/README.md)）。
 - 旁觀視角（M9，唯讀）：頁面預設就顯示旁觀視角（D80），左窗從外面看作圖相機的眼睛 E、投影平面與畫框（畫框上就是右窗的線稿）、視錐、主點、D 與 g、旋轉中心、平面方程式，以及第一個物體頂點的視線與光線；右窗的作圖與下載完全不變；作圖畫面右上角的「預覽」按鈕可暫時收起旁觀視角、讓作圖畫面佔滿全寬（按鈕變「返回編輯」，再按或按 Esc 回來），下載的檔案在兩種畫面之間逐位元組相同。
 - 平面模式（M10，板子為主）：拖左窗的橘色圓環決定從哪個方向看、拖藍色箭頭決定板子離場景多遠，眼睛 E 由板子算出、唯讀；右窗（作圖畫面）唯讀，在上面拖動或滾輪都不做事，板子只在左窗與工具列操作；箭頭拉近不是焦距；焦距、D、滾轉三個滑桿，旋轉中心（場景中心或點選物體）、鎖水平、六個一鍵視圖、平面方程式欄位（如 `y=2`）、復原與重設，以及讀數；「Download scene」寫出 `picture_plane` 相機。
 
@@ -98,7 +101,7 @@ npm run -w web preview           # 本機開啟 web/dist
 npm test                         # TypeScript 與網頁的測試
 ```
 
-說明見 [`docs/USAGE.md`](docs/USAGE.md) §4、[`ts/README.md`](ts/README.md) 與 [`web/README.md`](web/README.md)。截圖：[`docs/images/web_ui.png`](docs/images/web_ui.png)，以及第二階段的 [`web_ui_wall_and_ground.png`](docs/images/web_ui_wall_and_ground.png)（開啟消隱）、[`web_ui_mesh_demo.png`](docs/images/web_ui_mesh_demo.png)、[`web_ui_two_lights.png`](docs/images/web_ui_two_lights.png)，M9 的旁觀視角 [`web_ui_observer.png`](docs/images/web_ui_observer.png)，以及 M10 的平面模式 [`web_ui_plane_mode.png`](docs/images/web_ui_plane_mode.png)：
+說明見 [`docs/USAGE.md`](docs/USAGE.md) §4、[`ts/README.md`](ts/README.md) 與 [`web/README.md`](web/README.md)。截圖：[`docs/images/web_ui.png`](docs/images/web_ui.png)，以及第二階段的 [`web_ui_wall_and_ground.png`](docs/images/web_ui_wall_and_ground.png)（開啟消隱）、[`web_ui_mesh_demo.png`](docs/images/web_ui_mesh_demo.png)、[`web_ui_two_lights.png`](docs/images/web_ui_two_lights.png)，M9 的旁觀視角 [`web_ui_observer.png`](docs/images/web_ui_observer.png)，M10 的平面模式 [`web_ui_plane_mode.png`](docs/images/web_ui_plane_mode.png)，以及角色範例 `miki` 的 [`web_ui_miki.png`](docs/images/web_ui_miki.png)（各物件用自己的 `display_color` 上色）：
 
 ![平面模式](docs/images/web_ui_plane_mode.png)
 
@@ -177,6 +180,7 @@ npm test                         # TypeScript 與網頁的測試
 | | `type` | `box`（`size` 三個正數）、`cylinder` / `cone`（`radius`、`height` 正數）、`sphere`（`radius`）、`prism`（`polygon` 至少 3 個 `[x, y]`、不共線、不自交；順時針輸入會自動反向；`height`） |
 | | `transform` | 選填；`position` 預設 `[0, 0, 0]`，`rotation_deg` 預設 `[0, 0, 0]`（Z-Y-X 順序的歐拉角，`R = Rz·Ry·Rx`）；`scale` 不允許（用 size 參數） |
 | | `type: "mesh"`（M5） | `path`（網格檔，相對於場景檔目錄；CLI 與 `castplane.io.load_expanded_scene` 先展開）或內嵌 `data`（`vertices`、`faces`、選用 `smooth_groups`），選用 `node`、`up`（`"z"` / `"y"`）、`scale`、`weld_tolerance`（預設 1e-6 m）、`smooth_angle_deg`（預設 30）；面數、頂點數各 ≤ 50 000。完整規則見 [`docs/USAGE.md`](docs/USAGE.md)「場景 JSON 的 `mesh` 物件」 |
+| | `display_color`（選用） | 字串 `"#rrggbb"`，只給網頁的 3D 畫面上色用（D81）；核心與命令列忽略，輸出不變，無效值也不報錯 |
 | `lights[]` | | **M6 起**：非空串列（v1 恰好一個）；`id` 唯一、非空、不含 `.`、不得與受影面 id 相同；兩個以上光源時光源 id 不得是 `umbra` / `core`、物件 id 不得是 `core`（SVG 子群組名稱；單光源場景仍可用）。光源順序就是文件裡各光源紀錄與 `umbra[].lights` 的順序 |
 | | `type` | `point`（`position`）或 `directional`（`direction` 指向光源，長度必須為 1，容差 1e-9） |
 | `receivers[]` | | v1 恰好一個；`type: "plane"`、`normal` 必須是 `[0, 0, 1]`、`offset` 必須是 0（預設 0）。**M4 起**：非空串列；`id` 唯一、不含 `.`、不得與物件／光源 id 相同、不得是 `hidden`；`normal` 任意單位向量（法線指向的一側是受光面，不會自動翻轉）、`offset` 任意 |
@@ -222,6 +226,7 @@ npm test                         # TypeScript 與網頁的測試
 | 網格（M5） | 前處理表（焊接、退化面、方向、共面合併、邊分類）、匯入方塊 = 參數化方塊（逐位元）、非流形逐面退路、載入器（OBJ、glTF `.gltf` + `.bin` / data URI、GLB、跨距存取器、鏡像節點、精確 Y-up → Z-up、STL / PLY）、`castplane import` | `python3 -m pytest tests/test_meshprep.py tests/test_mesh_pipeline.py tests/test_loaders.py -q`；夾具：`python3 tools/make_mesh_fixtures.py` |
 | 多光源（M6） | 手算驗收案例（兩盞對稱點光源下的單位方塊：本影 3 片、地面面積 7/6）、每個光源的紀錄與其單光源文件逐位元相同、本影掃描線核心（`record_pieces` 表、隨機輸入對柵格 AND）、三盞光的本影對柵格 AND（IoU ≥ 0.995）與光源順序不變、對光線投射「被所有光源遮住」的遮罩 IoU ≥ 0.99、`umbra_from_document` 逐位元重算 | `python3 -m pytest tests/test_umbra.py tests/test_multilight.py -q` |
 | STEP（M8） | Part 21 語法（註解、字串跳脫、複合實體、型別值、截斷與重複編號）、單位（mm / m，除法換算的逐位元保證、`DEGREE`）、四種辨識器與反例（截頭圓錐、鍵槽、傾斜端面、環面）、組件只接受恆等變換、`cylinder.step` → `examples/basic.json` 逐位元、手算點、`cylinder_tilted.step` 對 `expected/buried_cylinder_tilted.json`、場景展開與 `castplane import`；需要 OCP 的測試（網格化退路、夾具產生器同步）在沒有 cadquery-ocp 時略過 | `python3 -m pytest tests/test_step.py -q`；夾具：`python3 tools/make_step_fixtures.py`（需 `pip install 'castplane[step]'`） |
+| 角色範例（`examples/miki.json`） | 14 個測試：產生器（`tools/make_miki_model.py`）重建出的 `miki.json` 與 `meshes/miki.{obj,mtl,glb}` 逐位元組相同（在原生、Haswell 核心與 Python 3.10 上都相同）、場景物件即產生器的物件、每個物件是封閉且方向一致的流形、castplane 不需網格前處理（無 `fallback`、無 `MESH_*` 警告）、場景相機渲染無警告、預設圖層、多邊形 6000 與三角形 10000 的預算、每物件至多 64 個特徵輪廓頂點、每個物件有 `display_color` 且核心忽略它（有無此鍵 SVG 與文件相同）、GLB 與 OBJ 匯入 | `python3 -m pytest tests/test_miki_model.py -q`（約 30 秒，建模佔約 18 秒） |
 | 效能基準（§8） | 100 個基元、約 1 萬條邊：完整渲染 < 1 s、只換相機 < 100 ms；預設讀取提交的場景檔 `benchmarks/scenes/benchmark_100.json`（`benchmarks/export_scene.py` 產生，TypeScript 基準讀同一個檔） | `python3 benchmarks/bench.py`（不在預設測試內；目前量測狀態見 `benchmarks/README.md`） |
 
 ## 里程碑（規格 §10）

@@ -175,6 +175,7 @@ castplane import tests/fixtures/step/two_solids.step --solid 1 -o sphere.json
 | `weld_tolerance` | 選用：≥ 0，預設 1e-6（公尺，縮放之後）；同時是這個網格與受影面的接觸容差：離受影面不到 `max(tol, weld_tolerance)` 的頂點算「貼在受影面上」（匯入時 float32 造成的 1e-8 級底面雜訊不會被當成穿入地面而切出錯誤的影子，也不發 `OBJECT_BELOW_RECEIVER`） |
 | `smooth_angle_deg` | 選用：[0, 180]，預設 30；兩面同屬同一個非零平滑群組的邊一律平滑（不看夾角）；兩面都無群組時，法線夾角小於它（`n_a·n_b ≥ cos(smooth_angle_deg) − 1e-9`）的邊平滑；群組不同、或一面有群組一面沒有，一律是特徵邊。平滑邊只在成為相機輪廓時才畫 |
 | `transform` | 同其他物件（`scale` 鍵不在 `transform` 裡，用物件的 `scale`） |
+| `display_color` | 選用，**只給網頁用**，任何物件型別都可以帶：字串 `"#rrggbb"`（六位十六進位，大小寫皆可）。網頁的 3D 畫面與旁觀視角用它替物件上色，沒有或無效時用調色盤；核心與命令列忽略它（未知鍵，合約 §2.0），輸出逐位元組不變，無效值也沒有錯誤或警告（D81） |
 | 上限 | 面數、頂點數各 ≤ 50 000；焊接並移除退化面後至少要剩一個面（`objects[i].data.faces` / 檔案來源為 `objects[i].path`：「no usable face」） |
 
 `mesh` 物件的 `edges[]` 多兩個鍵：`smooth`（與相機無關）與 `camera_silhouette`（與相機有關）。非流形網格（例如缺一個面）發 `MESH_NON_MANIFOLD` 並改用逐面影子（第 3 節）。
@@ -708,7 +709,7 @@ npm run -w web build && npm run -w web preview             # 網頁 UI（靜態�
 npm run -w web test                                        # orbit / download / rig / equation / observer / plane 單元測試
 ```
 
-`npm test` 與 `npm run build` 會依 ts → web 的順序執行兩個 workspace。Python 的 `tests/test_ts_port.py` 檢查兩邊共用的檔案：版本、`rules.json` 與比對常數、`INT_KEYS`、核心不碰 node API、npm 版本釘選。PATH 上有 node 時，它也會建置並執行移植的整套測試；單獨執行 TypeScript 一致性執行器，要求每個案例各有一個通過的測試、沒有失敗、略過或 todo；比對全部八個範例（含 M4–M6 的 `wall_and_ground`、`mesh_demo`、`two_lights`）的 SVG（逐位元組）與 JSON；並跑網頁的單元測試。
+`npm test` 與 `npm run build` 會依 ts → web 的順序執行兩個 workspace。Python 的 `tests/test_ts_port.py` 檢查兩邊共用的檔案：版本、`rules.json` 與比對常數、`INT_KEYS`、核心不碰 node API、npm 版本釘選。PATH 上有 node 時，它也會建置並執行移植的整套測試；單獨執行 TypeScript 一致性執行器，要求每個案例各有一個通過的測試、沒有失敗、略過或 todo；比對全部九個範例（含 M4–M6 的 `wall_and_ground`、`mesh_demo`、`two_lights`，以及角色範例 `miki`，其 18 個內嵌網格物件、隱藏線開啟）的 SVG（逐位元組）與 JSON；並跑網頁的單元測試。
 
 ### 4.2 API
 
@@ -747,7 +748,7 @@ const out   = render(scene, camera, hidden_lines, hidden_style); // {geometry: d
 
 **相機覆寫一律明確建構。** 傳給 `project_scene` 的相機區塊要從鏡頭欄位逐一建出：`{position, target, roll_deg, focal_length_mm, frame_mm, shift_mm, near_m}`，不要寫 `{...scene.camera, position, target}`。若場景相機是 yaw/pitch 形式（例如 `examples/directional.json`），展開後會同時帶 `yaw_deg` 與 `target`，`validate_camera` 會拒絕。`ts/test/helpers.ts` 的 `camera_override` 與網頁 UI 的 `camera_from_orbit` 都照這個規則建構。
 
-**數值與確定性。** 全程 binary64，V8 不做 FMA 收縮。因為 numpy / BLAS 的求和順序不同，兩個實作在最後幾位會有 ulp 差異，所以 JSON 以測試集的容差比對。第一階段實測 34/34 通過，最差的葉節點為容差的 0.22；第二階段 v6 的 50/50 通過。SVG 寫出器在 50 個案例、八個範例與 `benchmark_100.json` 上都與 Python 逐位元組相同（多光源場景若物體立在受影面上，本影碎片的切分可能不同而區域相同，見 §4.2 多光源一段；測試集與範例中沒有這種差異）。同一個 node 版本中，相同輸入的 JSON 與 SVG 字串位元相同。
+**數值與確定性。** 全程 binary64，V8 不做 FMA 收縮。因為 numpy / BLAS 的求和順序不同，兩個實作在最後幾位會有 ulp 差異，所以 JSON 以測試集的容差比對。第一階段實測 34/34 通過，最差的葉節點為容差的 0.22；第二階段 v6 的 50/50 通過。SVG 寫出器在 50 個案例、八個範例與 `benchmark_100.json` 上都與 Python 逐位元組相同（多光源場景若物體立在受影面上，本影碎片的切分可能不同而區域相同，見 §4.2 多光源一段；測試集與範例中沒有這種差異）。同一個 node 版本中，相同輸入的 JSON 與 SVG 字串位元相同。後來加入的 `miki.json` 也是：移植寫出的 SVG 與 Python 逐位元組相同（203 163 位元組，`tools/compare_svg.py examples/miki.json` 回報 0 個不一致）。
 
 ### 4.3 基準（規格 §8）
 
@@ -766,11 +767,12 @@ const out   = render(scene, camera, hidden_lines, hidden_style); // {geometry: d
 vite + three.js（版本釘選：three 0.186.1、vite 8.3.3）。`vite build` 產生靜態檔，不需要伺服器。執行時不連網，範例在建置時打包進去。
 
 - **載入**：
-  - 「Example」選單（全部 `examples/*.json`，八個檔案）、檔案選擇器，或把 JSON 檔拖放到頁面任何位置；
+  - 「Example」選單（全部 `examples/*.json`，九個檔案，含角色範例 `miki`）、檔案選擇器，或把 JSON 檔拖放到頁面任何位置；
   - 不是 JSON 的檔案顯示「not a JSON file」；
   - 場景無效時，錯誤面板顯示 `SceneError` 的欄位路徑與訊息，原本的場景保留。
 - **3D 顯示**：
   - 方塊、圓柱、圓錐、球、稜柱與內嵌網格（直接取 A 段紀錄裡核心前處理後的三角形，不再前處理一次，雙面繪製）以核心的 `transform_frame` 擺放；範例 `mesh_demo` 只有 `path`，網頁上顯示「必須先展開」的錯誤，請載入展開後的場景（例如 `ts/test/fixtures/mesh_demo.expanded.json`，或 `castplane import FILE -o scene.json --inline` 的輸出）；
+  - 物件的顏色：場景的物件可以帶選用的 `display_color`（字串 `"#rrggbb"`，`#` 加剛好六位十六進位數字，大小寫皆可，D81）。有效時，3D 畫面（作圖畫面的「3D view」與旁觀視角窗格，兩者共用 `build_scene3d`）用這個顏色畫該物件，仍受場景光源的明暗；旁觀視角裡只有受影面是半透明的，物件保有自己的顏色。沒有這個鍵或值無效時（沒有 `#`、位數不是 6、含非十六進位字元、前後有空白、不是字串），該物件沿用依索引取的 8 色調色盤 `PALETTE[i % 8]`，和以前完全一樣，不報錯也不發警告。這個鍵只給網頁顯示用：驗證器像對待其他未知鍵一樣忽略它（合約 §2.0），核心的文件、SVG 與警告在有無此鍵時逐位元組相同。網頁在載入場景時從**原始 JSON** 讀它（內建範例用範例資料，檔案選擇器、拖放與 `castplane_web.load_text` 用文字的 `JSON.parse`；`web/src/colours.ts`），不是從驗證後的場景讀；
   - 每盞光源各有一個輔助物件與自己的顏色：點光源畫成小球，平行光畫成箭頭；三維著色用的 three.js 光源平分同一個總亮度，所以多盞光源不會讓畫面變亮；
   - 無界的地面畫成大平面加格線；每個有界受影面（例如 `wall_and_ground` 的牆）依它的 `bounds` 畫成一塊板子（凸多邊形的三角扇形）並描出邊框；
   - three.js 相機直接由核心的 `camera_matrix` 建出，所以 WebGL 畫面與 SVG 疊圖是同一台 castplane 相機的兩種渲染；
@@ -787,6 +789,8 @@ vite + three.js（版本釘選：three 0.186.1、vite 8.3.3）。`vite build` �
   - 「Download SVG」：目前勾選的圖層，`<名稱>.svg`；
   - 「Download JSON」：§6.2 文件，`<名稱>.json`；
   - 「Download scene (current camera)」：場景加上目前的相機區塊、「Hidden lines」目前的勾選狀態（寫成 `output.hidden_lines`）與「Hidden style」（寫成 `output.hidden_style`），`<名稱>.scene.json`。用 Python 命令列的 `render` 指令渲染這個檔案會重現同一張 SVG（已驗證逐位元組相同）；
+  - 這個下載也會把 `display_color` 寫回（轉成小寫的 `#rrggbb`），只對原本有有效值的物件；沒有或無效的物件不寫這個鍵，所以無效值在下載時被丟掉，檔案重新載入後顏色相同，命令列渲染的結果與沒有這個鍵時逐位元組相同；
+  - **含網格物件的場景**（內嵌 `data` 或展開後的 `mesh_demo`）的下載現在是 Python 命令列能接受的檔案：`data.faces` 與 `data.smooth_groups` 寫成 JSON 整數（`26`，不是 `26.0`），整數的 `node` 也是整數，值為 null 的 `path` 與 `node` 不寫（字串的 `path` 與 `node` 照舊保留）；其餘的數字仍由核心的 `dumps` 以 Python 的 `repr` 寫出，整個檔案的文字等於 Python 的 `json.dumps(indent=1, sort_keys=True, ensure_ascii=False)`。修正之前，`castplane validate` 對這種檔案回報 `objects[0].data.faces[0]: vertex indices must be integers in [0, N)`（結束碼 2）。已用 `miki.json` 與展開後的 `mesh_demo` 在場景相機與繞轉後的相機各驗證一次：`validate` 與 `render` 成功，SVG 與網頁的逐位元組相同。沒有網格物件的場景，下載的文字與修正前逐位元組相同；
   - 「Copy camera block」：把目前的相機區塊複製到剪貼簿。
 - **面板**：
   - 狀態列顯示 A 段 ms（快取）、`core ms`（B + C + SVG）、`dom ms`（疊圖更新）、疊圖模式、點／邊／作圖線數量（所有光源的作圖線）、本影碎片數（兩盞以上光源），以及光源與受影面的 id；
@@ -801,7 +805,7 @@ vite + three.js（版本釘選：three 0.186.1、vite 8.3.3）。`vite build` �
   - 編輯畫面與預覽之間，同一台相機下載的 SVG 與 JSON 逐位元組相同（`web/scripts/smoke.mjs` 檢查）。狀態列另外顯示 `obs ms`（旁觀視角每格的成本），五個範例拖曳時每格總計約 4–24 ms；
   - 載入後第一次移動板子之前，直接用場景自己的相機區塊算圖（任何形式），所以文件、警告與下載都和 CLI 相同（水平板子不會出現 `CAMERA_LOOKING_ALONG_UP`）；移動之後改畫板子的 `picture_plane` 區塊，畫面不變，「Download scene」此後寫出 `picture_plane` 形式；「重設」回到場景的區塊。
 
-範例與 `benchmark_100.json` 拖曳時的 `core ms` / `dom ms` 實測見 `web/README.md`：八個範例每格約 1–3 ms，`benchmark_100.json` 約 66–78 ms（`<img>` 模式，第二階段量測）。截圖見 `docs/images/web_ui.png`，第二階段的三張是 `docs/images/web_ui_wall_and_ground.png`（開啟消隱：箱子背面的邊畫成虛線，牆畫成有界的板子）、`docs/images/web_ui_mesh_demo.png`（網格房子與圓柱，房子由展開後的場景載入）與 `docs/images/web_ui_two_lights.png`（兩盞點光源各有一個輔助小球，兩組影子與較深的本影）。旁觀視角的截圖是 `docs/images/web_ui_observer.png`，平面模式（輸入 `y=2` 後拖過圓環）的截圖是 `docs/images/web_ui_plane_mode.png`。
+範例與 `benchmark_100.json` 拖曳時的 `core ms` / `dom ms` 實測見 `web/README.md`：八個範例每格約 1–3 ms，`benchmark_100.json` 約 66–78 ms（`<img>` 模式，第二階段量測）。第九個範例 `miki`（18 個網格物件、4 469 個多邊形）載入或放開後的靜止影格（含消隱）約 1.4 秒，拖曳時每格約 40 ms（不做消隱）。截圖見 `docs/images/web_ui.png`，角色範例 `miki`（各物件用自己的 `display_color` 上色）是 `docs/images/web_ui_miki.png`，第二階段的三張是 `docs/images/web_ui_wall_and_ground.png`（開啟消隱：箱子背面的邊畫成虛線，牆畫成有界的板子）、`docs/images/web_ui_mesh_demo.png`（網格房子與圓柱，房子由展開後的場景載入）與 `docs/images/web_ui_two_lights.png`（兩盞點光源各有一個輔助小球，兩組影子與較深的本影）。旁觀視角的截圖是 `docs/images/web_ui_observer.png`，平面模式（輸入 `y=2` 後拖過圓環）的截圖是 `docs/images/web_ui_plane_mode.png`。
 
 ### 4.5 網頁 UI：平面模式（M10，合約 §5.7、spec-v0.2 §4.2、§5）
 
@@ -835,3 +839,33 @@ vite + three.js（版本釘選：three 0.186.1、vite 8.3.3）。`vite build` �
 **上方列**：平面方程式欄位平時即時顯示目前平面（例如 `y = 2.00`、`0.707x + 0.707y = 1.200`）；輸入 `x`、`y`、`z` 的一次式（兩邊都可有項，例如 `2x - y + 3 = 0`）後按 Enter 或「套用」，或按快速按鈕 `x=1`、`y=2`、`y=−3`、`z=3`、`x+y=3`。板子永遠放在眼睛與旋轉中心之間；平移與滾轉保留。語法錯誤、沒有 x/y/z、或 `g + D` 超出 0.8–40 m 時欄位變紅並說明原因，平面不變。在 D = 4 m、旋轉中心為場景中心時輸入 `y=2`，眼睛在 `y = −2`。另有「復原」（最多 50 步）、「重設」與「整體顯示」（預覽時隨旁觀視角一起隱藏）；工具列另有「預覽」按鈕（見本節上方的旁觀視角段）。
 
 **下載**：「Download scene」與「Copy camera block」寫出目前畫的那個區塊：移動過板子後為 `picture_plane` 形式（鎖水平且滾轉 0 時省略 `up`），`castplane render` 可重現同一張圖。
+
+## 5. 開發工具：`tools/make_miki_model.py`（花菱美希參考模型）
+
+`tools/make_miki_model.py` 產生角色範例：`examples/miki.json`（18 個內嵌網格物件）與同一個模型的 `examples/meshes/miki.{obj,mtl,glb}`（說明見 [`examples/README.md`](../examples/README.md)）。生成器本體在 `tools/miki_model/`（`rig.py` 放全部比例、`head.py` / `hair.py` / `body.py` / `limbs.py` 是各部位，`assemble.py` 把零件組成 18 個物件並配材質與 `display_color`，`export.py` 寫出場景 JSON、OBJ + MTL、GLB，`preview.py` 做著色預覽與線稿預覽）。幾何部分只用 numpy 與標準函式庫；只有 `--preview` 與 `--lines` 的圖片需要 Pillow 與 cairosvg。核心與 TypeScript 移植不讀取、也不依賴它。
+
+```sh
+python3 tools/make_miki_model.py                      # 建模、驗證、寫出 examples/miki.json 與 examples/meshes/miki.{obj,mtl,glb}
+python3 tools/make_miki_model.py --check              # 另跑場景檢查與渲染（警告必須為空）並印出面數預算表
+python3 tools/make_miki_model.py --preview DIR        # 另寫著色的總覽圖與頭部特寫
+python3 tools/make_miki_model.py --lines DIR --lines-views front head_side --no-hidden
+python3 tools/make_miki_model.py --only hair headband --preview DIR --context
+```
+
+| 選項 | 作用 |
+| --- | --- |
+| `--out-dir DIR` | 把 `miki.json` 寫到 DIR、`miki.{obj,mtl,glb}` 寫到 `DIR/meshes/`（預設是儲存庫的 `examples/`） |
+| `--check` | 場景檢查與渲染場景相機一次，警告必須是 `[]`；印出統計表（每個物件的零件數、頂點、多邊形、三角形與特徵輪廓頂點數）；場景檔超過 700 KiB 也算失敗 |
+| `--preview DIR` | 著色的總覽圖（多個視角）與頭部特寫，寫到 DIR |
+| `--lines DIR` | 用 castplane 渲染各視角的線稿與縮圖總覽到 DIR；`--lines-views` 選預設視角（`front back left right three_quarter_left three_quarter_right three_quarter_back top low_angle head_front head_three_quarter head_side head_low`），`--no-hidden` 略過消隱（較快），`--lines-layers` 選圖層（`objects` = 只有線，沒有影子填色） |
+| `--only 區域…` | 只建指定的區域（`head eyes face_marks hair headband neck torso collar scarf skirt arms hands legs socks shoes`）或模組，用來快速迭代；沒有 `--out-dir` 就不寫模型檔；`--context` 讓預覽把其他區域畫成灰色的假人 |
+| `--rig JSON` | 以 JSON 物件覆寫 `Rig` 的欄位（比例） |
+| `--no-strict` | 零件無效時繼續（只為了預覽） |
+
+結束碼：0 成功；1 模型無效、超過預算或場景檢查有警告；2 用法錯誤。
+
+**確定性。** 輸出是確定的：連跑兩次得到逐位元組相同的檔案，而且與 numpy / BLAS 的建置無關。在平面四邊形上，`n·(d−a)` 的符號只是 BLAS 核心的捨入雜訊，`inscribed_fan` 與 `fan_fold` 原本用它決定要不要轉動四邊形的頂點順序，不同的核心（原生、`OPENBLAS_CORETYPE=Haswell`、Python 3.10 的 numpy 2.2.6）會轉動不同的面，寫出不同的檔案。現在 `meshkit._below_fan` 把 `|n·(d−a)| <= 1e-9·|n|·|d−a|` 的四邊形視為平面、不轉動（31 個頭髮與側髮的平面四邊形保持原順序；頂點、群組與數量不變，場景相機的 SVG 逐位元組不變）。`tests/test_miki_model.py` 逐位元組比對 `miki.json` 與 OBJ / MTL / GLB。
+
+**預算。** 全部物件加起來 ≤ 6000 個多邊形與 ≤ 10000 個三角形（現在 4469 與 8154；castplane 的消隱成本隨三角形數上升，目前網頁上的靜止影格約 1.4 秒），每個物件的特徵輪廓頂點 ≤ 64（`MESH_MAX_RAYS`，超過會發 `MESH_RAYS_CAPPED`）。目前每個物件最多 39 個。每個殼都必須是封閉、方向一致的 2-流形，沒有低於地面的頂點。
+
+**時間（參考值）。** 建模約 18 秒；`--check` 約 26 秒；命令列渲染 `miki.json` 約 4–5 秒；TypeScript 移植（`ts/scripts/render.mjs`）約 1.8 秒；A 段約 0.13 秒；匯入 GLB 約 0.1 秒、OBJ 約 0.06 秒。檔案大小：`miki.json` 190 304 B、`miki.obj` 202 354 B、`miki.mtl` 1 000 B、`miki.glb` 182 364 B。
