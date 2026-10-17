@@ -28,12 +28,15 @@ from .rig import SUN_TOWARDS, Rig
 __all__ = ["OBJECTS", "OBJECT_IDS", "MATERIALS", "DISPLAY_MATERIALS", "display_color", "REGION_OBJECTS", "MODULES", "ALL_REGIONS", "BUDGET",
            "DECIMALS", "SUN_TOWARDS", "Assembly", "AssemblyError", "build_parts", "assemble", "format_stats"]
 
-#: The castplane objects in their fixed order (= index in the web UI's 3D palette) with what each holds.
+#: The castplane objects in their fixed order with what each holds.  ``headband`` comes first: the web UI's
+#: observer pane draws its sight rays (視線) for every vertex of ``objects[0]``, and the headband's 120
+#: vertices show its perspective without hiding the figure (the 324-vertex hair did).  Every object carries
+#: ``display_color`` (D81), so the order no longer picks the 3D colours from the index palette.
 OBJECTS = (
+    ("headband", "band, pink centre ridge"),
     ("hair", "dome H1, bangs H3, stray strand H5"),
     ("head", "head + face skin"),
     ("eyes", "sclera, iris, pupil, highlight"),
-    ("headband", "band, pink centre ridge"),
     ("scarf", "ribbons, tips"),
     ("sidelocks", "sidelocks H4 x2"),
     ("blouse", "torso / blouse"),
@@ -72,7 +75,7 @@ MATERIALS = {
 #: written as the object's optional ``display_color`` key in examples/miki.json.  The web UI's 3D views draw
 #: the object in it (instead of the index palette); castplane's core ignores the key (contract §2.0).
 DISPLAY_MATERIALS = {
-    "hair": "hair", "head": "skin", "eyes": "iris", "headband": "headband", "scarf": "scarf",
+    "headband": "headband", "hair": "hair", "head": "skin", "eyes": "iris", "scarf": "scarf",
     "sidelocks": "hair", "blouse": "uniform", "collar": "collar", "back_hair": "hair", "arm_l": "uniform",
     "face_marks": "face_marks", "arm_r": "uniform", "legs": "skin", "socks": "socks", "skirt": "skirt",
     "shoes": "shoes", "ring": "collar", "neck": "skin",
