@@ -1,16 +1,16 @@
 """Head, face, eyes, eyebrows and mouth of the Miki model (owner: head agent).
 
-Part contract (see ``assemble.py`` and the toolkit guide): :func:`build` takes the
+Part contract (see ``assemble.py`` and ``README.md`` in this directory): :func:`build` takes the
 :class:`~miki_model.rig.Rig` and returns a list of :class:`~miki_model.meshkit.Part` covering **all** of
 :data:`REGIONS` (each part's ``region`` names one of them, so ``--only`` can filter).
 Objects / materials (``Part(name, material, mesh, region, obj=...)``, see ``assemble.OBJECTS``): head + face ->
 head (skin; no ears); sclera, highlight -> eyes (eye_white), iris -> eyes (iris), pupil -> eyes (pupil); brows,
 lid bands, lower-lid marks, mouth -> face_marks (face_marks).
 
-How it is built (spec ``miki_spec.md`` §B):
+How it is built (``SPEC.md`` §B; the bare section numbers below are its sections):
 
 * **Skin head** (§B.1): one closed loft of horizontal sections from the skull top to the chin.  Each section
-  is the spec's asymmetric section (front half ``|x/hw|^3 + |(y-c)/(c-yf)|^3 = 1``, back half an ellipse);
+  is SPEC.md's asymmetric section (front half ``|x/hw|^3 + |(y-c)/(c-yf)|^3 = 1``, back half an ellipse);
   the ring points are spaced by arc length with most of them on the face (the back of the skull is under the
   hair).  Below the nape row the back of a section is the jaw underside, so the head's underside is closed
   and the neck (``body.py``) sinks into it.  The profile table's nose row (a ridge across the face) is
@@ -61,7 +61,7 @@ BACK_ANGLES = (20.0, 90.0, 160.0)
 #: Nose bump (§B.4): row -> displacement (forward, m) of the midline column; the neighbouring columns
 #: (fraction 0.05, about 6 mm off the midline at the nose) move ``NOSE_SIDE`` times as much.
 #: Round 2 (F4): a clear nose point (was 0.0032 / 0.0065 / 0.0018), 6 mm ahead of the brow.
-#: Round 3 (F4): that read as a 36 mm beak in 3/4 and profile; now a small point (tip y -0.093 = the spec's
+#: Round 3 (F4): that read as a 36 mm beak in 3/4 and profile; now a small point (tip y -0.093 = SPEC.md's
 #: nose_tip, ~8 mm ahead of the eye bridge, which is eased back halfway, ``rig.head_profile`` 1.342 / 1.333).
 NOSE_BUMP = {1.325: 0.0005, 1.312: 0.0065, 1.304: 0.0015}
 NOSE_SIDE = 0.10
@@ -76,7 +76,7 @@ NOSE_SIDE = 0.10
 #: down outside the neck to the junction, so no shelf sticks out of the neck.
 #: Round 3 (F3): the rim (``c``) comes forward and its side points rise (:data:`JAW_RIM_LIFT`), so seen from
 #: the side the jaw line climbs 33-41 degrees from the chin toward the jaw angle instead of 23-27: from below
-#: (elevation -20 ... -35) it stays a downward-bowing U close to the mouth (PDF p.18) instead of a straight
+#: (elevation -20 ... -35) it stays a downward-bowing U close to the mouth (the user's notes) instead of a straight
 #: bar (a rim rising at 27 degrees is seen edge-on from elevation -27).
 JAW_RINGS = (
     # zf      c        phi    P20 z   nape (y, z) or None
@@ -93,7 +93,7 @@ JAW_RINGS = (
 #: small rounded chin.
 #: Round 4 (F15): the side points of the first five rings rise 2 mm more (were 0.0015, 0.0026, 0.003, 0.0012,
 #: 0.0006): seen from below (az 15, el -35) the jaw line was still a nearly flat bar with a step at the near jaw
-#: corner; now it bows up toward the jaw angles (PDF p.18's U).
+#: corner; now it bows up toward the jaw angles (the notes' U).
 JAW_RIM_LIFT = (0.0035, 0.0046, 0.005, 0.0032, 0.0026, 0.0, 0.0)   # outline 47 -> 15 degrees, chin ~19 mm wide
 #: P20 lies at the given z on the neck, JUNCTION_INSET inside its surface: about level (1.265) where the
 #: rim descends from the jaw angle (so the strips from the rim into the neck do not twist), then rising to
@@ -269,7 +269,7 @@ def _head_mesh(rig: Rig) -> mk.Mesh:
     apex_chin = tuple(_chin_apex(rig))
     # Round 1 (F5) / round 2 (F1): the jaw underside is its own smooth group: the side columns (jaw rim ->
     # P20) from the last full ring down, the back columns once they are inside the neck, and the chin pole's
-    # fan.  Its border is the jaw rim from under the ear to the chin (PDF p.18's jaw line: on the outline
+    # fan.  Its border is the jaw rim from under the ear to the chin (the notes' jaw line: on the outline
     # from the front and from above, so the outline stays one stroke at head-lowered angles, and the jaw line
     # from below); its other borders lie inside the neck, or under the ear behind the silhouette of the
     # surface that turns from the jaw angle into the neck.  The nape stays in the skull's group (no line
@@ -361,7 +361,7 @@ def _face_y(rig: Rig, x: float, z: float) -> float:
 def smooth_face(rig: Rig, x: float, z: float, d: float = 2e-4):
     """``(point, unit outward normal)`` of the smooth face surface at ``(x, z)``.  The head mesh is its
     piecewise-flat inscription (rows on the profile, chords across), so a decal built on this surface is
-    never under the mesh and stacked decals keep their spec reliefs instead of chord-dependent lifts."""
+    never under the mesh and stacked decals keep their SPEC.md reliefs instead of chord-dependent lifts."""
     p = np.array([x, _face_y(rig, x, z), z])
     px = np.array([2 * d, _face_y(rig, x + d, z) - _face_y(rig, x - d, z), 0.0])
     pz = np.array([0.0, _face_y(rig, x, z + d) - _face_y(rig, x, z - d), 2 * d])
@@ -842,7 +842,7 @@ def _lid_band(rig: Rig, side: int, stack: DecalStack) -> mk.Mesh:
                   rig.eye_slab_depth + 0.5 * LAYER_DEPTH_STEP, stack, shrink=("across", BAND_SHRINK))
 
 
-#: Round 4 (F5): shorter brows closer to the eyes (PDF p.15): the rig's brow curve (3 mm lower in round 4) ends
+#: Round 4 (F5): shorter brows closer to the eyes (the user's notes): the rig's brow curve (3 mm lower in round 4) ends
 #: at x = BROW_OUTER_X (was rig.brow_outer x 0.058: 38.6 mm long, 18-31 mm above the lid), same slope.
 BROW_OUTER_X = 0.053
 
@@ -876,7 +876,7 @@ def _lower_lid(rig: Rig, side: int, stack: DecalStack) -> mk.Mesh:
                   shrink=("across", BAND_SHRINK))
 
 
-#: Round 3 (tech F6): a tiny nose mark (the anime nose of frame-000: a short dash under the tip, slightly to her
+#: Round 3 (tech F6): a tiny nose mark (the anime nose of the close-up: a short dash under the tip, slightly to her
 #: left, the side away from the sun), ``(x, z)`` ends and its half height; a decal like the mouth, so the
 #: front view shows a nose too.
 #: Round 4 (F3): 3 mm long, centred on the midline and ~4 mm lower (was x -0.001 ... 0.003 at z 1.307), under

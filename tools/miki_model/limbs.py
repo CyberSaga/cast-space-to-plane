@@ -1,11 +1,11 @@
 """Arms, sleeves, cuff stripes, hands, legs, socks and shoes of the Miki model (owner: body agent).
 
-Part contract (see ``assemble.py`` and the toolkit guide): :func:`build` takes the
+Part contract (see ``assemble.py`` and ``README.md`` in this directory): :func:`build` takes the
 :class:`~miki_model.rig.Rig` and returns a list of :class:`~miki_model.meshkit.Part` covering **all** of
 :data:`REGIONS`.  Objects / materials: each side's sleeve (uniform), its two cuff white stripes (collar), hand
 and thumb (skin) -> ``obj="arm_l"`` / ``obj="arm_r"``; legs -> legs (skin); socks -> socks (socks); shoes -> shoes (shoes).
 
-Lines (spec §F): the sleeve is one smooth group and its cuff (5 mm rim turning in to the opening + the
+Lines (SPEC.md §F): the sleeve is one smooth group and its cuff (5 mm rim turning in to the opening + the
 recessed disc) another, so the cuff rim always draws; the cuff stripes are single-group bands floating
 0.25 mm above the sleeve, built on the sleeve's own section polygon, so both borders of each stripe draw as
 silhouettes and cost no construction rays; hands, thumbs and legs are single groups (outlines only); the
@@ -53,7 +53,7 @@ SHOE_TOPLINE_FRONT_Z = 0.063       # throat height (back / sides: rig.shoe_topli
 SHOE_OPENING_FLOOR = 0.030
 STRAP_FLOAT = 0.0009               # the strap's chords cross the faceted upper: float it a little higher
 STRAP_CLEARANCE = 0.0008           # ... and every chord of its borders at least this far above the upper (r2 F5)
-SHOE_STRAP_U = 0.122                # saddle strap centre from the heel back (spec: y ~ -0.07)
+SHOE_STRAP_U = 0.122                # saddle strap centre from the heel back (SPEC.md: y ~ -0.07)
 SHOE_STRAP_POINTS = 13             # points along each strap border (r2 F5: 11 sagged up to 0.9 mm under the upper;
 #                                    r2 merge F8: 17 -> 13 for hidden-line time, lift_band_borders keeps >= 0.56 mm)
 #: Hand sections (review r1, T8): the wrist is narrower than the heel of the palm (a ~7 mm step each side

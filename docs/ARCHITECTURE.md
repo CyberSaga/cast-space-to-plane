@@ -4261,7 +4261,8 @@ and the hidden-run SVG groups (§5.1.8). Nothing an M4–M6 case needs lies beyo
   only for the geometry; castplane is imported to validate the written scene on every write, `export.check_scene`, and
   for `--check` and `--lines`) and is not edited by hand. It is
   the character 花菱美希 as a drawing reference: 18 inline `mesh` objects (headband, hair, head, eyes, scarf, sidelocks,
-  blouse, collar, back_hair, arm_l, face_marks, arm_r, legs, socks, skirt, shoes, ring, neck; the headband is first because the observer pane's sight rays use `objects[0]`; 58 closed shells,
+  blouse, collar, back_hair, arm_l, face_marks, arm_r, legs, socks, skirt, shoes, ring, neck; the headband is first
+  because the observer pane's sight rays use `objects[0]`; 58 closed shells,
   4181 vertices, 4469 polygons within a budget of 6000 polygons / 10000 triangles, 8154 triangles, at most 64 feature
   silhouette vertices per object so no `MESH_RAYS_CAPPED`), a portrait frame `[24, 36]` mm on a `[182, 273]` mm canvas
   (the aspect rule of §2.0 holds; `examples/README.md` says it is the exception to the 36×24 mm frames of the other

@@ -1,26 +1,26 @@
 """Hair cap, bangs, sidelocks, the stray strand, back hair and the headband of the Miki model (owner: head agent).
 
-Part contract (see ``assemble.py`` and the toolkit guide): :func:`build` takes the
+Part contract (see ``assemble.py`` and ``README.md`` in this directory): :func:`build` takes the
 :class:`~miki_model.rig.Rig` and returns a list of :class:`~miki_model.meshkit.Part` covering **all** of
 :data:`REGIONS` (each part's ``region`` names one of them, so ``--only`` can filter).
 Objects / materials (``Part(name, material, mesh, region, obj=...)``, see ``assemble.OBJECTS``): dome, bangs,
 strand -> hair (hair); sidelocks -> ``obj="sidelocks"`` (hair); curtain + back sheet -> ``obj="back_hair"``
 (hair); band -> headband (headband), its pink ridge -> headband (uniform).
 
-How it is built (spec ``miki_spec.md`` §C):
+How it is built (``SPEC.md`` §C; the bare section numbers below are its sections):
 
 * **H1 dome**: the §C top-hair ellipsoid from the crown down to a bottom boundary that runs along the headband's
   centreline in front (the band covers the dome's edge; the bangs come out from under it) and at
   :data:`DOME_BACK_BOTTOM_Z` around the sides and back (inside the side curtain).  Closed underneath by a fan
   to a point inside the skull.  One smooth group: it draws as the head's silhouette only.
-* **Headband** (§C.1): a 8 mm x 3 mm band swept along the spec centreline, its inner face sunk into the dome
+* **Headband** (§C.1): a 8 mm x 3 mm band swept along the SPEC.md centreline, its inner face sunk into the dome
   mesh (ray cast) and the pink centre ridge as a separate raised shell (material ``uniform``).  Both are
   classified slabs (see :func:`head.classify_rims`): the band's edges and the ridge's two borders are feature
   lines or robust silhouettes at a cost of a few construction rays.
 * **H3 bangs** (§C.2): a slab of even thickness on the forehead, from under the band's lower edge to the flat
   cut at ``bangs_cut_z``, six strips (five strand lines), the bottom 4 mm curling in, the cut face and the end
   faces in their own groups.
-* **H4 sidelocks** (§C.3): sharp-edged lens-section ribbons swept through the spec's edge table, their roots
+* **H4 sidelocks** (§C.3): sharp-edged lens-section ribbons swept through SPEC.md's edge table, their roots
   rising into the dome under the band; the cut face, a central strand crease and the outer edge are feature
   lines, the inner edge draws only as a silhouette.
 * **H5 strand** (§C.4): one thin swept strand on her left.
@@ -163,7 +163,7 @@ BAND_DIVE = 0.0075
 
 
 def _band_line(rig: Rig) -> np.ndarray:
-    """The headband centreline from her right end to her left end (spec points mirrored, ending at
+    """The headband centreline from her right end to her left end (SPEC.md points mirrored, ending at
     :data:`BAND_END_Y`)."""
     cl = np.array(rig.band_centreline)
     cl = cl[cl[:, 1] <= BAND_END_Y + 1e-9]
@@ -566,7 +566,7 @@ def _fit_rows(rows, deficit, movable, axis_sign, across: int = 0):
 # ---------------------------------------------------------------------------------------------------------
 # H4 sidelocks (§C.3)
 # ---------------------------------------------------------------------------------------------------------
-#: Root row added above the spec table (round 1, T3): the lock rises into the dome under the band to
+#: Root row added above the SPEC.md table (round 1, T3): the lock rises into the dome under the band to
 #: SIDELOCK_ROOT_Z, its edges SIDELOCK_ROOT_INSET inside the dome surface (the root cap never shows).
 SIDELOCK_ROOT_Z = 1.466
 SIDELOCK_ROOT_INSET = 0.005
@@ -654,7 +654,7 @@ STRAND_SIDES = 4
 
 def _strand(rig: Rig, lock_l: mk.Mesh) -> mk.Mesh:
     # round 4 (tech F4): the rig's P3 / P4 / P5 moved out 1 / 3 / 4.5 mm, so the strand passes outside the
-    # (shortened) brow's outer end and the lid's outer corner (spec I.12) instead of crossing them
+    # (shortened) brow's outer end and the lid's outer corner (SPEC.md §I.12) instead of crossing them
     pts = [np.array(p) for p in rig.strand_points]
     # the tip lies on the sidelock's front face (§C.4 P6): find that face along +y
     tip = pts[-1]
@@ -682,11 +682,11 @@ def _strand(rig: Rig, lock_l: mk.Mesh) -> mk.Mesh:
 # H2 side curtain + back sheet (§C.6)
 # ---------------------------------------------------------------------------------------------------------
 #: The curtain starts inside the dome and emerges from under it above the headband's buried ends:
-#: ``rig.curtain_top_rows`` replace the spec's first curtain row.
+#: ``rig.curtain_top_rows`` replace SPEC.md's first curtain row.
 BACK_GROOVE_DEPTH = 0.002
 BACK_STRAND_LINES = True            # the grooves are also group boundaries (strand lines on the back)
 BACK_BOTTOM_ROW_Z = 0.885           # last straight row above the clumps
-BACK_PLATE_ROWS = (1.180, 1.100)   # 1.100: the spec row over the collar flap (merge fit); round 3 (perf F3):
+BACK_PLATE_ROWS = (1.180, 1.100)   # 1.100: the SPEC.md row over the collar flap (merge fit); round 3 (perf F3):
 #                                   the 1.010 row dropped (the plate hangs straight from 1.10 to 0.885)
 BACK_CURVE = 0.025                  # the plate curves forward by this at its lateral edges (s = +-1)
 #: Round 1 (F8 / T4): the hem.  Clumps of these relative widths (her right to her left) over the notch-row

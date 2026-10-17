@@ -1,8 +1,9 @@
 """Proportions, landmarks and pose of the Miki model: the single source of every number.
 
-The values are the numeric character spec (``miki_spec.md``, sections A-E; the section of each field is in
-its comment).  Builders read every dimension from a :class:`Rig` and add a new named field (with a comment
-and the spec section) instead of a literal.  Units are metres and degrees.  The frame is castplane's world:
+The values are the numeric character spec (``SPEC.md`` in this directory, sections A-E; the section of each field is
+in its comment).  "Spec" in a comment means SPEC.md, and where a value differs from it the code wins.  Builders read
+every dimension from a :class:`Rig` and add a new named field (with a comment and the spec section) instead of a
+literal.  Units are metres and degrees.  The frame is castplane's world:
 Z up, soles on ``z = 0``, the figure stands at the origin facing ``-Y`` and her left is ``+X``.  A ``side``
 argument is ``+1`` for her left (``+X``) and ``-1`` for her right.
 
@@ -61,13 +62,13 @@ def _interp_rows(rows, z, col):
 
 @dataclass(frozen=True)
 class Rig:
-    """Named dimensions (metres, degrees) and derived landmarks of the figure (spec ``miki_spec.md``)."""
+    """Named dimensions (metres, degrees) and derived landmarks of the figure (``SPEC.md``)."""
 
     # =====================================================================================================
     # A. Overall proportions and landmarks
     # =====================================================================================================
-    #: Landmark table (spec §A): ``(name, z, hw, yf, yb)``; the body column is the body surface, or the
-    #: clothing surface where she is clothed (see the spec for the surface of each row).  ``height``,
+    #: Landmark table (SPEC.md §A): ``(name, z, hw, yf, yb)``; the body column is the body surface, or the
+    #: clothing surface where she is clothed (see SPEC.md for the surface of each row).  ``height``,
     #: ``chin_z``, ``eye_z``, ``waist_z`` ... are read from here.
     landmarks: tuple = (
         ("hair top", 1.528, 0.0, 0.010, 0.010),            # hair crown (hair 18 mm thick)
@@ -117,7 +118,7 @@ class Rig:
     )
     #: The convex shoulder between the neck root and the acromion row: ``(z, hw)``; yf / yb are linear between
     #: blouse_rows[0] and blouse_rows[1].  A straight loft from the neck root would cut the trapezius.
-    #: Review r4 (F1, PDF p.14 item 5: narrow shoulders sloping a little down read soft): ~17 deg off the neck,
+    #: Review r4 (F1, the user's notes: narrow shoulders sloping a little down read soft): ~17 deg off the neck,
     #: ~35 deg at the collar's turn over the shoulder (O5), then rounding down into the sleeve (round 3:
     #: (1.215, 0.0275), (1.203, 0.083), (1.193, 0.112), (1.183, 0.130), (1.172, 0.142)).
     blouse_shoulder_hw: tuple = ((1.215, 0.0275), (1.197, 0.086), (1.185, 0.106), (1.172, 0.121), (1.159, 0.132),
@@ -193,11 +194,11 @@ class Rig:
     eye_outer_x: float = 0.061
     eye_full_z: tuple = (1.323, 1.363)       # full eye height 0.040 if the lid were up
     eye_lid_z: float = 1.3465                # visible opening: lower lid 1.323 up to this flat upper-lid line
-    #                                          (r3 F2: pressed down 4.5 mm, was 1.351: half-lidded, PDF p.15)
+    #                                          (r3 F2: pressed down 4.5 mm, was 1.351: half-lidded, per the notes)
     eye_lid_rise: float = 0.001              # the lid line rises this much from inner to outer end (~1.5 deg)
     iris_size: tuple = (0.026, 0.031)        # ellipse width x height
     iris_center_z: float = 1.3375            # its top ~9 mm (29 %) is hidden under the lid band (r3 F2)
-    pupil_size: tuple = (0.011, 0.016)       # r3 F9: spec B.2 (was 0.012 wide)
+    pupil_size: tuple = (0.011, 0.016)       # r3 F9: SPEC.md §B.2 (was 0.012 wide)
     pupil_center_z: float = 1.337
     highlight_diameter: float = 0.005
     highlight_dx: float = -0.008             # highlight x = eye centre x + this on BOTH eyes (towards -x)
@@ -297,7 +298,7 @@ class Rig:
     #: Edge positions (centre of the thickness) for her left: ``(z, x_in, y_in, x_out, y_out)``; the last row
     #: is the straight horizontal cut.
     #: r2 F3 / F6 / F15: the lock hangs ~12 mm further back and 4 mm further out at the ear line, so the
-    #: cheek and jaw show in profile (overrides spec Decision 13: from the front the cheek outline shows just
+    #: cheek and jaw show in profile (overrides SPEC.md Decision 13: from the front the cheek outline shows just
     #: inside the hair); the outer edge stays at x 0.104 (straight side hair, the crown is the widest part);
     #: rows 1.245 / 1.220 / 1.200 make the bend over the shoulder a smooth curve.
     sidelock_rows: tuple = (
@@ -562,7 +563,7 @@ class Rig:
     # -----------------------------------------------------------------------------------------------------
     # landmarks (from the table)
     def landmark(self, name: str):
-        """``(z, hw, yf, yb)`` of a landmark row (spec §A)."""
+        """``(z, hw, yf, yb)`` of a landmark row (SPEC.md §A)."""
         for row in self.landmarks:
             if row[0] == name:
                 return row[1:]
@@ -745,7 +746,7 @@ class Rig:
         return np.array([side * self.shoe_heel_x, self.shoe_heel_y, 0.0])
 
 
-#: Rig fields that no builder of the detailed model reads (review r3, F7): spec values (``miki_spec.md``) kept
+#: Rig fields that no builder of the detailed model reads (review r3, F7): spec values (``SPEC.md``) kept
 #: for reference.  The builders take these shapes from their own tables or module constants instead (e.g.
 #: ``hair.BACK_GROOVE_DEPTH``, the pose in ``limbs``), so a ``--rig`` override of one of them changes
 #: nothing; :meth:`Rig.from_dict` warns about it.

@@ -105,7 +105,7 @@ REGION_OBJECTS = {
 MODULES = (head, hair, body, limbs)
 ALL_REGIONS = tuple(r for m in MODULES for r in m.REGIONS)
 
-#: Web-UI budget (BRIEF §5): polygons = faces as written, triangles = castplane's fan triangulation.
+#: Web-UI budget (SPEC.md §G): polygons = faces as written, triangles = castplane's fan triangulation.
 BUDGET = {"polygons": 6000, "triangles": 10000}
 
 

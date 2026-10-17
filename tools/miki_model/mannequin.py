@@ -1,10 +1,10 @@
-"""Placeholder (mannequin) parts for every region of the model, at the spec's proportions.
+"""Placeholder (mannequin) parts for every region of the model, at SPEC.md's proportions.
 
 Each region builder takes a :class:`~miki_model.rig.Rig` and returns a list of
 :class:`~miki_model.meshkit.Part`; :func:`build` returns the parts of the requested regions.  The shapes are
 deliberately simple (lofted sections, slabs, sweeps) but follow the rig's tables and landmarks (the numeric
-spec), so a detailed module (``head.py``, ``hair.py``, ``body.py``, ``limbs.py``) can be previewed in context
-while the others are still placeholders.  Every part names its material and lands in the object of
+character spec, SPEC.md), so a detailed module (``head.py``, ``hair.py``, ``body.py``, ``limbs.py``) can be
+previewed in context while the others are still placeholders.  Every part names its material and lands in the object of
 ``assemble.OBJECTS`` that the real part will use (``obj=`` where the region's default object differs).
 Most placeholders use one smooth group per shell, so they draw as silhouettes and cost no construction rays.
 

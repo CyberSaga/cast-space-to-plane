@@ -1,6 +1,6 @@
 """Neck, sailor top, collar, scarf + ring and skirt of the Miki model (owner: body agent).
 
-Part contract (see ``assemble.py`` and the toolkit guide): :func:`build` takes the
+Part contract (see ``assemble.py`` and ``README.md`` in this directory): :func:`build` takes the
 :class:`~miki_model.rig.Rig` and returns a list of :class:`~miki_model.meshkit.Part` covering **all** of
 :data:`REGIONS`.  Objects / materials (``Part(name, material, mesh, region, obj=...)``): neck + decollete
 bib -> head (skin); torso -> blouse (uniform); collar, dickey -> collar (collar), collar stripe -> collar
@@ -8,7 +8,7 @@ bib -> head (skin); torso -> blouse (uniform); collar, dickey -> collar (collar)
 ``obj="ring"`` (uniform); skirt, under-skirt -> skirt (skirt).
 
 How the lines come out (castplane draws feature edges always and smooth edges only on the camera
-silhouette; spec §F):
+silhouette; SPEC.md §F):
 
 * the blouse is one smooth group; its flat hem disc has its own group, so the hem rim always draws;
 * the collar top is one group and its walls + underside another: the outer and inner edges always draw,
@@ -43,7 +43,7 @@ SIDES = (1, -1)
 # Module constants (numbers the rig does not carry; see the report for the rig changes they suggest)
 # ---------------------------------------------------------------------------------------------------
 #: Convex shoulder slope of the blouse between the neck root (1.215) and the acromion (1.180), as
-#: ``(z, hw)``: through the collar's I3 (x 0.042 at z 1.213) and O5 (x 0.118 at z 1.191) (spec §D.2);
+#: ``(z, hw)``: through the collar's I3 (x 0.042 at z 1.213) and O5 (x 0.118 at z 1.191) (SPEC.md §D.2);
 #: yf / yb are interpolated linearly between the rig's 1.215 and 1.180 rows.
 TORSO_RING_POINTS = 18                 # points per blouse section
 TORSO_SKIP_ROWS = (0.990,)             # rig rows the loft leaves out (linear between their neighbours)
@@ -69,7 +69,7 @@ UNDERSKIRT = ((0.950, 0.100, -0.060, 0.055), (0.780, 0.150, -0.075, 0.090), (0.7
 #: The neck (review r1, F6 / T6): ``rig.neck_half_width`` is its half-width at the head end; toward the base it
 #: widens by this extra half-width ``(z, extra)`` (a 12 % taper with most of it in the last 15 mm: the flare
 #: into the trapezius, continued under the blouse).  The depth semi-axis scales with the half-width.
-#: Review r4 (F14, PDF p.14 item 4: a slimmer neck): the flare is 40 % of round 3's (root half-width 0.0262,
+#: Review r4 (F14, the user's notes: a slimmer neck): the flare is 40 % of round 3's (root half-width 0.0262,
 #: was 0.028; 0.027 at the bottom inside the blouse, was 0.030).
 NECK_FLARE = ((1.180, 0.0020), (1.205, 0.0018), (1.215, 0.0012), (1.228, 0.0005), (1.245, 0.0))
 #: The depth semi-axis is ``rig.neck_y``'s half-depth times ``a / (rig.neck_half_width + NECK_DEPTH_FLARE)``:
@@ -83,7 +83,7 @@ NECK_FIT = 0.85                        # ... and its ring within this ellipse me
 #: A point inside the chest (the collar slab's and its stripe's normals point away from it).
 TORSO_CENTRE = (0.0, 0.012, 1.12)
 
-#: Review r4 (F1): narrow, sloping shoulders (ref1 / frame-000, ref3, the user's drawing; PDF p.14 item 5): the
+#: Review r4 (F1): narrow, sloping shoulders (the close-up and 3/4 profile frames, the user's drawing and notes): the
 #: rig's blouse_rows[1:3], blouse_shoulder_hw, shoulder_joint_pos, sleeve_radii and collar_outer O4 - O6 hold
 #: the round-4 values (round 3 rose only ~12 deg from the neck to a square sleeve-cap corner 0.358 wide).
 
@@ -346,7 +346,7 @@ def _blouse(rig: Rig, torso: Torso):
 
 def _collar_edges(rig: Rig, n1=2, n2=5, n3=6):
     """Corresponding outer / inner edge points of her left half, back centre -> V tip: ``(outer, inner,
-    lift)`` with the lapel lift (spec §D.2) per column."""
+    lift)`` with the lapel lift (SPEC.md §D.2) per column."""
     O, I = np.array(rig.collar_outer), np.array(rig.collar_inner)
     side = mk.catmull_rom(O[1:], 400)                 # O2 ... O9, smooth (the O2 corner stays square)
     # round the turn over the shoulder (O3 - O5): its radius must exceed the stripe's 18 mm offset
@@ -376,7 +376,7 @@ def _collar_edges(rig: Rig, n1=2, n2=5, n3=6):
     inn = np.concatenate([mk.polyline_at(inner[:i2 + 1], np.linspace(0.0, 1.0, n1 + 1)),
                           mk.polyline_at(inner[i2:i3 + 1], np.linspace(0.0, 1.0, n2 + 1))[1:],
                           mk.polyline_at(lap_i, g)[1:]])
-    # lapel lift at the outer edge: 0 at O5, then the spec's 10 / 9 / 6 mm at O6 / O7 / O8, 0 at the tip
+    # lapel lift at the outer edge: 0 at O5, then SPEC.md's 10 / 9 / 6 mm at O6 / O7 / O8, 0 at the tip
     lift = np.zeros(len(outer))
     lift_pts = np.array([O[4], O[5], O[6], O[7], O[8]])
     lift_val = np.array([0.0, 0.010, 0.009, 0.006, 0.0])
@@ -577,7 +577,7 @@ def _ribbon(rig: Rig, torso: Torso, side: int):
 
 
 def _ring(rig: Rig):
-    # r2 F11 (frame-001 / the user's drawing): a prominent band about as wide as the scarf there and taller
+    # r2 F11 (the high-angle frame / the user's drawing): a prominent band about as wide as the scarf there and taller
     # than it is wide, with two clearly separate 4 mm stripes (rig.ring_size / ring_stripe_*)
     c = np.array(rig.ring_center)
     w, d, h = rig.ring_size
@@ -600,7 +600,7 @@ def _ring(rig: Rig):
 def _tip(rig: Rig, torso: Torso, side: int):
     """A flat 4 mm blade below the ring: root inside the ring, ``scarf_tip_angle_deg`` outward (toward
     ``scarf_tip_point``), widest ``scarf_tip_max_width`` (a broad fan), a 45 deg oblique cut with the point on
-    the outer side (spec §D.3)."""
+    the outer side (SPEC.md §D.3)."""
     if side > 0:
         root, point, front = np.array(rig.scarf_tip_root), np.array(rig.scarf_tip_point), rig.scarf_tip_front_offset
     else:
@@ -650,7 +650,7 @@ def _tip(rig: Rig, torso: Torso, side: int):
 # ---------------------------------------------------------------------------------------------------
 
 def _skirt(rig: Rig):
-    """Pleated skirt shell (spec §D.5): smooth from the waist (0.95) down to pleat_top_z, below it 16 knife
+    """Pleated skirt shell (SPEC.md §D.5): smooth from the waist (0.95) down to pleat_top_z, below it 16 knife
     pleats (crest / valley sawtooth, depth 0 at pleat_top_z -> pleat_depth at the hem), a 3 mm
     hem rim and a short inner facing that rises to ``rig.skirt_ceiling_z``, where a ceiling closes the shell level
     with the under-skirt's bottom (from below the legs and the under-skirt still show).  Groups: the two
