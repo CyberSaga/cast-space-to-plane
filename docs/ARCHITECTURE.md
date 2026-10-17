@@ -3345,9 +3345,9 @@ Modules (all TypeScript, strict; only `orbit.ts` and `download.ts` are DOM-free 
   block of `camera_from_orbit` (so the result never carries both forms; `"<sceneName>.scene.json"`: the loaded scene with
   the current camera block, so the Python CLI reproduces the picture: `castplane render x.scene.json -o out`). Buttons:
   "Download SVG", "Download JSON", "Download scene (current camera)", "Copy camera block" (clipboard).
-  Amended by the §5.4 implementation notes (D81, the mesh download): `scene_blob` also takes the objects' display
+  *Amended by the §5.4 implementation notes (D81, the mesh download): `scene_blob` also takes the objects' display
   colours and writes `mesh` objects so that the Python validator accepts them, and the pure module `src/colours.ts` holds
-  the display-colour logic of the 3D views.
+  the display-colour logic of the 3D views.*
 - Warnings panel — a table of `doc.warnings` (`code`, `ids`, `message`) refreshed per frame; the error panel shows
   `SceneError.field` / `.detail` and loader errors. A status line shows `core ms`, `dom ms`, points / edges / rays counts.
 - No server: `vite build` emits static files under `web/dist` (`base: './'`), openable from any static host; `vite preview`
