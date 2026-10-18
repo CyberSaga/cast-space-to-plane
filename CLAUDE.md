@@ -30,8 +30,10 @@ node --test --test-reporter=tap ts/build/test/conformance.test.js   # TS conform
 python3 tools/compare_svg.py                   # Python vs TS SVG text; must report 0 mismatches (needs ts build)
 node ts/build/bench/camera_only.js --gate both --reps 20            # TS perf gate
 npm run -w web build
+node tools/web_frame_bench.mjs examples/miki.json 5                  # web-path timings of one scene (needs ts build)
 
 castplane render examples/basic.json -o out    # CLI: render | validate | info | stages | import
+python3 tools/make_miki_model.py --check       # regenerates examples/miki.json + meshes/miki.*; must exit 0
 ```
 
 ## Verify before you push
@@ -62,6 +64,8 @@ match what you changed:
   - `README.md`, `docs/USAGE.md`, `docs/STEP.md`, `docs/DECISIONS.md` and `tests/conformance/*.md` are in Traditional
     Chinese.
   - Keep each file in its own language.
+  - In Chinese Markdown, never hard-wrap inside a paragraph or list item: Markdown renders the line break as a space
+    (「須自行 取得」). Write each Chinese paragraph on one line. English text may wrap at 120 columns.
 
 ## Hard constraints
 
@@ -114,6 +118,20 @@ Python is the reference.
 - **The JSON writer reproduces Python `repr` floats** (`ts/src/pyfloat.ts`). **The SVG writer must match Python's byte
   for byte**, with round-half-even at 4 decimals.
 - **When the two disagree, suspect TS first.** If Python breaks the contract, fix Python and bump the conformance set.
+
+## Character models (`tools/miki_model/`, `examples/miki.json`)
+
+- **To build a new character or figure model, load the `character-model` skill**
+  (`.claude/skills/character-model/SKILL.md`). The maintainer guide and the mesh rules are in
+  `tools/miki_model/README.md`.
+- **Generated files are never edited by hand.** `examples/miki.json` and `examples/meshes/miki.{obj,mtl,glb}` come from
+  the generator, and `tests/test_miki_model.py` compares them byte for byte, including the text in them (the
+  description and the copyright headers live in `tools/miki_model/export.py`). Change the generator, run `--check`,
+  and commit the generator and the regenerated files together.
+- **Adding an example** changes the count asserted in `tests/test_ts_port.py` (`len(examples) == 9`) and the
+  example lists in `examples/README.md`, `docs/USAGE.md` and `web/README.md`.
+- **Third-party characters** carry the notice in `COPYRIGHT_NOTICE.md`: the character is not part of the project's
+  authorized distribution. Keep the notice in the docs and in the generated file headers.
 
 ## Gotchas
 
@@ -173,12 +191,17 @@ can run in parallel, or when a search would otherwise flood your context.
 - Ask for a structured report: one line per item (fixed or rejected, with the reason), files changed, test counts,
   conformance cases whose bytes changed, and commits.
 - **A subagent's report is a claim, not proof.** Re-run the gates yourself before merging or pushing, and read the diff.
+- Read-only critics are often not allowed to write report files. Ask for the full report in the structured result as
+  well.
+- **Clean up after merging.** Run `git worktree remove .claude/worktrees/<wf>` and `git branch -d <branch>`. Stale
+  worktrees take hundreds of MB of the session's disk and slow down `git status`.
 
 ## Guard rails in `.claude/`
 
 - `settings.json` pre-approves the read-only and test commands. It deliberately leaves out `regen_conformance.py`
   without `--dry-run`, and any push.
 - `hooks/protect_expected.sh` denies Edit and Write on `tests/conformance/expected/`.
+- `skills/character-model/` is the playbook for character and figure models.
 
 ## Change checklist
 

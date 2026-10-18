@@ -213,7 +213,9 @@ These are castplane's mesh rules (contract §5.2) and what the generator adds on
 8. **Budget.** At most 6000 polygons and 10000 triangles in total (`assemble.BUDGET`, polygons = faces as written,
    triangles = castplane's fan triangulation; now 4469 and 8154) and a scene file of at most 700 KiB (186 KiB now).
    Hidden-line time grows with the number of drawn edge samples times the number of triangles, and shrinks when
-   objects are compact. The web port's resting frame (with hidden lines) takes about 1.4 s against a 1.5 s target,
+   objects are compact. `node tools/web_frame_bench.mjs examples/miki.json 5` times the web path (the figures
+   depend on the machine, so compare against a baseline measured on the same machine).
+   The web port's resting frame (with hidden lines) takes about 1.4 s against a 1.5 s target,
    and the Python CLI renders the scene in about 4 s, so spend polygons where the silhouette needs them and not on
    flat areas. Every mesh vertex also gets a label in the `labels` layer, which is why the web UI asks users to
    untick it.
