@@ -1,5 +1,7 @@
 # Hanabishi Miki (花菱美希): character specification
 
+> **Copyright notice:** Hanabishi Miki (*Hayate the Combat Butler*) belongs to her rights holders. This model is an unofficial fan-made drawing reference, and the character and her model are **not included in this project's authorized distribution and dissemination** (the GPL-3.0 licence covers the castplane software only). See [`COPYRIGHT_NOTICE.md`](../../COPYRIGHT_NOTICE.md).
+
 This is the design spec that was written **before modelling**, from the anime frames and from the user's notes on the
 character (an analysis of her hair, headband, scarf and cute-face proportions). It fixed the numbers the part builders
 in this directory were written against. The model was then **refined in four review rounds**, so where this document

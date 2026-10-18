@@ -1,5 +1,7 @@
 # tools/miki_model: maintainer guide
 
+> **Copyright notice:** Hanabishi Miki (*Hayate the Combat Butler*) belongs to her rights holders. This model is an unofficial fan-made drawing reference, and the character and her model are **not included in this project's authorized distribution and dissemination** (the GPL-3.0 licence covers the castplane software only). See [`COPYRIGHT_NOTICE.md`](../../COPYRIGHT_NOTICE.md).
+
 This package generates the 花菱美希 (Hanabishi Miki) drawing-reference model: `examples/miki.json` (the castplane
 scene, 18 inline `mesh` objects) and `examples/meshes/miki.{obj,mtl,glb}` (the same model for other 3D software). It is
 a development tool outside the castplane core. The geometry modules import numpy and the standard library only;
