@@ -9,11 +9,9 @@ import * as THREE from "three";
 import { transform_frame } from "castplane";
 import type { ObjectRecord, Scene, SceneObject, StageA, Vec3 } from "castplane";
 
+import { object_colour } from "./colours.js";
 import { OBJECT_ID_KEY, RECEIVER_ID_KEY, light_colour, receiver_plates, shading_intensity } from "./helpers3d.js";
 import { mesh_positions } from "./mesh3d.js";
-
-/** Per-object colours (cycled). */
-const PALETTE = [0xc9d6e8, 0xe8d3c3, 0xd2e3c8, 0xe6d9ef, 0xf0e2b6, 0xc8e4e4, 0xebc9cf, 0xd9d9d9];
 
 /** The geometry of a primitive in its local frame (castplane local frames: base on `z = 0`, axis `+z`); a mesh object
  * with its stage-A record `rec` is the exception: world coordinates (`mesh_positions(...).world`, identity matrix). */
@@ -89,15 +87,17 @@ export function dispose_scene3d(root: THREE.Object3D): void {
 }
 
 /** The three.js group of a scene: one mesh per object, light helpers + shading lights per light, receivers (the
- * unbounded ground as a large plane with a grid, each bounded receiver as a plate over its `bounds`). */
-export function build_scene3d(scene: Scene, A?: StageA): THREE.Group {
+ * unbounded ground as a large plane with a grid, each bounded receiver as a plate over its `bounds`). `colours`: the
+ * raw scene's display colours by object id (`colours.ts::display_colours`); an object without one is drawn with the
+ * palette colour of its index (`object_colour`). */
+export function build_scene3d(scene: Scene, A?: StageA, colours?: ReadonlyMap<string, number>): THREE.Group {
   const group = new THREE.Group();
   group.name = "castplane-scene";
   const { centre, extent } = extent_of(scene, A);
 
   scene.objects.forEach((obj, i) => {
     // a mesh object may be open (the per-face fallback of §5.2.5): draw both sides of its triangles
-    const material = new THREE.MeshLambertMaterial({ color: PALETTE[i % PALETTE.length],
+    const material = new THREE.MeshLambertMaterial({ color: object_colour(obj.id, i, colours),
       side: obj.type === "mesh" ? THREE.DoubleSide : THREE.FrontSide });
     // stage A's record of a mesh object carries its triangles over world-frame vertices: drawn with the identity
     const rec = obj.type === "mesh" ? A?.objects.find((o) => o.id === obj.id) : undefined;

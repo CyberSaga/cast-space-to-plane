@@ -30,6 +30,7 @@ node --test --test-reporter=tap ts/build/test/conformance.test.js   # TS conform
 python3 tools/compare_svg.py                   # Python vs TS SVG text; must report 0 mismatches (needs ts build)
 node ts/build/bench/camera_only.js --gate both --reps 20            # TS perf gate
 npm run -w web build
+node tools/web_frame_bench.mjs examples/wall_and_ground.json 5      # web-path timings of one scene (needs ts build)
 
 castplane render examples/basic.json -o out    # CLI: render | validate | info | stages | import
 ```
@@ -53,7 +54,7 @@ match what you changed:
   - New behaviour goes in as an appended `[decision, implementation]` paragraph at the end of that section's
     `### Implementation notes`.
   - Never rewrite existing contract text; amend it by reference.
-- `docs/DECISIONS.md` (D1–D80) explains each decision in plain language. A real new decision gets the next D-number,
+- `docs/DECISIONS.md` (D1–D81) explains each decision in plain language. A real new decision gets the next D-number,
   written in the same 規格 / 問題 / 決定 / 理由 style.
 - `docs/spec/spec-v0.1.md` is the original spec. The contract overrides it where marked **[decision]**.
 - In the contract, "§N" means the contract and "spec §N" means the spec.
@@ -62,6 +63,8 @@ match what you changed:
   - `README.md`, `docs/USAGE.md`, `docs/STEP.md`, `docs/DECISIONS.md` and `tests/conformance/*.md` are in Traditional
     Chinese.
   - Keep each file in its own language.
+  - In Chinese Markdown, never hard-wrap inside a paragraph or list item: Markdown renders the line break as a space
+    (「須自行 取得」). Write each Chinese paragraph on one line. English text may wrap at 120 columns.
 
 ## Hard constraints
 
@@ -114,6 +117,15 @@ Python is the reference.
 - **The JSON writer reproduces Python `repr` floats** (`ts/src/pyfloat.ts`). **The SVG writer must match Python's byte
   for byte**, with round-half-even at 4 decimals.
 - **When the two disagree, suspect TS first.** If Python breaks the contract, fix Python and bump the conformance set.
+
+## Character models live on their own branch
+
+Character and figure models (generators under `tools/<name>_model/`, the generated example scenes and meshes, the
+`character-model` skill) live only on the branch `claude/admiring-bohr-egi4ik`. That branch is never merged into main;
+main is merged into it from time to time.
+- Build and change models on that branch, never on main. Keep third-party characters out of main.
+- A system improvement found while building a model (core, port, web, tools, docs) goes to main on its own branch off
+  main, without model files. Then merge main into the model branch.
 
 ## Gotchas
 
@@ -173,6 +185,10 @@ can run in parallel, or when a search would otherwise flood your context.
 - Ask for a structured report: one line per item (fixed or rejected, with the reason), files changed, test counts,
   conformance cases whose bytes changed, and commits.
 - **A subagent's report is a claim, not proof.** Re-run the gates yourself before merging or pushing, and read the diff.
+- Read-only critics are often not allowed to write report files. Ask for the full report in the structured result as
+  well.
+- **Clean up after merging.** Run `git worktree remove .claude/worktrees/<wf>` and `git branch -d <branch>`. Stale
+  worktrees take hundreds of MB of the session's disk and slow down `git status`.
 
 ## Guard rails in `.claude/`
 

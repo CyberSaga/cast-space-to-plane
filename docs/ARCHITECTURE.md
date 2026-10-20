@@ -3345,6 +3345,9 @@ Modules (all TypeScript, strict; only `orbit.ts` and `download.ts` are DOM-free 
   block of `camera_from_orbit` (so the result never carries both forms; `"<sceneName>.scene.json"`: the loaded scene with
   the current camera block, so the Python CLI reproduces the picture: `castplane render x.scene.json -o out`). Buttons:
   "Download SVG", "Download JSON", "Download scene (current camera)", "Copy camera block" (clipboard).
+  *Amended by the §5.4 implementation notes (D81, the mesh download): `scene_blob` also takes the objects' display
+  colours and writes `mesh` objects so that the Python validator accepts them, and the pure module `src/colours.ts` holds
+  the display-colour logic of the 3D views.*
 - Warnings panel — a table of `doc.warnings` (`code`, `ids`, `message`) refreshed per frame; the error panel shows
   `SceneError.field` / `.detail` and loader errors. A status line shows `core ms`, `dom ms`, points / edges / rays counts.
 - No server: `vite build` emits static files under `web/dist` (`base: './'`), openable from any static host; `vite preview`
@@ -4227,6 +4230,50 @@ and the hidden-run SVG groups (§5.1.8). Nothing an M4–M6 case needs lies beyo
   observer switch keeps its default (off). A default drawing therefore shows the
   finished construction without the construction layer. Layer visibility is a CSS class on the overlay (or the written
   subset in `<img>` mode), not a different document, so no document byte and no conformance case changes.
+- **[decision, implementation] (web, D81) Optional per-object display colour for the 3D views.** §5.4.10 is amended by
+  reference (a pointer line added to its `src/download.ts` item): where it says `build_scene3d` gives each mesh "a per-object colour", that colour is the
+  object's `display_color` when it has a valid one, else the palette colour of its index. A scene object may carry
+  `display_color`, a string `"#rrggbb"` (exactly six hex digits, either case). The web UI's 3D views draw that object with
+  this colour: `build_scene3d(scene, A?, colours?)` serves both the drawing pane's 3D view and the observer pane's
+  `ObserverPane.set_scene(scene, A, colours?)`, and the colour is the `MeshLambertMaterial` colour, so it is still shaded by
+  the scene's lights (in the observer pane only the receiver plates are see-through). An absent or invalid value keeps the
+  palette colour of the object's index, `PALETTE[i % 8]`, as before. Invalid means any other string (no `#`, 3, 7 or other
+  digit counts, non-hex digits, surrounding spaces) or any non-string. The key is display-only and is not a core field.
+  The validators ignore it like any unknown key (§2.0), so the validated `Scene` drops it, and the document, the SVG and
+  the warnings are byte-identical with or without it, valid or not. No `SceneError`, no warning code, and no change to
+  `castplane/`, `ts/src`, the CLI or the conformance set (still v8, 63 cases). Because the validated scene drops the
+  key, the UI reads it from the raw JSON where it loads a scene: `ex.data` for a bundled example, and the parsed text
+  for the file picker, a drop and the `castplane_web.load_text` hook. The pure, DOM-free `web/src/colours.ts` holds the
+  logic: `parse_display_color`, `display_color_text`, `display_colours(raw) -> Map<id, 0xrrggbb>` (it skips malformed
+  entries, ids that are not strings and a missing or non-array `objects` silently and never fails a load),
+  `display_colours_text`, `object_colour(id, i, colours?)`, and `PALETTE`, which moved here from `scene3d.ts` with the
+  same eight values; `main.ts` keeps the map in `state.colours`. "Download scene (current camera)" writes the colours
+  back: `scene_blob(scene, cam, sceneName, hidden_lines?, hidden_style?, colours?)` adds `display_color` in lower case to
+  each scene object that had a valid one (an invalid value is dropped, an id that is not in the scene is never written;
+  with no `colours` the text is that of before). The file therefore reloads with the same colours, and the Python CLI
+  renders it byte-identically to the same file without the key. `web/tsconfig.test.json` compiles `src/colours.ts`.
+  Tests: `web/test/colours.test.ts` (7: the parser, the text form, the map, the text reader, `object_colour`, the core
+  ignoring the key, and the download round trip). DECISIONS D81.
+- **[implementation] (web, bug fix of §5.4.10) The scene download of mesh scenes is a file the Python CLI accepts.**
+  §5.4.10 says the "Download scene (current camera)" text lets the Python CLI reproduce the picture. For a scene with a
+  `mesh` object that was false: `scene_blob` passed the validated scene through the core's `dumps`, which writes every
+  number as a Python float except under `INT_KEYS`, so `data.faces` and `data.smooth_groups` came out as `0.0, 26.0, …`,
+  and `castplane validate` / `render` rejected the file (`objects[0].data.faces[0]: vertex indices must be integers in
+  [0, N)`, exit 2). A TypeScript re-validation cannot see this (JS does not tell `0` from `0.0`). The fix is in
+  `web/src/download.ts` only: for each `mesh` object `scene_blob` replaces `data.faces`, `data.smooth_groups` and an
+  integer `node` by placeholder strings before `dumps` and puts the integers back afterwards in the layout of
+  `json.dumps(indent=1)` at the depth of the placeholder (`IntSlots`; a scene string equal to a placeholder makes it throw
+  rather than write a different scene), and leaves out `path` and `node` when they are null (both validators read a missing
+  key as null; a string `path`, as in an expanded file source, and a string `node` are kept). Everything else is written
+  as before: the core's `dumps`, its `INT_KEYS` and `ts/src` are unchanged, floats stay Python `repr`, keys sorted,
+  indent 1, so the whole text of a mesh scene equals Python's `json.dumps(indent=1, sort_keys=True, ensure_ascii=False)` of
+  the same data. **A scene without mesh objects is byte-identical to before**: its text is
+  `dumps({...scene, objects, camera, output}) + "\n"` (checked on seven examples in six variants each, 42 texts). The
+  promise holds again: `castplane validate` and `render` of the downloaded expanded `mesh_demo` succeed at the scene camera and at an orbited one, and the SVG equals the web's for that camera byte for
+  byte. Tests: `web/test/download.test.ts` (5: three of the first four failed before the fix; the mesh test pins each
+  object's `faces` / `smooth_groups` text to `json.dumps(indent=1)` at depth 4, and the fifth pins the placeholder guard). No Python change, no conformance
+  case change. The core's TypeScript `dumps` still writes mesh indices as floats; no other `web/src` path serialises a
+  validated mesh scene.
 
 ### 5.5 M8 — STEP import (spec §9 row "STEP", spec §10 M8) — a loader, outside the core
 
@@ -4685,19 +4732,7 @@ in `doc["warnings"]` (closed §2.9 list); (l) snapping near-zero angles or sizes
 multiplying by `0.001` anywhere.
 
 #### 5.5.12 `docs/STEP.md` — required structure (Traditional Chinese)
-1 目的與結論（建議先寫）；2 STEP 對解析曲面的表達（AP203 / AP214 / AP242 共用的幾何實體、Part 21 語法、以 OCC 實際輸出為例的實體圖：
-`MANIFOLD_SOLID_BREP → CLOSED_SHELL → ADVANCED_FACE → {PLANE, CYLINDRICAL_SURFACE, SPHERICAL_SURFACE, CONICAL_SURFACE} +
-AXIS2_PLACEMENT_3D`、`EDGE_LOOP → ORIENTED_EDGE → EDGE_CURVE → {CIRCLE, LINE, SEAM_CURVE}`、`VERTEX_LOOP`、單位 complex entity、
-方向 12 位／座標最多 14–15 位有效數字的觀察、**方塊對面共用同一法線方向只靠 `same_sense` 區分**的觀察）；3 路線 (a) OCP / pythonOCC
-（`STEPControl_Reader` → `TransferRoots` → `OneShape` → `TopExp_Explorer(TopAbs_FACE)` → `BRepAdaptor_Surface.GetType()` →
-`gp_Cylinder / gp_Sphere / gp_Cone / gp_Pln`；安裝現實：pythonocc-core 只有 conda，cadquery-ocp 可 pip，wheel 67 MB、安裝後 158 MB、
-LGPL-2.1；確定性只到 OCC 版本；頂點重建誤差 1.4e-9 mm；OCP 8 的 API 名稱差異 `TopoDS.Face`、`Bnd_Box.CornerMin/Max`）；4 路線 (b)
-無相依 Part-21 子集解析器（§5.5.2–§5.5.5 的規則、量測：夾具 ≈ 2–3 ms、200 個實體 1.25 MB 0.63 s、約 700 行）；5 建議與工作量（b 為原型：
-解析器 1 天、辨識器 1.5 天、CLI 與展開 0.5 天、夾具與測試 1 天、文件 0.5 天；a 僅作網格退路與夾具產生器：0.5 天）；6 範圍外與錯誤／備註清單
-（B-spline、環面、掃掠面、截頭圓錐、組件變換、mm/m 以外單位、`BREP_WITH_VOIDS`；`StepError` 與三個備註碼）；7 與 M5 的介面與相依（規格 §10
-列 M5 為 M8 前置：網格退路經 M5 的內嵌 `data` 網格物件；`type: step` 走解析辨識；`type: mesh` + `.step` 直接走網格退路；`EXPANDERS` /
-`EXTENSION_LOADERS` 登錄表；網格化實測數字 170/164、400/598）；8 驗收案例（§5.5.10 的圓柱位元相同、手算數字）；9 風險（exporter 精度、
-分割面、單位宣告缺失、OCC 版本漂移、PRODUCT 名稱的程序計數器）。
+1 目的與結論（建議先寫）；2 STEP 對解析曲面的表達（AP203 / AP214 / AP242 共用的幾何實體、Part 21 語法、以 OCC 實際輸出為例的實體圖： `MANIFOLD_SOLID_BREP → CLOSED_SHELL → ADVANCED_FACE → {PLANE, CYLINDRICAL_SURFACE, SPHERICAL_SURFACE, CONICAL_SURFACE} + AXIS2_PLACEMENT_3D`、`EDGE_LOOP → ORIENTED_EDGE → EDGE_CURVE → {CIRCLE, LINE, SEAM_CURVE}`、`VERTEX_LOOP`、單位 complex entity、方向 12 位／座標最多 14–15 位有效數字的觀察、**方塊對面共用同一法線方向只靠 `same_sense` 區分**的觀察）；3 路線 (a) OCP / pythonOCC （`STEPControl_Reader` → `TransferRoots` → `OneShape` → `TopExp_Explorer(TopAbs_FACE)` → `BRepAdaptor_Surface.GetType()` → `gp_Cylinder / gp_Sphere / gp_Cone / gp_Pln`；安裝現實：pythonocc-core 只有 conda，cadquery-ocp 可 pip，wheel 67 MB、安裝後 158 MB、 LGPL-2.1；確定性只到 OCC 版本；頂點重建誤差 1.4e-9 mm；OCP 8 的 API 名稱差異 `TopoDS.Face`、`Bnd_Box.CornerMin/Max`）；4 路線 (b) 無相依 Part-21 子集解析器（§5.5.2–§5.5.5 的規則、量測：夾具 ≈ 2–3 ms、200 個實體 1.25 MB 0.63 s、約 700 行）；5 建議與工作量（b 為原型：解析器 1 天、辨識器 1.5 天、CLI 與展開 0.5 天、夾具與測試 1 天、文件 0.5 天；a 僅作網格退路與夾具產生器：0.5 天）；6 範圍外與錯誤／備註清單（B-spline、環面、掃掠面、截頭圓錐、組件變換、mm/m 以外單位、`BREP_WITH_VOIDS`；`StepError` 與三個備註碼）；7 與 M5 的介面與相依（規格 §10 列 M5 為 M8 前置：網格退路經 M5 的內嵌 `data` 網格物件；`type: step` 走解析辨識；`type: mesh` + `.step` 直接走網格退路；`EXPANDERS` / `EXTENSION_LOADERS` 登錄表；網格化實測數字 170/164、400/598）；8 驗收案例（§5.5.10 的圓柱位元相同、手算數字）；9 風險（exporter 精度、分割面、單位宣告缺失、OCC 版本漂移、PRODUCT 名稱的程序計數器）。
 
 ### Implementation notes
 - **[decision, implementation] (M8 part 1) Re-measured on the committed fixtures (cadquery-ocp 8.0.1.1.0, OCC 8.0).**

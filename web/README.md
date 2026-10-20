@@ -11,7 +11,7 @@ npm run -w ts build        # the core package "castplane" the UI imports
 npm run -w web dev         # vite dev server
 npm run -w web build       # tsc type check + vite build -> web/dist (static, base './')
 npm run -w web preview     # serve web/dist locally
-npm run -w web test        # orbit / download / rig / equation / observer / plane unit tests (node:test, web/test/)
+npm run -w web test        # orbit / download / colours / rig / equation / observer / plane unit tests (node:test, web/test/; 113 tests)
 ```
 
 ![web UI](../docs/images/web_ui.png)
@@ -51,10 +51,21 @@ drag):
   world coordinates) with an outline. The three.js camera is built from the core's `camera_matrix` (no `lookAt` and no
   `fov`), so the WebGL image and the SVG overlay are two renderings of one castplane camera. Three.js casts no
   shadows (`renderer.shadowMap.enabled = false`). Every shadow you see comes from the core.
+- **Display colours** (D81, `src/colours.ts`, pure and unit-tested in `web/test/colours.test.ts`). An object may carry
+  `display_color`, a string `"#rrggbb"` (`#` plus exactly six hex digits, either case). The 3D views (the drawing
+  pane's *3D view* and the observer pane, both through `build_scene3d(scene, A?, colours?)`) draw that object in that
+  colour as the `MeshLambertMaterial` colour, so it is still shaded by the scene's lights; in the observer pane only the
+  receiver plates are see-through. An absent or invalid value (no `#`, another digit count, non-hex digits, spaces, a
+  non-string) keeps the palette colour of the object's index, `PALETTE[i % 8]`, with no error and no warning. The key
+  is display-only: the validators ignore it like any unknown key (contract §2.0), so the validated scene drops it
+  and the document, the SVG and the warnings are byte-identical with or without it. It is read from the **raw JSON**
+  where a scene is loaded (`ex.data` for a bundled example, the parsed text for the file picker, a drop and the
+  `castplane_web.load_text` hook) into a `Map` by object id (`display_colours`); malformed entries are skipped silently.
+  `PALETTE` moved from `scene3d.ts` to `colours.ts`, its values unchanged.
 - **Modules**: `src/main.ts` keeps the page state, loading, the wiring and the render loop. `src/plane.ts` is plane
   mode's session (the rig of `src/rig.ts`, undo, pivot, readouts; pure, unit-tested). The drawing pane has no input
   handler (below). `src/stage.ts` is one three.js view (`Stage3D`, plus `letterbox` for the canvas size), `src/input.ts`
-  handles the page-wide file drop, and `src/ui.ts` drives the controls and the side panel (layer boxes, examples menu,
+  handles the page-wide file drop, `src/colours.ts` (pure) holds the display colours of the 3D views (above), and `src/ui.ts` drives the controls and the side panel (layer boxes, examples menu,
   sliders, readouts, error panel, warnings table, status line, `save` for downloads). `src/orbit.ts` (the M7 camera)
   is kept with its tests; only its focal-slider mapping is still used.
 - **Camera: plane mode** (M10, contract §5.7; `src/rig.ts`, `src/plane.ts`, `src/equation.ts`). You move the
@@ -114,7 +125,13 @@ drag):
     form once the board was moved), the *Hidden lines* state as
     `output.hidden_lines` and the *Hidden style* as `output.hidden_style`, `<name>.scene.json`. Run
     `castplane render <name>.scene.json -o out` to reproduce the picture with the Python reference: the
-    smoke check below found the SVG byte-identical;
+    smoke check below found the SVG byte-identical. It writes `display_color` back (lower-case `#rrggbb`) for the
+    objects that had a valid one, so the file reloads with the same colours (`scene_blob(..., colours?)`; an invalid
+    value is dropped). **Mesh scenes** are written so that the Python CLI accepts them (contract §5.4 notes): `data.faces`,
+    `data.smooth_groups` and an integer `node` are JSON integers (`26`, not `26.0`), and a null `path` / `node` is left
+    out (a string `path` or `node` is kept); everything else, and every scene without a mesh object, is written as
+    before (`web/test/download.test.ts`). `castplane validate` and `render` of the downloaded expanded `mesh_demo`
+    succeed and give the web's SVG byte for byte, at the scene camera and an orbited one;
   - *Copy camera block*: copies the current camera block to the clipboard.
 - **Panels**: the status line shows stage A ms (cached), `core ms` (B + C + SVG), `dom ms` (the overlay
   update), the overlay mode, the point / edge / ray counts (rays of every light), the umbra piece count (two or more
