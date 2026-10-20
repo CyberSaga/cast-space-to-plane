@@ -4759,19 +4759,7 @@ in `doc["warnings"]` (closed §2.9 list); (l) snapping near-zero angles or sizes
 multiplying by `0.001` anywhere.
 
 #### 5.5.12 `docs/STEP.md` — required structure (Traditional Chinese)
-1 目的與結論（建議先寫）；2 STEP 對解析曲面的表達（AP203 / AP214 / AP242 共用的幾何實體、Part 21 語法、以 OCC 實際輸出為例的實體圖：
-`MANIFOLD_SOLID_BREP → CLOSED_SHELL → ADVANCED_FACE → {PLANE, CYLINDRICAL_SURFACE, SPHERICAL_SURFACE, CONICAL_SURFACE} +
-AXIS2_PLACEMENT_3D`、`EDGE_LOOP → ORIENTED_EDGE → EDGE_CURVE → {CIRCLE, LINE, SEAM_CURVE}`、`VERTEX_LOOP`、單位 complex entity、
-方向 12 位／座標最多 14–15 位有效數字的觀察、**方塊對面共用同一法線方向只靠 `same_sense` 區分**的觀察）；3 路線 (a) OCP / pythonOCC
-（`STEPControl_Reader` → `TransferRoots` → `OneShape` → `TopExp_Explorer(TopAbs_FACE)` → `BRepAdaptor_Surface.GetType()` →
-`gp_Cylinder / gp_Sphere / gp_Cone / gp_Pln`；安裝現實：pythonocc-core 只有 conda，cadquery-ocp 可 pip，wheel 67 MB、安裝後 158 MB、
-LGPL-2.1；確定性只到 OCC 版本；頂點重建誤差 1.4e-9 mm；OCP 8 的 API 名稱差異 `TopoDS.Face`、`Bnd_Box.CornerMin/Max`）；4 路線 (b)
-無相依 Part-21 子集解析器（§5.5.2–§5.5.5 的規則、量測：夾具 ≈ 2–3 ms、200 個實體 1.25 MB 0.63 s、約 700 行）；5 建議與工作量（b 為原型：
-解析器 1 天、辨識器 1.5 天、CLI 與展開 0.5 天、夾具與測試 1 天、文件 0.5 天；a 僅作網格退路與夾具產生器：0.5 天）；6 範圍外與錯誤／備註清單
-（B-spline、環面、掃掠面、截頭圓錐、組件變換、mm/m 以外單位、`BREP_WITH_VOIDS`；`StepError` 與三個備註碼）；7 與 M5 的介面與相依（規格 §10
-列 M5 為 M8 前置：網格退路經 M5 的內嵌 `data` 網格物件；`type: step` 走解析辨識；`type: mesh` + `.step` 直接走網格退路；`EXPANDERS` /
-`EXTENSION_LOADERS` 登錄表；網格化實測數字 170/164、400/598）；8 驗收案例（§5.5.10 的圓柱位元相同、手算數字）；9 風險（exporter 精度、
-分割面、單位宣告缺失、OCC 版本漂移、PRODUCT 名稱的程序計數器）。
+1 目的與結論（建議先寫）；2 STEP 對解析曲面的表達（AP203 / AP214 / AP242 共用的幾何實體、Part 21 語法、以 OCC 實際輸出為例的實體圖： `MANIFOLD_SOLID_BREP → CLOSED_SHELL → ADVANCED_FACE → {PLANE, CYLINDRICAL_SURFACE, SPHERICAL_SURFACE, CONICAL_SURFACE} + AXIS2_PLACEMENT_3D`、`EDGE_LOOP → ORIENTED_EDGE → EDGE_CURVE → {CIRCLE, LINE, SEAM_CURVE}`、`VERTEX_LOOP`、單位 complex entity、方向 12 位／座標最多 14–15 位有效數字的觀察、**方塊對面共用同一法線方向只靠 `same_sense` 區分**的觀察）；3 路線 (a) OCP / pythonOCC （`STEPControl_Reader` → `TransferRoots` → `OneShape` → `TopExp_Explorer(TopAbs_FACE)` → `BRepAdaptor_Surface.GetType()` → `gp_Cylinder / gp_Sphere / gp_Cone / gp_Pln`；安裝現實：pythonocc-core 只有 conda，cadquery-ocp 可 pip，wheel 67 MB、安裝後 158 MB、 LGPL-2.1；確定性只到 OCC 版本；頂點重建誤差 1.4e-9 mm；OCP 8 的 API 名稱差異 `TopoDS.Face`、`Bnd_Box.CornerMin/Max`）；4 路線 (b) 無相依 Part-21 子集解析器（§5.5.2–§5.5.5 的規則、量測：夾具 ≈ 2–3 ms、200 個實體 1.25 MB 0.63 s、約 700 行）；5 建議與工作量（b 為原型：解析器 1 天、辨識器 1.5 天、CLI 與展開 0.5 天、夾具與測試 1 天、文件 0.5 天；a 僅作網格退路與夾具產生器：0.5 天）；6 範圍外與錯誤／備註清單（B-spline、環面、掃掠面、截頭圓錐、組件變換、mm/m 以外單位、`BREP_WITH_VOIDS`；`StepError` 與三個備註碼）；7 與 M5 的介面與相依（規格 §10 列 M5 為 M8 前置：網格退路經 M5 的內嵌 `data` 網格物件；`type: step` 走解析辨識；`type: mesh` + `.step` 直接走網格退路；`EXPANDERS` / `EXTENSION_LOADERS` 登錄表；網格化實測數字 170/164、400/598）；8 驗收案例（§5.5.10 的圓柱位元相同、手算數字）；9 風險（exporter 精度、分割面、單位宣告缺失、OCC 版本漂移、PRODUCT 名稱的程序計數器）。
 
 ### Implementation notes
 - **[decision, implementation] (M8 part 1) Re-measured on the committed fixtures (cadquery-ocp 8.0.1.1.0, OCC 8.0).**

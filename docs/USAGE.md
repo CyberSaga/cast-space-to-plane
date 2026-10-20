@@ -17,8 +17,7 @@ castplane [--version] <command> ...
 | `castplane import FILE [-o OUT.json] [--into SCENE] [--id ID] [-q] [網格選項]` | 把網格檔（OBJ、glTF / GLB、STL、PLY）匯入成場景檔（M5，見下方「`castplane import`」） |
 | `castplane import FILE [-o OUT.json] [--into SCENE] [--id ID] [--solid K] [--fallback error\|mesh] [-q]` | FILE 為 STEP 檔（`.step` / `.stp`）時：把實體辨識成圓柱、球、圓錐、方塊物件，寫成場景檔（M8，見下方「`castplane import` 的 STEP 檔」） |
 
-`render` / `validate` / `stages` / `info` 都以 `castplane.io.load_expanded_scene` 讀場景：帶 `path` 的 `mesh` 物件先依場景檔所在目錄讀檔、展開成內嵌的 `data`，再做驗證（合約 §5.0.2）。展開時的匯入備註以 `note: <CODE> ['id', …]: message` 印到 stderr（`-q` 不印），**不會**寫進輸出文件的 `warnings`。
-M8：場景裡的 `{"type": "step", "path": "parts/pillar.step"}` 物件也在這一步展開（相對路徑同樣以場景檔所在目錄為準），換成辨識出的基元物件；`validate` 印的物件數是展開後的數量，`info` 列出展開後的型別。
+`render` / `validate` / `stages` / `info` 都以 `castplane.io.load_expanded_scene` 讀場景：帶 `path` 的 `mesh` 物件先依場景檔所在目錄讀檔、展開成內嵌的 `data`，再做驗證（合約 §5.0.2）。展開時的匯入備註以 `note: <CODE> ['id', …]: message` 印到 stderr（`-q` 不印），**不會**寫進輸出文件的 `warnings`。 M8：場景裡的 `{"type": "step", "path": "parts/pillar.step"}` 物件也在這一步展開（相對路徑同樣以場景檔所在目錄為準），換成辨識出的基元物件；`validate` 印的物件數是展開後的數量，`info` 列出展開後的型別。
 
 ### `render` 選項
 
