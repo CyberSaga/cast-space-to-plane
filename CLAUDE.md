@@ -30,7 +30,7 @@ node --test --test-reporter=tap ts/build/test/conformance.test.js   # TS conform
 python3 tools/compare_svg.py                   # Python vs TS SVG text; must report 0 mismatches (needs ts build)
 node ts/build/bench/camera_only.js --gate both --reps 20            # TS perf gate
 npm run -w web build
-node tools/web_frame_bench.mjs examples/miki.json 5                  # web-path timings of one scene (needs ts build)
+node tools/web_frame_bench.mjs examples/wall_and_ground.json 5      # web-path timings of one scene (needs ts build)
 
 castplane render examples/basic.json -o out    # CLI: render | validate | info | stages | import
 python3 tools/make_miki_model.py --check       # regenerates examples/miki.json + meshes/miki.*; must exit 0
@@ -119,8 +119,20 @@ Python is the reference.
   for byte**, with round-half-even at 4 decimals.
 - **When the two disagree, suspect TS first.** If Python breaks the contract, fix Python and bump the conformance set.
 
-## Character models (`tools/miki_model/`, `examples/miki.json`)
+## Character models live on their own branch
 
+Character and figure models (generators under `tools/<name>_model/`, the generated example scenes and meshes, the
+`character-model` skill) live only on the branch `claude/admiring-bohr-egi4ik`. That branch is never merged into main;
+main is merged into it from time to time.
+- Build and change models on that branch, never on main. Keep third-party characters out of main.
+- A system improvement found while building a model (core, port, web, tools, docs) goes to main on its own branch off
+  main, without model files. Then merge main into the model branch.
+
+### On the model branch (`tools/miki_model/`, `examples/miki.json`)
+
+- **Keep it in step with main:** `git fetch origin main && git merge origin/main` (a merge commit, never a rebase),
+  then run the gates. In a conflict in a shared file, keep main's text and re-add the model lines (counts, example
+  lists, the miki notes).
 - **To build a new character or figure model, load the `character-model` skill**
   (`.claude/skills/character-model/SKILL.md`). The maintainer guide and the mesh rules are in
   `tools/miki_model/README.md`.
@@ -128,8 +140,10 @@ Python is the reference.
   the generator, and `tests/test_miki_model.py` compares them byte for byte, including the text in them (the
   description and the copyright headers live in `tools/miki_model/export.py`). Change the generator, run `--check`,
   and commit the generator and the regenerated files together.
-- **Adding an example** changes the count asserted in `tests/test_ts_port.py` (`len(examples) == 9`) and the
-  example lists in `examples/README.md`, `docs/USAGE.md` and `web/README.md`.
+- **Web timings of a model:** `node tools/web_frame_bench.mjs examples/miki.json 5`. Compare against a baseline
+  measured in the same container.
+- **Adding an example** changes the count asserted in `tests/test_ts_port.py` (`len(examples) == 9` here, 8 on main)
+  and the example lists in `examples/README.md`, `docs/USAGE.md` and `web/README.md`.
 - **Third-party characters** carry the notice in `COPYRIGHT_NOTICE.md`: the character is not part of the project's
   authorized distribution. Keep the notice in the docs and in the generated file headers.
 

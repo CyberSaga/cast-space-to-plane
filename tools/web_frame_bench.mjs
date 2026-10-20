@@ -2,8 +2,9 @@
 // Times the TypeScript port the way the web UI uses it: stage A once (scene load), then "drag frames"
 // (project_scene with umbra off + compose without hidden lines + write_svg) and "still frames" (compose with
 // hidden lines on). Prints the medians, the drag-frame SVG size and the document's warnings as JSON.
-// Needs the port built first (`npm run -w ts build`). Targets for an example scene: stage A <= 1.5 s,
-// drag frame <= 120 ms, still frame <= 1.5 s (tools/miki_model/README.md, rule 8).
+// Needs the port built first (`npm run -w ts build`). Targets for a heavy example scene (many meshes, hidden lines
+// on): stage A <= 1.5 s, drag frame <= 120 ms, still frame <= 1.5 s. Timings depend on the machine: compare against
+// a baseline measured in the same container.
 import { readFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";

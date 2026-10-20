@@ -150,3 +150,8 @@ owner, part, view, observed, expected, and a fix concrete enough to implement ("
 Builders and fixers run in worktrees (`isolation: "worktree"`). Nothing in `castplane/`, `ts/`, `web/` or
 `tests/conformance/` changes for a model; if it must, that is a separate change with its own D-number and review.
 Remove the worktrees after their branches are merged (`git worktree remove`, then `git branch -d`).
+
+Models live only on the model branch `claude/admiring-bohr-egi4ik`, which is never merged into main (CLAUDE.md,
+"Character models live on their own branch"). Merge `origin/main` into it before starting a model. A system change
+the model needs lands on main first, on its own branch off main without model files; then merge main into the model
+branch.
