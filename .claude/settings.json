@@ -16,6 +16,7 @@
       "Bash(npm run -w web test)",
       "Bash(node --test *)",
       "Bash(node ts/build/bench/camera_only.js *)",
+      "Bash(node tools/web_frame_bench.mjs *)",
       "Bash(castplane validate *)",
       "Bash(castplane info *)",
       "Bash(castplane render *)",

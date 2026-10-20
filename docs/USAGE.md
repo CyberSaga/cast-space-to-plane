@@ -17,8 +17,7 @@ castplane [--version] <command> ...
 | `castplane import FILE [-o OUT.json] [--into SCENE] [--id ID] [-q] [網格選項]` | 把網格檔（OBJ、glTF / GLB、STL、PLY）匯入成場景檔（M5，見下方「`castplane import`」） |
 | `castplane import FILE [-o OUT.json] [--into SCENE] [--id ID] [--solid K] [--fallback error\|mesh] [-q]` | FILE 為 STEP 檔（`.step` / `.stp`）時：把實體辨識成圓柱、球、圓錐、方塊物件，寫成場景檔（M8，見下方「`castplane import` 的 STEP 檔」） |
 
-`render` / `validate` / `stages` / `info` 都以 `castplane.io.load_expanded_scene` 讀場景：帶 `path` 的 `mesh` 物件先依場景檔所在目錄讀檔、展開成內嵌的 `data`，再做驗證（合約 §5.0.2）。展開時的匯入備註以 `note: <CODE> ['id', …]: message` 印到 stderr（`-q` 不印），**不會**寫進輸出文件的 `warnings`。
-M8：場景裡的 `{"type": "step", "path": "parts/pillar.step"}` 物件也在這一步展開（相對路徑同樣以場景檔所在目錄為準），換成辨識出的基元物件；`validate` 印的物件數是展開後的數量，`info` 列出展開後的型別。
+`render` / `validate` / `stages` / `info` 都以 `castplane.io.load_expanded_scene` 讀場景：帶 `path` 的 `mesh` 物件先依場景檔所在目錄讀檔、展開成內嵌的 `data`，再做驗證（合約 §5.0.2）。展開時的匯入備註以 `note: <CODE> ['id', …]: message` 印到 stderr（`-q` 不印），**不會**寫進輸出文件的 `warnings`。 M8：場景裡的 `{"type": "step", "path": "parts/pillar.step"}` 物件也在這一步展開（相對路徑同樣以場景檔所在目錄為準），換成辨識出的基元物件；`validate` 印的物件數是展開後的數量，`info` 列出展開後的型別。
 
 ### `render` 選項
 
@@ -175,6 +174,7 @@ castplane import tests/fixtures/step/two_solids.step --solid 1 -o sphere.json
 | `weld_tolerance` | 選用：≥ 0，預設 1e-6（公尺，縮放之後）；同時是這個網格與受影面的接觸容差：離受影面不到 `max(tol, weld_tolerance)` 的頂點算「貼在受影面上」（匯入時 float32 造成的 1e-8 級底面雜訊不會被當成穿入地面而切出錯誤的影子，也不發 `OBJECT_BELOW_RECEIVER`） |
 | `smooth_angle_deg` | 選用：[0, 180]，預設 30；兩面同屬同一個非零平滑群組的邊一律平滑（不看夾角）；兩面都無群組時，法線夾角小於它（`n_a·n_b ≥ cos(smooth_angle_deg) − 1e-9`）的邊平滑；群組不同、或一面有群組一面沒有，一律是特徵邊。平滑邊只在成為相機輪廓時才畫 |
 | `transform` | 同其他物件（`scale` 鍵不在 `transform` 裡，用物件的 `scale`） |
+| `display_color` | 選用，**只給網頁用**，任何物件型別都可以帶：字串 `"#rrggbb"`（六位十六進位，大小寫皆可）。網頁的 3D 畫面與旁觀視角用它替物件上色，沒有或無效時用調色盤；核心與命令列忽略它（未知鍵，合約 §2.0），輸出逐位元組不變，無效值也沒有錯誤或警告（D81） |
 | 上限 | 面數、頂點數各 ≤ 50 000；焊接並移除退化面後至少要剩一個面（`objects[i].data.faces` / 檔案來源為 `objects[i].path`：「no usable face」） |
 
 `mesh` 物件的 `edges[]` 多兩個鍵：`smooth`（與相機無關）與 `camera_silhouette`（與相機有關）。非流形網格（例如缺一個面）發 `MESH_NON_MANIFOLD` 並改用逐面影子（第 3 節）。
@@ -705,7 +705,7 @@ node ts/build/bench/camera_only.js --gate both --reps 20   # 規格 §8 基準�
 node ts/scripts/render.mjs examples/basic.json out/        # 開發工具：out/basic.svg 與 out/basic.json
 python3 tools/compare_svg.py                               # 開發工具：逐案例比對兩個實作的 SVG 文字
 npm run -w web build && npm run -w web preview             # 網頁 UI（靜態檔，web/dist）
-npm run -w web test                                        # orbit / download / rig / equation / observer / plane 單元測試
+npm run -w web test                                        # orbit / download / colours / rig / equation / observer / plane 單元測試
 ```
 
 `npm test` 與 `npm run build` 會依 ts → web 的順序執行兩個 workspace。Python 的 `tests/test_ts_port.py` 檢查兩邊共用的檔案：版本、`rules.json` 與比對常數、`INT_KEYS`、核心不碰 node API、npm 版本釘選。PATH 上有 node 時，它也會建置並執行移植的整套測試；單獨執行 TypeScript 一致性執行器，要求每個案例各有一個通過的測試、沒有失敗、略過或 todo；比對全部八個範例（含 M4–M6 的 `wall_and_ground`、`mesh_demo`、`two_lights`）的 SVG（逐位元組）與 JSON；並跑網頁的單元測試。
@@ -771,6 +771,7 @@ vite + three.js（版本釘選：three 0.186.1、vite 8.3.3）。`vite build` �
   - 場景無效時，錯誤面板顯示 `SceneError` 的欄位路徑與訊息，原本的場景保留。
 - **3D 顯示**：
   - 方塊、圓柱、圓錐、球、稜柱與內嵌網格（直接取 A 段紀錄裡核心前處理後的三角形，不再前處理一次，雙面繪製）以核心的 `transform_frame` 擺放；範例 `mesh_demo` 只有 `path`，網頁上顯示「必須先展開」的錯誤，請載入展開後的場景（例如 `ts/test/fixtures/mesh_demo.expanded.json`，或 `castplane import FILE -o scene.json --inline` 的輸出）；
+  - 物件的顏色：場景的物件可以帶選用的 `display_color`（字串 `"#rrggbb"`，`#` 加剛好六位十六進位數字，大小寫皆可，D81）。有效時，3D 畫面（作圖畫面的「3D view」與旁觀視角窗格，兩者共用 `build_scene3d`）用這個顏色畫該物件，仍受場景光源的明暗；旁觀視角裡只有受影面是半透明的，物件保有自己的顏色。沒有這個鍵或值無效時（沒有 `#`、位數不是 6、含非十六進位字元、前後有空白、不是字串），該物件沿用依索引取的 8 色調色盤 `PALETTE[i % 8]`，和以前完全一樣，不報錯也不發警告。這個鍵只給網頁顯示用：驗證器像對待其他未知鍵一樣忽略它（合約 §2.0），核心的文件、SVG 與警告在有無此鍵時逐位元組相同。網頁在載入場景時從**原始 JSON** 讀它（內建範例用範例資料，檔案選擇器、拖放與 `castplane_web.load_text` 用文字的 `JSON.parse`；`web/src/colours.ts`），不是從驗證後的場景讀；
   - 每盞光源各有一個輔助物件與自己的顏色：點光源畫成小球，平行光畫成箭頭；三維著色用的 three.js 光源平分同一個總亮度，所以多盞光源不會讓畫面變亮；
   - 無界的地面畫成大平面加格線；每個有界受影面（例如 `wall_and_ground` 的牆）依它的 `bounds` 畫成一塊板子（凸多邊形的三角扇形）並描出邊框；
   - three.js 相機直接由核心的 `camera_matrix` 建出，所以 WebGL 畫面與 SVG 疊圖是同一台 castplane 相機的兩種渲染；
@@ -787,6 +788,8 @@ vite + three.js（版本釘選：three 0.186.1、vite 8.3.3）。`vite build` �
   - 「Download SVG」：目前勾選的圖層，`<名稱>.svg`；
   - 「Download JSON」：§6.2 文件，`<名稱>.json`；
   - 「Download scene (current camera)」：場景加上目前的相機區塊、「Hidden lines」目前的勾選狀態（寫成 `output.hidden_lines`）與「Hidden style」（寫成 `output.hidden_style`），`<名稱>.scene.json`。用 Python 命令列的 `render` 指令渲染這個檔案會重現同一張 SVG（已驗證逐位元組相同）；
+  - 這個下載也會把 `display_color` 寫回（轉成小寫的 `#rrggbb`），只對原本有有效值的物件；沒有或無效的物件不寫這個鍵，所以無效值在下載時被丟掉，檔案重新載入後顏色相同，命令列渲染的結果與沒有這個鍵時逐位元組相同；
+  - **含網格物件的場景**（內嵌 `data` 或展開後的 `mesh_demo`）的下載現在是 Python 命令列能接受的檔案：`data.faces` 與 `data.smooth_groups` 寫成 JSON 整數（`26`，不是 `26.0`），整數的 `node` 也是整數，值為 null 的 `path` 與 `node` 不寫（字串的 `path` 與 `node` 照舊保留）；其餘的數字仍由核心的 `dumps` 以 Python 的 `repr` 寫出，整個檔案的文字等於 Python 的 `json.dumps(indent=1, sort_keys=True, ensure_ascii=False)`。修正之前，`castplane validate` 對這種檔案回報 `objects[0].data.faces[0]: vertex indices must be integers in [0, N)`（結束碼 2）。已用展開後的 `mesh_demo` 在場景相機與繞轉後的相機各驗證一次：`validate` 與 `render` 成功，SVG 與網頁的逐位元組相同。沒有網格物件的場景，下載的文字與修正前逐位元組相同；
   - 「Copy camera block」：把目前的相機區塊複製到剪貼簿。
 - **面板**：
   - 狀態列顯示 A 段 ms（快取）、`core ms`（B + C + SVG）、`dom ms`（疊圖更新）、疊圖模式、點／邊／作圖線數量（所有光源的作圖線）、本影碎片數（兩盞以上光源），以及光源與受影面的 id；

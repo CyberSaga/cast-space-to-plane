@@ -1,5 +1,13 @@
 # Changelog
 
+## Unreleased — web: display colours (D81), the mesh scene download, a web-path bench
+
+- web (D81): optional `objects[i].display_color` (`"#rrggbb"`) colours the 3D views (`web/src/colours.ts`, `build_scene3d(scene, A?, colours?)`, `ObserverPane.set_scene(scene, A, colours?)`); absent or invalid keeps the palette colour; the core ignores the key (§2.0) so documents, SVG and warnings are unchanged; "Download scene" writes it back. DECISIONS D81, contract §5.4 implementation notes.
+- web: the "Download scene (current camera)" file of a mesh scene is accepted by the Python CLI and reproduces the SVG (`data.faces`, `data.smooth_groups` and an integer `node` are JSON integers, null `path` / `node` are left out, §5.4.10); non-mesh downloads are byte-identical to before.
+- tests: `web/test/colours.test.ts` (7) and `web/test/download.test.ts` (5), 113 web tests in all.
+- tools: `tools/web_frame_bench.mjs SCENE.json [REPS]` times one scene the way the web UI runs it (stage A, drag frames, still frames with hidden lines) and prints the medians and the warnings as JSON.
+- docs: Chinese paragraphs that were hard-wrapped are joined into one line each (Markdown rendered the line breaks as stray spaces); CLAUDE.md states the rule, notes on subagent reports and worktree clean-up, and that character models live on their own branch.
+
 ## Unreleased — M9: the read-only observer view (spec-v0.2 §2, §3; contract §5.6)
 
 - m9-observer: the web UI's "旁觀視角" switch (off by default; off = the M7 page) opens an observer pane left of the drawing pane (stacked below 880 px) showing the eye E, the board and frame with the current drawing on it (`unproject_to_plane`, D − 0.012 m, following the layer checkboxes), the frustum, Q, the D and g lines, the pivot, the plane equation and the first object's vertex rays; `web/src/observer.ts` (pure, `web/test/observer.test.ts`) and `web/src/observer3d.ts`; a `picture_plane` scene camera loads into the M7 orbit with its picture kept; SVG / JSON downloads are byte-identical with the switch on and off; `web/scripts/smoke.mjs` checks it and records `obs ms`; the `<img>` drag overlay is no longer displayed at rest (`#stage .overlay[hidden]`; it stayed over a smaller scene after `benchmark_100.json`'s drag).

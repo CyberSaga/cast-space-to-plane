@@ -86,7 +86,8 @@ B = castplane.project_scene(scene, A, camera=camera, umbra=False)   # umbra[].po
 - 工具列預設：horizon、objects、form_shadow、cast_shadow、labels 與「Hidden lines」勾選，construction（作圖線）與「3D view」不勾選；這是頁面層級的狀態，載入場景不會改變它；
 - 消隱開關與虛線／省略樣式選單；
 - 作圖線稿每個影格由移植的核心重新寫出 SVG，疊在 3D 畫面上；
-- 可下載 SVG、JSON，以及帶目前相機的場景檔（Python 命令列可重現同一張圖）。
+- 可下載 SVG、JSON，以及帶目前相機的場景檔（Python 命令列可重現同一張圖；含網格物件的場景也可以，面的索引寫成整數）。
+- 物件的選用鍵 `display_color`（`"#rrggbb"`，D81）：3D 畫面與旁觀視角用它替物件上色，沒有就用調色盤；只影響網頁顯示，核心與輸出忽略它。
 - 旁觀視角（M9，唯讀）：頁面預設就顯示旁觀視角（D80），左窗從外面看作圖相機的眼睛 E、投影平面與畫框（畫框上就是右窗的線稿）、視錐、主點、D 與 g、旋轉中心、平面方程式，以及第一個物體頂點的視線與光線；右窗的作圖與下載完全不變；作圖畫面右上角的「預覽」按鈕可暫時收起旁觀視角、讓作圖畫面佔滿全寬（按鈕變「返回編輯」，再按或按 Esc 回來），下載的檔案在兩種畫面之間逐位元組相同。
 - 平面模式（M10，板子為主）：拖左窗的橘色圓環決定從哪個方向看、拖藍色箭頭決定板子離場景多遠，眼睛 E 由板子算出、唯讀；右窗（作圖畫面）唯讀，在上面拖動或滾輪都不做事，板子只在左窗與工具列操作；箭頭拉近不是焦距；焦距、D、滾轉三個滑桿，旋轉中心（場景中心或點選物體）、鎖水平、六個一鍵視圖、平面方程式欄位（如 `y=2`）、復原與重設，以及讀數；「Download scene」寫出 `picture_plane` 相機。
 
@@ -177,6 +178,7 @@ npm test                         # TypeScript 與網頁的測試
 | | `type` | `box`（`size` 三個正數）、`cylinder` / `cone`（`radius`、`height` 正數）、`sphere`（`radius`）、`prism`（`polygon` 至少 3 個 `[x, y]`、不共線、不自交；順時針輸入會自動反向；`height`） |
 | | `transform` | 選填；`position` 預設 `[0, 0, 0]`，`rotation_deg` 預設 `[0, 0, 0]`（Z-Y-X 順序的歐拉角，`R = Rz·Ry·Rx`）；`scale` 不允許（用 size 參數） |
 | | `type: "mesh"`（M5） | `path`（網格檔，相對於場景檔目錄；CLI 與 `castplane.io.load_expanded_scene` 先展開）或內嵌 `data`（`vertices`、`faces`、選用 `smooth_groups`），選用 `node`、`up`（`"z"` / `"y"`）、`scale`、`weld_tolerance`（預設 1e-6 m）、`smooth_angle_deg`（預設 30）；面數、頂點數各 ≤ 50 000。完整規則見 [`docs/USAGE.md`](docs/USAGE.md)「場景 JSON 的 `mesh` 物件」 |
+| | `display_color`（選用） | 字串 `"#rrggbb"`，只給網頁的 3D 畫面上色用（D81）；核心與命令列忽略，輸出不變，無效值也不報錯 |
 | `lights[]` | | **M6 起**：非空串列（v1 恰好一個）；`id` 唯一、非空、不含 `.`、不得與受影面 id 相同；兩個以上光源時光源 id 不得是 `umbra` / `core`、物件 id 不得是 `core`（SVG 子群組名稱；單光源場景仍可用）。光源順序就是文件裡各光源紀錄與 `umbra[].lights` 的順序 |
 | | `type` | `point`（`position`）或 `directional`（`direction` 指向光源，長度必須為 1，容差 1e-9） |
 | `receivers[]` | | v1 恰好一個；`type: "plane"`、`normal` 必須是 `[0, 0, 1]`、`offset` 必須是 0（預設 0）。**M4 起**：非空串列；`id` 唯一、不含 `.`、不得與物件／光源 id 相同、不得是 `hidden`；`normal` 任意單位向量（法線指向的一側是受光面，不會自動翻轉）、`offset` 任意 |

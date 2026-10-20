@@ -1,7 +1,6 @@
 # 透視陰影作圖系統 — 規格增補 v0.2：投影平面視覺化與平面模式
 
-狀態：草案，行為已由互動 demo 驗證（§8），待確認的假設見 §7.3。日期：2026-10-09。
-放置位置：`docs/spec/spec-v0.2.md`（與 `spec-v0.1.md` 並列）。行為參考：`docs/demo/picture_plane_demo.html`。
+狀態：草案，行為已由互動 demo 驗證（§8），待確認的假設見 §7.3。日期：2026-10-09。放置位置：`docs/spec/spec-v0.2.md`（與 `spec-v0.1.md` 並列）。行為參考：`docs/demo/picture_plane_demo.html`。
 
 ## 0. 與 spec-v0.1 的關係
 
