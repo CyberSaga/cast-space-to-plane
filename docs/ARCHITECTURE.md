@@ -6141,7 +6141,8 @@ the verbatim write. `main.ts::initial_pose` returns the target pose for a part (
 the button is disabled exactly when 還原 would be a no-op; a group's 還原 is unchanged. (6) **落地.** A subtree moves as one,
 by a single translation along the receiver normal and the minimum over all its members (`ground_unit` already iterates
 `pose.transforms`). **[decision]** The button is hidden (`#obj-ground.hidden`, `rotate.ground_shown` false) for a part
-with a parent: a translation cannot keep its joint on the unmoved parent, and moving the parent would move an object
+with a parent, and `ground_unit` itself refuses such a part (D85 review: a script click on the hidden button
+moves nothing): a translation cannot keep its joint on the unmoved parent, and moving the parent would move an object
 outside the selected unit; the group's 落地 is one click away. A root part, a D84 part and a lone object keep it; `G` and
 `c` are not moved by it. (7) **Panel and rings.** `selection_text(sel, groups, members, carried = 0)`: with `carried >
 0` (`subtree(P).length − 1`) the line reads 「已選：<id>（<group> 的部件，帶動 <n> 個部件）」, otherwise the D84 strings. A part's rings
