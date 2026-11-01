@@ -51,7 +51,13 @@
 // button, its rings drawn with the board's handles (hover shows the pointer), a blank click clears it, 點選物體 + a click
 // also picks the pivot; the 「板子」 checkbox hides the observer's board group, its labels and handles (not hit) with the
 // page SVG, overlay and downloads byte-identical, a click still selects and a ring drag still rotates, and a change
-// during a held board-ring drag is ignored. Prints one JSON record. Exit 1 on a page error or a failed check.
+// during a held board-ring drag is ignored. D84 (groups of parts, the fixture web/test/fixtures/basic_grouped.json): the
+// dropdown lists the group first; real clicks cycle whole group → part → whole group, blank space clears, another
+// part after part focus takes the focus, an ungrouped object selects as in D83; the group's rings are larger and a
+// real drag on them turns every member; rotate_group keeps c, the camera block, the rig and scene_block, changes every
+// member and not the ungrouped object, and undo restores the SVG byte for byte; the fields and 還原此物體 act on the
+// whole group; 點選物體 puts the pivot on the group's c; Download scene keeps the group keys. Prints one JSON record.
+// Exit 1 on a page error or a failed check.
 import { execSync } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { createRequire } from "node:module";
@@ -1443,6 +1449,181 @@ const objrot = {};
     await page.evaluate(() => window.castplane_web.load_example("basic"));
     await frames2();
     await frames2();
+  }
+  {
+    // D84: groups of parts. The fixture is basic with the crate and the pillar in group "g" plus an ungrouped post
+    // (web/test/fixtures/basic_grouped.json; examples/ is not touched). Real clicks run the cycle whole → part → whole;
+    // blank space clears; another part after part focus moves the focus; rotate_group turns every member about c
+    // with the camera fixed and undo gives the byte-identical SVG; the dropdown, fields, 還原 and the download keep groups.
+    const ob = await page.locator("#observer").boundingBox();
+    const text = readFileSync(join(ROOT, "web", "test", "fixtures", "basic_grouped.json"), "utf-8");
+    const loaded = await page.evaluate((t) => window.castplane_web.load_text("basic_grouped", t), text);
+    await frames2();
+    await frames2();
+    const d84 = (objrot.d84 = {});
+    const sel = () => api("selection");
+    const click_px = (id) => page.evaluate((id) => {
+      const w = window.castplane_web, c = w.objects_px?.[id];
+      if (!c) return null;
+      for (let k = 0; k < 225; k++) {
+        const x = c[0] + ((k % 15) - 7) * 3, y = c[1] + (Math.floor(k / 15) - 7) * 3;
+        if (w.hit_at(x, y) === null && w.pick_at(x, y) === id) return [x, y];
+      }
+      return null;
+    }, id);
+    const blank_px = () => page.evaluate(() => {
+      const w = window.castplane_web, [W, H] = w.observer.size;
+      for (let k = 0; k < 400; k++) {
+        const x = 20 + (k % 20) * (W - 40) / 19, y = 20 + Math.floor(k / 20) * (H - 40) / 19;
+        if (w.hit_at(x, y) === null && w.pick_at(x, y) === null) return [x, y];
+      }
+      return null;
+    });
+    /** A real click on object `id` (a point that is on the object and on no handle); false when none was found. */
+    const click_on = async (id) => {
+      const p = await click_px(id);
+      if (p === null) return false;
+      await page.mouse.click(ob.x + p[0], ob.y + p[1]);
+      await frames2();
+      await frames2();
+      return true;
+    };
+    const opts = await page.evaluate(() => [...document.getElementById("obj-select").options].map((o) => [o.value, o.textContent]));
+    const groups = await api("object_groups");
+    d84.load = { loaded, opts, groups };
+    check(loaded && JSON.stringify(groups.units) === JSON.stringify({ g: ["crate", "pillar"] }) && groups.groups.post === undefined
+      && (await sel()) === null, `D84: the grouped fixture loads with group g = crate + pillar and no selection (${JSON.stringify(groups)})`);
+    check(JSON.stringify(opts) === JSON.stringify([["", "—"], ["group.g", "g（整組，2 個部件）"], ["crate", "crate"], ["pillar", "pillar"], ["post", "post"]]),
+      `D84: the 物體 dropdown lists the group first, then every object (${JSON.stringify(opts)})`);
+    // the click cycle with real mouse clicks
+    const cycle = [];
+    const step = async (id) => {
+      const ok = id === null ? await (async () => {
+        const bp = await blank_px();
+        if (bp === null) return false;
+        await page.mouse.click(ob.x + bp[0], ob.y + bp[1]);
+        await frames2();
+        await frames2();
+        return true;
+      })() : await click_on(id);
+      const s = await sel();
+      cycle.push({ click: id, ok, sel: s, text: (await get("rotate")).selected_text, value: await page.evaluate(() => document.getElementById("obj-select").value) });
+      return s;
+    };
+    const s1 = await step("crate");
+    const rings_g = await get("object_rings_px");
+    const s2 = await step("crate");
+    const rings_p = await get("object_rings_px");
+    const s3 = await step("crate");
+    const s4 = await step(null);
+    const rings_blank = await get("object_rings_px");
+    await step("crate");
+    const s6 = await step("crate");
+    const s7 = await step("pillar");
+    const s8 = await step("post");
+    const s9 = await step("pillar");
+    d84.cycle = cycle;
+    check(cycle.every((c) => c.ok), `D84: every cycle click found a point on its object off the rings (${JSON.stringify(cycle.map((c) => c.ok))})`);
+    check(s1?.kind === "group" && s1.group === "g" && JSON.stringify(s1.members) === JSON.stringify(["crate", "pillar"])
+      && cycle[0].text === "已選：g（整組）" && cycle[0].value === "group.g", `D84: the first click on the crate selects the whole group (${JSON.stringify(cycle[0])})`);
+    check(s2?.kind === "part" && s2.id === "crate" && s2.group === "g" && cycle[1].text === "已選：crate（g 的部件）" && cycle[1].value === "crate",
+      `D84: the second click focuses the crate as a part (${JSON.stringify(cycle[1])})`);
+    check(s3?.kind === "group" && s3.group === "g", `D84: the third click returns to the whole group (${JSON.stringify(s3)})`);
+    check(s4 === null && cycle[3].value === "" && cycle[3].text === "" && rings_blank === null,
+      "D84: a click on blank space clears the selection (rings gone)");
+    check(s6?.kind === "part" && s6.id === "crate" && s7?.kind === "part" && s7.id === "pillar",
+      `D84: after part focus a click on the other part moves the focus to it (${JSON.stringify([s6, s7])})`);
+    check(s8?.kind === "part" && s8.id === "post" && s8.group === null && s9?.kind === "group" && s9.group === "g",
+      `D84: an ungrouped object selects as in D83; from it a grouped click selects the whole group (${JSON.stringify([s8, s9])})`);
+    const radius = (r) => r === null ? 0 : Math.max(...r.rings[2].filter((q) => q !== null).map((q) => Math.hypot(q[0] - r.centre[0], q[1] - r.centre[1])));
+    check(rings_g?.id === "group.g" && rings_p?.id === "crate" && radius(rings_g) > radius(rings_p),
+      `D84: the group's rings are larger than the part's (${radius(rings_g).toFixed(1)} vs ${radius(rings_p).toFixed(1)} px)`);
+    // rotate_group 30° about z: every member changes, the post and the camera do not; undo is byte-identical
+    const e0 = await env(), v0 = await verts(["crate", "pillar", "post"]), svg0 = await get("svg"), u0 = await undo_size();
+    const c0 = await api("group_centre", "g");
+    const rg = await api("rotate_group", "g", 2, 30);
+    await frames2();
+    const e1 = await env(), v1 = await verts(["crate", "pillar", "post"]), c1 = await api("group_centre", "g"), gr = await api("group_rotation", "g");
+    d84.rotate = { rg, gr, c0, c1 };
+    check(rg !== null && v1.crate !== v0.crate && v1.pillar !== v0.pillar && v1.post === v0.post,
+      "D84: rotate_group changes every member's vertices, not the ungrouped post's");
+    check(JSON.stringify(e1) === JSON.stringify(e0), "D84: rotate_group keeps the camera block, the rig and scene_block");
+    check(JSON.stringify(c1) === JSON.stringify(c0) && near(gr[2], 30, 1e-9) && near(gr[0], 0, 1e-9) && near(gr[1], 0, 1e-9)
+      && await undo_size() === u0 + 1 && await get("svg") !== svg0, `D84: c fixed, the group shows rz = 30, one undo step (${JSON.stringify(gr)})`);
+    await page.click("#undo");
+    await frames2();
+    check(await get("svg") === svg0 && JSON.stringify(await verts(["crate", "pillar", "post"])) === JSON.stringify(v0)
+      && JSON.stringify(await api("group_rotation", "g")) === JSON.stringify([0, 0, 0]) && await undo_size() === u0,
+    "D84: undo of the group step restores every member, G and the SVG byte for byte");
+    // the panel: the dropdown's group entry, a typed rz for the whole group, 還原此物體 for the whole group
+    await page.selectOption("#obj-select", "group.g");
+    await frames2();
+    const s10 = await sel();
+    await page.fill("#obj-rz", "45");
+    await page.press("#obj-rz", "Enter");
+    await frames2();
+    const gr45 = await api("group_rotation", "g"), v45 = await verts(["crate", "pillar", "post"]);
+    const fields45 = (await get("rotate")).fields.map((f) => f.value);
+    await page.click("#obj-restore");
+    await frames2();
+    d84.panel = { s10, gr45, fields45 };
+    check(s10?.kind === "group" && near(gr45[2], 45, 1e-9) && v45.crate !== v0.crate && v45.pillar !== v0.pillar && v45.post === v0.post
+      && JSON.stringify(fields45) === JSON.stringify(["0.0", "0.0", "45.0"]),
+    `D84: the dropdown selects the group; a typed rz turns the whole group (${JSON.stringify(d84.panel)})`);
+    check(await get("svg") === svg0 && JSON.stringify(await verts(["crate", "pillar", "post"])) === JSON.stringify(v0)
+      && JSON.stringify(await api("group_rotation", "g")) === JSON.stringify([0, 0, 0]) && await undo_size() === u0 + 2,
+    "D84: 還原此物體 on the group restores every member (one more undo step)");
+    await page.click("#undo");
+    await frames2();
+    await page.click("#undo");
+    await frames2();
+    check(await get("svg") === svg0 && await undo_size() === u0, "D84: two undos restore the SVG byte for byte");
+    // a real ring drag on the group's z ring: every member turns, one undo step; interior clicks still pick parts
+    const zr = await page.evaluate(() => {
+      const r = window.castplane_web.object_rings_px, [W, H] = r.size;
+      for (const q of r.rings[2]) {
+        if (q === null || q[0] < 80 || q[0] > W - 80 || q[1] < 80 || q[1] > H - 80) continue;
+        const hit = window.castplane_web.hit_at(q[0], q[1]);
+        if (hit !== null && hit.kind === "object_ring" && hit.axis === 2) return q;
+      }
+      return null;
+    });
+    if (zr !== null) await drag(6, "#observer", [8, 5], zr);
+    const v2 = await verts(["crate", "pillar", "post"]);
+    check(zr !== null && v2.crate !== v0.crate && v2.pillar !== v0.pillar && v2.post === v0.post && await undo_size() === u0 + 1
+      && (await sel())?.kind === "group", "D84: a real drag on the group's z ring turns every member (one undo step, selection kept)");
+    await page.click("#undo");
+    await frames2();
+    // 旋轉中心 = 點選物體: a click selecting the whole group puts the pivot on its c (no undo step)
+    await step(null);
+    await page.selectOption("#pivot-mode", "object");
+    await frames2();
+    await click_on("pillar");
+    const rp = await get("rig");
+    d84.pivot = { pivot: rp.pivot, P: rp.P, c: c0 };
+    check(rp.pivot.object_id === "group.g" && rp.P.every((x, i) => near(x, c0[i], 1e-12)) && rp.undo === u0,
+      `D84: 點選物體 + a click selecting the group puts the pivot on its centre (${JSON.stringify(d84.pivot)})`);
+    const labels = (await get("observer")).labels;
+    check(labels.includes("旋轉中心：g（整組）"), `D84: the pivot label names the group (${JSON.stringify(labels)})`);
+    await page.selectOption("#pivot-mode", "scene");
+    await frames2();
+    // select_object keeps meaning "select as a part"; select_group; the download keeps the group keys
+    await api("select_object", "pillar");
+    const s11 = await sel();
+    await api("select_group", "g");
+    const s12 = await sel();
+    check(s11?.kind === "part" && s11.id === "pillar" && s12?.kind === "group", "D84: select_object selects a part, select_group the group");
+    const [dl] = await Promise.all([page.waitForEvent("download"), page.click("#dl-scene")]);
+    const path = join(outdir, "d84_basic_grouped.scene.json");
+    await dl.saveAs(path);
+    const saved = JSON.parse(readFileSync(path, "utf-8"));
+    d84.download = saved.objects.map((o) => [o.id, o.group ?? null]);
+    check(JSON.stringify(d84.download) === JSON.stringify([["crate", "g"], ["pillar", "g"], ["post", null]]),
+      `D84: Download scene keeps the group keys (${JSON.stringify(d84.download)})`);
+    await page.evaluate(() => window.castplane_web.load_example("basic"));
+    await frames2();
+    await frames2();
+    check((await sel()) === null && JSON.stringify((await api("object_groups")).units) === "{}", "D84: loading basic replaces the groups and clears the selection");
   }
   {
     // the panel: a bad field turns red and changes nothing; numeric entry; 還原此物體

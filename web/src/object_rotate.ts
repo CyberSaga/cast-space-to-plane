@@ -134,13 +134,30 @@ export function world_centre(transform: Transform, c_local: readonly number[]): 
  */
 export function rotate_about_world_axis(t: Transform, c_local: readonly number[], axis: Axis, deg: number): Transform {
   const [R, p] = transform_frame(t);
+  return rotate_about_point(t, add3(mul3(R, c_local), p), axis, deg);
+}
+
+/**
+ * D84: rotate the pose `t` about world axis `axis` by `deg` through the world point `c` (a group's pivot, or an object's
+ * own `c_w`): `R′ = Q·R`, `p′ = c + Q·(p − c)`, the Euler angles as in {@link rotate_about_world_axis} (exact about `z`,
+ * decomposed about `x` or `y`).
+ */
+export function rotate_about_point(t: Transform, c: readonly number[], axis: Axis, deg: number): Transform {
+  const [R, p] = transform_frame(t);
   const Q = axis_rotation(axis, deg);
-  const c = add3(mul3(R, c_local), p);
   const position = add3(c, mul3(Q, sub3(p, c)));
   const rotation_deg: Vec3 = axis === 2
     ? [t.rotation_deg[0], t.rotation_deg[1], wrap_angle(t.rotation_deg[2] + deg)]
     : euler_zyx_from_matrix(matmul(Q, R));
   return { position: [z0(position[0]), z0(position[1]), z0(position[2])], rotation_deg };
+}
+
+/** D84: the pose `t` rotated by the matrix `Q` through the world point `c`: `R′ = Q·R` decomposed
+ * ({@link euler_zyx_from_matrix}), `p′ = c + Q·(p − c)`. */
+export function rotate_by_matrix(t: Transform, c: readonly number[], Q: Mat3): Transform {
+  const [R, p] = transform_frame(t);
+  const position = add3(c, mul3(Q, sub3(p, c)));
+  return { position: [z0(position[0]), z0(position[1]), z0(position[2])], rotation_deg: euler_zyx_from_matrix(matmul(Q, R)) };
 }
 
 /**
@@ -239,57 +256,186 @@ export function ring_drag_angle(axis: Axis, w: readonly number[], r_c: readonly 
   return KAPPA_DEG_PER_PX * (dx * sx + dy * sy);
 }
 
-// ------------------------------------------------------------------------------------------------ drag lifecycle (§3.5)
+// ------------------------------------------------------------------------------------------------ groups (D84)
 
-/** The side effects of {@link ObjectDrag}, supplied by `main.ts` (contract §5.8.2). */
-export interface ObjectDragEffects<S, A> {
-  /** Steps 1–4 of `apply_object_transform` with `record: none` (stage A on the candidate, session, 3D matrices);
-   * false when stage A threw (the committed pose and view are kept). */
-  apply(id: string, t: Transform): boolean;
-  /** The 3D proxy only (a slow scene during a drag: no stage A). */
-  proxy(id: string, t: Transform): void;
-  /** Back to the pointer-down state: `scene0` and `A0` (by reference), the session, both 3D groups at `t0`. */
-  restore(id: string, t0: Transform, scene0: S, A0: A): void;
+/** The 3×3 identity. */
+export function identity3(): Mat3 {
+  return [[1, 0, 0], [0, 1, 0], [0, 0, 1]];
 }
 
-/** What {@link ObjectDrag.end} committed. */
-export interface ObjectDragResult {
-  id: string;
-  t0: Transform;
-  /** The committed pose (`t0` when nothing changed or stage A failed). */
-  t: Transform;
-  /** Whether stage A succeeded (false: restored to `t0`, the error is the caller's to show). */
+/** A deep copy of a 3×3 matrix. */
+export function clone_mat3(M: Mat3): Mat3 {
+  return [[M[0][0], M[0][1], M[0][2]], [M[1][0], M[1][1], M[1][2]], [M[2][0], M[2][1], M[2][2]]];
+}
+
+/** Exact equality of two 3×3 matrices (every element `===`). */
+export function same_mat3(A: Mat3, B: Mat3): boolean {
+  for (let i = 0; i < 3; i++) for (let j = 0; j < 3; j++) if (A[i]![j] !== B[i]![j]) return false;
+  return true;
+}
+
+/** A group's session frame (D84): `G` its rotation relative to the load (identity at load; display only) and `c` its
+ * pivot in world space (the centre of the load-time world bounding box of its members; moved only by 落地 / 還原). */
+export interface GroupFrame {
+  name: string;
+  G: Mat3;
+  c: Vec3;
+}
+
+export function clone_group_frame(f: GroupFrame): GroupFrame {
+  return { name: f.name, G: clone_mat3(f.G), c: [f.c[0], f.c[1], f.c[2]] };
+}
+
+export function same_group_frame(a: GroupFrame | null, b: GroupFrame | null): boolean {
+  if (a === null || b === null) return a === b;
+  return a.name === b.name && same_mat3(a.G, b.G) && a.c[0] === b.c[0] && a.c[1] === b.c[1] && a.c[2] === b.c[2];
+}
+
+/**
+ * The pose of a rotation unit (D84): the transforms of its objects by id (one for a part or an ungrouped object, every
+ * member for a group) and, for a group, its frame (null for a single object).
+ */
+export interface UnitPose {
+  transforms: Map<string, Transform>;
+  group: GroupFrame | null;
+}
+
+export function clone_pose(p: UnitPose): UnitPose {
+  return { transforms: new Map([...p.transforms].map(([id, t]) => [id, clone_transform(t)])),
+    group: p.group === null ? null : clone_group_frame(p.group) };
+}
+
+/** Exact equality of two unit poses (the same ids, every transform and the group frame `===`). */
+export function same_pose(a: UnitPose, b: UnitPose): boolean {
+  if (a.transforms.size !== b.transforms.size || !same_group_frame(a.group, b.group)) return false;
+  for (const [id, t] of a.transforms) {
+    const u = b.transforms.get(id);
+    if (u === undefined || !same_transform(t, u)) return false;
+  }
+  return true;
+}
+
+/**
+ * The axis-aligned world bounding box of several objects' world vertices (D84, a group's pivot and ring radius): its
+ * centre and half its diagonal; the vertices are the same source as {@link local_bbox}'s (stage A's `mesh.vertices`).
+ */
+export function world_bbox(vertex_lists: Iterable<readonly (readonly number[])[]>): { centre: Vec3; half_diagonal: number } {
+  const lo: Vec3 = [Infinity, Infinity, Infinity], hi: Vec3 = [-Infinity, -Infinity, -Infinity];
+  let n = 0;
+  for (const list of vertex_lists) {
+    for (const v of list) {
+      n += 1;
+      for (let k = 0; k < 3; k++) {
+        if (v[k]! < lo[k]!) lo[k] = v[k]!;
+        if (v[k]! > hi[k]!) hi[k] = v[k]!;
+      }
+    }
+  }
+  if (n === 0) return { centre: [0, 0, 0], half_diagonal: 0 };
+  return { centre: [z0((lo[0] + hi[0]) / 2), z0((lo[1] + hi[1]) / 2), z0((lo[2] + hi[2]) / 2)],
+    half_diagonal: Math.hypot(hi[0] - lo[0], hi[1] - lo[1], hi[2] - lo[2]) / 2 };
+}
+
+/**
+ * A ring drag of a group (D84) about world axis `axis` by `deg`, `Q` its rotation: every member `R_i′ = Q·R_i`,
+ * `p_i′ = c + Q·(p_i − c)` ({@link rotate_about_point}: exact about `z`, decomposed about `x` or `y`); `G′ = Q·G`, `c`
+ * unchanged.
+ */
+export function rotate_group_pose(pose: UnitPose, axis: Axis, deg: number): UnitPose {
+  const g = pose.group;
+  if (g === null) throw new Error("rotate_group_pose: not a group pose");
+  const transforms = new Map([...pose.transforms].map(([id, t]) => [id, rotate_about_point(t, g.c, axis, deg)]));
+  return { transforms, group: { name: g.name, G: matmul(axis_rotation(axis, deg), g.G), c: [g.c[0], g.c[1], g.c[2]] } };
+}
+
+/**
+ * The numeric fields of a group (D84): `G_t = euler_zyx_matrix(e)`, `Q = G_t·Gᵀ`, every member rotated by `Q` through
+ * `c` ({@link rotate_by_matrix}); `G′ = G_t`, `c` unchanged.
+ */
+export function set_group_rotation(pose: UnitPose, e: readonly number[]): UnitPose {
+  const g = pose.group;
+  if (g === null) throw new Error("set_group_rotation: not a group pose");
+  const Gt = euler_zyx_matrix(e);
+  const Q = matmul_t(Gt, g.G);
+  const transforms = new Map([...pose.transforms].map(([id, t]) => [id, rotate_by_matrix(t, g.c, Q)]));
+  return { transforms, group: { name: g.name, G: Gt, c: [g.c[0], g.c[1], g.c[2]] } };
+}
+
+/** The unit pose translated by `d` (every member, and a group's `c`; `G` unchanged) — 落地 of a group (D84). */
+export function translate_pose(pose: UnitPose, d: readonly number[]): UnitPose {
+  const transforms = new Map([...pose.transforms].map(([id, t]) => [id, translate(t, d)]));
+  const g = pose.group;
+  if (g === null) return { transforms, group: null };
+  const c = add3(g.c, d);
+  return { transforms, group: { name: g.name, G: clone_mat3(g.G), c: [z0(c[0]), z0(c[1]), z0(c[2])] } };
+}
+
+/**
+ * A ring drag of a unit about world axis `axis` by `deg`: a group through its `c` ({@link rotate_group_pose}); a single
+ * object through its own pivot `c_w` from `c_locals` ({@link rotate_about_world_axis}, M11).
+ */
+export function rotate_unit(pose: UnitPose, axis: Axis, deg: number, c_locals: ReadonlyMap<string, readonly number[]>): UnitPose {
+  if (pose.group !== null) return rotate_group_pose(pose, axis, deg);
+  const transforms = new Map([...pose.transforms].map(([id, t]) => [id, rotate_about_world_axis(t, c_locals.get(id) ?? [0, 0, 0], axis, deg)]));
+  return { transforms, group: null };
+}
+
+/** A single object's unit pose. */
+export function single_pose(id: string, t: Transform): UnitPose {
+  return { transforms: new Map([[id, clone_transform(t)]]), group: null };
+}
+
+// ------------------------------------------------------------------------------------------------ drag lifecycle (§3.5)
+
+/** The side effects of {@link UnitDrag}, supplied by `main.ts` (contract §5.8.2; D84 a unit of one or more objects). */
+export interface UnitDragEffects<S, A> {
+  /** Steps 1–4 of `apply_object_transform` with `record: none` on every transform of `pose` (stage A on the
+   * candidate, session, group frame, 3D matrices); false when stage A threw (the committed pose and view are kept). */
+  apply(pose: UnitPose): boolean;
+  /** The 3D proxy only (a slow scene during a drag: no stage A). */
+  proxy(pose: UnitPose): void;
+  /** Back to the pointer-down state: `scene0` and `A0` (by reference), the session, the group frame, the 3D groups at
+   * `pose0`. */
+  restore(pose0: UnitPose, scene0: S, A0: A): void;
+}
+
+/** What {@link UnitDrag.end} committed. */
+export interface UnitDragResult {
+  pose0: UnitPose;
+  /** The committed pose (`pose0` when nothing changed or stage A failed). */
+  pose: UnitPose;
+  /** Whether stage A succeeded (false: restored to `pose0`, the error is the caller's to show). */
   ok: boolean;
-  /** Whether the pose differs from `t0` (an undo step is due). */
+  /** Whether the pose differs from `pose0` (an undo step is due). */
   changed: boolean;
 }
 
-interface Gesture<S, A> {
-  id: string;
-  t0: Transform;
+interface UnitGesture<S, A> {
+  pose0: UnitPose;
   scene0: S;
   A0: A;
   seq: number;
   live: boolean;
   axis: Axis;
-  c_local: Vec3;
+  c_locals: Map<string, Vec3>;
   /** The candidate of the last move not yet applied by stage A (null when none). */
-  pending: Transform | null;
-  /** The pose stage A last ran on in this gesture (`t0` at first). */
-  applied: Transform;
+  pending: UnitPose | null;
+  /** The pose stage A last ran on in this gesture (`pose0` at first). */
+  applied: UnitPose;
 }
 
 /**
- * The object-drag state machine (contract §5.8.2): `begin` remembers the pressed pose, scene and A record by reference
- * and the gesture's sequence number; `move(θ)` only stores the pending candidate; `frame(seq)` (at the start of an
- * animation frame) runs stage A on it at most once, and only for the current gesture (a stale number applies nothing);
- * a slow scene (`live: false`) only moves the 3D proxy there. `end()` takes the last candidate and runs stage A on it
- * synchronously (never waiting for a frame); `cancel()` invalidates the number and restores the pointer-down state.
+ * The object-drag state machine (contract §5.8.2; D84 generalised from one transform to a unit pose): `begin`
+ * remembers the pressed pose, scene and A record by reference and the gesture's sequence number; `move(θ)` only stores
+ * the pending candidate; `frame(seq)` (at the start of an animation frame) runs stage A on it at most once, and only for
+ * the current gesture (a stale number applies nothing); a slow scene (`live: false`) only moves the 3D proxy there.
+ * `end()` takes the last candidate and runs stage A on it synchronously (never waiting for a frame); `cancel()`
+ * invalidates the number and restores the pointer-down state.
  */
-export class ObjectDrag<S, A> {
-  private g: Gesture<S, A> | null = null;
+export class UnitDrag<S, A> {
+  private g: UnitGesture<S, A> | null = null;
 
-  constructor(private readonly fx: ObjectDragEffects<S, A>) {}
+  constructor(private readonly fx: UnitDragEffects<S, A>) {}
 
   /** Whether a gesture is running. */
   get active(): boolean {
@@ -301,31 +447,28 @@ export class ObjectDrag<S, A> {
     return this.g?.seq ?? null;
   }
 
-  /** The current gesture's object id (null when none). */
-  get id(): string | null {
-    return this.g?.id ?? null;
+  /** The current gesture's pending candidate (a copy; null when none, or applied). */
+  get pending(): UnitPose | null {
+    const p = this.g?.pending ?? null;
+    return p === null ? null : clone_pose(p);
   }
 
-  /** The current gesture's pending candidate (null when none, or applied). */
-  get pending(): Transform | null {
-    return this.g?.pending ?? null;
+  /** Pointer-down: a new gesture (any running one is forgotten without a restore). `c_locals`: the local pivots of a
+   * single object (unused for a group, which turns about its frame's `c`). */
+  begin(pose0: UnitPose, scene0: S, A0: A, seq: number,
+    opts: { live?: boolean; axis?: Axis; c_locals?: ReadonlyMap<string, readonly number[]> } = {}): void {
+    const c_locals = new Map<string, Vec3>([...(opts.c_locals ?? new Map<string, readonly number[]>())].map(([id, c]) => [id, [c[0]!, c[1]!, c[2]!]]));
+    this.g = { pose0: clone_pose(pose0), scene0, A0, seq, live: opts.live ?? true, axis: opts.axis ?? 2, c_locals, pending: null,
+      applied: clone_pose(pose0) };
   }
 
-  /** Pointer-down: a new gesture (any running one is forgotten without a restore). */
-  begin(id: string, t0: Transform, scene0: S, A0: A, seq: number,
-    opts: { live?: boolean; axis?: Axis; c_local?: readonly number[] } = {}): void {
-    const c = opts.c_local ?? [0, 0, 0];
-    this.g = { id, t0: clone_transform(t0), scene0, A0, seq, live: opts.live ?? true, axis: opts.axis ?? 2,
-      c_local: [c[0]!, c[1]!, c[2]!], pending: null, applied: clone_transform(t0) };
-  }
-
-  /** A move: the candidate `t0` rotated about the gesture's axis by `theta_deg` (total angle, already snapped). No
+  /** A move: the candidate `pose0` rotated about the gesture's axis by `theta_deg` (total angle, already snapped). No
    * stage A. Returns the candidate (null outside a gesture). */
-  move(theta_deg: number): Transform | null {
+  move(theta_deg: number): UnitPose | null {
     const g = this.g;
     if (g === null) return null;
-    g.pending = rotate_about_world_axis(g.t0, g.c_local, g.axis, theta_deg);
-    return clone_transform(g.pending);
+    g.pending = rotate_unit(g.pose0, g.axis, theta_deg, g.c_locals);
+    return clone_pose(g.pending);
   }
 
   /** Start of an animation frame: stage A on the pending candidate when `seq` is the current gesture's and the scene
@@ -334,35 +477,35 @@ export class ObjectDrag<S, A> {
     const g = this.g;
     if (g === null || seq !== g.seq || g.pending === null) return false;
     if (!g.live) {
-      this.fx.proxy(g.id, g.pending);
+      this.fx.proxy(g.pending);
       return false;
     }
-    if (same_transform(g.pending, g.applied)) {
+    if (same_pose(g.pending, g.applied)) {
       g.pending = null;
       return false;
     }
-    const t = g.pending;
-    if (this.fx.apply(g.id, t)) {
-      g.applied = t;
+    const p = g.pending;
+    if (this.fx.apply(p)) {
+      g.applied = p;
       g.pending = null;
     }
     return true;
   }
 
   /** Release: the last candidate through stage A synchronously; on failure the pointer-down state is restored. */
-  end(): ObjectDragResult | null {
+  end(): UnitDragResult | null {
     const g = this.g;
     if (g === null) return null;
     this.g = null;
     const cand = g.pending ?? g.applied;
-    if (!same_transform(cand, g.applied)) {
-      if (!this.fx.apply(g.id, cand)) {
-        this.fx.restore(g.id, g.t0, g.scene0, g.A0);
-        return { id: g.id, t0: g.t0, t: clone_transform(g.t0), ok: false, changed: false };
+    if (!same_pose(cand, g.applied)) {
+      if (!this.fx.apply(cand)) {
+        this.fx.restore(g.pose0, g.scene0, g.A0);
+        return { pose0: g.pose0, pose: clone_pose(g.pose0), ok: false, changed: false };
       }
       g.applied = cand;
     }
-    return { id: g.id, t0: g.t0, t: clone_transform(g.applied), ok: true, changed: !same_transform(g.applied, g.t0) };
+    return { pose0: g.pose0, pose: clone_pose(g.applied), ok: true, changed: !same_pose(g.applied, g.pose0) };
   }
 
   /** Abandon the gesture (a second finger): the sequence number is invalidated and the pointer-down state restored. */
@@ -370,11 +513,96 @@ export class ObjectDrag<S, A> {
     const g = this.g;
     if (g === null) return;
     this.g = null;
-    this.fx.restore(g.id, g.t0, g.scene0, g.A0);
+    this.fx.restore(g.pose0, g.scene0, g.A0);
   }
 
   /** Forget the gesture without restoring (a scene load replaced everything). */
   abandon(): void {
     this.g = null;
+  }
+}
+
+/** The side effects of {@link ObjectDrag} (M11: one object). */
+export interface ObjectDragEffects<S, A> {
+  apply(id: string, t: Transform): boolean;
+  proxy(id: string, t: Transform): void;
+  restore(id: string, t0: Transform, scene0: S, A0: A): void;
+}
+
+/** What {@link ObjectDrag.end} committed. */
+export interface ObjectDragResult {
+  id: string;
+  t0: Transform;
+  t: Transform;
+  ok: boolean;
+  changed: boolean;
+}
+
+const only = (p: UnitPose, id: string): Transform => clone_transform(p.transforms.get(id)!);
+
+/**
+ * M11's single-object drag (contract §5.8.2), kept as its API: {@link UnitDrag} on a one-object pose (D84: the
+ * machine is the same, only the pose type is wider).
+ */
+export class ObjectDrag<S, A> {
+  private readonly d: UnitDrag<S, A>;
+  private id_: string | null = null;
+
+  constructor(fx: ObjectDragEffects<S, A>) {
+    const first = (p: UnitPose): [string, Transform] => [...p.transforms][0]!;
+    this.d = new UnitDrag<S, A>({
+      apply: (p) => fx.apply(...first(p)),
+      proxy: (p) => fx.proxy(...first(p)),
+      restore: (p, scene0, A0) => fx.restore(...first(p), scene0, A0),
+    });
+  }
+
+  get active(): boolean {
+    return this.d.active;
+  }
+
+  get seq(): number | null {
+    return this.d.seq;
+  }
+
+  /** The current gesture's object id (null when none). */
+  get id(): string | null {
+    return this.d.active ? this.id_ : null;
+  }
+
+  get pending(): Transform | null {
+    const p = this.d.pending;
+    return p === null || this.id_ === null ? null : only(p, this.id_);
+  }
+
+  begin(id: string, t0: Transform, scene0: S, A0: A, seq: number,
+    opts: { live?: boolean; axis?: Axis; c_local?: readonly number[] } = {}): void {
+    this.id_ = id;
+    const c = opts.c_local ?? [0, 0, 0];
+    this.d.begin(single_pose(id, t0), scene0, A0, seq, { live: opts.live ?? true, axis: opts.axis ?? 2,
+      c_locals: new Map([[id, c]]) });
+  }
+
+  move(theta_deg: number): Transform | null {
+    const p = this.d.move(theta_deg);
+    return p === null || this.id_ === null ? null : only(p, this.id_);
+  }
+
+  frame(seq: number | null = this.seq): boolean {
+    return this.d.frame(seq);
+  }
+
+  end(): ObjectDragResult | null {
+    const r = this.d.end(), id = this.id_;
+    if (r === null || id === null) return null;
+    return { id, t0: only(r.pose0, id), t: only(r.pose, id), ok: r.ok, changed: r.changed };
+  }
+
+  cancel(): void {
+    this.d.cancel();
+  }
+
+  abandon(): void {
+    this.d.abandon();
   }
 }

@@ -792,7 +792,7 @@ test("shared undo (M11): an unchanged pose records nothing; cancel is shared; st
   for (let i = 0; i < 40; i++) undo.record_object("crate", { ...t, rotation_deg: [0, 0, i] }, { ...t, rotation_deg: [0, 0, i + 1] });
   assert.equal(undo.size, UNDO_MAX);
   const kinds: string[] = [];
-  for (let s = undo.undo(rig0); s !== null; s = undo.undo(rig0)) kinds.push(s.kind === "rig" ? `rig:${s.rig.g}` : `object:${s.transform.rotation_deg[2]}`);
+  for (let s = undo.undo(rig0); s !== null; s = undo.undo(rig0)) kinds.push(s.kind === "rig" ? `rig:${s.rig.g}` : s.kind === "object" ? `object:${s.transform.rotation_deg[2]}` : "objects");
   assert.equal(kinds.length, 50);
   assert.equal(kinds[0], "object:39");
   assert.equal(kinds[39], "object:0");

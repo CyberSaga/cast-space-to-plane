@@ -74,6 +74,8 @@ export interface Controls {
   objectGround: HTMLButtonElement;
   objectCentre: HTMLDivElement;
   objectNotice: HTMLDivElement;
+  /** D84: the line naming the selection (whole group or part). */
+  objectSelected: HTMLDivElement;
 }
 
 export function controls(): Controls {
@@ -125,20 +127,22 @@ export function controls(): Controls {
     objectGround: $<HTMLButtonElement>("obj-ground"),
     objectCentre: $<HTMLDivElement>("obj-centre"),
     objectNotice: $<HTMLDivElement>("obj-notice"),
+    objectSelected: $<HTMLDivElement>("obj-selected"),
   };
 }
 
-/** M11: the object dropdown — "—" (none) and one `<option>` per object id (replacing the previous scene's). */
-export function fill_object_select(select: HTMLSelectElement, ids: readonly string[]): void {
-  const none = document.createElement("option");
-  none.value = "";
-  none.textContent = "—";
-  select.replaceChildren(none, ...ids.map((id) => {
+/** M11: the object dropdown — "—" (none) and one `<option>` per object id (replacing the previous scene's). D84: first
+ * one `<option>` per group of `groups` (value and label given, e.g. `group.<name>` and 「<name>（整組，n 個部件）」), then
+ * the objects. Labels are set with `textContent` only (group names come from the scene file). */
+export function fill_object_select(select: HTMLSelectElement, ids: readonly string[],
+  groups: readonly { value: string; label: string }[] = []): void {
+  const option = (value: string, label: string): HTMLOptionElement => {
     const opt = document.createElement("option");
-    opt.value = id;
-    opt.textContent = id;
+    opt.value = value;
+    opt.textContent = label;
     return opt;
-  }));
+  };
+  select.replaceChildren(option("", "—"), ...groups.map((g) => option(g.value, g.label)), ...ids.map((id) => option(id, id)));
 }
 
 /** M11: the pivot readout of the panel (`c_w`, 3 decimals). */

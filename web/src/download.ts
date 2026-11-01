@@ -10,6 +10,7 @@ import { LAYER_ORDER, dumps, write_svg } from "castplane";
 import type { Camera, GeometryDocument, Scene, SceneObject } from "castplane";
 
 import { DISPLAY_COLOR_KEY, display_color_text } from "./colours.js";
+import { GROUP_KEY } from "./groups.js";
 import type { TargetCamera } from "./orbit.js";
 
 export interface DownloadFile {
@@ -46,21 +47,25 @@ export function json_blob(doc: GeometryDocument, sceneName: string): DownloadFil
  * phase 2 of §5.4.10), when given, are written as `output.hidden_lines` / `output.hidden_style` for the same reason.
  * `colours` (the loaded raw scene's display colours by object id, `colours.ts::display_colours`): each object of the
  * scene that has one gets it back as `display_color: "#rrggbb"` (lower case), so the file reloads with the same 3D
- * colours; the core ignores the key (§2.0), so the CLI's output is that of the file without it.
+ * colours; the core ignores the key (§2.0), so the CLI's output is that of the file without it. D84: `groups` (the loaded
+ * raw scene's group names by object id, `groups.ts::object_groups`) likewise: each object that has one gets it back as
+ * `group` (the string verbatim), so the file reloads with the same groups.
  * A `mesh` object (§5.2.1) is written so that the Python validator accepts it (`mesh_object_for_file`): `data.faces`,
  * `data.smooth_groups` and an integer `node` as JSON integers, and `path` / `node` left out when null. A scene without
  * mesh objects is `dumps({...scene, objects, camera, output}) + "\n"`, as before.
  */
 export function scene_blob(scene: Scene, cam: TargetCamera | Camera, sceneName: string, hidden_lines?: boolean,
-  hidden_style?: "dashed" | "omit", colours?: ReadonlyMap<string, number>): DownloadFile {
+  hidden_style?: "dashed" | "omit", colours?: ReadonlyMap<string, number>, groups?: ReadonlyMap<string, string>): DownloadFile {
   const output = { ...scene.output };
   if (hidden_lines !== undefined) output.hidden_lines = hidden_lines;
   if (hidden_style !== undefined) output.hidden_style = hidden_style;
   const ints = new IntSlots();
   const objects = scene.objects.map((o) => {
-    const colour = colours?.get(o.id);
-    const obj = o.type === "mesh" ? mesh_object_for_file(o, ints) : o;
-    return colour === undefined ? obj : { ...obj, [DISPLAY_COLOR_KEY]: display_color_text(colour) };
+    const colour = colours?.get(o.id), group = groups?.get(o.id);
+    let obj: object = o.type === "mesh" ? mesh_object_for_file(o, ints) : o;
+    if (colour !== undefined) obj = { ...obj, [DISPLAY_COLOR_KEY]: display_color_text(colour) };
+    if (group !== undefined) obj = { ...obj, [GROUP_KEY]: group };
+    return obj;
   });
   return { filename: `${sceneName}.scene.json`, type: JSON_MIME, text: ints.fill(dumps({ ...scene, objects, camera: cam, output })) + "\n" };
 }

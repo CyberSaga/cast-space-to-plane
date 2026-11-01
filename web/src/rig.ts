@@ -16,7 +16,7 @@
  */
 
 import { camera_matrix, fixed, plane_equation, resolve_picture_plane } from "castplane";
-import type { Camera, Vec2, Vec3 } from "castplane";
+import type { Camera, Mat3, Vec2, Vec3 } from "castplane";
 
 import { FOCAL_MAX_MM, FOCAL_MIN_MM, forward_from_angles } from "./orbit.js";
 import type { LensBase, OrbitState, TargetCamera } from "./orbit.js";
@@ -671,18 +671,49 @@ export interface ObjectPose {
 const clonePose = (t: ObjectPose): ObjectPose => ({ position: copy3(t.position), rotation_deg: copy3(t.rotation_deg) });
 const samePose = (a: ObjectPose, b: ObjectPose): boolean => same3(a.position, b.position) && same3(a.rotation_deg, b.rotation_deg);
 
-/** One entry of the shared undo stack (M11 amends §5.7.8 item 13): a board snapshot or an object's pose before a step. */
-export type UndoEntry = { kind: "rig"; rig: RigState } | { kind: "object"; id: string; before: ObjectPose };
+/** D84: a group's frame in an undo step: its rotation relative to the load `G` and its pivot `c`. */
+export interface GroupFramePose {
+  name: string;
+  G: Mat3;
+  c: Vec3;
+}
 
-/** What {@link UndoStack.undo} restores: the board state (the current pivot kept) or an object's pose. */
-export type UndoStep = { kind: "rig"; rig: RigState } | { kind: "object"; id: string; transform: ObjectPose };
+const cloneFrame = (f: GroupFramePose | null): GroupFramePose | null => f === null ? null
+  : { name: f.name, G: [copy3(f.G[0]), copy3(f.G[1]), copy3(f.G[2])], c: copy3(f.c) };
+const sameFrame = (a: GroupFramePose | null, b: GroupFramePose | null): boolean => a === null || b === null ? a === b
+  : a.name === b.name && same3(a.G[0], b.G[0]) && same3(a.G[1], b.G[1]) && same3(a.G[2], b.G[2]) && same3(a.c, b.c);
+const clonePoses = (m: ReadonlyMap<string, ObjectPose>): Map<string, ObjectPose> => new Map([...m].map(([id, t]) => [id, clonePose(t)]));
+const samePoses = (a: ReadonlyMap<string, ObjectPose>, b: ReadonlyMap<string, ObjectPose>): boolean => {
+  if (a.size !== b.size) return false;
+  for (const [id, t] of a) {
+    const u = b.get(id);
+    if (u === undefined || !samePose(t, u)) return false;
+  }
+  return true;
+};
+
+/** One entry of the shared undo stack (M11 amends §5.7.8 item 13): a board snapshot, an object's pose before a step,
+ * or (D84) the poses of a group's members and the group's frame before a step. */
+export type UndoEntry = { kind: "rig"; rig: RigState } | { kind: "object"; id: string; before: ObjectPose }
+  | { kind: "objects"; before: Map<string, ObjectPose>; group: GroupFramePose | null };
+
+/** What {@link UndoStack.undo} restores: the board state (the current pivot kept), an object's pose, or (D84) several
+ * objects' poses with a group frame. */
+export type UndoStep = { kind: "rig"; rig: RigState } | { kind: "object"; id: string; transform: ObjectPose }
+  | { kind: "objects"; transforms: Map<string, ObjectPose>; group: GroupFramePose | null };
+
+const cloneEntry = (e: UndoEntry): UndoEntry => e.kind === "rig" ? { kind: "rig", rig: clone(e.rig) }
+  : e.kind === "object" ? { kind: "object", id: e.id, before: clonePose(e.before) }
+  : { kind: "objects", before: clonePoses(e.before), group: cloneFrame(e.group) };
 
 /**
  * The undo stack (spec-v0.2 §5.7), shared by the board and the objects since M11 (contract §5.8.3): at most 50
  * entries, each a board snapshot (the pivot excluded: undo keeps the current pivot) or an object's pose before a step.
  * One step each: a handle drag that changed the board ({@link begin} / {@link end}; a press without change records
  * nothing), a view, an equation apply, reset, lock-horizontal off → on ({@link record}); an object drag that changed
- * the pose ({@link begin_object} / {@link end_object}), a numeric apply, 還原此物體 and 落地 ({@link record_object}).
+ * the pose ({@link begin_object} / {@link end_object}), a numeric apply, 還原此物體 and 落地 ({@link record_object}); D84
+ * the same for a whole group ({@link begin_objects} / {@link end_objects}, {@link record_objects}: one step carries every
+ * member's pose and the group frame).
  * The observer camera, focal length, `D`, roll and pivot changes are never recorded (callers do not call the stack
  * for them).
  */
@@ -701,7 +732,7 @@ export class UndoStack {
   }
 
   private push(e: UndoEntry): void {
-    this.steps.push(e.kind === "rig" ? { kind: "rig", rig: clone(e.rig) } : { kind: "object", id: e.id, before: clonePose(e.before) });
+    this.steps.push(cloneEntry(e));
     if (this.steps.length > this.max) this.steps.shift();
   }
 
@@ -716,6 +747,29 @@ export class UndoStack {
   record_object(id: string, before: ObjectPose, after: ObjectPose): boolean {
     if (samePose(before, after)) return false;
     this.push({ kind: "object", id, before });
+    return true;
+  }
+
+  /** D84: a discrete action on a group (numeric apply, 還原此物體, 落地): one step when any member's pose or the
+   * group frame changed. */
+  record_objects(before: ReadonlyMap<string, ObjectPose>, group_before: GroupFramePose | null, after: ReadonlyMap<string, ObjectPose>,
+    group_after: GroupFramePose | null): boolean {
+    if (samePoses(before, after) && sameFrame(group_before, group_after)) return false;
+    this.push({ kind: "objects", before: clonePoses(before), group: group_before });
+    return true;
+  }
+
+  /** D84: pointer-down of a group drag. */
+  begin_objects(before: ReadonlyMap<string, ObjectPose>, group: GroupFramePose | null): void {
+    this.gesture = { kind: "objects", before: clonePoses(before), group: cloneFrame(group) };
+  }
+
+  /** D84: release of a group drag: one step when a member's pose or the group frame differs from the pointer-down one. */
+  end_objects(after: ReadonlyMap<string, ObjectPose>, group_after: GroupFramePose | null): boolean {
+    const g = this.gesture;
+    this.gesture = null;
+    if (g === null || g.kind !== "objects" || (samePoses(g.before, after) && sameFrame(g.group, group_after))) return false;
+    this.push(g);
     return true;
   }
 
@@ -756,8 +810,7 @@ export class UndoStack {
    * only then popped (contract §5.8.3). */
   peek(): UndoEntry | null {
     const s = this.steps.at(-1);
-    if (s === undefined) return null;
-    return s.kind === "rig" ? { kind: "rig", rig: clone(s.rig) } : { kind: "object", id: s.id, before: clonePose(s.before) };
+    return s === undefined ? null : cloneEntry(s);
   }
 
   /** Drop the top entry without touching an open gesture (M11: the pop after a peeked object step was applied, so it
@@ -771,7 +824,9 @@ export class UndoStack {
     this.gesture = null;
     const s = this.steps.pop();
     if (s === undefined) return null;
-    return s.kind === "rig" ? { kind: "rig", rig: { ...s.rig, P: copy3(current.P) } } : { kind: "object", id: s.id, transform: s.before };
+    if (s.kind === "rig") return { kind: "rig", rig: { ...s.rig, P: copy3(current.P) } };
+    if (s.kind === "object") return { kind: "object", id: s.id, transform: s.before };
+    return { kind: "objects", transforms: s.before, group: s.group };
   }
 
   clear(): void {
