@@ -5710,3 +5710,171 @@ through the port's `resolve_picture_plane` and draws its readout camera through 
   drag or wheel can change the camera" is read as "while previewing (§5.6, D80 note)"; the 旁觀視角 switch is gone and
   the observer is shown by default, so the drag and wheel on the board are available in the edit view without any
   switch. The rest of the D79 note stands.
+
+### 5.8 M11 — single-object rotation (web UI, not core; spec-v0.3)
+
+The user rotates **one** object about a world axis through the centre of its local bounding box. The camera, the picture
+plane (board), the eye, the lights and the receivers stay fixed; the rest of the objects do not move. Everything in this
+section is web UI and is marked so; it adds no core behaviour (D82, spec-v0.3).
+
+#### 5.8.0 Scope and hard rules
+- **Core, TS port and conformance unchanged:** `castplane/`, `ts/src/` and `tests/conformance/` are not touched; no
+  warning code (§5.0.5 stays at 18), no new object type, no change to `rules.json`. The conformance set stays v8 / 63
+  cases; `regen_conformance.py --dry-run` reports 0 changes and `compare_svg.py` 0 mismatches.
+- **Unoperated output is byte-identical:** a scene that is loaded and not rotated renders exactly as before this
+  section (documents, SVG, downloads). A rotated scene is an ordinary valid scene (`transform` is already part of
+  §2.0; `validate_transform` accepts any finite angles): stage A runs on it unchanged and "Download scene" writes the
+  new `transform` (full doubles, §5.4.10), so the CLI reproduces the picture.
+- **Fixed environment:** the rig (including `P`, `initial`, `centre`, `scene_block`), the camera block, the lights and
+  the receivers are not modified by an object rotation. Only the rotated object's `transform` changes; `scene` is
+  replaced by a copy and the old one is never mutated (stage A's lists are shared by reference, §5.4).
+- **New module:** the maths and the drag state machine live in `web/src/object_rotate.ts` (pure, no DOM, unit-tested in
+  `web/test/object_rotate.test.ts`); it reuses the port's `transform_frame` and `euler_zyx_matrix`.
+
+#### 5.8.1 Maths (spec-v0.3 §2)
+Pose `(R, p)` from `transform_frame(transform)`; `R = Rz(rz)·Ry(ry)·Rx(rx)`, world `= R·local + p` (§2.0).
+- **Pivot [decision]:** `c_local = bbox_centre({Rᵀ(v − p) : v ∈ A.objects[i].mesh.vertices})`, computed once per
+  object at load and cached by id (`PlaneSession.local_centres`, never changed by `update_scene`);
+  `c_w = R·c_local + p`. It depends only on the shape, not on the pose the scene was loaded in.
+- **Drag:** with `Q` the right-handed rotation about the world axis by `θ`: `R′ = Q·R`, `p′ = c_w + Q·(p − c_w)`, where
+  `(R, p)` is the pose at pointer-down and `c_w` is computed from it. `θ` comes from the total displacement, never
+  incrementally.
+- **Numeric fields:** `R′ = euler_zyx_matrix([rx, ry, rz])`, `p′ = c_w + R′·Rᵀ·(p − c_w)`; `c_w` is unchanged, and a
+  drag and a numeric entry that reach the same `R′` also reach the same `p′`.
+- **`euler_zyx_from_matrix(R) → [rx, ry, rz]` (degrees):** `ry = atan2(−R₂₀, hypot(R₀₀, R₁₀))`; when
+  `hypot(R₀₀, R₁₀) ≥ 1e-9`: `rz = atan2(R₁₀, R₀₀)`, `rx = atan2(R₂₁, R₂₂)`; otherwise (gimbal lock, `ry = ±90°`)
+  `rx = 0` and `rz = atan2(−R₀₁, R₁₁)`. Euler angles are not unique, so correctness is the **matrix round trip**
+  `euler_zyx_matrix(euler_zyx_from_matrix(R)) ≈ R` (< 1e-12 per element), never an angle comparison.
+- **Range and display:** results are in `(−180°, 180°]` (`ry` in `[−90°, 90°]`) and are **not unwrapped**: a rotation
+  about `z` past 180° makes `rz` jump to `−180°`; the panel shows 0.1°, the written file the full double. Tests compare
+  angles modulo 360.
+- **Snap:** the drag angle `θ` snaps to multiples of `OBJECT_SNAP_DEG` (the 吸附 checkbox; Alt suspends, spec-v0.2 §5.1).
+- **Ground (落地):** only when `receivers[0].type === "plane"` (unbounded); translate along the plane normal so that the
+  minimum signed distance of the new stage-A vertices to the plane is 0. One undo step.
+
+#### 5.8.2 Drag lifecycle (web UI, not core; spec-v0.3 §3.5)
+`apply_object_transform(id, transform, record, live)` in `web/src/main.ts`: (1) copy the scene with the object's new
+`transform` (the old scene is not mutated); (2) `A′ = shadow_geometry(scene′)`; (3) update `state.scene`, `state.A`,
+`state.timings.stage_a_ms` and `plane.update_scene(...)`; (4) apply the 3D matrices; (5) request a frame. The 3D matrix
+is `object_matrix(obj′)` for a primitive and the rigid delta `object_matrix(obj′)·object_matrix(obj₀)⁻¹` (loaded
+object `obj₀`) for a mesh, applied to both three.js groups (the drawing pane's `view.group` and the observer's group);
+meshes are never rebuilt during a drag.
+
+`ObjectDrag` (pure state machine in `object_rotate.ts`):
+- `begin(id, t0, scene0, A0, seq)`: remembers the pressed transform, the scene and A record (by reference, no
+  recompute) and the gesture sequence number.
+- `move(θ)`: updates only the pending candidate transform; no stage A. `main.ts` then requests a frame.
+- `frame()` start: if a pending candidate exists and its sequence number is the current gesture's, run steps 1–4 with
+  `record: none`, then stages B and C. At most one stage A per frame.
+- `end()`: **take the last pending candidate, run steps 1–4 synchronously, and only on success record the undo step**;
+  nothing is recorded when the candidate equals the committed pose. It never waits for a frame, so a pointer-up that
+  arrives before the next frame still commits the last candidate. The slow-scene path ends here too.
+- `cancel()`: invalidates the sequence number (a later frame sees a stale number and applies nothing), restores
+  `state.scene = scene0`, `state.A = A0`, `plane.update_scene(A0)`, resets both 3D groups to `t0`, records nothing.
+- **Stage-A exception:** a rotated scene is valid and the core warns on degeneracy instead of raising, so an exception
+  is a core bug and not a normal path. The pose is not committed, the 3D matrices return to the committed transform,
+  the history is untouched, and the error panel reads 「核心重算失敗，請回報」. It is never swallowed silently.
+- **Stage B** keeps the existing `!dragging` rule: umbra and hidden lines are off while dragging and computed in full at
+  release.
+- **`LIVE_STAGE_A_MS = 150`:** if `stage_a_ms` measured at load exceeds it, a drag updates only the 3D matrices
+  (`pending` is still recorded), stage A runs at `end()`, and the panel shows 「此場景拖動放開後更新」.
+
+#### 5.8.3 Session and undo (web UI, not core; amends §5.7.8 item 13 by reference)
+- **`PlaneSession.update_scene(objects, A)`:** replaces `scene` and, from the new A, only `object_centres` (the bounding
+  box centres used by pivot picking and labels) and `vertices`. It keeps `rig` (including `P`), `initial`, `centre`
+  (the load-time scene centre), `scene_block`, `load_notices` and `local_centres`; it clears `ref0` and `delta`
+  (the "這次拖動右窗畫面變動" readout describes board drags only; without the clear the next measurement would count the
+  object rotation).
+- **Shared undo stack (amends §5.7.8 item 13):** `UndoStack` holds a tagged union `{kind: "rig", rig: RigState} |
+  {kind: "object", id, before: Transform}`; the limit stays 50 and `size` / `canUndo` are unchanged. `undo(current)`
+  returns `{kind: "rig", rig} | {kind: "object", id, transform}` (the rig's `P` still taken from the current value).
+  `peek()` returns the top step without consuming it: an object step is peeked, stage A is recomputed, and only on
+  success is it popped; on failure the history is kept (§5.8.2).
+- `record_object(id, before, after)` records nothing when the two transforms are equal; `begin_object(id, t0)` /
+  `end_object(t)` bracket a gesture and record nothing when the pose is unchanged; `cancel` is shared.
+- `PlaneSession.undo_step()` returns `ActionResult & { object?: {id, transform} }`; a rig step goes through the existing
+  `assign`, an object step does not touch the rig.
+- **Reset (§5.7.8 item 13) stays board-only** and does not move objects. "還原此物體" returns one object to its load-time
+  transform as one step; 落地 and numeric apply are one step each.
+
+#### 5.8.4 Interaction (web UI, not core; amends §5.7.9 hit order by reference)
+- **Rotate mode:** a toolbar toggle 「轉動物體」 (`aria-pressed`, default off). While on, the hit order of §5.7.9 is
+  replaced by: object ring > object (click only, pointer-up within `CLICK_PX` = 5 px of pointer-down; selects it) >
+  blank (observer orbit, §5.6.4). The board's orange ring and blue arrow are hidden and disabled (`handles: null`),
+  and the pivot's 「點選物體」 click (§5.7.8 item 10) is suspended. While off, §5.7.9 applies unchanged and the object rings
+  are hidden. The mode is not an undo step and is not stored.
+- **Rings:** for the selected object, three rings centred at `c_w`, x red / y green / z blue, each in the plane
+  perpendicular to its world axis, radius `1.2 × ½ × (bounding-box diagonal)` with a 0.3 m minimum, 72 segments each,
+  drawn thick while dragged. `ObserverGeometry` gains `object_rings?: {id, centre, rings: [Vec3[], Vec3[], Vec3[]]} |
+  null`; `HandleHit` gains `{kind: "object_ring", axis: 0 | 1 | 2, index}`; `hit_handles` gains the ring branch with
+  the same radii (14 px mouse, 26 px touch, 0.8 factor for a ring).
+- **Ring drag angle (same rule as §5.7.8 item 1):** at pointer-down record `w = X − c_w` (the grabbed ring point) and
+  the observer's `r_c`, `u_c`. Tangent `t = axis × w`, screen tangent `t_s = (t·r_c, −t·u_c)` normalised;
+  `θ = κ·(Δ·t_s)` with `κ = 0.32°/px` and `Δ` the total pointer displacement; when `|t_s| < 1e-6` take
+  `t_s = (1, 0)`. Then snap, then `Q = rot(axis, θ)`. `state.handle` gains
+  `{kind: "object", id, axis, t0: Transform, A0: StageA, w: Vec3, r_c, u_c}`.
+- **Panel 「物體」 section:** object dropdown (synced with the click selection; the only object is preselected),
+  rx / ry / rz fields (Enter or 「套用」 applies; a non-finite entry turns the field red and keeps the old value),
+  「還原此物體」, 「落地」 (only when `receivers[0]` is an unbounded plane), the `c_w` readout and the slow-scene hint.
+  **Preview** (§5.6.4, D80): the observer is hidden, so only the panel works.
+- **Test hooks** on `window.castplane_web`: `object_transform(id)`, `object_vertices(id)` (the `world_lists` of the A
+  record), `rotate_object(id, axis, deg)` (one drag-equivalent step), `set_object_rotation(id, [rx, ry, rz])`,
+  `select_object(id)`, `set_rotate_mode(on)`, `object_centre(id)`.
+
+#### 5.8.5 Pivot (amends §5.7.7 by reference)
+The board's pivot `P` (§5.7.7: the scene centre, or the bounding-box centre of the picked object) is **not** updated
+when an object rotates: `rig.P` lives in the rig, which an object rotation never changes, and it is not an undo item.
+If `P` was the rotated object's centre it stays where it was, so the board keeps looking at the same world point;
+picking the object again (§5.7.8 item 10, outside rotate mode) re-centres the pivot on the object's new bounding-box
+centre. The scene centre `centre` of the load rule is likewise unchanged.
+
+#### 5.8.6 Constants (web UI, not core)
+| constant | value | constant | value |
+| --- | --- | --- | --- |
+| `OBJECT_SNAP_DEG` | 15 | `LIVE_STAGE_A_MS` | 150 |
+| ring radius factor, minimum | 1.2 × ½ × bbox diagonal, 0.3 m | ring segments | 72 |
+| `KAPPA_DEG_PER_PX`, `CLICK_PX`, `UNDO_MAX` | 0.32, 5, 50 (§5.7.11) | `HIT_PX_MOUSE`, `HIT_PX_TOUCH`, ring factor | 14, 26, 0.8 (§5.7.11) |
+| gimbal threshold `hypot(R₀₀, R₁₀)` | 1e-9 | edge-on ring `\|t_s\|` | 1e-6 |
+
+#### 5.8.7 Degenerate cases (spec-v0.3 §4)
+| situation | handling |
+| --- | --- |
+| rotation takes the object through the receiver | computed as is; the core emits `OBJECT_BELOW_RECEIVER` (expected) and clips; 落地 returns it to the plane |
+| gimbal lock (`ry = ±90°`) | `rx = 0`, `rz = atan2(−R₀₁, R₁₁)`; the matrix round trip holds |
+| ring seen edge-on (`\|t_s\| < 1e-6`) | `t_s = (1, 0)` |
+| stage A at load > `LIVE_STAGE_A_MS` | 3D proxy during the drag, stage A at release |
+| stage A throws | pose not committed, committed view restored, history kept, error 「核心重算失敗，請回報」 |
+| `rig.P` points at the rotated object | `rig.P` stays; re-pick to re-centre (§5.8.5) |
+| non-finite numeric field | field turns red; the scene is unchanged |
+
+#### 5.8.8 Testing contract (spec-v0.3 §5)
+Unit (`web/test/object_rotate.test.ts`, `plane.test.ts`, `rig.test.ts`):
+| test | criterion |
+| --- | --- |
+| matrix round trip | random `R` and `R` with `ry = ±90°`: `euler_zyx_matrix(euler_zyx_from_matrix(R))` within 1e-12 per element |
+| pivot fixed | ten 37° rotations about each world axis, incl. cone and prism: `c_w` within 1e-9 m |
+| pivot independent of load pose | the same prism loaded with `rz = 0` and `rz = 50°` gives the same `c_local` within 1e-12 |
+| numeric ≡ drag | the same target gives the same `R′` and `p′` |
+| rotation about `z` | `(rz − rz₀ − θ) mod 360 ≈ 0` (< 1e-9) incl. 170° + 30° → −160°; `rx`, `ry` unchanged |
+| `ObjectDrag` | move then immediate end commits the last candidate and records one step; a candidate equal to the committed pose records nothing; after cancel a stale-sequence apply is rejected; slow scene: move runs no stage A, end runs one |
+| `update_scene` | `rig`, `block()`, `rig_block()`, `scene_block`, `initial` identical afterwards; `ref0` / `delta` cleared |
+| shared undo | object steps undo correctly; interleaved with board steps in order; still capped at 50; an unchanged pose records nothing; `peek` consumes nothing |
+
+Smoke (`web/scripts/smoke.mjs`, Playwright; Chromium at `/opt/pw-browsers/chromium`):
+- Load `basic`: `rotate_object("crate", 2, 30)` (about `z`); load `directional`: rotate the cone about `x` by 20°.
+- Camera block, `rig`, `scene_block` unchanged; the other objects' `object_vertices` identical value for value and the
+  rotated one's different; after undo the SVG is bit-identical to the one before the rotation.
+- The downloaded scene through `castplane render` gives the same SVG as `download_texts().svg`.
+- During a drag `frames` records and `stage_a_ms` updates; after a rotation about `x` the warnings include
+  `OBJECT_BELOW_RECEIVER` (expected).
+- In rotate mode the board's `handles_px` is null; it returns when the mode is switched off.
+- Fast drag: real pointer events down → one move → immediate up (no frame wait): `object_transform` is updated and
+  `rig.undo` grows by one. Second-finger cancel: `object_transform`, `object_vertices` and the SVG equal the values
+  before the press, `undo` unchanged.
+
+Gates: `npm ci && npm test`, `npm run -w web build`, `node web/scripts/smoke.mjs`,
+`node tools/web_frame_bench.mjs examples/directional.json 5`, and the unchanged
+`python3 tools/regen_conformance.py --reason "check" --dry-run` (0 changes) and `python3 tools/compare_svg.py`
+(0 mismatches).
+
+#### Implementation notes
