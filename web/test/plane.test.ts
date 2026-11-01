@@ -320,6 +320,23 @@ test("session undo (M11): an object step is peeked by undo_step and popped only 
   assert.equal(s.undo.peek()?.kind, "object", "reset of an unchanged board records nothing");
 });
 
+test("session undo (M11 review): popping an object step never cancels an open board gesture", () => {
+  const l = load_with_poses(raw("basic"));
+  const s = new PlaneSession(l.ss);
+  const t0 = l.scene.objects.find((o) => o.id === "crate")!.transform;
+  const t1 = rotate_about_world_axis(t0, s.local_centres.get("crate")!, 2, 30);
+  s.record_object("crate", t0, t1);
+  const rig0 = clone(s.rig);
+  s.begin(); // a held board drag with an object step on top of the shared stack
+  assert.deepEqual(s.undo_step().object, { id: "crate", transform: t0 });
+  s.pop_object_step();
+  assert.equal(s.undo.size, 0);
+  assert.ok(s.drag(pushed(rig0, 20)));
+  assert.equal(s.end(), true, "the board drag still records its step");
+  assert.equal(s.undo.size, 1);
+  assert.equal(s.undo.peek()?.kind, "rig");
+});
+
 // ------------------------------------------------------------------------------------------------ readouts
 
 test("readouts: the spec-v0.2 §5.8 lines, the picture delta of a gesture, the eye-below-ground notice", () => {

@@ -760,6 +760,12 @@ export class UndoStack {
     return s.kind === "rig" ? { kind: "rig", rig: clone(s.rig) } : { kind: "object", id: s.id, before: clonePose(s.before) };
   }
 
+  /** Drop the top entry without touching an open gesture (M11: the pop after a peeked object step was applied, so it
+   * can never cancel a board drag held at the same time). */
+  pop_top(): void {
+    this.steps.pop();
+  }
+
   /** Pop the last entry: a board snapshot with the current pivot kept, or an object's pose; `null` when empty. */
   undo(current: RigState): UndoStep | null {
     this.gesture = null;

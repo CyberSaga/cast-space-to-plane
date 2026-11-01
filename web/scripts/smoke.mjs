@@ -45,7 +45,9 @@
 // drag records drag frames and live stage-A runs; the board's handles_px is null in rotate mode and back after it; a
 // pointerdown → one move → pointerup with no frame in between commits (one undo step); a second finger cancels (pose,
 // vertices, SVG and undo as before the press); a bad numeric field turns red and changes nothing; the numeric fields,
-// 還原此物體 and the panel in 預覽 work. Prints one JSON record. Exit 1 on a page error or a failed check.
+// 還原此物體 and the panel in 預覽 work; angles typed into several fields apply together (套用, or Tab and Enter), Escape
+// drops them, a drag with a focused field refreshes it, the object-pivot hint names rotate mode, and 復原 is off while a
+// board or ring drag is held. Prints one JSON record. Exit 1 on a page error or a failed check.
 import { execSync } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { createRequire } from "node:module";
@@ -881,6 +883,9 @@ const plane = {};
     await page.mouse.down();
     await page.mouse.move(ob.x + q[0] + 25, ob.y + q[1] + 5);
     await frames2();
+    // M11 review: 復原 is off while a board drag is held (an object step popped mid-drag would drop the drag's step)
+    const held = await page.evaluate(() => ({ disabled: document.getElementById("undo").disabled, undo: window.castplane_web.rig.undo }));
+    check(held.disabled && held.undo > 0, `plane: 復原 is off while a ring drag is held (${JSON.stringify(held)})`);
     await page.evaluate(() => window.castplane_web.load_example("curved_demo"));
     await frames2();
     const c0 = await rig();
@@ -1165,6 +1170,7 @@ const objrot = {};
         await frames2();
       }
       const mid = await get("timings");
+      const undo_held = await page.evaluate(() => document.getElementById("undo").disabled);
       await page.mouse.up();
       await frames2();
       await page.click("#snap");
@@ -1174,6 +1180,7 @@ const objrot = {};
         `M11: a ring drag records drag frames with live stage-A runs (${JSON.stringify(objrot.drag)})`);
       check(JSON.stringify(t1) !== JSON.stringify(t0) && t1.rotation_deg[0] === t0.rotation_deg[0] && t1.rotation_deg[1] === t0.rotation_deg[1]
         && await undo_size() === u0 + 1, "M11: the z-ring drag turns rz only, one undo step");
+      check(undo_held && !(await page.evaluate(() => document.getElementById("undo").disabled)), "M11: 復原 is off while a ring drag is held, on after it");
       await page.click("#undo");
       await frames2();
     }
@@ -1263,6 +1270,65 @@ const objrot = {};
     await frames2();
     check(JSON.stringify(await api("object_transform", "crate")) === JSON.stringify(t0) && await undo_size() === u0 + 2,
       "M11: 還原此物體 returns to the load pose (one undo step)");
+    // M11 review: the three fields are one entry: typed rx and ry both survive the focus moving on and apply together
+    const fields = async () => (await get("rotate")).fields.map((f) => f.value);
+    await page.fill("#obj-rx", "10");
+    await page.fill("#obj-ry", "20");
+    const typed = await fields();
+    await page.click("#obj-apply");
+    await frames2();
+    const tf = await api("object_transform", "crate");
+    objrot.fields = { typed, after: tf.rotation_deg };
+    check(typed[0] === "10" && typed[1] === "20" && near(tf.rotation_deg[0], 10, 1e-9) && near(tf.rotation_deg[1], 20, 1e-9)
+      && near(tf.rotation_deg[2], t0.rotation_deg[2], 1e-9) && await undo_size() === u0 + 3,
+    `M11: rx and ry typed in turn, then 套用: both applied as one step (${JSON.stringify(objrot.fields)})`);
+    await page.click("#undo");
+    await frames2();
+    // the same with keystrokes: rx, Tab, ry, Enter
+    await page.focus("#obj-rx");
+    await page.keyboard.press("Control+A");
+    await page.keyboard.type("5");
+    await page.keyboard.press("Tab");
+    const tab_to = await page.evaluate(() => document.activeElement?.id ?? null);
+    await page.keyboard.press("Control+A");
+    await page.keyboard.type("15");
+    const typed_k = await fields();
+    await page.keyboard.press("Enter");
+    await frames2();
+    const tk = await api("object_transform", "crate");
+    check(tab_to === "obj-ry" && typed_k[0] === "5" && near(tk.rotation_deg[0], 5, 1e-9) && near(tk.rotation_deg[1], 15, 1e-9)
+      && await undo_size() === u0 + 3, `M11: rx, Tab, ry, Enter applies both (${JSON.stringify({ tab_to, typed_k, r: tk.rotation_deg })})`);
+    await page.click("#undo");
+    await frames2();
+    // Escape drops the typed angles; the fields show the pose again
+    const shown0 = await fields();
+    await page.fill("#obj-rx", "33");
+    await page.press("#obj-rx", "Escape");
+    await frames2();
+    check(JSON.stringify(await fields()) === JSON.stringify(shown0) && JSON.stringify(await api("object_transform", "crate")) === JSON.stringify(t0)
+      && await undo_size() === u0 + 2, "M11: Escape in a field drops the typed angles, the pose kept");
+    // a focused, unedited field follows a drag (the drag takes the focus and rewrites the fields)
+    await page.focus("#obj-rx");
+    const td = await api("rotate_object", "crate", 0, 12);
+    await frames2();
+    const fd = await fields(), active_d = await page.evaluate(() => document.activeElement?.id ?? null);
+    objrot.focused_drag = { fields: fd, rx: td.rotation_deg[0], active: active_d };
+    check(fd.every((v, i) => near(Number(v), wrap(td.rotation_deg[i]), 0.0501)) && Math.abs(td.rotation_deg[0]) > 1 && active_d !== "obj-rx",
+      `M11: a drag with the rx field focused refreshes the fields (${JSON.stringify(objrot.focused_drag)})`);
+    await page.click("#undo");
+    await frames2();
+    // the pivot hint in rotate mode names the suspended click (the click selects the object to rotate there)
+    await page.selectOption("#pivot-mode", "object");
+    await api("set_rotate_mode", true);
+    await frames2();
+    const hint_on = await page.evaluate(() => document.getElementById("notices").textContent);
+    await api("set_rotate_mode", false);
+    await frames2();
+    const hint_off = await page.evaluate(() => document.getElementById("notices").textContent);
+    await page.selectOption("#pivot-mode", "scene");
+    await frames2();
+    check(hint_on.includes("轉動模式中暫停點選旋轉中心") && !hint_on.includes("請點一下左窗的物體") && hint_off.includes("請點一下左窗的物體"),
+      "M11: the object-pivot hint in rotate mode says to switch the mode off first");
     // 預覽: the observer is hidden, the panel still works
     await page.evaluate(() => window.castplane_web.set_preview(true));
     await frames2();

@@ -1,6 +1,6 @@
 # 透視陰影作圖系統 — 規格增補 v0.3：物體編輯 I，轉動單一物體
 
-狀態：草案，待實作。放置位置：`docs/spec/spec-v0.3.md`（與 `spec-v0.1.md`、`spec-v0.2.md` 並列）。實作合約為 `docs/ARCHITECTURE.md` §5.8，決策為 `docs/DECISIONS.md` D82。
+狀態：草案，已由網頁實作（M11），行為以 §5 的測試表驗證（`web/test/object_rotate.test.ts`、`web/test/plane.test.ts`、`web/test/rig.test.ts`、`web/scripts/smoke.mjs`）。放置位置：`docs/spec/spec-v0.3.md`（與 `spec-v0.1.md`、`spec-v0.2.md` 並列）。實作合約為 `docs/ARCHITECTURE.md` §5.8，決策為 `docs/DECISIONS.md` D82。
 
 ## 0. 與 spec-v0.2 的關係
 

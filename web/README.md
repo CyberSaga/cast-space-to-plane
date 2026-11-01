@@ -11,7 +11,7 @@ npm run -w ts build        # the core package "castplane" the UI imports
 npm run -w web dev         # vite dev server
 npm run -w web build       # tsc type check + vite build -> web/dist (static, base './')
 npm run -w web preview     # serve web/dist locally
-npm run -w web test        # orbit / download / colours / rig / equation / observer / plane / object-rotation unit tests (node:test, web/test/; 133 tests)
+npm run -w web test        # orbit / download / colours / rig / equation / observer / plane / object-rotation unit tests (node:test, web/test/; 135 tests)
 ```
 
 ![web UI](../docs/images/web_ui.png)
@@ -119,11 +119,12 @@ drag):
     once per frame, so the shadow and the drawing follow the drag. The object's `position` changes with the rotation so
     that `c_w` stays put.
   - The panel's *物體* section: the object dropdown (kept in sync with a click in the observer pane; a scene with one
-    object preselects it), the `rx` `ry` `rz` fields in degrees with *套用* (or Enter; a field that is not a finite
-    number turns red and keeps its value), *還原此物體* (back to the load-time transform), *落地* (shown only when
-    `receivers[0]` is an unbounded plane: moves the object along its normal until the lowest vertex touches it) and the
-    `c_w` readout. Angles are shown to 0.1° in (−180°, 180°] and are not unwrapped (170° plus 30° reads −160°). While
-    previewing (*預覽*) the observer pane is hidden and only the panel works.
+    object preselects it), the `rx` `ry` `rz` fields in degrees with *套用* (or Enter; angles typed into several
+    fields apply together, Esc drops them; a field that is not a finite number turns red and keeps its value),
+    *還原此物體* (back to the load-time transform), *落地* (shown only when `receivers[0]` is an unbounded plane: moves
+    the object along its normal until the lowest vertex touches it) and the `c_w` readout. Angles are shown to 0.1° in
+    (−180°, 180°] and are not unwrapped (170° plus 30° reads −160°). While previewing (*預覽*) the observer pane is
+    hidden and only the panel works.
   - A ring drag, a *套用*, a *還原此物體* and a *落地* are one undo step each, in the same 50-step stack as the board
     (*復原*); *重設* still resets only the board. A drag released at once still commits its last pose, and a second
     finger cancels the gesture and restores the pressed pose.

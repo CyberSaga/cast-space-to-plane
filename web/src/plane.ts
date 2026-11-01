@@ -157,9 +157,10 @@ export class PlaneSession {
     return this.undo.peek();
   }
 
-  /** M11: pop the top entry after its object step was applied successfully (no-op when the top is not an object step). */
+  /** M11: pop the top entry after its object step was applied successfully (no-op when the top is not an object step);
+   * an open board gesture is kept. */
   pop_object_step(): void {
-    if (this.undo.peek()?.kind === "object") this.undo.undo(this.rig);
+    if (this.undo.peek()?.kind === "object") this.undo.pop_top();
   }
 
   /** The picture-delta readout ("這次拖動右窗畫面變動", frame mm): the largest image displacement of the stage-A

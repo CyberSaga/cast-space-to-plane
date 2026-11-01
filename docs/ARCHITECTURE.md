@@ -5916,3 +5916,19 @@ hidden with the observer pane in 預覽, where only the panel works. (8) The und
 is held (an object step undone mid-gesture would race the gesture's commit). (9) The smoke test compares the CLI's SVG
 of the downloaded rotated scene with `download_texts().svg` with all six layers checked (作圖線 switched on for the
 check), so that the page's checked layers equal the file's `output.layers`.
+
+**[decision, implementation] M11 review fixes (web UI, not core).** (1) **The three angle fields are one entry**
+(amends clarification (5) above and the panel row of §5.8.4 by reference): a field counts as edited when its text
+differs from the text the panel last wrote (`dataset.shown`), not when it has the focus. A re-sync of the panel leaves
+an edited field's text and red state alone; leaving a field keeps its text; 「套用」 / Enter applies all three at once
+(an unedited field still keeps the exact current angle). Every field is rewritten from the pose after a successful
+numeric apply, 還原此物體 or 落地, on Escape in a field (which drops all typed angles), at the start of a ring drag, on a
+selection change and on a scene load. An unedited focused field follows the pose like any other, and a ring drag or a
+discrete object action takes the focus off an angle field, so the fields never show a stale angle. (2) **復原 is ignored
+and disabled while any drag is held** (board or object; amends clarification (8) above, which covered object drags
+only), and `PlaneSession.pop_object_step()` drops the peeked step with `UndoStack.pop_top()`, which never touches an
+open gesture, so an object step popped during a held board drag can no longer cancel that drag's step. (3) With the
+pivot mode 「點選物體」 and no object picked, the notice in rotate mode says the pivot click is suspended there, since
+the click there selects the object to rotate (§5.8.4):
+「轉動模式中暫停點選旋轉中心；關閉「轉動物體」後再點左窗的物體（目前暫用場景中心）」, and in 預覽
+「按「返回編輯」並關閉「轉動物體」後點一下左窗的物體，把它設為旋轉中心（目前暫用場景中心）」.

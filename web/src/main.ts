@@ -219,7 +219,7 @@ function load(name: string, make: () => Scene, colours: Map<string, number>): bo
   // output.hidden_lines do not reset them; the hidden style still comes from the scene
   hiddenStyle.value = scene.output.hidden_style ?? "dashed";
   sync_controls();
-  sync_object_panel();
+  sync_object_panel(true);
   layout();
   document.title = `${name} — castplane web`;
   request_render();
@@ -266,10 +266,20 @@ function sync_controls(): void {
   set_lines(ui.readouts, pl.readout_lines());
   const notes = pl.notices();
   if (pl.pivot.mode === "object" && pl.pivot.object_id === null) {
-    notes.push(state.obs.on ? "請點一下左窗的物體，把它設為旋轉中心（目前暫用場景中心）" : "按「返回編輯」後點一下左窗的物體，把它設為旋轉中心（目前暫用場景中心）");
+    notes.push(pivot_hint());
   }
   set_lines(ui.notices, notes);
-  ui.undo.disabled = !pl.undo.canUndo;
+  // M11 review: 復原 is off while any drag is held (an undo mid-gesture would race the gesture's own step)
+  ui.undo.disabled = !pl.undo.canUndo || state.dragging || state.handle !== null;
+}
+
+/** The hint for an object pivot not yet picked: in rotate mode (§5.8.4) the pivot's click is suspended, so the hint says
+ * to switch the mode off first. */
+function pivot_hint(): string {
+  if (state.rotate.on) {
+    return state.obs.on ? "轉動模式中暫停點選旋轉中心；關閉「轉動物體」後再點左窗的物體（目前暫用場景中心）" : "按「返回編輯」並關閉「轉動物體」後點一下左窗的物體，把它設為旋轉中心（目前暫用場景中心）";
+  }
+  return state.obs.on ? "請點一下左窗的物體，把它設為旋轉中心（目前暫用場景中心）" : "按「返回編輯」後點一下左窗的物體，把它設為旋轉中心（目前暫用場景中心）";
 }
 
 /** After a session action: re-frame the observer when asked (never during a drag), then render. */
@@ -348,7 +358,8 @@ ui.equation.addEventListener("blur", () => {
 });
 ui.undo.addEventListener("click", () => {
   const pl = state.plane;
-  if (pl === null || state.handle?.kind === "object") return; // an object step mid-drag would race the gesture's commit
+  // M11 review: ignored during any held drag (board or object): an undo mid-gesture would race the gesture's own step
+  if (pl === null || state.dragging || state.handle !== null) return;
   const r = pl.undo_step();
   if (r.object !== undefined) {
     // M11 (§5.8.3): an object step is peeked, stage A recomputed, and popped only on success (else the history is kept)
@@ -449,6 +460,7 @@ const handle_input: HandleInput = {
     }
     pl.begin();
     state.dragging = true;
+    sync_controls(); // 復原 off while the drag is held
     request_render();
   },
   move: (dx, dy, alt) => {
@@ -605,6 +617,10 @@ function start_object_drag(id: string, axis: Axis, grab: { w: Vec3; r_c: Vec3; u
   pl.begin_object(id, t0);
   state.handle = { kind: "object", id, axis, t0, A0: A, ...grab };
   state.dragging = true;
+  // M11 review: a drag drops any typed angle and the field's focus, so the fields follow the pose while it turns
+  blur_object_field();
+  sync_object_panel(true);
+  sync_controls(); // 復原 off while the drag is held
   request_render();
   return true;
 }
@@ -637,8 +653,10 @@ function object_action(id: string, t: Transform): boolean {
   if (state.dragging || state.handle !== null) return false;
   const before = current_transform(id);
   if (before === null) return false;
-  if (same_transform(before, t)) return true;
-  const ok = apply_object_transform(id, t, { kind: "step" });
+  blur_object_field();
+  const ok = same_transform(before, t) || apply_object_transform(id, t, { kind: "step" });
+  // M11 review: a successful action resets every field to the pose (typed entries applied or superseded)
+  if (ok) sync_object_panel(true);
   sync_controls();
   return ok;
 }
@@ -686,7 +704,7 @@ function select_object(id: string | null): void {
   if (id !== null && object_in(state.scene, id) === undefined) return;
   if (state.dragging || state.handle !== null) return;
   state.rotate.id = id;
-  sync_object_panel();
+  sync_object_panel(true);
   request_render();
 }
 
@@ -695,6 +713,7 @@ function set_rotate_mode(on: boolean): void {
   if (on === state.rotate.on || state.dragging || state.handle !== null) return;
   state.rotate.on = on;
   sync_object_panel();
+  sync_controls(); // the pivot hint depends on the mode
   request_render();
 }
 
@@ -706,14 +725,28 @@ function object_rings_now(): ObjectRings | null {
   return object_rings(id, world_centre(t, c), ring_radius(hd));
 }
 
-/** The panel's 物體 section from the state: dropdown, fields (unless focused), buttons, pivot readout, slow-scene hint. */
-function sync_object_panel(): void {
+/** Whether angle field `el` holds typed text (its text differs from the one the panel last wrote). */
+const field_edited = (el: HTMLInputElement): boolean => el.value !== (el.dataset["shown"] ?? "");
+
+/** Take the focus off an angle field (a drag or a discrete object action), so the field shows the pose afterwards. */
+function blur_object_field(): void {
+  const a = document.activeElement;
+  if (a instanceof HTMLInputElement && ui.objectFields.includes(a)) a.blur();
+}
+
+/**
+ * The panel's 物體 section from the state: dropdown, fields, buttons, pivot readout, slow-scene hint. M11 review: the
+ * three angle fields are one entry, so a field with typed text (`field_edited`) keeps its text and red state until
+ * 「套用」 / Enter applies it; `force` rewrites every field from the pose (a successful object action, Escape, a drag
+ * start, a selection change, a scene load). Focus alone never protects a field: an unedited focused field follows the pose.
+ */
+function sync_object_panel(force = false): void {
   const scene = state.scene, pl = state.plane, id = state.rotate.id, t = current_transform(id);
   ui.rotateMode.setAttribute("aria-pressed", state.rotate.on ? "true" : "false");
   if (ui.objectSelect.value !== (id ?? "")) ui.objectSelect.value = id ?? "";
   ui.objectFields.forEach((el, i) => {
     el.disabled = t === null;
-    if (document.activeElement === el) return;
+    if (!force && t !== null && field_edited(el)) return;
     const text = t === null ? "" : format_angle(t.rotation_deg[i]!);
     el.value = text;
     el.dataset["shown"] = text;
@@ -732,7 +765,7 @@ function sync_object_panel(): void {
 
 ui.rotateMode.addEventListener("click", () => set_rotate_mode(!state.rotate.on));
 ui.objectSelect.addEventListener("change", () => select_object(ui.objectSelect.value === "" ? null : ui.objectSelect.value));
-// 「套用」 must not take the focus first: the field's blur would re-sync it to the current pose before the click
+// 「套用」 does not take the focus: a red field keeps its caret for the correction
 ui.objectApply.addEventListener("mousedown", (ev) => ev.preventDefault());
 ui.objectApply.addEventListener("click", () => {
   if (apply_object_fields()) (document.activeElement as HTMLElement | null)?.blur();
@@ -743,12 +776,12 @@ for (const el of ui.objectFields) {
       ev.preventDefault();
       if (apply_object_fields()) el.blur();
     } else if (ev.key === "Escape") {
-      ev.stopPropagation(); // the field's Esc discards the typed text only; it does not also leave 預覽
+      ev.stopPropagation(); // the fields' Esc discards the typed angles only; it does not also leave 預覽
+      sync_object_panel(true);
       el.blur();
     }
   });
-  // leaving a field discards its typed text (and its red state)
-  el.addEventListener("blur", () => sync_object_panel());
+  // M11 review: leaving a field keeps its typed text (the three fields are one entry, applied together)
 }
 ui.objectRestore.addEventListener("click", () => {
   const id = state.rotate.id, t = id === null ? null : state.plane?.initial_transform(id) ?? null;

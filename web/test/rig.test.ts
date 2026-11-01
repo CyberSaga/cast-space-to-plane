@@ -757,6 +757,20 @@ test("shared undo (M11, §5.8.3): object steps, interleaved with board steps in 
   assert.equal(undo.peek(), null);
 });
 
+test("shared undo (M11 review): pop_top drops the top entry and keeps an open gesture", () => {
+  const undo = new UndoStack();
+  const rig0 = initial();
+  const tA = { position: [2, 4, 0] as Vec3, rotation_deg: [0, 0, 30] as Vec3 };
+  const tB = { position: [2, 4, 0] as Vec3, rotation_deg: [0, 0, 60] as Vec3 };
+  undo.record_object("crate", tA, tB);
+  undo.begin(rig0);
+  undo.pop_top();
+  assert.equal(undo.size, 0);
+  undo.pop_top(); // empty: no-op
+  assert.equal(undo.end(sixView(rig0, "top")), true, "the gesture opened before the pop is still recorded");
+  assert.equal(undo.peek()?.kind, "rig");
+});
+
 test("shared undo (M11): an unchanged pose records nothing; cancel is shared; still at most 50 entries", () => {
   const undo = new UndoStack();
   const t = { position: [1, 2, 0] as Vec3, rotation_deg: [0, 0, 0] as Vec3 };
