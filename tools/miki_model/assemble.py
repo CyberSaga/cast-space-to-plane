@@ -25,8 +25,9 @@ from . import body, hair, head, limbs, mannequin
 from . import meshkit as mk
 from .rig import SUN_TOWARDS, Rig
 
-__all__ = ["OBJECTS", "OBJECT_IDS", "MATERIALS", "DISPLAY_MATERIALS", "display_color", "REGION_OBJECTS", "MODULES", "ALL_REGIONS", "BUDGET",
-           "DECIMALS", "SUN_TOWARDS", "Assembly", "AssemblyError", "build_parts", "assemble", "format_stats"]
+__all__ = ["OBJECTS", "OBJECT_IDS", "MATERIALS", "DISPLAY_MATERIALS", "display_color", "PARENTS", "part_links",
+           "REGION_OBJECTS", "MODULES", "ALL_REGIONS", "BUDGET", "DECIMALS", "SUN_TOWARDS", "Assembly", "AssemblyError",
+           "build_parts", "assemble", "format_stats"]
 
 #: The castplane objects in their fixed order with what each holds.  ``headband`` comes first: the web UI's
 #: observer pane draws its sight rays (視線) for every vertex of ``objects[0]``, and the headband's 120
@@ -87,6 +88,44 @@ def display_color(oid: str) -> str:
     return MATERIALS[DISPLAY_MATERIALS[oid]].lower()
 
 
+#: Parent object of each object (D85 linked parts; ``None``: the root), in :data:`OBJECTS` order, written as the
+#: object's optional ``parent`` key in examples/miki.json.  The web UI turns a part together with its descendants
+#: about the part's ``joint`` (:func:`part_links`), so rotating the head carries the hair, and rotating the legs
+#: carries the socks and shoes; castplane's core ignores both keys (contract §2.0).  The root is the skirt (its
+#: under-skirt block holds the hips): legs, socks and shoes hang from it, and blouse -> neck -> head carries the
+#: head's six pieces; the collar, scarf (-> ring) and both arms hang from the blouse.  ``legs`` / ``socks`` /
+#: ``shoes`` are both-legs objects, so one leg cannot bend alone.
+PARENTS = {
+    "headband": "head", "hair": "head", "head": "neck", "eyes": "head", "scarf": "blouse",
+    "sidelocks": "head", "blouse": "skirt", "collar": "blouse", "back_hair": "head", "arm_l": "blouse",
+    "face_marks": "head", "arm_r": "blouse", "legs": "skirt", "socks": "legs", "skirt": None,
+    "shoes": "socks", "ring": "scarf", "neck": "blouse",
+}
+
+
+def part_links(rig: Rig) -> dict:
+    """``{object id: (parent, joint)}`` in :data:`OBJECTS` order: the parent (:data:`PARENTS`, ``None`` for the root)
+    and the joint, the point the part turns about in the web UI, from the rig's joints (each component rounded to
+    :data:`DECIMALS`).  The meshes are world coordinates with identity transforms, so the object-local joint the
+    ``joint`` key holds is the world point.  Midline joints (hips, knees, ankles) are the left / right mean."""
+    def mid(f):
+        return (f(+1) + f(-1)) / 2
+
+    hips = mid(rig.hip_joint)
+    neck_y = (rig.neck_y[0] + rig.neck_y[1]) / 2       # the neck's front / back mean at its root
+    neck_root = (0.0, neck_y, rig.neck_z[0])           # inside the torso
+    skull = rig.cranium_center                         # hair, headband and the face decals turn with the skull
+    joints = {
+        "headband": skull, "hair": skull, "head": (0.0, neck_y, rig.neck_z[1]), "eyes": skull,
+        "scarf": rig.collar_outer[-1],                 # the collar's V tip, where the knot sits
+        "sidelocks": skull, "blouse": (0.0, 0.0, rig.waist_z), "collar": neck_root, "back_hair": skull,
+        "arm_l": rig.shoulder_joint(+1), "face_marks": skull, "arm_r": rig.shoulder_joint(-1),
+        "legs": hips, "socks": mid(rig.knee), "skirt": hips, "shoes": mid(rig.ankle),
+        "ring": rig.ring_center, "neck": neck_root,
+    }
+    return {oid: (PARENTS[oid], tuple(round(float(v), DECIMALS) + 0.0 for v in joints[oid])) for oid in OBJECT_IDS}
+
+
 #: Default object of a part by its region (``Part.obj`` overrides it: e.g. ``hair`` parts that are
 #: sidelocks go to ``sidelocks``, the back hair to ``back_hair``, the scarf ring to ``ring``).  ``None``:
 #: the region has no default and every part must set ``obj`` (``arms`` / ``hands`` go to ``arm_l`` or
@@ -116,6 +155,9 @@ assert set(mannequin.REGIONS) == set(ALL_REGIONS), "mannequin regions and module
 assert set(REGION_OBJECTS) == set(ALL_REGIONS), "REGION_OBJECTS must name every region"
 assert tuple(DISPLAY_MATERIALS) == OBJECT_IDS, "DISPLAY_MATERIALS must list every object in OBJECTS order"
 assert set(DISPLAY_MATERIALS.values()) <= set(MATERIALS)
+assert tuple(PARENTS) == OBJECT_IDS, "PARENTS must list every object in OBJECTS order"
+assert [p for p in PARENTS.values() if p is None] == [None], "PARENTS: exactly one root"
+assert set(PARENTS.values()) - {None} <= set(OBJECT_IDS), "PARENTS: every parent is an object"
 assert all(re.fullmatch(r"#[0-9a-f]{6}", c) for c in MATERIALS.values()), "MATERIALS: lower-case #rrggbb"
 assert set(REGION_OBJECTS.values()) - {None} <= set(OBJECT_IDS)
 

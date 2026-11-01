@@ -50,6 +50,34 @@ castplane's hidden-line pass tests a sample only against objects whose image rec
 first**: the web UI's observer pane draws its sight rays for every vertex of `objects[0]`, and the headband's 120
 vertices show its perspective without hiding the figure. Each object also carries a `display_color` (the colour of
 its dominant material, `assemble.DISPLAY_MATERIALS`), which only the web UI's 3D views read; the core ignores it.
+Every object has `"group": "miki"` (`export.GROUP`, D84), so a click in the web UI selects the whole figure and a
+second click the part.
+
+**Linked parts (D85).** Each object also carries the web-only keys `parent` (the id of the object it hangs from;
+left out on the root) and `joint` (the point it turns about, `[x, y, z]` in the object's local frame), which the
+core ignores. In the web UI a rotation of a part carries its descendants about its joint, so the hair stays on the
+head and the socks and shoes on the legs. `assemble.PARENTS` holds the tree (in `OBJECTS` order, exactly one
+`None`) and `assemble.part_links(rig)` the joints, read from the rig (`hip_joint`, `knee`, `ankle`,
+`shoulder_joint`, `waist_z`, `neck_y` / `neck_z`, `collar_outer`, `ring_center`, `cranium_center`) and rounded to
+`DECIMALS`; `export.scene_dict` writes them after `group` (key order `id, type, display_color, group, parent,
+joint, data`). The meshes are world coordinates with identity transforms, so a local joint is the world point.
+Authoring rules, which the web UI enforces by ignoring a bad link silently:
+- a parent must be another object of the same group, and the links must form a tree (a cycle drops every link on
+  it); a `joint` without a `parent` is the root's own pivot (the skirt's hip centre);
+- put a joint inside its parent's bounding box, where the two pieces meet (shoulder, neck, hip, knee, ankle); a
+  piece that only sits on its parent (hair, headband, eyes, face decals) turns about the parent's centre (the
+  skull); the tests allow a joint up to 0.12 m outside the part's own box;
+- left and right limbs that share one object (`legs`, `socks`, `shoes`) take a midline joint and move together;
+  give each side its own object to bend one leg.
+
+| object | parent | joint | | object | parent | joint |
+| --- | --- | --- | --- | --- | --- | --- |
+| `skirt` | (root) | hip centre | | `hair`, `headband`, `sidelocks`, `back_hair`, `eyes`, `face_marks` | `head` | `cranium_center` |
+| `blouse` | `skirt` | `(0, 0, waist_z)` | | `collar` | `blouse` | neck root |
+| `legs` | `skirt` | hip centre | | `scarf` | `blouse` | `collar_outer[-1]` (the V tip) |
+| `socks` | `legs` | knee centre | | `ring` | `scarf` | `ring_center` |
+| `shoes` | `socks` | ankle centre | | `arm_l`, `arm_r` | `blouse` | `shoulder_joint(+1)`, `(-1)` |
+| `neck` | `blouse` | neck root `(0, mean(neck_y), neck_z[0])` | | `head` | `neck` | `(0, mean(neck_y), neck_z[1])` |
 
 | # | object | holds |
 | --- | --- | --- |
@@ -73,8 +101,9 @@ its dominant material, `assemble.DISPLAY_MATERIALS`), which only the web UI's 3D
 | 17 | `neck` | neck and décolleté bib |
 
 Currently 58 parts (58 closed shells), 4181 vertices, 4469 polygons and 8154 triangles. To add, split or reorder
-objects, change `OBJECTS` and keep `DISPLAY_MATERIALS` in the same order (an assert checks it), then update the
-object lists that `export.DESCRIPTION`, `examples/README.md` and the §5.4 note quote.
+objects, change `OBJECTS` and keep `DISPLAY_MATERIALS` and `PARENTS` in the same order (asserts check it), give a
+new object its joint in `part_links`, then update the object lists that `export.DESCRIPTION`, `examples/README.md`
+and the §5.4 note quote.
 
 A minimal part module:
 
@@ -211,7 +240,7 @@ These are castplane's mesh rules (contract §5.2) and what the generator adds on
    object instead of deleting designed lines. Prefer `thicken(groups="single")` slabs, whose borders draw only as
    silhouettes and cost no rays, and give a rim its own group only where the line must show.
 8. **Budget.** At most 6000 polygons and 10000 triangles in total (`assemble.BUDGET`, polygons = faces as written,
-   triangles = castplane's fan triangulation; now 4469 and 8154) and a scene file of at most 700 KiB (186 KiB now).
+   triangles = castplane's fan triangulation; now 4469 and 8154) and a scene file of at most 700 KiB (188 KiB now).
    Hidden-line time grows with the number of drawn edge samples times the number of triangles, and shrinks when
    objects are compact. `node tools/web_frame_bench.mjs examples/miki.json 5` times the web path (the figures
    depend on the machine, so compare against a baseline measured on the same machine).
@@ -246,6 +275,8 @@ python -m pytest -q -o addopts="" tests/test_miki_model.py    # about half a min
 - the polygon / triangle budget holds and no object has more than 64 construction rays (by the generator's count
   and by castplane's);
 - `display_color` is on every object, equals the dominant material colour, and does not change the core's output;
+- `parent` / `joint` (D85) form one tree rooted at the skirt, equal `part_links(Rig())`, put every joint inside its
+  parent's bounding box and within 0.12 m of its part's, and do not change the core's output;
 - the GLB and the OBJ import with `castplane import` into the same objects.
 
 Object lists come from `miki_model.assemble`, so the tests need no edit when an object changes.

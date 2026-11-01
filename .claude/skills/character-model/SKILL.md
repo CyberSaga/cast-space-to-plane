@@ -66,6 +66,21 @@ the web UI, and a test pins the files byte for byte.
   `display_color` is its dominant material colour (D81, read only by the web 3D views).
 - **`objects[0]` matters.** The web observer pane draws sight rays to every vertex of the first object. Put a small,
   telling part first (Miki: the headband, 120 vertices).
+- **One group, linked parts.** Give every object the same `group` (D84: a click selects the whole figure, a second
+  click the part) and the web-only links (D85) `parent` (the object it hangs from; none on the root) and `joint`
+  (`[x, y, z]` in the object's local frame, the point it turns about), so that rotating a part in the web UI carries
+  its descendants instead of tearing the figure apart. The core ignores all three keys. Keep the tree and the joints
+  in the generator (Miki: `assemble.PARENTS` and `assemble.part_links(rig)`, joints read from the rig and rounded),
+  never in the scene by hand.
+  - The links must form one tree inside the group; the web UI silently ignores a parent in another group, an
+    unknown id, a cycle or a bad joint.
+  - Put each joint inside its parent's bounding box where the pieces meet (hip, waist, neck root, top of the neck,
+    shoulders, knees, ankles). Pieces that only sit on a parent (hair, headband, eyes, face decals) turn about the
+    skull centre. Miki's root is the skirt (hips), with `blouse` → `neck` → `head` and `legs` → `socks` → `shoes`.
+  - Objects that hold both sides (Miki's `legs`, `socks`, `shoes`) take a midline joint and move together. Emit
+    left and right objects if one limb has to bend alone.
+  - Pin it in the model test: one tree rooted at the root, the file's keys equal the generator's, each joint inside
+    its parent's box and near its own, and the key order.
 - **Split the builders by file ownership** so that two agents run in separate worktrees: head + hair in one, body +
   limbs in the other. Each writes only its own modules; one merger agent merges both, fits the seams (neck / collar,
   hair / shoulders) and regenerates.
@@ -106,7 +121,8 @@ owner, part, view, observed, expected, and a fix concrete enough to implement ("
 - Vite bundles every `examples/*.json` into the web Example menu. `tests/test_ts_port.py` asserts the number of
   examples (`len(examples) == 9`), so a new example must update that count.
 - Write `tests/test_<name>_model.py`, modelled on `tests/test_miki_model.py`. It pins byte-identical regeneration,
-  closed manifolds with no mesh fallback, `warnings == []`, the budget and the ray cap, and `display_color`.
+  closed manifolds with no mesh fallback, `warnings == []`, the budget and the ray cap, `display_color`, `group` and
+  the links (`parent` / `joint`).
 - Docs: the generator's README and SPEC (in English), `examples/README.md`, `docs/USAGE.md` and `README.md` (in
   Traditional Chinese), and a §5.4 implementation note when the model needs a contract-visible change. Quote the
   object and polygon counts, and update them whenever the model changes.
