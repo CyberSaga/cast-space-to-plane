@@ -162,6 +162,34 @@ drag):
   - Hooks: `click_object(id | null)`, `selection()`, `select_group(name)`, `rotate_group(name, axis, deg)`,
     `set_group_rotation(name, r)`, `group_rotation(name)`, `group_centre(name)`, `object_groups()`; `select_object(id)`
     still selects an object as a part.
+- **Linked parts** (D85, contract §5.8 notes, spec-v0.3 §9; `src/links.ts`, the subtree maths of `src/object_rotate.ts`,
+  the `PlaneSession` helpers in `src/plane.ts`). Two more web-only object keys: `parent` (the id of another part of the
+  same ≥ 2 group; a non-empty, UTF-8 encodable string, kept verbatim) and `joint` (`[x, y, z]`, three finite numbers in
+  the object's **local** frame, so its world image `j_w = R·joint + p` rides with the object). The core ignores both,
+  *Download scene* writes them back verbatim (the reload gives the same links and world joints); a malformed value is
+  no key, and a link to itself, to an id not in the scene, to a part of another group or on a cycle (every link of the
+  cycle is dropped, whatever the scene order) is ignored silently: that part behaves as in D84. `joint` is also honoured
+  on an ungrouped object. `resolve_links` runs once at load (`PlaneSession.links`, `parent_of`, `children_of`,
+  `subtree`, `joint`, `pivot_local`); nothing else is stored.
+  - Turning a part P (a ring drag, `rotate_object`) turns P and its descendants (`subtree(P)`: P first, then preorder,
+    siblings in scene order) rigidly about one world point fixed at pointer-down, P's `j_w` (its `c_w` without a joint,
+    D82): `rotate_unit(..., pivot)` and `UnitDrag.begin`'s `pivot`. P's joint stays on its unmoved parent; ancestors,
+    siblings, `G` and `c` never change. A part with neither a joint nor children takes the D84 path byte for byte. The
+    rings are centred on the pivot; the panel line reads 「已選：head（miki 的部件，帶動 6 個部件）」 and the readout
+    「關節 j_w = (x, y, z) m」 (「中心 c_w = …」 without a joint).
+  - The fields show P's own world angles. 套用 gives P exactly `r` and every other member the rotation `R′Rᵀ` about the
+    pivot (`set_part_rotation`), so a drag and an entry that reach the same `R′` agree; entering the displayed angles is
+    no action (a copy), so no ulp noise reaches the descendants.
+  - *還原此物體* on a part puts P back to its load pose **relative to its parent's current pose** and carries the
+    subtree (`restore_part_pose`, `rigid_map`); a part with a parent that is already within `RESTORE_EPS` = 1e-9 of the
+    target (a part that was only carried) is a no-op: no step, button disabled. *落地* lifts the whole subtree of a
+    root part by one translation and is hidden for a part with a parent. The board pivot *點選物體* still picks the
+    part's bounding-box centre, not the joint.
+  - A subtree action is one `objects` undo step with `group: null` (`start_unit_drag` / `finish_object_drag` choose
+    `begin_object` or `begin_objects` by the member count). Hooks: `object_links()`, `object_joint(id)`,
+    `descendants(id)`, `object_matrices(id)` (the 3D matrices of both panes), `world_px([x, y, z])`; `rotate_object`,
+    `set_object_rotation` and `select_object` with the panel buttons run the UI's own path, so they carry the subtree.
+    Unit tests: `test/links.test.ts` (15) on `test/fixtures/basic_linked.json`.
 - **Overlay** (`src/overlay.ts`): an `<svg>` over the canvas with the same CSS box and `viewBox`. On each
   animation frame where something changed, the frame runs `project_scene` → `compose` → `write_svg` (all six
   layers) against the cached stage A. Pointer events only update the state and at most one core render runs per
@@ -381,6 +409,18 @@ The script needs a Playwright installed outside the repository; it is not a depe
   `rotate_group` keeps `c`, the camera block, the rig and `scene_block`, leaves the post alone, and undo restores the
   SVG byte for byte; the dropdown's group entry, the fields and *還原此物體* act on the whole group; *點選物體* puts the
   pivot on `c`; *Download scene* keeps the `group` keys.
+- D85 (linked parts, on the fixture `web/test/fixtures/basic_linked.json`: group `g` with base → mast → {arm → flag,
+  lamp} and an ungrouped post): `object_links()` gives the expected forest and `descendants` the preorder; real clicks
+  on the arm select the group, then the arm (「已選：arm（g 的部件，帶動 1 個部件）」) with its rings on its world joint
+  (`world_px(object_joint("arm"))` within 1 px, readout 「關節 j_w」) and 落地 hidden; `rotate_object("arm", 0, 25)` and a
+  real drag on the arm's z ring move the arm and the flag (stage-A vertices and `object_matrices` of both panes), keep
+  the flag's pose relative to the arm and the arm's joint on the mast (1e-9), leave the base, mast, lamp, post, camera,
+  `group_centre` and `group_rotation` alone, and are one undo step each (undo: the SVG byte for byte); turning the
+  mast carries arm, flag and lamp; the carried-only lamp shows the D84 line, has no 落地 and nothing to restore;
+  *還原此物體* on the arm puts it back relative to the turned mast with the flag carried; an unedited *套用* records no
+  step; 落地 on the tilted base lifts its whole subtree by one translation (`OBJECT_BELOW_RECEIVER` gone); the undos
+  restore the SVG byte for byte; *Download scene* keeps `parent` and `joint` verbatim and its reload gives the same
+  links and world joints; loading `basic` clears the links.
 
 Last run (phase 2, part 5; exit 0, no failed check, no page error):
 
