@@ -143,6 +143,23 @@ drag):
     drawing. Hooks for the smoke test: `castplane_web.rotate_object`, `set_object_rotation`, `select_object`,
     `object_transform`, `object_vertices`, `object_centre`, `rotate` (selection and panel state), `object_rings_px`,
     `pick_at(x, y)` (the object a click there selects), `set_board_visible(on)` and `board_visible()` (D83).
+- **Groups of parts** (D84, contract §5.8 notes, spec-v0.3 §8; `src/groups.ts`, the group maths of
+  `src/object_rotate.ts`). An object may carry the web-only key `group` (a non-empty, non-whitespace string, kept
+  verbatim; the core ignores it, *Download scene* writes it back; unrelated to OBJ `g` groups and `smooth_groups`).
+  A group with two or more members in the scene is one unit; other objects behave as in D83.
+  - A click on a grouped object selects the whole group, the next click the clicked part, the next the whole group
+    again; after part focus a click on another part of the group moves the focus there; only a click on blank space
+    clears. The dropdown lists the groups first (`group.<name>`, label 「<name>（整組，<n> 個部件）」), and a line
+    under it names the selection. With the pivot set to *點選物體* the click puts `P` on the selected unit's centre.
+  - A whole group turns rigidly about `c`, the centre of the load-time world bounding box of its members (frozen:
+    only the group's *落地* and *還原此物體* move it). Its rings are centred on `c` with a radius from that box (larger
+    than a part's; they hit on the band only, so a click inside still picks a part); the fields show the rotation
+    relative to the load; *還原此物體* restores every member and *落地* moves the whole group by one common amount.
+    A part keeps M11's behaviour and never changes the group's reading or `c`. One group action is one undo step with
+    every member and the group frame (`UnitDrag`, `UndoStack.record_objects`).
+  - Hooks: `click_object(id | null)`, `selection()`, `select_group(name)`, `rotate_group(name, axis, deg)`,
+    `set_group_rotation(name, r)`, `group_rotation(name)`, `group_centre(name)`, `object_groups()`; `select_object(id)`
+    still selects an object as a part.
 - **Overlay** (`src/overlay.ts`): an `<svg>` over the canvas with the same CSS box and `viewBox`. On each
   animation frame where something changed, the frame runs `project_scene` → `compose` → `write_svg` (all six
   layers) against the cached stage A. Pointer events only update the state and at most one core render runs per
@@ -351,6 +368,12 @@ The script needs a Playwright installed outside the repository; it is not a depe
     hovering the arrow tip shows the pointer cursor; the observer labels do not overlap.
 
   With `--shots DIR` it saves `DIR/web_ui_plane_mode.png`.
+- D84 (groups of parts, on the fixture `web/test/fixtures/basic_grouped.json`: `basic` with both objects in group
+  `g` plus an ungrouped post): real clicks cycle whole group → part → whole group, blank space clears, another part
+  after part focus takes the focus; the group's rings are larger and a real drag on them turns every member;
+  `rotate_group` keeps `c`, the camera block, the rig and `scene_block`, leaves the post alone, and undo restores the
+  SVG byte for byte; the dropdown's group entry, the fields and *還原此物體* act on the whole group; *點選物體* puts the
+  pivot on `c`; *Download scene* keeps the `group` keys.
 
 Last run (phase 2, part 5; exit 0, no failed check, no page error):
 

@@ -5977,3 +5977,62 @@ second click to re-pick the pivot with 「點選物體」), or `select_object` w
 `select_object` rewrites the angle fields from the pose (`sync_object_panel(true)`) only when the id changes; otherwise
 the panel syncs unforced, so typed rx / ry / rz text survives until 「套用」 / Enter applies it or Escape drops it.
 `web/scripts/smoke.mjs` pins it with real mouse clicks.
+
+**[decision, implementation] (D84) Groups of parts and the whole → part click cycle.** Amends, by reference and with the
+existing text unchanged, item (3) "Click" of the D83 note above, the D83 review note's "re-selecting the selected
+object", the dropdown of §5.8.4's panel bullet, §5.8.1's single pivot (a whole group turns about its own `c`, below),
+§5.8.3's undo entry (one object's pose) and the `rotate` hook. (1) **Web-only key.** An object may carry
+`objects[i].group`, a string; it is a group name iff `typeof v === "string" && v.trim() !== ""`, kept verbatim (not
+trimmed). Like `display_color` (§5.4 note D81) the validators ignore it (§2.0), so the core, the TS port, the documents,
+SVG, warnings and the conformance set (v8 / 63 cases) never see it; `web/src/groups.ts::object_groups(raw) -> Map<id,
+name>` reads it from the raw scene at the same load sites as `display_colours` (malformed values: no group, no
+SceneError, no warning), a load replaces the map and clears the selection, and `scene_blob(..., colours?, groups?)`
+writes each valid value back unchanged. It is unrelated to OBJ `g` groups and to a mesh's `data.smooth_groups`; no
+nesting, no geometric inference and no stored pivot. Follow-up, out of scope: `castplane import` stamping `group` when
+one file yields two or more objects. (2) **Units.** A unit is a group with at least two members present in the scene
+(`group_members`, members in scene order), or a single object (no group, or a group name used once: that object behaves
+exactly as in D83). (3) **Selection and the click cycle.** The selection is `null | {kind: "group", group} | {kind:
+"part", id}`; `next_selection(current, clicked, groups, members)` is pure and unit-tested: an object not in a ≥ 2 group
+gives `{part, clicked}`; for an object of group G, null or a selection outside G gives `{group G}`, `{group G}` gives
+`{part clicked}`, and `{part p}` with `p` in G gives `{group G}` when `p` is the clicked object and `{part clicked}`
+otherwise (the focus moves to the other part). A click on blank space clears the selection; orbit and ring drags never
+change it; the hit order is D83's with "the selected object's rings" read as "the selected unit's rings". A click on an
+ungrouped object that is already selected is still not a selection change (the D83 review rule); a grouped click always
+is (the cycle). With 旋轉中心 = 點選物體 the click sets `P` to the newly selected unit's centre: a group's `c`
+(`PlaneSession.pick_group`, pivot id `group.<name>`, label 「旋轉中心：<name>（整組）」), a part's stage-A bbox centre as before;
+no undo step. Nothing is selected on load. (4) **Dropdown and panel.** The 物體 dropdown lists one entry per ≥ 2 group
+first (value `group.<name>`, which no object id can equal since object ids cannot contain `.`; label 「<name>（整組，<n>
+個部件）」, set with `textContent` only), then every object; "—" clears; dropdown and clicks stay in sync. A line
+`#obj-selected` names the selection (「已選：<name>（整組）」, 「已選：<id>（<group> 的部件）」, 「已選：<id>」). (5) **Group maths**
+(`object_rotate.ts`, pure). Per group the session (`PlaneSession`) keeps a frame `{G, c}`: `G` the rotation relative to
+the load (identity at load; display only), `c` the centre of the axis-aligned world bbox of all members' stage-A world
+vertices at load (`world_bbox`, the vertex source of `local_bbox`). A ring drag of the group by `Q` about a world axis:
+every member `R_i′ = Q·R_i`, `p_i′ = c + Q(p_i − c)` (`rotate_about_point`: exact `rz` about z, `euler_zyx_from_matrix`
+otherwise, the M11 wrap and gimbal rules), `G′ = Q·G`, `c` unchanged. Numeric entry `e`: `G_t = euler_zyx_matrix(e)`, `Q
+= G_t·Gᵀ`, every member rotated by `Q` about `c` (decomposed), `G′ = G_t`; the fields show `euler_zyx_from_matrix(G)`,
+an unedited field keeps that exact value. Rotating a part (part focus) changes only that member; `G` and `c` are
+unchanged, so after a part is turned or a part-only 還原 the group's fields keep their value, and `c` stays frozen at its
+load position (the group rings do not follow a part dragged away; `c` moves only by the group's 落地 and returns by its
+還原). 還原此物體 on a group: every member to its load transform, `G = I`, `c = c0`; on a part: that part only. 落地 on a group:
+one common translation along the receiver normal by the minimum over all members (`curved.plane_min` for curved members,
+the stage-A vertices otherwise), `c` translated with it (`translate_pose`). Group rings: centre `c`, radius
+`ring_radius(½ × the load-time group bbox diagonal)` (≥ 0.3 m), world axes, the M11 colours and hit rules; rings hit on
+their band only, so a click inside a large group ring still picks the part under it. (6) **Drag lifecycle.**
+`ObjectDrag` is generalised to `UnitDrag<S, A>` over a `UnitPose = {transforms: Map<id, Transform>, group: {name, G, c}
+| null}` with the same semantics (pending candidate, at most one stage A per frame under `LIVE_STAGE_A_MS`, `end`
+commits synchronously, `cancel` restores `scene0` / `A0` and the group frame, a stage-A exception keeps the committed
+pose); `ObjectDrag` remains as M11's one-object API on top of it. `main.ts`'s `apply_pose` is `apply_object_transform`
+for one or more objects plus the group frame (one stage A for all members). (7) **Undo.** The shared stack (50 entries)
+gains an entry `{kind: "objects", before: Map<id, ObjectPose>, group: {name, G, c} | null}` (`UndoStack.record_objects`
+/ `begin_objects` / `end_objects`): one group action is one step with every member's pose and the frame; undo restores
+them in one stage A (peeked, popped on success as §5.8.3). A step is recorded when any member's pose or the frame
+changed; part and ungrouped actions still record one-object steps; LIFO with board steps; undo stays disabled during a
+held drag. (8) **Hooks.** D83's hooks are kept (`select_object(id)` still selects the object as a part, also when it is
+grouped); added `click_object(id | null)` (the cycle, null = blank), `selection()` (`{kind: "group", group, members} |
+{kind: "part", id, group | null} | null`), `select_group(name)`, `rotate_group(name, axis, deg)` (one drag, one undo
+step), `set_group_rotation(name, r)`, `group_rotation(name)` (the display Euler), `group_centre(name)` and
+`object_groups()`; `rotate` also reports `selection` (the dropdown value) and `selected_text`, and its `id` is the
+selected part (null for a whole group). `web/test/groups.test.ts` pins the parsing, the cycle table, the rigid rotation
+about a fixed `c` (10 × 37°, < 1e-9, against stage A), numeric entry ≡ the equivalent drags, the display round trip, 還原
+/ 落地 of a group, the group pivot and group undo interleaved with board and part steps; `web/scripts/smoke.mjs` drives
+the cycle with real clicks on `web/test/fixtures/basic_grouped.json` (docs/DECISIONS.md D84, spec-v0.3 §8).
