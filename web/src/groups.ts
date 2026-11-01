@@ -24,11 +24,17 @@ const LONE_SURROGATE = /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[
 /** The left pane's selection: nothing, a whole group (≥ 2 members), or one object (a part, or an ungrouped object). */
 export type Selection = null | { kind: "group"; group: string } | { kind: "part"; id: string };
 
+/** Whether `s` is encodable as UTF-8: no UTF-16 surrogate without its pair (D84 review: JSON `"\ud800"` parses, but
+ * the downloaded scene's `dumps` could not write it). D85 also uses it for `objects[i].parent` (`links.ts`). */
+export function is_utf8_text(s: string): boolean {
+  return !LONE_SURROGATE.test(s);
+}
+
 /** Whether `value` is a valid group name: a string that is not empty or whitespace only (kept verbatim, not trimmed)
  * and is encodable as UTF-8 (D84 review: no lone surrogate such as JSON `"\ud800"`, which the downloaded scene's
  * `dumps` could not write). */
 export function is_group_name(value: unknown): value is string {
-  return typeof value === "string" && value.trim() !== "" && !LONE_SURROGATE.test(value);
+  return typeof value === "string" && value.trim() !== "" && is_utf8_text(value);
 }
 
 /**
@@ -124,11 +130,15 @@ export function group_option_label(name: string, n: number): string {
   return `${name}（整組，${n} 個部件）`;
 }
 
-/** The panel's line naming the selection: 「已選：<name>（整組）」, 「已選：<id>（<group> 的部件）」, 「已選：<id>」, or `""`. */
+/** The panel's line naming the selection: 「已選：<name>（整組）」, 「已選：<id>（<group> 的部件）」, 「已選：<id>」, or `""`.
+ * D85: `carried` (the number of descendants a part's rotation carries, `subtree(P).length − 1`) > 0 on a part of a
+ * group gives 「已選：<id>（<group> 的部件，帶動 <carried> 個部件）」; 0 (the default) gives the D84 strings. Links exist
+ * only inside a ≥ 2 group (`links.ts::resolve_links`), so `carried` is ignored for a whole group or an ungrouped object. */
 export function selection_text(sel: Selection, groups: ReadonlyMap<string, string>,
-  members: ReadonlyMap<string, readonly string[]>): string {
+  members: ReadonlyMap<string, readonly string[]>, carried = 0): string {
   if (sel === null) return "";
   if (sel.kind === "group") return `已選：${sel.group}（整組）`;
   const G = group_of(sel.id, groups, members);
-  return G === null ? `已選：${sel.id}` : `已選：${sel.id}（${G} 的部件）`;
+  if (G === null) return `已選：${sel.id}`;
+  return carried > 0 ? `已選：${sel.id}（${G} 的部件，帶動 ${carried} 個部件）` : `已選：${sel.id}（${G} 的部件）`;
 }

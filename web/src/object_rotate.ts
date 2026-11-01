@@ -29,6 +29,9 @@ export const OBJECT_RING_SEGMENTS = 72;
 export const GIMBAL_EPS = 1e-9;
 /** A ring whose screen tangent is shorter than this is seen edge-on: the tangent is taken as `(1, 0)`. */
 export const EDGE_ON_EPS = 1e-6;
+/** D85: 還原此物體 of a part with a parent is no action when its pose is within this of the target
+ * ({@link near_transform}: scene metres for positions, dimensionless for rotation-matrix elements). */
+export const RESTORE_EPS = 1e-9;
 
 /** A world axis: 0 = x, 1 = y, 2 = z. */
 export type Axis = 0 | 1 | 2;
@@ -158,6 +161,30 @@ export function rotate_by_matrix(t: Transform, c: readonly number[], Q: Mat3): T
   const [R, p] = transform_frame(t);
   const position = add3(c, mul3(Q, sub3(p, c)));
   return { position: [z0(position[0]), z0(position[1]), z0(position[2])], rotation_deg: euler_zyx_from_matrix(matmul(Q, R)) };
+}
+
+/**
+ * D85: the pose `t` moved by the rigid map `x ↦ to + Q·(x − from)`: `R′ = Q·R` decomposed
+ * ({@link euler_zyx_from_matrix}), `p′ = to + Q·(p − from)`, one rounding pass. `rigid_map(t, Q, c, c)` is
+ * {@link rotate_by_matrix}`(t, c, Q)` bit for bit (the same expression).
+ */
+export function rigid_map(t: Transform, Q: Mat3, from: readonly number[], to: readonly number[]): Transform {
+  const [R, p] = transform_frame(t);
+  const position = add3(to, mul3(Q, sub3(p, from)));
+  return { position: [z0(position[0]), z0(position[1]), z0(position[2])], rotation_deg: euler_zyx_from_matrix(matmul(Q, R)) };
+}
+
+/**
+ * D85: whether two poses are within `eps` of each other: `max|Δposition| ≤ eps` and `max|R_a − R_b| ≤ eps` over the
+ * matrix elements of `transform_frame` (never the Euler angles: they wrap at ±180° and change branch at gimbal lock).
+ */
+export function near_transform(a: Transform, b: Transform, eps: number): boolean {
+  const [Ra, pa] = transform_frame(a), [Rb, pb] = transform_frame(b);
+  for (let i = 0; i < 3; i++) {
+    if (!(Math.abs(pa[i]! - pb[i]!) <= eps)) return false;
+    for (let j = 0; j < 3; j++) if (!(Math.abs(Ra[i]![j]! - Rb[i]![j]!) <= eps)) return false;
+  }
+  return true;
 }
 
 /**
@@ -376,11 +403,15 @@ export function translate_pose(pose: UnitPose, d: readonly number[]): UnitPose {
 }
 
 /**
- * A ring drag of a unit about world axis `axis` by `deg`: a group through its `c` ({@link rotate_group_pose}); a single
- * object through its own pivot `c_w` from `c_locals` ({@link rotate_about_world_axis}, M11).
+ * A ring drag of a unit about world axis `axis` by `deg`: a group through its `c` ({@link rotate_group_pose}); D85 a
+ * part's subtree (`pivot` not null: the part's world joint, or its `c_w`, fixed at pointer-down) every member through
+ * that one world point ({@link rotate_about_point}: exact about `z`, decomposed about `x` or `y`), so the subtree turns
+ * rigidly; else a single object through its own pivot `c_w` from `c_locals` ({@link rotate_about_world_axis}, M11).
  */
-export function rotate_unit(pose: UnitPose, axis: Axis, deg: number, c_locals: ReadonlyMap<string, readonly number[]>): UnitPose {
+export function rotate_unit(pose: UnitPose, axis: Axis, deg: number, c_locals: ReadonlyMap<string, readonly number[]>,
+  pivot: readonly number[] | null = null): UnitPose {
   if (pose.group !== null) return rotate_group_pose(pose, axis, deg);
+  if (pivot !== null) return { transforms: new Map([...pose.transforms].map(([id, t]) => [id, rotate_about_point(t, pivot, axis, deg)])), group: null };
   const transforms = new Map([...pose.transforms].map(([id, t]) => [id, rotate_about_world_axis(t, c_locals.get(id) ?? [0, 0, 0], axis, deg)]));
   return { transforms, group: null };
 }
@@ -388,6 +419,64 @@ export function rotate_unit(pose: UnitPose, axis: Axis, deg: number, c_locals: R
 /** A single object's unit pose. */
 export function single_pose(id: string, t: Transform): UnitPose {
   return { transforms: new Map([[id, clone_transform(t)]]), group: null };
+}
+
+// ------------------------------------------------------------------------------------------------ linked parts (D85)
+
+/** The transform of part `id` in a part pose (`group: null`); throws for a group pose or a missing id. */
+function part_transform(pose: UnitPose, id: string, what: string): Transform {
+  if (pose.group !== null) throw new Error(`${what}: not a part pose`);
+  const t = pose.transforms.get(id);
+  if (t === undefined) throw new Error(`${what}: no transform of '${id}'`);
+  return t;
+}
+
+/**
+ * D85: the numeric fields of part `id` whose pose `pose` holds its subtree (P and its descendants; `group: null`):
+ * P's `rotation_deg` becomes `r` exactly about its pivot `pivot_local` ({@link set_rotation}: `p′ = c + R′Rᵀ(p − c)`,
+ * `c = world_centre(T_P, pivot_local)`), and every other member turns by the same `Q = R′·Rᵀ` through `c`
+ * ({@link rotate_by_matrix}), so a drag and an entry reaching the same `R′` reach the same poses (D82 rule). G4 (the
+ * D84-review rule extended to the subtree): `r` equal (`===`, component-wise) to P's `rotation_deg` returns the pose
+ * unchanged (a copy), so `Q` never smears ulp noise over the descendants.
+ */
+export function set_part_rotation(pose: UnitPose, id: string, pivot_local: readonly number[], r: readonly number[]): UnitPose {
+  const tP = part_transform(pose, id, "set_part_rotation");
+  if (r[0] === tP.rotation_deg[0] && r[1] === tP.rotation_deg[1] && r[2] === tP.rotation_deg[2]) return clone_pose(pose);
+  const [R] = transform_frame(tP);
+  const c = world_centre(tP, pivot_local);
+  const Q = matmul_t(euler_zyx_matrix(r), R);
+  const transforms = new Map([...pose.transforms].map(([k, t]) => [k, k === id ? set_rotation(t, pivot_local, r) : rotate_by_matrix(t, c, Q)]));
+  return { transforms, group: null };
+}
+
+/**
+ * D85: 還原此物體 of part `id` whose pose `pose` holds its subtree (P first; `group: null`), with `t_load` its
+ * load-time transform and `parent` its parent's current and load-time transforms (null for a root part or a lone
+ * object). G3: P goes back to its load pose **relative to its parent's current pose**, and the subtree is carried:
+ * 1. target `T*`: `parent === null` or the parent at its load pose (`same_transform`) → `t_load` exactly; else
+ *    `W* = W_par(now)·W_par(load)⁻¹·W_P(load)`, i.e. {@link rigid_map}`(t_load, Q_r, p_par(load), p_par(now))` with
+ *    `Q_r = R_par(now)·R_par(load)ᵀ`.
+ * 2. no action **[decision]** when `same_transform(T_P(now), T*)`, or (a part with a parent only)
+ *    {@link near_transform}`(T_P(now), T*, RESTORE_EPS)`: the pose is returned unchanged (a copy), so a part carried by
+ *    its parent records no spurious step and its subtree gets no ulp noise. A root part and a lone object keep the
+ *    exact compare.
+ * 3. else P gets `T*` and every descendant the delta `W*·W_P(now)⁻¹`: {@link rigid_map}`(T_i, Q_d, p_P(now), p*)`,
+ *    `Q_d = R(T*)·R_P(now)ᵀ` — descendants keep their own adjustments relative to P.
+ */
+export function restore_part_pose(pose: UnitPose, id: string, t_load: Transform,
+  parent: { now: Transform; load: Transform } | null): UnitPose {
+  const tP = part_transform(pose, id, "restore_part_pose");
+  let target: Transform;
+  if (parent === null || same_transform(parent.now, parent.load)) target = clone_transform(t_load);
+  else {
+    const [Rn, pn] = transform_frame(parent.now), [Rl, pl] = transform_frame(parent.load);
+    target = rigid_map(t_load, matmul_t(Rn, Rl), pl, pn);
+  }
+  if (same_transform(tP, target) || (parent !== null && near_transform(tP, target, RESTORE_EPS))) return clone_pose(pose);
+  const [RP, pP] = transform_frame(tP);
+  const Qd = matmul_t(transform_frame(target)[0], RP);
+  const transforms = new Map([...pose.transforms].map(([k, t]) => [k, k === id ? clone_transform(target) : rigid_map(t, Qd, pP, target.position)]));
+  return { transforms, group: null };
 }
 
 // ------------------------------------------------------------------------------------------------ drag lifecycle (§3.5)
@@ -423,6 +512,8 @@ interface UnitGesture<S, A> {
   live: boolean;
   axis: Axis;
   c_locals: Map<string, Vec3>;
+  /** D85: the world pivot of a part's subtree drag, fixed at pointer-down (null: the M11 per-object pivots). */
+  pivot: Vec3 | null;
   /** The candidate of the last move not yet applied by stage A (null when none). */
   pending: UnitPose | null;
   /** The pose stage A last ran on in this gesture (`pose0` at first). */
@@ -459,11 +550,15 @@ export class UnitDrag<S, A> {
   }
 
   /** Pointer-down: a new gesture (any running one is forgotten without a restore). `c_locals`: the local pivots of a
-   * single object (unused for a group, which turns about its frame's `c`). */
+   * single object (unused for a group, which turns about its frame's `c`). D85 `pivot`: the world point a part's
+   * subtree turns about (the part's world joint or `c_w` at `pose0`, copied here and never re-read; null or absent:
+   * the M11 per-object path). */
   begin(pose0: UnitPose, scene0: S, A0: A, seq: number,
-    opts: { live?: boolean; axis?: Axis; c_locals?: ReadonlyMap<string, readonly number[]> } = {}): void {
+    opts: { live?: boolean; axis?: Axis; c_locals?: ReadonlyMap<string, readonly number[]>; pivot?: readonly number[] | null } = {}): void {
     const c_locals = new Map<string, Vec3>([...(opts.c_locals ?? new Map<string, readonly number[]>())].map(([id, c]) => [id, [c[0]!, c[1]!, c[2]!]]));
-    this.g = { pose0: clone_pose(pose0), scene0, A0, seq, live: opts.live ?? true, axis: opts.axis ?? 2, c_locals, pending: null,
+    const pv = opts.pivot ?? null;
+    const pivot: Vec3 | null = pv === null ? null : [pv[0]!, pv[1]!, pv[2]!];
+    this.g = { pose0: clone_pose(pose0), scene0, A0, seq, live: opts.live ?? true, axis: opts.axis ?? 2, c_locals, pivot, pending: null,
       applied: clone_pose(pose0) };
   }
 
@@ -472,7 +567,7 @@ export class UnitDrag<S, A> {
   move(theta_deg: number): UnitPose | null {
     const g = this.g;
     if (g === null) return null;
-    g.pending = rotate_unit(g.pose0, g.axis, theta_deg, g.c_locals);
+    g.pending = rotate_unit(g.pose0, g.axis, theta_deg, g.c_locals, g.pivot);
     return clone_pose(g.pending);
   }
 

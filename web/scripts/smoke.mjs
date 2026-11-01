@@ -56,7 +56,14 @@
 // part after part focus takes the focus, an ungrouped object selects as in D83; the group's rings are larger and a
 // real drag on them turns every member; rotate_group keeps c, the camera block, the rig and scene_block, changes every
 // member and not the ungrouped object, and undo restores the SVG byte for byte; the fields and 還原此物體 act on the
-// whole group (an unedited 套用 records no step); 點選物體 puts the pivot on the group's c; Download scene keeps the group keys. Prints one JSON record.
+// whole group (an unedited 套用 records no step); 點選物體 puts the pivot on the group's c; Download scene keeps the group keys.
+// D85 (linked parts, the fixture web/test/fixtures/basic_linked.json): object_links() gives the expected forest; real
+// clicks on the arm select the group, then the arm with 「帶動 1 個部件」, its rings centred on its world joint (「關節 j_w」);
+// rotate_object and a real z-ring drag on the arm move the arm and the flag (stage-A vertices, both panes' 3D matrices)
+// with the flag's pose relative to the arm kept and nothing else moved, one undo step each, undo byte-identical; a turned
+// mast carries its subtree; the carried-only lamp has no 落地 and nothing to restore; 還原此物體 puts the arm back
+// relative to the turned mast with the flag carried; an unedited 套用 records no step; 落地 on the tilted root lifts its
+// whole subtree; Download scene keeps parent / joint and reloads to the same links and world joints. Prints one JSON record.
 // Exit 1 on a page error or a failed check.
 import { execSync } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
@@ -1644,6 +1651,215 @@ const objrot = {};
     await frames2();
     await frames2();
     check((await sel()) === null && JSON.stringify((await api("object_groups")).units) === "{}", "D84: loading basic replaces the groups and clears the selection");
+  }
+  {
+    // D85: linked parts. The fixture (web/test/fixtures/basic_linked.json) is group g = base → mast → {arm → flag, lamp}
+    // with each part's joint in its local frame (the lamp has none) plus an ungrouped post. Real clicks on the arm run
+    // whole → part, its line counts the carried flag and its rings sit on its world joint; a rotation of the arm carries
+    // the flag (stage-A vertices and 3D matrices) and nothing else, with the camera, the group frame and undo as D84; a
+    // real z-ring drag is one step; 還原此物體 of the arm after its parent turned puts it back relative to the mast with
+    // the flag carried (a carried-only part has nothing to restore); an unedited 套用 is no step; 落地 is hidden for a
+    // part with a parent and lifts a root part's whole subtree; Download scene keeps the keys and reloads to the same
+    // links and world joints; loading basic clears the links.
+    const ob = await page.locator("#observer").boundingBox();
+    const text = readFileSync(join(ROOT, "web", "test", "fixtures", "basic_linked.json"), "utf-8");
+    const loaded = await page.evaluate((t) => window.castplane_web.load_text("basic_linked", t), text);
+    await frames2();
+    await frames2();
+    const d85 = (objrot.d85 = {});
+    const ALL = ["base", "mast", "arm", "flag", "lamp", "post"];
+    const sel = () => api("selection");
+    const click_px = (id) => page.evaluate((id) => {
+      const w = window.castplane_web, c = w.objects_px?.[id];
+      if (!c) return null;
+      for (let k = 0; k < 225; k++) {
+        const x = c[0] + ((k % 15) - 7) * 3, y = c[1] + (Math.floor(k / 15) - 7) * 3;
+        if (w.hit_at(x, y) === null && w.pick_at(x, y) === id) return [x, y];
+      }
+      return null;
+    }, id);
+    /** A real click on object `id` (a point that is on the object and on no handle); false when none was found. */
+    const click_on = async (id) => {
+      const p = await click_px(id);
+      if (p === null) return false;
+      await page.mouse.click(ob.x + p[0], ob.y + p[1]);
+      await frames2();
+      await frames2();
+      return true;
+    };
+    const mats = async (ids) => Object.fromEntries(await Promise.all(ids.map(async (id) => [id, await api("object_matrices", id)])));
+    /** The pose of `d` in the frame of `q` from their column-major 3D matrices: `R_qᵀR_d` and `R_qᵀ(p_d − p_q)` (12 numbers). */
+    const rel = (q, d) => {
+      const R = (e, i, j) => e[j * 4 + i], p = (e, i) => e[12 + i], out = [];
+      for (let i = 0; i < 3; i++) for (let j = 0; j < 3; j++) out.push(R(q, 0, i) * R(d, 0, j) + R(q, 1, i) * R(d, 1, j) + R(q, 2, i) * R(d, 2, j));
+      for (let i = 0; i < 3; i++) out.push(R(q, 0, i) * (p(d, 0) - p(q, 0)) + R(q, 1, i) * (p(d, 1) - p(q, 1)) + R(q, 2, i) * (p(d, 2) - p(q, 2)));
+      return out;
+    };
+    const dmax = (a, b) => Math.max(...a.map((x, i) => Math.abs(x - b[i])));
+    const rel_now = async (q, d) => { const m = await mats([q, d]); return rel(m[q].view, m[d].view); };
+    const restore_disabled = () => page.evaluate(() => document.getElementById("obj-restore").disabled);
+    // the forest of the fixture
+    const links = await api("object_links");
+    const expected_links = {
+      links: { base: { joint: [0, 0, 0] }, mast: { parent: "base", joint: [0, 0, 0] }, arm: { parent: "mast", joint: [-0.3, 0, 0] },
+        flag: { parent: "arm", joint: [0, 0, 0] }, lamp: { parent: "mast" } },
+      parent: { mast: "base", arm: "mast", flag: "arm", lamp: "mast" },
+      children: { base: ["mast"], mast: ["arm", "lamp"], arm: ["flag"] },
+    };
+    const desc = await Promise.all([...ALL, "nope"].map((id) => api("descendants", id)));
+    d85.load = { loaded, links, desc };
+    check(loaded && JSON.stringify(links) === JSON.stringify(expected_links) && (await sel()) === null,
+      `D85: the linked fixture loads with the expected forest and no selection (${JSON.stringify(links)})`);
+    check(JSON.stringify(desc) === JSON.stringify([["mast", "arm", "flag", "lamp"], ["arm", "flag", "lamp"], ["flag"], [], [], [], null]),
+      `D85: descendants in preorder, siblings in scene order (${JSON.stringify(desc)})`);
+    // real clicks: the whole group, then the arm as a part; its rings are centred on its world joint (the mast's top)
+    const c1 = await click_on("arm");
+    const s1 = await sel();
+    const c2 = await click_on("arm");
+    const s2 = await sel();
+    const r2 = await get("rotate"), rings = await get("object_rings_px");
+    const jw0 = await api("object_joint", "arm");
+    const jpx = await api("world_px", jw0);
+    d85.click = { c1, c2, s1, s2, text: r2.selected_text, centre: r2.centre, rings_centre: rings?.centre ?? null, jpx, jw0 };
+    check(c1 && c2 && s1?.kind === "group" && s1.group === "g" && s2?.kind === "part" && s2.id === "arm" && s2.group === "g"
+      && r2.selected_text === "已選：arm（g 的部件，帶動 1 個部件）",
+    `D85: real clicks on the arm select the group, then the arm with the count of the parts it carries (${JSON.stringify(d85.click)})`);
+    check(rings?.id === "arm" && jpx !== null && Math.hypot(rings.centre[0] - jpx[0], rings.centre[1] - jpx[1]) <= 1
+      && jw0 !== null && near(jw0[0], 2, 1e-12) && near(jw0[1], 4, 1e-12) && near(jw0[2], 1.3, 1e-12)
+      && r2.centre === "關節 j_w = (2.000, 4.000, 1.300) m" && r2.ground_shown === false,
+    `D85: the arm's rings are centred on its world joint, the readout names the joint, 落地 is hidden (${JSON.stringify(d85.click)})`);
+    // rotate_object on the arm: the arm and the flag move (vertices, 3D matrices in both panes), nothing else does
+    const e0 = await env(), v0 = await verts(ALL), m0 = await mats(ALL), svg0 = await get("svg"), u0 = await undo_size();
+    const gc0 = await api("group_centre", "g"), gr0 = await api("group_rotation", "g");
+    const rel_af0 = rel(m0.arm.view, m0.flag.view), rel_ma0 = rel(m0.mast.view, m0.arm.view), rel_ml0 = rel(m0.mast.view, m0.lamp.view);
+    const ta = await api("rotate_object", "arm", 0, 25);
+    await frames2();
+    const e1 = await env(), v1 = await verts(ALL), m1 = await mats(ALL), svg1 = await get("svg");
+    const gc1 = await api("group_centre", "g"), gr1 = await api("group_rotation", "g"), jw1 = await api("object_joint", "arm");
+    const still = (v, m, id) => v[id] === v0[id] && JSON.stringify(m[id]) === JSON.stringify(m0[id]);
+    const moved = (v, m, id) => v[id] !== v0[id] && JSON.stringify(m[id].view) !== JSON.stringify(m0[id].view);
+    d85.rotate = { ta, jw1, rel_af: dmax(rel(m1.arm.view, m1.flag.view), rel_af0) };
+    check(ta !== null && moved(v1, m1, "arm") && moved(v1, m1, "flag") && ["base", "mast", "lamp", "post"].every((id) => still(v1, m1, id)),
+      "D85: rotate_object on the arm moves the arm and the flag (stage-A vertices, 3D matrices), not the base, mast, lamp or post");
+    check(ALL.every((id) => m1[id]?.view != null && JSON.stringify(m1[id].view) === JSON.stringify(m1[id].observer)),
+      "D85: the drawing pane's and the observer's 3D matrices agree for every object");
+    check(d85.rotate.rel_af <= 1e-9 && jw1 !== null && jw1.every((x, i) => near(x, jw0[i], 1e-9)),
+      `D85: the flag keeps its pose relative to the arm and the arm's joint stays on the mast (${JSON.stringify(d85.rotate)})`);
+    check(JSON.stringify(e1) === JSON.stringify(e0) && JSON.stringify(gc1) === JSON.stringify(gc0) && JSON.stringify(gr1) === JSON.stringify(gr0)
+      && svg1 !== svg0 && await undo_size() === u0 + 1, "D85: the camera, the rig, the group's c and rotation unchanged; the drawing changes; one undo step");
+    await page.click("#undo");
+    await frames2();
+    check(await get("svg") === svg0 && JSON.stringify(await verts(ALL)) === JSON.stringify(v0) && JSON.stringify(await mats(ALL)) === JSON.stringify(m0)
+      && await undo_size() === u0, "D85: undo restores the arm and the flag, the SVG byte for byte");
+    // a real drag on the arm's z ring (the ring point whose screen tangent is the most along the drag): one step
+    const zr = await page.evaluate(() => {
+      const w = window.castplane_web, r = w.object_rings_px;
+      if (r === null) return null;
+      const [W, H] = r.size, ring = r.rings[2], n = ring.length;
+      let best = null, score = -1;
+      for (let k = 0; k < n; k++) {
+        const q = ring[k], a = ring[(k + n - 1) % n], b = ring[(k + 1) % n];
+        if (q === null || a === null || b === null || q[0] < 80 || q[0] > W - 80 || q[1] < 80 || q[1] > H - 80) continue;
+        const hit = w.hit_at(q[0], q[1]);
+        if (hit === null || hit.kind !== "object_ring" || hit.axis !== 2) continue;
+        const tx = b[0] - a[0], ty = b[1] - a[1], s = Math.abs(tx * 8 + ty * 5) / (Math.hypot(tx, ty) || 1);
+        if (s > score) {
+          score = s;
+          best = q;
+        }
+      }
+      return best;
+    });
+    if (zr !== null) await drag(6, "#observer", [8, 5], zr);
+    const v2 = await verts(ALL), m2 = await mats(ALL), s3 = await sel();
+    d85.ring_drag = { zr, rel_af: dmax(rel(m2.arm.view, m2.flag.view), rel_af0), undo: await undo_size() - u0 };
+    check(zr !== null && moved(v2, m2, "arm") && moved(v2, m2, "flag") && ["base", "mast", "lamp", "post"].every((id) => still(v2, m2, id))
+      && d85.ring_drag.rel_af <= 1e-9 && d85.ring_drag.undo === 1 && s3?.kind === "part" && s3.id === "arm",
+    `D85: a real drag on the arm's z ring turns the arm and the flag with it (one undo step, selection kept) (${JSON.stringify(d85.ring_drag)})`);
+    // the parent turns (the subtree is carried); the carried-only lamp has nothing to restore and no 落地
+    await api("rotate_object", "mast", 1, 20);
+    await frames2();
+    const v3 = await verts(ALL), m3 = await mats(ALL);
+    d85.mast = { rel_ma: dmax(rel(m3.mast.view, m3.arm.view), rel(m2.mast.view, m2.arm.view)), rel_ml: dmax(rel(m3.mast.view, m3.lamp.view), rel_ml0),
+      rel_af: dmax(rel(m3.arm.view, m3.flag.view), rel_af0), undo: await undo_size() - u0 };
+    check(["mast", "arm", "flag", "lamp"].every((id) => moved(v3, m3, id)) && still(v3, m3, "base") && still(v3, m3, "post")
+      && d85.mast.rel_ma <= 1e-9 && d85.mast.rel_ml <= 1e-9 && d85.mast.rel_af <= 1e-9 && d85.mast.undo === 2,
+    `D85: rotate_object on the mast carries the arm, the flag and the lamp rigidly, the base stays (${JSON.stringify(d85.mast)})`);
+    await api("select_object", "lamp");
+    await frames2();
+    const rl = await get("rotate");
+    d85.lamp = { text: rl.selected_text, centre: rl.centre, ground_shown: rl.ground_shown, restore_disabled: await restore_disabled() };
+    check(rl.selected_text === "已選：lamp（g 的部件）" && rl.centre.startsWith("中心 c_w = ") && !rl.ground_shown && d85.lamp.restore_disabled,
+      `D85: the carried-only lamp (no joint, no children): D84 line, 中心 c_w readout, no 落地, nothing to restore (${JSON.stringify(d85.lamp)})`);
+    // 還原此物體 of the arm: back to its load pose relative to the turned mast, the flag carried
+    await api("select_object", "arm");
+    await frames2();
+    const rd0 = await restore_disabled();
+    await page.click("#obj-restore");
+    await frames2();
+    const v4 = await verts(ALL), m4 = await mats(ALL);
+    d85.restore = { enabled_before: !rd0, rel_ma: dmax(rel(m4.mast.view, m4.arm.view), rel_ma0), rel_af: dmax(rel(m4.arm.view, m4.flag.view), rel_af0),
+      disabled_after: await restore_disabled(), undo: await undo_size() - u0 };
+    check(!rd0 && d85.restore.rel_ma <= 1e-9 && d85.restore.rel_af <= 1e-9 && moved(v4, m4, "arm") && ["base", "post"].every((id) => still(v4, m4, id))
+      && ["mast", "lamp"].every((id) => v4[id] === v3[id]) && d85.restore.disabled_after && d85.restore.undo === 3,
+    `D85: 還原此物體 puts the arm back relative to the turned mast with the flag carried (one undo step) (${JSON.stringify(d85.restore)})`);
+    // an unedited 套用 on a part with descendants is no step and moves nothing (G4)
+    await page.click("#obj-apply");
+    await frames2();
+    check(await undo_size() === u0 + 3 && JSON.stringify(await verts(ALL)) === JSON.stringify(v4),
+      "D85: an unedited 套用 on the arm records no undo step and keeps the arm and the flag");
+    for (let k = 0; k < 3; k++) {
+      await page.click("#undo");
+      await frames2();
+    }
+    check(await get("svg") === svg0 && JSON.stringify(await verts(ALL)) === JSON.stringify(v0) && await undo_size() === u0,
+      "D85: three undos (還原, the mast, the ring drag) restore the SVG byte for byte");
+    // 落地 of the root part: tilted through its joint the base goes below the ground; 落地 lifts its whole subtree
+    const rb = await api("rotate_object", "base", 0, 25);
+    await frames2();
+    const below = (await warning_codes()).includes("OBJECT_BELOW_RECEIVER");
+    await api("select_object", "base");
+    await frames2();
+    const rgb = await get("rotate");
+    const m5 = await mats(ALL);
+    await page.click("#obj-ground");
+    await frames2();
+    const m6 = await mats(ALL), codes6 = await warning_codes();
+    const lift = m6.base.view[14] - m5.base.view[14];
+    d85.ground = { rb: rb !== null, below, text: rgb.selected_text, shown: rgb.ground_shown, lift, codes6 };
+    check(rb !== null && below && rgb.ground_shown && rgb.selected_text === "已選：base（g 的部件，帶動 4 個部件）" && !codes6.includes("OBJECT_BELOW_RECEIVER")
+      && lift > 0 && ["mast", "arm", "flag", "lamp"].every((id) => near(m6[id].view[14] - m5[id].view[14], lift, 1e-12)
+        && JSON.stringify(m6[id].view.slice(0, 12)) === JSON.stringify(m5[id].view.slice(0, 12))) && still(await verts(ALL), m6, "post"),
+    `D85: 落地 on the tilted root part lifts its whole subtree by one translation (warning gone) (${JSON.stringify(d85.ground)})`);
+    await page.click("#undo");
+    await frames2();
+    await page.click("#undo");
+    await frames2();
+    check(await get("svg") === svg0 && await undo_size() === u0, "D85: two undos (落地, the base) restore the SVG byte for byte");
+    // Download scene at a moved pose keeps the keys; the reloaded file gives the same links and world joints
+    await api("rotate_object", "arm", 2, 15);
+    await frames2();
+    const joints0 = await Promise.all(ALL.map((id) => api("object_joint", id)));
+    const [dl] = await Promise.all([page.waitForEvent("download"), page.click("#dl-scene")]);
+    const path = join(outdir, "d85_basic_linked.scene.json");
+    await dl.saveAs(path);
+    const saved_text = readFileSync(path, "utf-8"), saved = JSON.parse(saved_text), raw = JSON.parse(text);
+    const keys = (objs) => objs.map((o) => [o.id, o.parent ?? null, o.joint ?? null]);
+    d85.download = keys(saved.objects);
+    check(JSON.stringify(keys(saved.objects)) === JSON.stringify(keys(raw.objects))
+      && JSON.stringify(saved.objects.map((o) => o.group ?? null)) === JSON.stringify(raw.objects.map((o) => o.group ?? null)),
+    `D85: Download scene writes the parent and joint keys verbatim (${JSON.stringify(d85.download)})`);
+    const reloaded = await page.evaluate((t) => window.castplane_web.load_text("basic_linked_dl", t), saved_text);
+    await frames2();
+    const links_r = await api("object_links"), joints_r = await Promise.all(ALL.map((id) => api("object_joint", id)));
+    d85.reload = { reloaded, joints0, joints_r };
+    check(reloaded && JSON.stringify(links_r) === JSON.stringify(links) && JSON.stringify(joints_r) === JSON.stringify(joints0),
+      `D85: the downloaded scene reloads with the same links and world joints (${JSON.stringify(d85.reload)})`);
+    await page.evaluate(() => window.castplane_web.load_example("basic"));
+    await frames2();
+    await frames2();
+    check(JSON.stringify(await api("object_links")) === JSON.stringify({ links: {}, parent: {}, children: {} })
+      && JSON.stringify(await api("descendants", "crate")) === "[]" && (await sel()) === null, "D85: loading basic clears the links");
   }
   {
     // the panel: a bad field turns red and changes nothing; numeric entry; 還原此物體
