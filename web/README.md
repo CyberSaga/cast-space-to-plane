@@ -105,21 +105,28 @@ drag):
   Until the first change after a load or 重設, the core renders the scene's own camera, so the document and the
   downloads equal the CLI's. From then on it renders the rig's explicit `picture_plane` block (`position` plus
   `picture_plane {normal, offset[, up]}`; `up` only when not lock-horizontal or roll ≠ 0).
-- **Rotate one object** (M11, contract §5.8, spec-v0.3, D82; `src/object_rotate.ts`, `PlaneSession.update_scene`). The
-  toolbar toggle *轉動物體* (`aria-pressed`, off by default) turns the observer pane into an object editor; the camera,
-  the board (rig, pivot `P`, plane), the eye, the lights and the receivers never change, only the selected object's
-  `transform` does. Web only: the core, the port and the conformance set are untouched, and an unrotated scene renders
+- **Rotate one object** (M11, contract §5.8, spec-v0.3, D82, D83; `src/object_rotate.ts`, `PlaneSession.update_scene`).
+  Modeless (D83): there is no toggle; clicking an object in the observer pane selects it and its rings appear next to
+  the board's handles. The camera, the board (rig, pivot `P`, plane), the eye, the lights and the receivers never
+  change, only the selected object's `transform` does. Web only: the core, the port and the conformance set are untouched, and an unrotated scene renders
   byte-identically to before.
-  - With the toggle on, the observer pane's hit order is object ring > object (a click of less than 5 px selects it)
-    > empty space (orbits the observer camera). The board's orange ring and blue arrow are hidden and disabled, and the
-    *點選物體* pivot pick is paused; turning the toggle off restores them and hides the object rings.
+  - The observer pane's hit order on pointer-down is the selected object's rings > the board's arrow tip > its orange
+    ring > object (a click of less than 5 px selects it; with the pivot set to *點選物體* the same click also picks it
+    as the pivot) > empty space (a drag orbits the observer camera, a click clears the selection and hides the rings).
+    Nothing is selected after a load, also in a single-object scene. The hover cursor covers the object rings too.
+  - The *板子* checkbox (next to *視線*, on by default) hides, in the observer pane only, the board group (eye, board
+    patch, frame with the drawing, frustum, principal point, `D` and `g` lines, pivot marker, the orange ring and the
+    blue arrow) and its labels; the board's handles are then not hit-tested, so a press there orbits or clicks. The
+    object rings and the *視線* rays stay; the drawing pane, the outputs, the camera block, undo and *整體顯示* are
+    unchanged; it is not an undo step and not stored in the scene. A change while a board-handle drag is held is
+    ignored.
   - The selected object gets three rings around its pivot `c_w` (the centre of its **local** bounding box, which does
     not move while it rotates): x red, y green, z blue, about the world axes. Dragging a ring turns the object by the
     total pointer displacement (0.32°/px, snapped to 15° with *吸附*, Alt suspends it) and stage A re-runs live, at most
     once per frame, so the shadow and the drawing follow the drag. The object's `position` changes with the rotation so
     that `c_w` stays put.
-  - The panel's *物體* section: the object dropdown (kept in sync with a click in the observer pane; a scene with one
-    object preselects it), the `rx` `ry` `rz` fields in degrees with *套用* (or Enter; angles typed into several
+  - The panel's *物體* section: the object dropdown (kept in sync with a click in the observer pane; "—" clears the
+    selection), the `rx` `ry` `rz` fields in degrees with *套用* (or Enter; angles typed into several
     fields apply together, Esc drops them; a field that is not a finite number turns red and keeps its value),
     *還原此物體* (back to the load-time transform), *落地* (shown only when `receivers[0]` is an unbounded plane: moves
     the object along its normal until the lowest vertex touches it) and the `c_w` readout. Angles are shown to 0.1° in
@@ -134,7 +141,8 @@ drag):
     failed recompute keeps the committed pose and shows 核心重算失敗，請回報.
   - *Download scene* writes the rotated `transform` (full doubles), so `castplane render` of the file reproduces the
     drawing. Hooks for the smoke test: `castplane_web.rotate_object`, `set_object_rotation`, `select_object`,
-    `set_rotate_mode`, `object_transform`, `object_vertices`, `object_centre`.
+    `object_transform`, `object_vertices`, `object_centre`, `rotate` (selection and panel state), `object_rings_px`,
+    `pick_at(x, y)` (the object a click there selects), `set_board_visible(on)` and `board_visible()` (D83).
 - **Overlay** (`src/overlay.ts`): an `<svg>` over the canvas with the same CSS box and `viewBox`. On each
   animation frame where something changed, the frame runs `project_scene` → `compose` → `write_svg` (all six
   layers) against the cached stage A. Pointer events only update the state and at most one core render runs per
@@ -181,7 +189,7 @@ drag):
   scene's camera clamped into 0.5–12 m), the frame on it (the canvas rectangle unprojected with the core's
   `unproject_to_plane`) with the current drawing laid on it 0.012 m towards the eye, the frustum (dotted on to 1.9×),
   the principal point `Q`, the `D` line, the pivot (the orbit target) with the `g` line (`g = R − D`), the plane's
-  equation, and with *視線* (default on) the vertex rays of the first object: sight lines `E → P` with their crossings
+  equation (all hidden with the *板子* checkbox off, D83), and with *視線* (default on) the vertex rays of the first object: sight lines `E → P` with their crossings
   `P′` on the board, the light rays `L → S` of its vertices, the sight lines `E → S` and their crossings `S′`. The
   drawing on the frame follows the layer checkboxes; SVG arcs are drawn with 32 segments, ellipses with 72. Every
   drawing-camera change (handle drag, sliders, views, equation, example load, 重設) updates it in the same frame. In the

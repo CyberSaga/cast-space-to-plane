@@ -61,11 +61,12 @@ export interface Controls {
   observerControls: HTMLSpanElement;
   observerFrame: HTMLButtonElement;
   observerRays: HTMLInputElement;
+  /** D83 (contract §5.6 note): the left pane's 「板子」 checkbox (hides the observer's board group and its labels). */
+  observerBoard: HTMLInputElement;
   observerPane: HTMLElement;
   observerCanvas: HTMLCanvasElement;
   observerLabels: HTMLDivElement;
-  /** M11 (contract §5.8.4): the 轉動物體 toggle and the panel's 物體 section. */
-  rotateMode: HTMLButtonElement;
+  /** M11 (contract §5.8.4; D83: modeless, no toggle): the panel's 物體 section. */
   objectSelect: HTMLSelectElement;
   objectFields: [HTMLInputElement, HTMLInputElement, HTMLInputElement];
   objectApply: HTMLButtonElement;
@@ -113,10 +114,10 @@ export function controls(): Controls {
     observerControls: $<HTMLSpanElement>("observer-controls"),
     observerFrame: $<HTMLButtonElement>("observer-frame"),
     observerRays: $<HTMLInputElement>("observer-rays"),
+    observerBoard: $<HTMLInputElement>("observer-board"),
     observerPane: $<HTMLElement>("observer"),
     observerCanvas: $<HTMLCanvasElement>("obs-gl"),
     observerLabels: $<HTMLDivElement>("obs-labels"),
-    rotateMode: $<HTMLButtonElement>("rotate-mode"),
     objectSelect: $<HTMLSelectElement>("obj-select"),
     objectFields: [$<HTMLInputElement>("obj-rx"), $<HTMLInputElement>("obj-ry"), $<HTMLInputElement>("obj-rz")],
     objectApply: $<HTMLButtonElement>("obj-apply"),

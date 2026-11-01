@@ -651,7 +651,8 @@ export function handles_of(rig: RigState, frame_mm: readonly number[]): Handles 
 export type HandleHit = { kind: "arrow" } | { kind: "ring"; index: number } | { kind: "object_ring"; axis: 0 | 1 | 2; index: number }
   | null;
 
-/** M11 (contract §5.8.4): the three rings of the selected object in rotate mode (x, y, z; closed polylines). */
+/** M11 (contract §5.8.4): the three rings of the selected object (x, y, z; closed polylines; D83: whenever an object is
+ * selected). */
 export interface ObjectRingSet {
   id: string;
   centre: Vec3;
@@ -677,8 +678,9 @@ function nearest_ring_point(px: readonly (Vec2 | null)[], p: Vec2, tol: number):
 /**
  * The handle hit test of the observer pane (§5.7.9, spec-v0.2 §3): the arrow tip within the hit radius (14 px mouse,
  * 26 px touch) wins over the ring (within 0.8 × the radius of one of its segments). The eye is never returned: it is
- * not a handle (D72), so a drag on it is an observer orbit. M11 (§5.8.4): in rotate mode the board's handles are
- * null and the object rings are tested instead, with the ring rule (0.8 × the radius; the nearest of the three wins).
+ * not a handle (D72), so a drag on it is an observer orbit. M11 (§5.8.4) and D83 (modeless): the selected object's
+ * rings are tested first, with the ring rule (0.8 × the radius; the nearest of the three wins), and win over both board
+ * handles; only when none is hit are the board's handles tested (`h` is null while the board is hidden).
  */
 export function hit_handles(basis: { pos: Vec3; r: Vec3; u: Vec3; f: Vec3 }, W: number, H: number, p: Vec2, touch: boolean,
   h: Handles | null, object_rings: ObjectRingSet | null = null): HandleHit {

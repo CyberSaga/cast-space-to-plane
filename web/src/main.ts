@@ -95,12 +95,14 @@ interface State {
   /** M10: the last equation error (the field turns red with it), null when none. */
   equation_error: string | null;
   /** M11 (contract §5.8): the scene and stage-A record as loaded (the 3D groups' geometry; 還原此物體), stage A's time
-   * at load (the slow-scene rule), the rotate mode and the selected object, and whether the error panel shows a failed
-   * stage-A recompute. */
+   * at load (the slow-scene rule), the selected object (D83: modeless; its rings are drawn whenever it is set), and
+   * whether the error panel shows a failed stage-A recompute. */
   loaded: { scene: Scene; A: StageA } | null;
   load_stage_a_ms: number;
-  rotate: { on: boolean; id: string | null };
+  rotate: { id: string | null };
   object_error: boolean;
+  /** D83: the left pane's 「板子」 checkbox (page-level, not an undo step, not stored in the scene). */
+  board_visible: boolean;
 }
 
 const state: State = {
@@ -123,8 +125,9 @@ const state: State = {
   equation_error: null,
   loaded: null,
   load_stage_a_ms: 0,
-  rotate: { on: false, id: null },
+  rotate: { id: null },
   object_error: false,
+  board_visible: true,
 };
 
 const ui = controls();
@@ -201,8 +204,8 @@ function load(name: string, make: () => Scene, colours: Map<string, number>): bo
     vertices: A.vertices,
     object_poses: scene.objects.map((o) => ({ id: o.id, transform: o.transform, vertices: records.get(o.id)?.mesh.vertices ?? [] })),
   });
-  // M11: the object selection (the only object is preselected); the rotate mode is page-level and kept
-  state.rotate.id = scene.objects.length === 1 ? scene.objects[0]!.id : null;
+  // D83: a load clears the object selection (none is preselected, also for a single-object scene)
+  state.rotate.id = null;
   fill_object_select(ui.objectSelect, scene.objects.map((o) => o.id));
   state.obs.needs_framing = true;
   // a drag held across the load (keyboard on the examples menu, a drop) belongs to the old scene: drop it
@@ -273,12 +276,8 @@ function sync_controls(): void {
   ui.undo.disabled = !pl.undo.canUndo || state.dragging || state.handle !== null;
 }
 
-/** The hint for an object pivot not yet picked: in rotate mode (§5.8.4) the pivot's click is suspended, so the hint says
- * to switch the mode off first. */
+/** The hint for an object pivot not yet picked (D83: modeless, the click on an object picks the pivot and selects it). */
 function pivot_hint(): string {
-  if (state.rotate.on) {
-    return state.obs.on ? "轉動模式中暫停點選旋轉中心；關閉「轉動物體」後再點左窗的物體（目前暫用場景中心）" : "按「返回編輯」並關閉「轉動物體」後點一下左窗的物體，把它設為旋轉中心（目前暫用場景中心）";
-  }
   return state.obs.on ? "請點一下左窗的物體，把它設為旋轉中心（目前暫用場景中心）" : "按「返回編輯」後點一下左窗的物體，把它設為旋轉中心（目前暫用場景中心）";
 }
 
@@ -430,13 +429,9 @@ const handle_input: HandleInput = {
   hit: (p, touch): HandleHit => {
     const o = obs_frame();
     if (o === null || observer === null || state.plane === null || state.dragging) return null;
-    // M11 (§5.8.4): in rotate mode only the object rings are handles (the board's are hidden and disabled)
-    if (state.rotate.on) {
-      const rings = observer.last_object_rings;
-      return rings === null ? null : hit_handles(o.basis, o.W, o.H, p, touch, null, rings);
-    }
-    const h = observer.last_handles;
-    return h === null ? null : hit_handles(o.basis, o.W, o.H, p, touch, h);
+    // D83 (modeless): the selected object's rings > the board's arrow tip > its ring; the board's handles are null
+    // while 「板子」 is unchecked, the rings null without a selection
+    return hit_handles(o.basis, o.W, o.H, p, touch, observer.last_handles, observer.last_object_rings);
   },
   begin: (hit) => {
     const pl = state.plane, o = obs_frame();
@@ -502,15 +497,11 @@ const handle_input: HandleInput = {
   click: (p) => {
     const pl = state.plane;
     if (pl === null || observer === null) return;
-    if (state.rotate.on) {
-      // §5.8.4: in rotate mode a click selects the object to rotate; the pivot's 「點選物體」 is suspended
-      const id = observer.pick_object(p);
-      if (id !== null) select_object(id);
-      return;
-    }
-    if (pl.pivot.mode !== "object") return;
+    // D83 (modeless): a click on an object selects it (its rings appear) and, with 旋轉中心 = 點選物體, also picks it as
+    // the pivot (§5.7.8 item 10); a click on blank space clears the selection (the pivot is kept)
     const id = observer.pick_object(p);
-    if (id !== null) after_action(pl.pick_object(id));
+    if (id !== null && pl.pivot.mode === "object") after_action(pl.pick_object(id));
+    select_object(id);
   },
 };
 
@@ -699,7 +690,7 @@ function ground_object(id: string): boolean {
   return object_action(id, ground_transform(t, dmin, n));
 }
 
-/** Select the object to rotate (the dropdown, a click in rotate mode, the hook); null clears the selection. */
+/** Select the object to rotate (the dropdown, a click in the left pane, the hook); null clears the selection. */
 function select_object(id: string | null): void {
   if (id !== null && object_in(state.scene, id) === undefined) return;
   if (state.dragging || state.handle !== null) return;
@@ -708,16 +699,7 @@ function select_object(id: string | null): void {
   request_render();
 }
 
-/** The 轉動物體 toggle (§5.8.4): not an undo step, not stored. Ignored during a gesture. */
-function set_rotate_mode(on: boolean): void {
-  if (on === state.rotate.on || state.dragging || state.handle !== null) return;
-  state.rotate.on = on;
-  sync_object_panel();
-  sync_controls(); // the pivot hint depends on the mode
-  request_render();
-}
-
-/** The selected object's three rings in rotate mode (null without a selection). */
+/** The selected object's three rings (null without a selection; D83: drawn whenever an object is selected). */
 function object_rings_now(): ObjectRings | null {
   const id = state.rotate.id, pl = state.plane, t = current_transform(id);
   const c = id === null ? undefined : pl?.local_centres.get(id), hd = id === null ? undefined : pl?.local_half_diagonals.get(id);
@@ -742,7 +724,6 @@ function blur_object_field(): void {
  */
 function sync_object_panel(force = false): void {
   const scene = state.scene, pl = state.plane, id = state.rotate.id, t = current_transform(id);
-  ui.rotateMode.setAttribute("aria-pressed", state.rotate.on ? "true" : "false");
   if (ui.objectSelect.value !== (id ?? "")) ui.objectSelect.value = id ?? "";
   ui.objectFields.forEach((el, i) => {
     el.disabled = t === null;
@@ -763,7 +744,6 @@ function sync_object_panel(force = false): void {
   ui.objectNotice.textContent = scene !== null && slow_scene() ? NOTICE_SLOW_SCENE : "";
 }
 
-ui.rotateMode.addEventListener("click", () => set_rotate_mode(!state.rotate.on));
 ui.objectSelect.addEventListener("change", () => select_object(ui.objectSelect.value === "" ? null : ui.objectSelect.value));
 // 「套用」 does not take the focus: a red field keeps its caret for the correction
 ui.objectApply.addEventListener("mousedown", (ev) => ev.preventDefault());
@@ -819,16 +799,18 @@ function update_observer(rec: CameraRecord, doc: GeometryDocument): number {
   const board = derive_board(rec, { target: rig.P, distance: d.R }, rig.D);
   const art = line_art(doc, rec, rig.D, state.layersChecked);
   const rays = ui.observerRays.checked ? vertex_rays(doc, state.scene, board, rec.near) : null;
+  const shown = state.board_visible;
   if (state.obs.needs_framing && !state.dragging) {
     observer.view = frame_view(observer.view, framing_points(board, state.scene, pl.scene.centre), observer.aspect);
     state.obs.needs_framing = false;
   }
-  // M11 (§5.8.4): in rotate mode the board's handles are hidden (null) and the selected object's rings drawn
-  const hd = state.handle, rot = state.rotate.on;
-  observer.update({ board, art, rays, handles: rot ? null : handles_of(rig, state.scene.camera.frame_mm),
+  // D83: the board's handles and the selected object's rings are drawn together (modeless); 「板子」 unchecked hides the
+  // board group and its labels and passes no board handles (not hit-tested, not hover-highlighted)
+  const hd = state.handle;
+  observer.update({ board, art, rays, board_visible: shown, handles: shown ? handles_of(rig, state.scene.camera.frame_mm) : null,
     pivot_id: pl.pivot.mode === "object" ? pl.pivot.object_id : null,
     active: hd?.kind === "ring" || hd?.kind === "arrow" ? hd.kind : null,
-    object_rings: rot ? object_rings_now() : null, active_axis: hd?.kind === "object" ? hd.axis : null });
+    object_rings: object_rings_now(), active_axis: hd?.kind === "object" ? hd.axis : null });
   observer.render();
   return performance.now() - t0;
 }
@@ -890,6 +872,24 @@ ui.observerFrame.addEventListener("click", () => {
   observer_refresh(true);
 });
 ui.observerRays.addEventListener("change", () => observer_refresh(true));
+
+/** D83: the left pane's 「板子」 checkbox. Left pane only: the drawing pane, the outputs, the camera, undo and framing
+ * are unchanged; not an undo step, not stored in the scene. A change while a board-handle drag is held is ignored
+ * (the checkbox goes back), so the held board never disappears under the pointer; an object-ring drag allows it. */
+function set_board_visible(on: boolean): void {
+  const hd = state.handle;
+  if (hd?.kind === "ring" || hd?.kind === "arrow") {
+    ui.observerBoard.checked = state.board_visible;
+    return;
+  }
+  ui.observerBoard.checked = on;
+  if (on === state.board_visible) return;
+  state.board_visible = on;
+  ui.observerPane.classList.remove("on-handle"); // the hover state is re-computed on the next mouse move
+  observer_refresh(true);
+}
+ui.observerBoard.checked = state.board_visible;
+ui.observerBoard.addEventListener("change", () => set_board_visible(ui.observerBoard.checked));
 
 // ---------------------------------------------------------------------------- render loop
 let rafPending = false;
@@ -1017,6 +1017,8 @@ function frame(): void {
   },
   /** M10: the observer's handle hit test at pane px `(x, y)` (mouse radius). */
   hit_at: (x: number, y: number) => handle_input.hit([x, y], false),
+  /** D83: the object a click at pane px `(x, y)` would select (the observer's ray pick), or null (blank space). */
+  pick_at: (x: number, y: number) => observer?.pick_object([x, y]) ?? null,
   /** M10: the equation field's state. */
   get equation_field() { return { value: ui.equation.value, error: state.equation_error, bad: ui.equation.classList.contains("bad") }; },
   get svg_length() { return state.svg.length; },
@@ -1045,7 +1047,8 @@ function frame(): void {
     const px = b === null ? null : { corners: b.corners.map((c) => observer_project(observer!.view, W, H, c)),
       E: observer_project(observer.view, W, H, b.E) };
     return { on: state.obs.on, D: state.plane?.rig.D ?? null, view: observer.view, labels: observer.label_texts, names,
-      art_objects: count("art"), ms: state.obs.ms, size: [W, H], px };
+      art_objects: count("art"), ms: state.obs.ms, size: [W, H], px, board_shown: observer.board_shown,
+      labels_shown: [...ui.observerLabels.querySelectorAll<HTMLElement>(".obs-label")].filter((e) => !e.hidden).length };
   },
   /** M9: the "整體顯示" button. */
   frame_observer: () => ui.observerFrame.click(),
@@ -1095,13 +1098,21 @@ function frame(): void {
   },
   /** M11: the numeric fields' action for object `id` (exact Euler angles, the pivot fixed): one undo step. */
   set_object_rotation: (id: string, r: [number, number, number]) => apply_object_rotation(id, r),
-  /** M11: select the object to rotate (the dropdown / a click in rotate mode); null clears it. */
+  /** M11: select the object to rotate (the dropdown / a click in the left pane); null clears it. */
   select_object: (id: string | null) => select_object(id),
-  /** M11: switch the 轉動物體 mode as its toggle would. */
-  set_rotate_mode: (on: boolean) => set_rotate_mode(on),
-  /** M11: the rotate mode, the selection, the slow-scene flag and the panel's state. */
+  /** D83: set the left pane's 「板子」 checkbox as a user would (fires its change handler); returns the resulting state. */
+  set_board_visible: (on: boolean) => {
+    if (ui.observerBoard.checked !== on) {
+      ui.observerBoard.checked = on;
+      ui.observerBoard.dispatchEvent(new Event("change"));
+    }
+    return state.board_visible;
+  },
+  /** D83: whether the observer's board is shown (the 「板子」 checkbox). */
+  board_visible: () => state.board_visible,
+  /** M11 / D83: the selection, the slow-scene flag and the panel's state (no mode: the rotation is modeless). */
   get rotate() {
-    return { on: state.rotate.on, id: state.rotate.id, slow: slow_scene(), pressed: ui.rotateMode.getAttribute("aria-pressed"),
+    return { id: state.rotate.id, slow: slow_scene(),
       fields: ui.objectFields.map((el) => ({ value: el.value, bad: el.classList.contains("bad") })),
       ground_shown: !ui.objectGround.hidden, centre: ui.objectCentre.textContent, notice: ui.objectNotice.textContent };
   },

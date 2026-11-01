@@ -2,7 +2,8 @@
  * The observer pane of M9 (contract §5.6.3–§5.6.5): a second {@link Stage3D} on its own canvas showing the scene
  * (`scene3d.ts`, the same builder as the drawing pane), plus the board group built from the pure arrays of
  * `observer.ts` (eye, board patch, frame with the drawing on it, frustum, principal point, D and g lines, pivot,
- * vertex rays) and HTML labels. Its camera is an ordinary `THREE.PerspectiveCamera` (40° vertical field of view) set
+ * vertex rays) and HTML labels. D83: the vertex rays and the object rings live in a second group, so the 「板子」
+ * checkbox can hide the board group and its labels while they stay. Its camera is an ordinary `THREE.PerspectiveCamera` (40° vertical field of view) set
  * from {@link observer_basis}; left drag orbits it, the wheel and a two-finger pinch zoom it. Nothing here changes the
  * drawing camera, the document or the SVG (read-only, §5.6.0).
  */
@@ -39,10 +40,13 @@ export interface ObserverGeometry {
   pivot_id?: string | null;
   /** M10: the handle being dragged (drawn thicker). */
   active?: "ring" | "arrow" | null;
-  /** M11 (§5.8.4): the selected object's three rings in rotate mode (the board's `handles` are null then), or null. */
+  /** M11 (§5.8.4): the selected object's three rings (D83: drawn with the board's handles, modeless), or null. */
   object_rings?: ObjectRingSet | null;
   /** M11: the axis of the object ring being dragged (drawn thicker). */
   active_axis?: 0 | 1 | 2 | null;
+  /** D83: whether the board group (eye, patch, frame with the drawing, frustum, Q, D and g lines, pivot, the board's
+   * handles) and its labels are drawn (default true); the rays and the object rings are drawn either way. */
+  board_visible?: boolean;
 }
 
 /**
@@ -155,6 +159,8 @@ export class ObserverPane {
   readonly camera: THREE.PerspectiveCamera;
   view: ObserverView = initial_view();
   private readonly board = new THREE.Group();
+  /** D83: the vertex rays and the object rings (not hidden by the 「板子」 checkbox). */
+  private readonly extras = new THREE.Group();
   private readonly lineMats = new Map<string, LineMaterial>();
   private readonly dotMats = new Map<string, THREE.PointsMaterial>();
   private readonly fillMats = new Map<string, THREE.MeshBasicMaterial>();
@@ -171,7 +177,8 @@ export class ObserverPane {
     this.stage.scene3.background = new THREE.Color(0xf3f2ec);
     this.camera = new THREE.PerspectiveCamera(OBSERVER_FOV_DEG, 1, OBSERVER_NEAR_M, OBSERVER_FAR_M);
     this.board.name = "observer-board";
-    this.stage.scene3.add(this.board);
+    this.extras.name = "observer-extras";
+    this.stage.scene3.add(this.board, this.extras);
   }
 
   /** Show `scene` (a second build of the `scene3d` group: three.js objects belong to one scene each). Its receiver
@@ -216,9 +223,14 @@ export class ObserverPane {
     return this.W / this.H;
   }
 
-  /** The names of the board group's children (smoke test). */
+  /** The names of the board group's children, then the rays' and object rings' (smoke test). */
   get names(): string[] {
-    return this.board.children.map((c) => c.name);
+    return [...this.board.children, ...this.extras.children].map((c) => c.name);
+  }
+
+  /** D83: whether the board group is shown (the 「板子」 checkbox; smoke test). */
+  get board_shown(): boolean {
+    return this.board.visible;
   }
 
   /** The current label texts (smoke test). */
@@ -240,7 +252,7 @@ export class ObserverPane {
     return m;
   }
 
-  private add_lines(name: string, key: string, spec: LineSpec, pairs: readonly (readonly [Vec3, Vec3])[]): void {
+  private add_lines(name: string, key: string, spec: LineSpec, pairs: readonly (readonly [Vec3, Vec3])[], group = this.board): void {
     if (pairs.length === 0) return;
     const g = new LineSegmentsGeometry();
     g.setPositions(flat(pairs));
@@ -248,10 +260,10 @@ export class ObserverPane {
     if (spec.dash !== undefined) line.computeLineDistances();
     line.name = name;
     line.renderOrder = spec.order;
-    this.board.add(line);
+    group.add(line);
   }
 
-  private add_dots(name: string, spec: DotSpec, pts: readonly Vec3[]): void {
+  private add_dots(name: string, spec: DotSpec, pts: readonly Vec3[], group = this.board): void {
     if (pts.length === 0) return;
     let m = this.dotMats.get(name);
     if (m === undefined) {
@@ -264,7 +276,7 @@ export class ObserverPane {
     const pointsObj = new THREE.Points(g, m);
     pointsObj.name = name;
     pointsObj.renderOrder = 10;
-    this.board.add(pointsObj);
+    group.add(pointsObj);
   }
 
   private fill_mat(key: string, color: number, opacity: number): THREE.MeshBasicMaterial {
@@ -291,12 +303,43 @@ export class ObserverPane {
 
   /** Rebuild the board group from one frame's geometry (the materials are kept). */
   update(geo: ObserverGeometry): void {
-    for (const c of [...this.board.children]) {
-      this.board.remove(c);
-      (c as THREE.Mesh).geometry.dispose();
+    for (const g of [this.board, this.extras]) {
+      for (const c of [...g.children]) {
+        g.remove(c);
+        (c as THREE.Mesh).geometry.dispose();
+      }
     }
     const b = geo.board;
     this.boardNow = b;
+    const shown = geo.board_visible ?? true;
+    this.board.visible = shown;
+    // vertex rays (D83: in the extras group, shown with or without the board)
+    const r = geo.rays;
+    if (r !== null) {
+      const x = this.extras;
+      this.add_lines("rays:sight", "sight", HELPER_LINES.sight, r.sight, x);
+      this.add_lines("rays:light", "light", HELPER_LINES.light, r.light, x);
+      this.add_lines("rays:shadow-sight", "shadow_sight", HELPER_LINES.shadow_sight, r.shadow_sight, x);
+      this.add_dots("dots:crossing", DOTS.crossing, r.crossings, x);
+      this.add_dots("dots:shadow", DOTS.shadow, r.shadows, x);
+      this.add_dots("dots:shadow-crossing", DOTS.shadow_crossing, r.shadow_crossings, x);
+    }
+    // M11 object rings (§5.8.4): one closed polyline per world axis around the object's pivot (D83: extras group)
+    const orings = geo.object_rings ?? null;
+    this.objectRingsNow = orings;
+    if (orings !== null) {
+      orings.rings.forEach((ring, axis) => {
+        const key = `object_ring_${axis}${geo.active_axis === axis ? "_active" : ""}` as keyof typeof HELPER_LINES;
+        this.add_lines(`object-ring:${"xyz"[axis]}`, key, HELPER_LINES[key], ring.map((p, i) => [p, ring[(i + 1) % ring.length]!] as [Vec3, Vec3]),
+          this.extras);
+      });
+    }
+    if (!shown) {
+      // D83: 「板子」 unchecked: no board group, no board handles (the caller passes none), no labels
+      this.handlesNow = null;
+      this.labels = [];
+      return;
+    }
     const loop = (pts: readonly Vec3[]): [Vec3, Vec3][] => pts.map((p, i) => [p, pts[(i + 1) % pts.length]!]);
     const square: [number, number][] = [[-1, -1], [1, -1], [1, 1], [-1, 1]];
     // board patch and frame (back-filled), then the drawing on the frame
@@ -328,16 +371,6 @@ export class ObserverPane {
     this.add_lines("frustum:far", "frustum_far", HELPER_LINES.frustum_far, fr.dotted);
     this.add_lines("d-line", "d_line", HELPER_LINES.d_line, [[b.E, b.Q]]);
     this.add_lines("g-line", "g_line", HELPER_LINES.g_line, [[b.Q, b.P]]);
-    // vertex rays
-    const r = geo.rays;
-    if (r !== null) {
-      this.add_lines("rays:sight", "sight", HELPER_LINES.sight, r.sight);
-      this.add_lines("rays:light", "light", HELPER_LINES.light, r.light);
-      this.add_lines("rays:shadow-sight", "shadow_sight", HELPER_LINES.shadow_sight, r.shadow_sight);
-      this.add_dots("dots:crossing", DOTS.crossing, r.crossings);
-      this.add_dots("dots:shadow", DOTS.shadow, r.shadows);
-      this.add_dots("dots:shadow-crossing", DOTS.shadow_crossing, r.shadow_crossings);
-    }
     this.add_dots("dots:Q", DOTS.Q, [b.Q]);
     this.add_dots("dots:pivot", DOTS.pivot, [b.P]);
     this.add_dots("dots:E", DOTS.E, [b.E]);
@@ -352,24 +385,15 @@ export class ObserverPane {
         [[h.Q, h.tip], ...arrow_head(h.Q, h.tip, b.r)]);
       this.add_dots("handle:tip", DOTS.tip, [h.tip]);
     }
-    // M11 object rings (§5.8.4): one closed polyline per world axis around the object's pivot
-    const orings = geo.object_rings ?? null;
-    this.objectRingsNow = orings;
-    if (orings !== null) {
-      orings.rings.forEach((ring, axis) => {
-        const key = `object_ring_${axis}${geo.active_axis === axis ? "_active" : ""}` as keyof typeof HELPER_LINES;
-        this.add_lines(`object-ring:${"xyz"[axis]}`, key, HELPER_LINES[key], ring.map((p, i) => [p, ring[(i + 1) % ring.length]!] as [Vec3, Vec3]));
-      });
-    }
     this.labels = board_labels(b, { pivot_id: geo.pivot_id ?? null, ...(h !== null ? { tip: h.tip } : {}) });
   }
 
-  /** The handles of the last update (null without handles). */
+  /** The handles of the last update (null without handles, D83 also while the board is hidden). */
   get last_handles(): Handles | null {
     return this.handlesNow;
   }
 
-  /** M11: the object rings of the last update (null outside rotate mode or with no object selected). */
+  /** M11: the object rings of the last update (null with no object selected). */
   get last_object_rings(): ObjectRingSet | null {
     return this.objectRingsNow;
   }

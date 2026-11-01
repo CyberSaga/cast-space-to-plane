@@ -42,12 +42,16 @@
 // 20° keep the camera block, the rig and scene_block, keep the other objects' stage-A vertices value for value and
 // change the rotated one's (pivot fixed); undo gives the byte-identical SVG; the downloaded rotated scene rendered by
 // the Python CLI equals download_texts().svg; the x rotation reports OBJECT_BELOW_RECEIVER and 落地 clears it; a ring
-// drag records drag frames and live stage-A runs; the board's handles_px is null in rotate mode and back after it; a
+// drag records drag frames and live stage-A runs; a
 // pointerdown → one move → pointerup with no frame in between commits (one undo step); a second finger cancels (pose,
 // vertices, SVG and undo as before the press); a bad numeric field turns red and changes nothing; the numeric fields,
 // 還原此物體 and the panel in 預覽 work; angles typed into several fields apply together (套用, or Tab and Enter), Escape
-// drops them, a drag with a focused field refreshes it, the object-pivot hint names rotate mode, and 復原 is off while a
-// board or ring drag is held. Prints one JSON record. Exit 1 on a page error or a failed check.
+// drops them, a drag with a focused field refreshes it, and 復原 is off while a board or ring drag is held. D83
+// (modeless): no selection after a load (also with one object); a real click on an object selects it with no mode
+// button, its rings drawn with the board's handles (hover shows the pointer), a blank click clears it, 點選物體 + a click
+// also picks the pivot; the 「板子」 checkbox hides the observer's board group, its labels and handles (not hit) with the
+// page SVG, overlay and downloads byte-identical, a click still selects and a ring drag still rotates, and a change
+// during a held board-ring drag is ignored. Prints one JSON record. Exit 1 on a page error or a failed check.
 import { execSync } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { createRequire } from "node:module";
@@ -1133,17 +1137,46 @@ const objrot = {};
       && await undo_size() === u0, "M11: undo restores the pose, the vertices and the byte-identical SVG");
   }
   {
-    // rotate mode: the board's handles are null, the object rings are drawn; a ring drag with frames is live
-    const h_before = await get("handles_px");
-    await page.click("#rotate-mode");
-    await api("select_object", "crate");
-    await frames2();
-    await frames2();
+    // D83 (modeless): no selection after load; a real click on an object selects it (no mode button) and its rings are
+    // drawn together with the board's handles; a ring drag with frames is live; a click on blank space clears it
+    const ob = await page.locator("#observer").boundingBox();
+    /** Pane px where a click lands on object `id` (not on a handle), or null. */
+    const click_px = (id) => page.evaluate((id) => {
+      const w = window.castplane_web, c = w.objects_px?.[id];
+      if (!c) return null;
+      for (let k = 0; k < 81; k++) {
+        const x = c[0] + ((k % 9) - 4) * 4, y = c[1] + (Math.floor(k / 9) - 4) * 4;
+        if (w.hit_at(x, y) === null && w.pick_at(x, y) === id) return [x, y];
+      }
+      return null;
+    }, id);
+    /** Pane px of blank space: no handle and no object under it. */
+    const blank_px = () => page.evaluate(() => {
+      const w = window.castplane_web, [W, H] = w.observer.size;
+      for (let k = 0; k < 400; k++) {
+        const x = 20 + (k % 20) * (W - 40) / 19, y = 20 + Math.floor(k / 20) * (H - 40) / 19;
+        if (w.hit_at(x, y) === null && w.pick_at(x, y) === null) return [x, y];
+      }
+      return null;
+    });
+    const sel0 = await get("rotate");
+    check(sel0.id === null && await get("object_rings_px") === null && await page.evaluate(() => document.getElementById("obj-select").value) === ""
+      && await page.evaluate(() => document.getElementById("rotate-mode")) === null,
+    `D83: basic loads with no selection and there is no 轉動物體 button (${JSON.stringify(sel0.id)})`);
+    const cp = await click_px("crate");
+    check(cp !== null, "D83: a clickable point on the crate");
+    if (cp !== null) {
+      await page.mouse.click(ob.x + cp[0], ob.y + cp[1]);
+      await frames2();
+      await frames2();
+    }
     const rot = await get("rotate");
-    check(rot.on && rot.pressed === "true" && rot.id === "crate" && await get("handles_px") === null && h_before !== null,
-      "M11: in rotate mode the board's handles_px is null");
     const names = (await get("observer")).names;
-    check(["object-ring:x", "object-ring:y", "object-ring:z"].every((n) => names.includes(n)), "M11: the three object rings are drawn");
+    check(rot.id === "crate" && await get("object_rings_px") !== null && await get("handles_px") !== null
+      && await page.evaluate(() => document.getElementById("obj-select").value) === "crate",
+    "D83: a real click on the crate selects it (dropdown synced); its rings and the board's handles are both drawn");
+    check(["object-ring:x", "object-ring:y", "object-ring:z", "handle:ring", "handle:arrow"].every((n) => names.includes(n)),
+      "D83: the three object rings and the board's ring and arrow are drawn together");
     /** A hit-testable point of the selected object's ring `axis` with room around it (pane px), or null. */
     const ring_point = (axis, touch = false) => page.evaluate(([axis, touch]) => {
       const r = window.castplane_web.object_rings_px;
@@ -1156,7 +1189,14 @@ const objrot = {};
       }
       return null;
     }, [axis, touch]);
-    const ob = await page.locator("#observer").boundingBox();
+    // hovering an object ring shows the pointer cursor (the on-handle state covers the object rings)
+    const qh = await ring_point(2);
+    if (qh !== null) {
+      await page.mouse.move(ob.x + qh[0], ob.y + qh[1]);
+      await frames2();
+      const cur = await page.evaluate(([x, y]) => getComputedStyle(document.elementFromPoint(x, y)).cursor, [ob.x + qh[0], ob.y + qh[1]]);
+      check(cur === "pointer", `D83: hovering an object ring shows the pointer cursor (${cur})`);
+    }
     const q = await ring_point(2);
     check(q !== null, "M11: a z-ring point is hit-testable");
     if (q !== null) {
@@ -1179,7 +1219,7 @@ const objrot = {};
       check(fr.filter((f) => f.dragging).length >= 3 && mid.stage_a_runs >= runs0 + 3 && typeof mid.stage_a_ms === "number",
         `M11: a ring drag records drag frames with live stage-A runs (${JSON.stringify(objrot.drag)})`);
       check(JSON.stringify(t1) !== JSON.stringify(t0) && t1.rotation_deg[0] === t0.rotation_deg[0] && t1.rotation_deg[1] === t0.rotation_deg[1]
-        && await undo_size() === u0 + 1, "M11: the z-ring drag turns rz only, one undo step");
+        && await undo_size() === u0 + 1, "M11: the z-ring drag (no mode button) turns rz only, one undo step");
       check(undo_held && !(await page.evaluate(() => document.getElementById("undo").disabled)), "M11: 復原 is off while a ring drag is held, on after it");
       await page.click("#undo");
       await frames2();
@@ -1233,21 +1273,157 @@ const objrot = {};
       check(JSON.stringify(t1) === JSON.stringify(t0) && JSON.stringify(await verts(["crate"])) === JSON.stringify(v0)
         && await get("svg") === svg0 && await undo_size() === u0, "M11: a second finger cancels (pose, vertices, SVG, undo as before)");
     } else check(false, "M11: a ring point for the touch drag");
-    // a click on the pillar in rotate mode selects it (the pivot is not picked)
+    // with 旋轉中心 = 場景中心 a click on the pillar selects it and leaves the pivot alone
     const pivot0 = (await get("rig")).pivot;
-    const objs = await get("objects_px");
-    if (objs.pillar !== null) {
-      await page.mouse.click(ob.x + objs.pillar[0], ob.y + objs.pillar[1]);
+    const pp = await click_px("pillar");
+    check(pp !== null, "D83: a clickable point on the pillar");
+    if (pp !== null) {
+      await page.mouse.click(ob.x + pp[0], ob.y + pp[1]);
       await frames2();
       const r = await get("rotate");
       check(r.id === "pillar" && JSON.stringify((await get("rig")).pivot) === JSON.stringify(pivot0)
         && await page.evaluate(() => document.getElementById("obj-select").value) === "pillar",
-      "M11: a click in rotate mode selects the object (dropdown synced), the pivot unchanged");
+      "D83: a click on the pillar selects it (dropdown synced); the scene-centre pivot unchanged");
     }
-    await page.click("#rotate-mode");
+    // with 旋轉中心 = 點選物體 the same click also picks the pivot (no undo step)
+    await page.selectOption("#pivot-mode", "object");
+    await frames2();
+    const u_p = await undo_size();
+    const cp2 = await click_px("crate");
+    if (cp2 !== null) {
+      await page.mouse.click(ob.x + cp2[0], ob.y + cp2[1]);
+      await frames2();
+      await frames2();
+    }
+    const rp = await get("rig"), sp = await get("rotate");
+    objrot.pivot_click = { pivot: rp.pivot, selected: sp.id };
+    check(cp2 !== null && rp.pivot.mode === "object" && rp.pivot.object_id === "crate" && sp.id === "crate" && rp.undo === u_p,
+      `D83: pivot 點選物體 + a click on the crate sets the pivot and selects it (${JSON.stringify(objrot.pivot_click)})`);
+    await page.selectOption("#pivot-mode", "scene");
+    await frames2();
+    // a click on blank space clears the selection (rings gone, dropdown "—"); the board's handles stay
+    const bp = await blank_px();
+    check(bp !== null, "D83: a blank point in the observer pane");
+    if (bp !== null) {
+      await page.mouse.click(ob.x + bp[0], ob.y + bp[1]);
+      await frames2();
+      await frames2();
+    }
+    check((await get("rotate")).id === null && await get("object_rings_px") === null && await get("handles_px") !== null
+      && await page.evaluate(() => document.getElementById("obj-select").value) === ""
+      && !(await get("observer")).names.includes("object-ring:x"),
+    "D83: a click on blank space clears the selection (rings gone), the board's handles stay");
+  }
+  {
+    // D83: the left pane's 「板子」 checkbox hides the board group and its labels there only; the page SVG is unchanged;
+    // the board handles are not hit; a click on an object still selects it; object rings stay usable
+    const ob = await page.locator("#observer").boundingBox();
+    const h0 = await get("handles_px"), o0 = await get("observer");
+    const svg0 = await get("svg"), dl0 = await api("download_texts"), cam0 = JSON.stringify(await get("camera")), u0 = await undo_size();
+    const overlay0 = await page.evaluate(() => document.querySelector("svg.overlay")?.outerHTML ?? null);
+    check(o0.board_shown && o0.labels_shown > 0 && await page.evaluate(() => document.getElementById("observer-board").checked),
+      "D83: 板子 is checked by default, the board and its labels shown");
+    await page.click("#observer-board");
     await frames2();
     await frames2();
-    check(await get("handles_px") !== null && !(await get("rotate")).on, "M11: the board's handles return when rotate mode is off");
+    const o1 = await get("observer");
+    const tip_hit = await page.evaluate(([x, y]) => window.castplane_web.hit_at(x, y), h0.tip);
+    const ring_q = h0.ring.find((p) => p !== null);
+    const ring_hit = await page.evaluate(([x, y]) => window.castplane_web.hit_at(x, y), ring_q);
+    objrot.board_off = { board_shown: o1.board_shown, labels_shown: o1.labels_shown, names: o1.names, tip_hit, ring_hit };
+    check(!o1.board_shown && o1.labels_shown === 0 && !o1.names.includes("board:frame") && !o1.names.includes("handle:ring")
+      && !o1.names.includes("dots:E") && !(await api("board_visible")), `D83: 板子 unchecked hides the board group and its labels (${JSON.stringify({ shown: o1.board_shown, labels: o1.labels_shown })})`);
+    check(await get("handles_px") === null && tip_hit === null && (ring_hit === null || ring_hit.kind === "object_ring"),
+      `D83: 板子 unchecked: handles_px null, the board's tip and ring are not hit (${JSON.stringify({ tip_hit, ring_hit })})`);
+    check(o1.names.includes("rays:sight") === o0.names.includes("rays:sight"), "D83: the 視線 rays follow their own checkbox");
+    await page.mouse.move(ob.x + h0.tip[0], ob.y + h0.tip[1]);
+    await frames2();
+    const cur = await page.evaluate(([x, y]) => getComputedStyle(document.elementFromPoint(x, y)).cursor, [ob.x + h0.tip[0], ob.y + h0.tip[1]]);
+    check(cur !== "pointer", `D83: the hidden arrow tip is not hover-highlighted (${cur})`);
+    await page.mouse.move(ob.x + 4, ob.y + 4);
+    const overlay1 = await page.evaluate(() => document.querySelector("svg.overlay")?.outerHTML ?? null);
+    check(await get("svg") === svg0 && JSON.stringify(await api("download_texts")) === JSON.stringify(dl0) && overlay1 === overlay0
+      && JSON.stringify(await get("camera")) === cam0 && await undo_size() === u0,
+    "D83: 板子 unchecked: the page SVG, overlay, downloads, camera block and undo are byte-identical");
+    // a real click on an object still selects it, and its rings are drawn and usable
+    const objs = await get("objects_px");
+    let cp = null;
+    if (objs.crate !== null) {
+      cp = await page.evaluate((c) => {
+        const w = window.castplane_web;
+        for (let k = 0; k < 81; k++) {
+          const x = c[0] + ((k % 9) - 4) * 4, y = c[1] + (Math.floor(k / 9) - 4) * 4;
+          if (w.hit_at(x, y) === null && w.pick_at(x, y) === "crate") return [x, y];
+        }
+        return null;
+      }, objs.crate);
+    }
+    if (cp !== null) {
+      await page.mouse.click(ob.x + cp[0], ob.y + cp[1]);
+      await frames2();
+      await frames2();
+    }
+    const o2 = await get("observer");
+    check(cp !== null && (await get("rotate")).id === "crate" && await get("object_rings_px") !== null && o2.names.includes("object-ring:z")
+      && !o2.board_shown && o2.labels_shown === 0, "D83: 板子 unchecked: a real click on the crate selects it, its rings drawn");
+    const t0 = await api("object_transform", "crate");
+    const zr = await page.evaluate(() => {
+      const r = window.castplane_web.object_rings_px, [W, H] = r.size;
+      for (const q of r.rings[2]) {
+        if (q === null || q[0] < 80 || q[0] > W - 80 || q[1] < 80 || q[1] > H - 80) continue;
+        const hit = window.castplane_web.hit_at(q[0], q[1]);
+        if (hit !== null && hit.kind === "object_ring" && hit.axis === 2) return q;
+      }
+      return null;
+    });
+    if (zr !== null) await drag(6, "#observer", [8, 5], zr);
+    check(zr !== null && JSON.stringify(await api("object_transform", "crate")) !== JSON.stringify(t0) && await undo_size() === u0 + 1,
+      "D83: 板子 unchecked: an object-ring drag rotates the crate (one undo step)");
+    await page.click("#undo");
+    await frames2();
+    await page.click("#observer-board");
+    await frames2();
+    await frames2();
+    const o3 = await get("observer");
+    check(o3.board_shown && o3.labels_shown > 0 && await get("handles_px") !== null && await get("svg") === svg0,
+      "D83: 板子 checked again: the board, its labels and handles are back, the SVG unchanged");
+    // a toggle while a board-ring drag is held is ignored (the checkbox stays checked)
+    await api("select_object", null);
+    await frames2();
+    const rq = await ring_px(60);
+    check(rq !== null, "D83: a board-ring point for the held drag");
+    if (rq !== null) {
+      await page.mouse.move(ob.x + rq[0], ob.y + rq[1]);
+      await page.mouse.down();
+      await page.mouse.move(ob.x + rq[0] + 20, ob.y + rq[1] + 4);
+      await frames2();
+      const res = await api("set_board_visible", false);
+      const held = { res, checked: await page.evaluate(() => document.getElementById("observer-board").checked),
+        shown: (await get("observer")).board_shown };
+      await page.mouse.up();
+      await frames2();
+      objrot.board_toggle_held = held;
+      check(held.res === true && held.checked && held.shown && await api("board_visible"),
+        `D83: a 板子 change during a held board-ring drag is ignored (${JSON.stringify(held)})`);
+      await page.click("#undo");
+      await frames2();
+    }
+  }
+  {
+    // D83: no selection after a load, also for a single-object scene
+    const data = JSON.parse(readFileSync(join(ROOT, "examples", "basic.json"), "utf-8"));
+    data.objects = data.objects.filter((o) => o.id === "crate");
+    await api("select_object", "crate");
+    await page.evaluate((t) => window.castplane_web.load_text("basic_single", t), JSON.stringify(data));
+    await frames2();
+    await frames2();
+    const single = { id: (await get("rotate")).id, rings: await get("object_rings_px"), select: await page.evaluate(() => document.getElementById("obj-select").value),
+      options: await page.evaluate(() => document.getElementById("obj-select").options.length) };
+    check(single.id === null && single.rings === null && single.select === "" && single.options === 2,
+      `D83: a single-object scene loads with no selection (${JSON.stringify(single)})`);
+    await page.evaluate(() => window.castplane_web.load_example("basic"));
+    await frames2();
+    await frames2();
   }
   {
     // the panel: a bad field turns red and changes nothing; numeric entry; 還原此物體
@@ -1317,18 +1493,15 @@ const objrot = {};
       `M11: a drag with the rx field focused refreshes the fields (${JSON.stringify(objrot.focused_drag)})`);
     await page.click("#undo");
     await frames2();
-    // the pivot hint in rotate mode names the suspended click (the click selects the object to rotate there)
+    // D83: the object-pivot hint asks for a click on an object (no mode to switch off); the API has no set_rotate_mode
     await page.selectOption("#pivot-mode", "object");
-    await api("set_rotate_mode", true);
     await frames2();
-    const hint_on = await page.evaluate(() => document.getElementById("notices").textContent);
-    await api("set_rotate_mode", false);
-    await frames2();
-    const hint_off = await page.evaluate(() => document.getElementById("notices").textContent);
+    const hint = await page.evaluate(() => document.getElementById("notices").textContent);
+    const no_mode = await page.evaluate(() => !("set_rotate_mode" in window.castplane_web) && !("on" in window.castplane_web.rotate));
     await page.selectOption("#pivot-mode", "scene");
     await frames2();
-    check(hint_on.includes("轉動模式中暫停點選旋轉中心") && !hint_on.includes("請點一下左窗的物體") && hint_off.includes("請點一下左窗的物體"),
-      "M11: the object-pivot hint in rotate mode says to switch the mode off first");
+    check(hint.includes("請點一下左窗的物體") && !hint.includes("轉動物體") && no_mode,
+      `D83: the object-pivot hint names no mode and the hooks have no rotate mode (${hint})`);
     // 預覽: the observer is hidden, the panel still works
     await page.evaluate(() => window.castplane_web.set_preview(true));
     await frames2();

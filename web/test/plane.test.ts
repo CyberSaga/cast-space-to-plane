@@ -31,7 +31,7 @@ import {
 } from "../src/rig.js";
 import type { RigState } from "../src/rig.js";
 import { LAYERS_OFF_AT_START, initial_toggles } from "../src/toggles.js";
-import { clone_transform, rotate_about_world_axis } from "../src/object_rotate.js";
+import { clone_transform, object_rings, rotate_about_world_axis } from "../src/object_rotate.js";
 import { OBJECT_ID_KEY, RECEIVER_ID_KEY, object_id_of } from "../src/helpers3d.js";
 import type { TaggedNode } from "../src/helpers3d.js";
 
@@ -425,6 +425,35 @@ test("hit test: arrow tip > ring (0.8 × radius); touch radius 26 px; the eye is
   const h2 = handles_of(s2.rig, BASIC.scene.camera.frame_mm);
   const tip2 = observer_project(VIEW, W, H, h2.tip)!;
   assert.deepEqual(hit_handles(basis, W, H, tip2, true, h2), { kind: "arrow" });
+});
+
+test("D83 hit order (modeless): object rings > arrow tip > board ring, with both present; board hidden: rings only", () => {
+  const s = session();
+  const h = handles_of(s.rig, BASIC.scene.camera.frame_mm);
+  const basis = observer_basis(VIEW);
+  const px = (X: readonly number[]): Vec2 => observer_project_with(basis, W, H, X)!;
+  // object rings of radius 0.3 m whose z ring (index 0) and y ring (index 18) pass exactly through the arrow tip
+  const c: Vec3 = [h.tip[0] - 0.3, h.tip[1], h.tip[2]];
+  const rings = object_rings("crate", c, 0.3);
+  const tip = px(h.tip);
+  assert.deepEqual(hit_handles(basis, W, H, tip, false, h), { kind: "arrow" }, "board handles alone: the arrow");
+  const both = hit_handles(basis, W, H, tip, false, h, rings);
+  assert.equal(both?.kind, "object_ring", "an object ring wins over the arrow tip it overlaps");
+  // a board-ring point away from the object rings: the board ring is still hit with the object rings present
+  const far = h.ring.findIndex((X) => {
+    const q = px(X);
+    return Math.hypot(q[0] - tip[0], q[1] - tip[1]) > 120 && hit_handles(basis, W, H, q, true, null, rings) === null;
+  });
+  assert.ok(far >= 0, "a board-ring point far from the object rings");
+  assert.equal(hit_handles(basis, W, H, px(h.ring[far]!), false, h, rings)?.kind, "ring");
+  // the board hidden (h = null): the object rings are hit, the board's tip and ring are not
+  assert.equal(hit_handles(basis, W, H, tip, false, null, rings)?.kind, "object_ring");
+  assert.equal(hit_handles(basis, W, H, px(h.ring[far]!), false, null, rings), null);
+  // a ring point's hit names its axis and grabbed index
+  const z5 = px(rings.rings[2][5]!);
+  const hz = hit_handles(basis, W, H, z5, false, h, rings);
+  assert.ok(hz !== null && hz.kind === "object_ring");
+  assert.equal(hit_handles(basis, W, H, z5, false, h, null)?.kind === "object_ring", false, "no rings: never an object ring");
 });
 
 test("left-pane drags: ring and arrow mappings from the pointer-down state (the eye moves rigidly / along f)", () => {
