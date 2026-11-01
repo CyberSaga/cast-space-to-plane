@@ -3,8 +3,8 @@
 ## Unreleased — the 花菱美希 reference model (tools/make_miki_model.py)
 
 - miki model: `tools/make_miki_model.py` (generator in `tools/miki_model/`, numpy-only geometry, deterministic and independent of the numpy / BLAS build: `meshkit._below_fan` treats planar quads as planar instead of trusting the sign of rounding noise) writes `examples/miki.json` (the ninth example: 18 inline mesh objects, 4469 polygons / 8154 triangles, portrait 24×36 mm frame, sun, layers `objects` + `cast_shadow`, hidden lines on with `omit`, warnings `[]`) and the same model as `examples/meshes/miki.{obj,mtl,glb}`; `examples/README.md` and `docs/USAGE.md` §5 describe it; contract §5.4 implementation notes. No conformance case, warning code or set version changes.
-- `examples/miki.json` carries one `display_color` per object (D81), the dominant material colour of its parts.
-- tests: `tests/test_miki_model.py` (14 tests: the generated files byte for byte, closed oriented shells, castplane takes every object without mesh preprocessing, no warnings, budgets, `display_color` ignored by the core, GLB / OBJ import); `tests/test_ts_port.py` compares nine examples; `web/test/download.test.ts` also runs its mesh test on `miki.json` (114 web tests on this branch).
+- `examples/miki.json` carries one `display_color` per object (D81), the dominant material colour of its parts, and `"group": "miki"` (D84) on all 18 objects, so a click in the observer pane selects the whole figure and a second click the part.
+- tests: `tests/test_miki_model.py` (15 tests: the generated files byte for byte, closed oriented shells, castplane takes every object without mesh preprocessing, no warnings, budgets, `display_color` ignored by the core, GLB / OBJ import); `tests/test_ts_port.py` compares nine examples; `web/test/download.test.ts` also runs its mesh test on `miki.json` (114 web tests on this branch).
 
 ## Unreleased — M11: rotate a single object in the web UI (spec-v0.3; contract §5.8, D82)
 

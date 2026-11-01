@@ -34,8 +34,10 @@ from . import meshkit as mk
 from .assemble import MATERIALS, OBJECTS, display_color
 from .rig import SUN_TOWARDS
 
-__all__ = ["SCENE_SETTINGS", "DESCRIPTION", "scene_dict", "scene_text", "write_scene", "check_scene",
+__all__ = ["SCENE_SETTINGS", "DESCRIPTION", "GROUP", "scene_dict", "scene_text", "write_scene", "check_scene",
            "obj_text", "mtl_text", "write_obj", "glb_bytes", "write_glb", "srgb_to_linear"]
+
+GROUP = "miki"   # web-only `objects[i].group` (D84): all 18 objects are parts of one figure; the core ignores it
 
 DESCRIPTION = (
     "Hanabishi Miki (Hayate the Combat Butler) as a drawing reference: a 1.51 m anime schoolgirl (5.9 heads) in "
@@ -94,9 +96,9 @@ def scene_dict(assembly, description: str = DESCRIPTION) -> dict:
     out = {"description": description}
     for k in ("version", "units", "up"):
         out[k] = s[k]
-    # each object: id, type, display_color (web 3D views only; the core ignores it), data
-    out["objects"] = [{"id": o["id"], "type": o["type"], "display_color": display_color(o["id"]), "data": o["data"]}
-                      for o in assembly.objects()]
+    # each object: id, type, display_color and group (web only; the core ignores both), data
+    out["objects"] = [{"id": o["id"], "type": o["type"], "display_color": display_color(o["id"]), "group": GROUP,
+                       "data": o["data"]} for o in assembly.objects()]
     for k in ("lights", "receivers", "camera", "output"):
         out[k] = s[k]
     return out

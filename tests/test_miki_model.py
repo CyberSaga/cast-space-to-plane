@@ -5,7 +5,7 @@ shipped files promise: the generator reproduces ``examples/miki.json`` and ``exa
 byte for byte (the build is independent of the BLAS kernel and SIMD loops, ``meshkit._below_fan``); every object
 is a closed, consistently oriented manifold that castplane takes without mesh preprocessing warnings; the scene
 camera renders with ``warnings == []`` and the default layers; the polygon / triangle budget and the 64 feature
-silhouette vertices per object hold; ``display_color`` is the web-only colour the core ignores; and the GLB and
+silhouette vertices per object hold; ``display_color`` and ``group`` (D84) are web-only keys the core ignores; and the GLB and
 OBJ import with ``castplane import``.  Object lists come from ``miki_model.assemble`` (no hard-coded counts).
 The model is built once per module (~20 s).
 """
@@ -72,6 +72,7 @@ def _without_display_color(raw: dict) -> dict:
     plain = copy.deepcopy(raw)
     for o in plain["objects"]:
         o.pop("display_color", None)
+        o.pop("group", None)
     return plain
 
 
@@ -161,12 +162,18 @@ def test_every_object_has_its_display_color(raw):
         colour = o["display_color"]
         assert COLOUR.fullmatch(colour), (o["id"], colour)
         assert colour == asm.display_color(o["id"]) == asm.MATERIALS[asm.DISPLAY_MATERIALS[o["id"]]]
-        assert list(o) == ["id", "type", "display_color", "data"]      # deterministic key order
+        assert list(o) == ["id", "type", "display_color", "group", "data"]      # deterministic key order
 
 
-def test_display_color_is_ignored_by_the_core(raw, scene, rendered):
+def test_every_object_is_a_part_of_the_miki_group(raw):
+    # D84: one group with all 18 objects, so a click in the web UI selects the whole figure, a second click the part
+    assert [o["group"] for o in raw["objects"]] == [export.GROUP] * len(asm.OBJECT_IDS)
+    assert export.GROUP == "miki"
+
+
+def test_display_color_and_group_are_ignored_by_the_core(raw, scene, rendered):
     plain = castplane.load_scene(_without_display_color(raw))
-    assert all("display_color" not in o for o in scene["objects"])
+    assert all("display_color" not in o and "group" not in o for o in scene["objects"])
     out = castplane.render(plain)
     assert out["svg"] == rendered["svg"]
     assert dumps(out["geometry"]) == dumps(rendered["geometry"])
