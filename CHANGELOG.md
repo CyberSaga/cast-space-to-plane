@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased — M11: rotate a single object in the web UI (spec-v0.3; contract §5.8, D82)
+
+- m11-web (D82): the toolbar's 轉動物體 toggle turns the observer pane's handles into three world-axis rings (x red, y green, z blue) around the selected object's local bounding-box centre, plus a panel 物體 section (object dropdown, rx / ry / rz fields with 套用, 還原此物體, 落地 for an unbounded `receivers[0]`, the `c_w` readout); the camera, board, eye, lights and receivers stay fixed, stage A re-runs live while dragging through the `ObjectDrag` state machine (`web/src/object_rotate.ts`; scenes whose stage A takes more than `LIVE_STAGE_A_MS` = 150 ms update on release and say so), objects and board share one 50-step undo stack (`PlaneSession.update_scene`, tagged `UndoStack` steps); web only: `castplane/`, `ts/src/` and the conformance set (v8 / 63 cases) are untouched, `web/test/object_rotate.test.ts` and the extended plane / rig tests and `web/scripts/smoke.mjs`, 133 web tests in all. spec-v0.3, contract §5.8, DECISIONS D82.
+
 ## Unreleased — web: display colours (D81), the mesh scene download, a web-path bench
 
 - web (D81): optional `objects[i].display_color` (`"#rrggbb"`) colours the 3D views (`web/src/colours.ts`, `build_scene3d(scene, A?, colours?)`, `ObserverPane.set_scene(scene, A, colours?)`); absent or invalid keeps the palette colour; the core ignores the key (§2.0) so documents, SVG and warnings are unchanged; "Download scene" writes it back. DECISIONS D81, contract §5.4 implementation notes.

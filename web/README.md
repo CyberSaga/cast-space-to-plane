@@ -11,7 +11,7 @@ npm run -w ts build        # the core package "castplane" the UI imports
 npm run -w web dev         # vite dev server
 npm run -w web build       # tsc type check + vite build -> web/dist (static, base './')
 npm run -w web preview     # serve web/dist locally
-npm run -w web test        # orbit / download / colours / rig / equation / observer / plane unit tests (node:test, web/test/; 113 tests)
+npm run -w web test        # orbit / download / colours / rig / equation / observer / plane / object-rotation unit tests (node:test, web/test/; 133 tests)
 ```
 
 ![web UI](../docs/images/web_ui.png)
@@ -63,7 +63,8 @@ drag):
   `castplane_web.load_text` hook) into a `Map` by object id (`display_colours`); malformed entries are skipped silently.
   `PALETTE` moved from `scene3d.ts` to `colours.ts`, its values unchanged.
 - **Modules**: `src/main.ts` keeps the page state, loading, the wiring and the render loop. `src/plane.ts` is plane
-  mode's session (the rig of `src/rig.ts`, undo, pivot, readouts; pure, unit-tested). The drawing pane has no input
+  mode's session (the rig of `src/rig.ts`, undo, pivot, readouts; pure, unit-tested). `src/object_rotate.ts` (pure)
+  holds the object-rotation maths and the `ObjectDrag` state machine (M11, below). The drawing pane has no input
   handler (below). `src/stage.ts` is one three.js view (`Stage3D`, plus `letterbox` for the canvas size), `src/input.ts`
   handles the page-wide file drop, `src/colours.ts` (pure) holds the display colours of the 3D views (above), and `src/ui.ts` drives the controls and the side panel (layer boxes, examples menu,
   sliders, readouts, error panel, warnings table, status line, `save` for downloads). `src/orbit.ts` (the M7 camera)
@@ -104,6 +105,35 @@ drag):
   Until the first change after a load or 重設, the core renders the scene's own camera, so the document and the
   downloads equal the CLI's. From then on it renders the rig's explicit `picture_plane` block (`position` plus
   `picture_plane {normal, offset[, up]}`; `up` only when not lock-horizontal or roll ≠ 0).
+- **Rotate one object** (M11, contract §5.8, spec-v0.3, D82; `src/object_rotate.ts`, `PlaneSession.update_scene`). The
+  toolbar toggle *轉動物體* (`aria-pressed`, off by default) turns the observer pane into an object editor; the camera,
+  the board (rig, pivot `P`, plane), the eye, the lights and the receivers never change, only the selected object's
+  `transform` does. Web only: the core, the port and the conformance set are untouched, and an unrotated scene renders
+  byte-identically to before.
+  - With the toggle on, the observer pane's hit order is object ring > object (a click of less than 5 px selects it)
+    > empty space (orbits the observer camera). The board's orange ring and blue arrow are hidden and disabled, and the
+    *點選物體* pivot pick is paused; turning the toggle off restores them and hides the object rings.
+  - The selected object gets three rings around its pivot `c_w` (the centre of its **local** bounding box, which does
+    not move while it rotates): x red, y green, z blue, about the world axes. Dragging a ring turns the object by the
+    total pointer displacement (0.32°/px, snapped to 15° with *吸附*, Alt suspends it) and stage A re-runs live, at most
+    once per frame, so the shadow and the drawing follow the drag. The object's `position` changes with the rotation so
+    that `c_w` stays put.
+  - The panel's *物體* section: the object dropdown (kept in sync with a click in the observer pane; a scene with one
+    object preselects it), the `rx` `ry` `rz` fields in degrees with *套用* (or Enter; a field that is not a finite
+    number turns red and keeps its value), *還原此物體* (back to the load-time transform), *落地* (shown only when
+    `receivers[0]` is an unbounded plane: moves the object along its normal until the lowest vertex touches it) and the
+    `c_w` readout. Angles are shown to 0.1° in (−180°, 180°] and are not unwrapped (170° plus 30° reads −160°). While
+    previewing (*預覽*) the observer pane is hidden and only the panel works.
+  - A ring drag, a *套用*, a *還原此物體* and a *落地* are one undo step each, in the same 50-step stack as the board
+    (*復原*); *重設* still resets only the board. A drag released at once still commits its last pose, and a second
+    finger cancels the gesture and restores the pressed pose.
+  - Turning about x or y can push the object through the ground: the core clips it and warns `OBJECT_BELOW_RECEIVER`
+    (expected; *落地* puts it back on the ground). A scene whose stage A took more than `LIVE_STAGE_A_MS` = 150 ms at
+    load only moves the 3D proxy while dragging and recomputes on release, with the notice 此場景拖動放開後更新. A
+    failed recompute keeps the committed pose and shows 核心重算失敗，請回報.
+  - *Download scene* writes the rotated `transform` (full doubles), so `castplane render` of the file reproduces the
+    drawing. Hooks for the smoke test: `castplane_web.rotate_object`, `set_object_rotation`, `select_object`,
+    `set_rotate_mode`, `object_transform`, `object_vertices`, `object_centre`.
 - **Overlay** (`src/overlay.ts`): an `<svg>` over the canvas with the same CSS box and `viewBox`. On each
   animation frame where something changed, the frame runs `project_scene` → `compose` → `write_svg` (all six
   layers) against the cached stage A. Pointer events only update the state and at most one core render runs per
