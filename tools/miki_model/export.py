@@ -11,8 +11,8 @@ material of every part (:data:`~miki_model.assemble.MATERIALS`).
   :func:`~miki_model.assemble.display_color`; read only by the web UI's 3D views, ignored by the core), ``group``
   (:data:`GROUP`, D84) and the D85 links ``parent`` (not on the root) and ``joint``
   (:func:`~miki_model.assemble.part_links`; read only by the web UI, which turns a part with its descendants about
-  its joint, ignored by the core); the structure is indented, every ``data`` block is compact on one line.  :func:`check_scene` loads it with
-  ``castplane.load_scene`` (lazy import).
+  its joint, ignored by the core); the structure is indented, every ``data`` block is compact on one line.
+  :func:`check_scene` loads it with ``castplane.load_scene`` (lazy import).
 * :func:`write_obj`: ``mtllib``, one ``o <object>`` per object and a ``usemtl <material>`` per part block
   (castplane's OBJ reader ignores ``usemtl``), ``s`` per smooth group (group ids made unique across objects;
   vertices ordered so that the whole file is also safe as a single castplane mesh).  The MTL has every
