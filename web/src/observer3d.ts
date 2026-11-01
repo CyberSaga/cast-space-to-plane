@@ -18,7 +18,9 @@ import {
   CLICK_PX, OBSERVER_FAR_M, OBSERVER_FOV_DEG, OBSERVER_NEAR_M, board_labels, first_inside, frustum, initial_view, layout_labels,
   observer_accepts_pointer, observer_basis, orbit_view, pinch_view, zoom_view,
 } from "./observer.js";
-import type { Board, BoardLabel, FillStyle, HandleHit, Handles, LineArt, LineStyle, ObserverView, VertexRays } from "./observer.js";
+import type {
+  Board, BoardLabel, FillStyle, HandleHit, Handles, LineArt, LineStyle, ObjectRingSet, ObserverView, VertexRays,
+} from "./observer.js";
 import { OBJECT_ID_KEY, RECEIVER_ID_KEY, object_id_of } from "./helpers3d.js";
 import { build_scene3d } from "./scene3d.js";
 import { Stage3D } from "./stage.js";
@@ -37,6 +39,10 @@ export interface ObserverGeometry {
   pivot_id?: string | null;
   /** M10: the handle being dragged (drawn thicker). */
   active?: "ring" | "arrow" | null;
+  /** M11 (§5.8.4): the selected object's three rings in rotate mode (the board's `handles` are null then), or null. */
+  object_rings?: ObjectRingSet | null;
+  /** M11: the axis of the object ring being dragged (drawn thicker). */
+  active_axis?: 0 | 1 | 2 | null;
 }
 
 /**
@@ -93,6 +99,13 @@ const HELPER_LINES = {
   ring_active: { color: 0xe8730c, width: 4, dash: [0.09, 0.06], order: 7 },
   arrow: { color: 0x1d4ed8, width: 3, order: 7 },
   arrow_active: { color: 0x1d4ed8, width: 5, order: 7 },
+  // M11 object rings (§5.8.4): x red, y green, z blue
+  object_ring_0: { color: 0xd93025, width: 2.4, order: 8 },
+  object_ring_1: { color: 0x1e9e48, width: 2.4, order: 8 },
+  object_ring_2: { color: 0x1f5fd6, width: 2.4, order: 8 },
+  object_ring_0_active: { color: 0xd93025, width: 4.5, order: 8 },
+  object_ring_1_active: { color: 0x1e9e48, width: 4.5, order: 8 },
+  object_ring_2_active: { color: 0x1f5fd6, width: 4.5, order: 8 },
 } satisfies Record<string, LineSpec>;
 
 interface DotSpec {
@@ -149,6 +162,7 @@ export class ObserverPane {
   private labels: BoardLabel[] = [];
   private boardNow: Board | null = null;
   private handlesNow: Handles | null = null;
+  private objectRingsNow: ObjectRingSet | null = null;
   private W = 1;
   private H = 1;
 
@@ -338,12 +352,26 @@ export class ObserverPane {
         [[h.Q, h.tip], ...arrow_head(h.Q, h.tip, b.r)]);
       this.add_dots("handle:tip", DOTS.tip, [h.tip]);
     }
+    // M11 object rings (§5.8.4): one closed polyline per world axis around the object's pivot
+    const orings = geo.object_rings ?? null;
+    this.objectRingsNow = orings;
+    if (orings !== null) {
+      orings.rings.forEach((ring, axis) => {
+        const key = `object_ring_${axis}${geo.active_axis === axis ? "_active" : ""}` as keyof typeof HELPER_LINES;
+        this.add_lines(`object-ring:${"xyz"[axis]}`, key, HELPER_LINES[key], ring.map((p, i) => [p, ring[(i + 1) % ring.length]!] as [Vec3, Vec3]));
+      });
+    }
     this.labels = board_labels(b, { pivot_id: geo.pivot_id ?? null, ...(h !== null ? { tip: h.tip } : {}) });
   }
 
   /** The handles of the last update (null without handles). */
   get last_handles(): Handles | null {
     return this.handlesNow;
+  }
+
+  /** M11: the object rings of the last update (null outside rotate mode or with no object selected). */
+  get last_object_rings(): ObjectRingSet | null {
+    return this.objectRingsNow;
   }
 
   /**

@@ -6,14 +6,15 @@
  * no gesture there reaches the session. `main.ts` wires the DOM to it.
  */
 
-import type { Vec2, Vec3 } from "castplane";
+import type { Transform, Vec2, Vec3 } from "castplane";
 
 import {
   UndoStack, arrowDrag, bboxCentre, clone, deltaText, equation, frameMetres, fromCamera, measureRef, orbitRing,
   pictureDelta, readouts, sameState, setD, setFocal, setLockLevel, setPivot, setRoll, sixView, toCameraBlock,
 } from "./rig.js";
-import type { AnyCamera, PicturePlaneCamera, RigState, RingGrab, ViewName } from "./rig.js";
+import type { AnyCamera, PicturePlaneCamera, RigState, RingGrab, UndoEntry, ViewName } from "./rig.js";
 import { EquationError, applyEquation } from "./equation.js";
+import { clone_transform, local_bbox } from "./object_rotate.js";
 
 /** The pivot selection (§5.7.7): not part of an undo snapshot. */
 export interface PivotSelection {
@@ -37,6 +38,10 @@ export interface SessionScene {
   object_centres: ReadonlyMap<string, Vec3>;
   /** Every stage-A vertex (the picture-delta readout). */
   vertices: readonly Vec3[];
+  /** M11 (contract §5.8.3): each object's load-time transform and stage-A world vertices (`mesh.vertices`), from
+   * which the session caches the local pivots and the load-time transforms (還原此物體). Optional: without it no object
+   * can be rotated. */
+  object_poses?: readonly { id: string; transform: Transform; vertices: readonly (readonly number[])[] }[];
 }
 
 /** What changed after a session action: `framing` asks for an observer re-framing (§5.6.4: views, equation, reset,
@@ -45,6 +50,10 @@ export interface ActionResult {
   changed: boolean;
   framing: boolean;
 }
+
+/** M11 (contract §5.8.3): an undo whose top entry is an object step reports it here without consuming it; the caller
+ * recomputes stage A with `transform` and, on success, calls {@link PlaneSession.pop_object_step}. */
+export type UndoResult = ActionResult & { object?: { id: string; transform: Transform } };
 
 /**
  * The plane-mode session of one loaded scene. Every rig change goes through it: handle drags in the observer pane
@@ -69,8 +78,27 @@ export class PlaneSession {
   private ref0: (Vec2 | null)[] | null = null;
   private gesture0: { rig: RigState; scene_block: boolean; delta: number | null } | null = null;
   private readonly clamped: boolean;
+  private scene_: SessionScene;
+  /** M11 (contract §5.8.1): per object id the centre of its local bounding box `c_local` (the rotation pivot), computed
+   * once at load; {@link update_scene} never changes it. */
+  readonly local_centres: ReadonlyMap<string, Vec3>;
+  /** M11: per object id half its local bounding-box diagonal (the ring radius, spec-v0.3 §3.2), computed at load. */
+  readonly local_half_diagonals: ReadonlyMap<string, number>;
+  /** M11: per object id its load-time transform (還原此物體). */
+  private readonly initial_transforms: ReadonlyMap<string, Transform>;
 
-  constructor(readonly scene: SessionScene) {
+  constructor(scene: SessionScene) {
+    this.scene_ = scene;
+    const centres = new Map<string, Vec3>(), diagonals = new Map<string, number>(), initial = new Map<string, Transform>();
+    for (const o of scene.object_poses ?? []) {
+      const b = local_bbox(o.transform, o.vertices);
+      centres.set(o.id, b.centre);
+      diagonals.set(o.id, b.half_diagonal);
+      initial.set(o.id, clone_transform(o.transform));
+    }
+    this.local_centres = centres;
+    this.local_half_diagonals = diagonals;
+    this.initial_transforms = initial;
     const res = fromCamera(scene.camera, scene.centre);
     this.rig = res.rig;
     this.initial = clone(res.rig);
@@ -79,6 +107,59 @@ export class PlaneSession {
     this.load_notices = [];
     if (res.clampedR) this.load_notices.push(NOTICE_R_CLAMPED);
     if (res.clampedD) this.load_notices.push(NOTICE_D_CLAMPED);
+  }
+
+  /** What the session knows of the scene (replaced by {@link update_scene} after an object rotation). */
+  get scene(): SessionScene {
+    return this.scene_;
+  }
+
+  /**
+   * M11 (contract §5.8.3): an object was rotated. From the new stage-A record only `object_centres` (`objects`' bounding
+   * box centres) and `vertices` change; the rig (with `P`), `initial`, the scene centre, the camera, `scene_block`,
+   * the load notices and the local pivots are kept. The picture-delta reference is cleared (it describes board drags).
+   */
+  update_scene(objects: readonly { id: string; bbox: readonly (readonly number[])[] }[], A: { vertices: readonly Vec3[] }): void {
+    this.scene_ = { ...this.scene_, object_centres: object_centres(objects), vertices: A.vertices };
+    this.ref0 = null;
+    this.delta = null;
+  }
+
+  /** M11: the load-time transform of object `id` (a copy; null for an unknown id). */
+  initial_transform(id: string): Transform | null {
+    const t = this.initial_transforms.get(id);
+    return t === undefined ? null : clone_transform(t);
+  }
+
+  /** M11: one undo step for a discrete object action (numeric apply, 還原此物體, 落地) when the pose changed. */
+  record_object(id: string, before: Transform, after: Transform): boolean {
+    return this.undo.record_object(id, before, after);
+  }
+
+  /** M11: pointer-down of an object drag (opens one undo step; the board's gesture state is not touched). */
+  begin_object(id: string, t0: Transform): void {
+    this.undo.begin_object(id, t0);
+  }
+
+  /** M11: release of an object drag with the committed pose `t`: one undo step when it differs from the pointer-down
+   * pose. */
+  end_object(t: Transform): boolean {
+    return this.undo.end_object(t);
+  }
+
+  /** M11: abandon an object drag (no step). */
+  cancel_object(): void {
+    this.undo.cancel();
+  }
+
+  /** The top undo entry without consuming it (null when empty). */
+  peek_undo(): UndoEntry | null {
+    return this.undo.peek();
+  }
+
+  /** M11: pop the top entry after its object step was applied successfully (no-op when the top is not an object step). */
+  pop_object_step(): void {
+    if (this.undo.peek()?.kind === "object") this.undo.undo(this.rig);
   }
 
   /** The picture-delta readout ("這次拖動右窗畫面變動", frame mm): the largest image displacement of the stage-A
@@ -233,12 +314,16 @@ export class PlaneSession {
     return { changed, framing: changed };
   }
 
-  /** Undo (§5.7.8 item 13): restores the last snapshot (the current pivot kept); re-frames the observer. */
-  undo_step(): ActionResult {
+  /** Undo (§5.7.8 item 13): restores the last board snapshot (the current pivot kept) and re-frames the observer. M11
+   * (§5.8.3): an object step on top is only peeked and returned in `object`; the rig is not touched. */
+  undo_step(): UndoResult {
+    const top = this.undo.peek();
+    if (top === null) return { changed: false, framing: false };
+    if (top.kind === "object") return { changed: false, framing: false, object: { id: top.id, transform: top.before } };
     const prev = this.undo.undo(this.rig);
-    if (prev === null) return { changed: false, framing: false };
+    if (prev === null || prev.kind !== "rig") return { changed: false, framing: false };
     this.ref0 = null;
-    const changed = this.assign(prev);
+    const changed = this.assign(prev.rig);
     return { changed, framing: true };
   }
 

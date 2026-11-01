@@ -5878,3 +5878,41 @@ Gates: `npm ci && npm test`, `npm run -w web build`, `node web/scripts/smoke.mjs
 (0 mismatches).
 
 #### Implementation notes
+
+**[implementation] M11 web code (spec-v0.3).** `web/src/object_rotate.ts` holds the maths (`local_bbox`,
+`local_centre`, `world_centre`, `rotate_about_world_axis`, `set_rotation`, `euler_zyx_from_matrix`, `wrap_angle`,
+`snap_angle`, `parse_angle` / `format_angle`, `ring_points` / `object_rings` / `ring_radius`, `ring_drag_angle`,
+`ground_transform`) and `ObjectDrag<S, A>`, whose side effects are injected by `main.ts` as `{apply, proxy, restore}`
+(stage A + session + 3D; 3D only; back to `scene0` / `A0` / `t0`), so the state machine is unit-tested without a page.
+`begin(id, t0, scene0, A0, seq, {live, axis, c_local})` carries the axis and the pivot in an options argument;
+`move(θ)` stores the pending candidate; `frame(seq)` applies it only for the current sequence number; `end()` returns
+`{id, t0, t, ok, changed}`; `abandon()` forgets a gesture without a restore (a scene load). `PlaneSession` gains the
+optional `SessionScene.object_poses` (load-time transforms and stage-A `mesh.vertices`), from which it caches
+`local_centres`, `local_half_diagonals` and the load-time transforms (`initial_transform(id)`, 還原此物體);
+`update_scene(objects, A)` takes stage A's object records (their `bbox`) and `A.vertices`. `undo_step()` reports an
+object step in `object` without consuming it and `pop_object_step()` pops it after a successful recompute. The 3D
+matrices come from `scene3d.ts::display_matrix(obj, obj0, built_in_world(obj0, A0))` and `set_object_matrix` on both
+groups; the observer's group is always built from the loaded scene and then posed. `hit_handles` takes `h: Handles |
+null` and an optional `ObjectRingSet` (rotate mode passes `h = null`). `window.castplane_web` also gains `rotate` (mode,
+selection, slow flag, panel state) and `object_rings_px`; `timings.stage_a_runs` counts stage-A runs since the load (the
+smoke test's evidence of live recomputes, since `stage_a_ms` is a coarse timer value).
+
+**[decision, implementation] M11 clarifications of spec-v0.3 (web UI, not core).** (1) **Rotation about `z` writes
+exact angles:** `rotate_about_world_axis` with axis `z` keeps `rx`, `ry` as they are and sets `rz′ = wrap(rz + θ)`
+(`Rz(θ)·Rz(rz)·Ry·Rx = Rz(rz + θ)·Ry·Rx`, the same `R′ = Q·R` up to rounding), instead of decomposing `Q·R`; about `x`
+or `y` the matrix is decomposed as §5.8.1 says. So a z drag never perturbs `rx`, `ry` by an ulp. (2) **落地 uses the exact
+surface of a curved primitive:** for a sphere, cylinder or cone the minimum signed distance is the core's
+`curved.plane_min(analytic, π)` (the surface the core tests for `OBJECT_BELOW_RECEIVER`), not the minimum over the
+stage-A vertices of its polygonal mesh, which after a tilt can sit above the true lowest rim point and leave the
+warning on; polyhedra and meshes use the stage-A vertices. (3) **Ring radius:** "bounding-box diagonal" is the local
+bounding box's (the one whose centre is `c_local`), so the rings keep their size while the object turns. (4) **A
+stage-A exception at release** restores the pointer-down state (`scene0`, `A0`, `t0`), not an intermediate pose a
+live frame had committed during the same gesture, and records nothing; during the drag a failed frame keeps the last
+good pose and the drag continues. (5) **Numeric fields:** a field whose text is still the one the panel wrote keeps
+the exact current angle on 「套用」 (the 0.1° display is not applied back to the pose). (6) **Selection:** with several
+objects none is preselected (the dropdown shows "—"); the selection survives switching the rotate mode off and on and
+is reset by a scene load. (7) The 「轉動物體」 toggle sits in the toolbar's observer group (`#observer-controls`), so it is
+hidden with the observer pane in 預覽, where only the panel works. (8) The undo button is ignored while an object drag
+is held (an object step undone mid-gesture would race the gesture's commit). (9) The smoke test compares the CLI's SVG
+of the downloaded rotated scene with `download_texts().svg` with all six layers checked (作圖線 switched on for the
+check), so that the page's checked layers equal the file's `output.layers`.

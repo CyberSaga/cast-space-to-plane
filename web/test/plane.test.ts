@@ -11,7 +11,7 @@ import { test } from "node:test";
 import { fileURLToPath } from "node:url";
 
 import { LAYER_IDS, compose, dumps, load_scene, load_scene_text, project_scene, shadow_geometry, validate_camera, write_svg } from "castplane";
-import type { Scene, StageA, Vec2, Vec3 } from "castplane";
+import type { Scene, StageA, Transform, Vec2, Vec3 } from "castplane";
 
 import {
   ARROW_LABEL, HIT_PX_MOUSE, HIT_PX_TOUCH, LABEL_GAP_PX, LABEL_H_PX, LABEL_OFFSET_PX, RING_HIT_FACTOR, RING_SEGMENTS, board_labels,
@@ -31,6 +31,7 @@ import {
 } from "../src/rig.js";
 import type { RigState } from "../src/rig.js";
 import { LAYERS_OFF_AT_START, initial_toggles } from "../src/toggles.js";
+import { clone_transform, rotate_about_world_axis } from "../src/object_rotate.js";
 import { OBJECT_ID_KEY, RECEIVER_ID_KEY, object_id_of } from "../src/helpers3d.js";
 import type { TaggedNode } from "../src/helpers3d.js";
 
@@ -222,6 +223,101 @@ test("undo keeps the current pivot; reset restores the load state, the scene piv
   assert.ok(s.undo.size >= 1, "reset is an undo step");
   s.undo_step();
   assert.equal(s.rig.focal, 80, "undo of the reset");
+});
+
+// ------------------------------------------------------------------------------------------------ M11 object rotation
+
+/** `basic` with the M11 object poses in its session scene. */
+function load_with_poses(data: Record<string, unknown>): Loaded {
+  const l = load(data);
+  const recs = new Map(l.A.objects.map((o) => [o.id, o]));
+  return { ...l, ss: { ...l.ss, object_poses: l.scene.objects.map((o) => ({ id: o.id, transform: o.transform, vertices: recs.get(o.id)!.mesh.vertices })) } };
+}
+
+/** `scene` with object `id` at pose `t`, and its stage A. */
+function rotated(l: Loaded, id: string, t: Transform): { scene: Scene; A: StageA } {
+  const scene = { ...l.scene, objects: l.scene.objects.map((o) => o.id === id ? { ...o, transform: t } : o) };
+  return { scene, A: shadow_geometry(scene) };
+}
+
+test("update_scene (M11, §5.8.3): rig, block(), rig_block(), scene_block, initial, centre and local pivots unchanged; ref0 / delta cleared", () => {
+  const l = load_with_poses(raw("basic"));
+  const s = new PlaneSession(l.ss);
+  // a board drag first, so that the picture delta and its reference exist
+  s.begin();
+  s.drag(pushed(clone(s.rig), 20));
+  s.end();
+  assert.ok(s.delta !== null && s.delta > 0);
+  const rig = clone(s.rig), block = JSON.stringify(s.block()), rig_block = JSON.stringify(s.rig_block());
+  const initial = clone(s.initial), scene_block = s.scene_block, centre = [...s.scene.centre];
+  const local = new Map(s.local_centres), P = [...s.rig.P];
+  const c = s.local_centres.get("crate")!;
+  const crate = l.scene.objects.find((o) => o.id === "crate")!;
+  const t1 = rotate_about_world_axis(crate.transform, c, 0, 40);
+  const r = rotated(l, "crate", t1);
+  s.update_scene(r.A.objects, r.A);
+  assert.deepEqual(s.rig, rig);
+  assert.deepEqual(s.rig.P, P, "rig.P stays (§5.8.5)");
+  assert.equal(JSON.stringify(s.block()), block);
+  assert.equal(JSON.stringify(s.rig_block()), rig_block);
+  assert.deepEqual(s.initial, initial);
+  assert.equal(s.scene_block, scene_block);
+  assert.deepEqual(s.scene.centre, centre, "the load-time scene centre");
+  assert.deepEqual(new Map(s.local_centres), local, "local pivots unchanged");
+  assert.equal(s.delta, null, "ref0 / delta cleared");
+  assert.equal(s.scene.vertices, r.A.vertices, "the new vertices");
+  assert.deepEqual(s.scene.object_centres.get("crate"), object_centres(r.A.objects).get("crate"), "the new object centre");
+  assert.notDeepEqual(s.scene.object_centres.get("crate"), object_centres(l.A.objects).get("crate"));
+  // the next board gesture measures from the new scene: a press reads 0
+  s.begin();
+  assert.equal(s.delta, 0);
+  s.end();
+  // a scene-block session stays on the scene camera after an object rotation
+  const s2 = new PlaneSession(l.ss);
+  s2.update_scene(r.A.objects, r.A);
+  assert.equal(s2.scene_block, true);
+  assert.equal(s2.block(), l.scene.camera);
+});
+
+test("session undo (M11): an object step is peeked by undo_step and popped only by pop_object_step; board steps as before", () => {
+  const l = load_with_poses(raw("basic"));
+  const s = new PlaneSession(l.ss);
+  const crate = l.scene.objects.find((o) => o.id === "crate")!;
+  const t0 = crate.transform;
+  assert.deepEqual(s.initial_transform("crate"), t0);
+  assert.equal(s.initial_transform("nope"), null);
+  close3(s.local_centres.get("crate")!, [0, 0, 0.3], 1e-12, "the crate's local pivot");
+  close(s.local_half_diagonals.get("crate")!, Math.hypot(1.0, 0.8, 0.6) / 2, 1e-12, "half diagonal");
+  s.view("top");
+  const rig_top = clone(s.rig);
+  const t1 = rotate_about_world_axis(t0, s.local_centres.get("crate")!, 2, 30);
+  assert.equal(s.record_object("crate", t0, t1), true);
+  assert.equal(s.record_object("crate", t1, clone_transform(t1)), false, "unchanged: no step");
+  s.begin_object("crate", t1);
+  assert.equal(s.end_object(clone_transform(t1)), false, "a press without change");
+  s.begin_object("crate", t1);
+  s.cancel_object();
+  assert.equal(s.undo.size, 2);
+  // the object step: reported, not consumed, the rig untouched
+  const u = s.undo_step();
+  assert.deepEqual(u.object, { id: "crate", transform: t0 });
+  assert.equal(u.changed, false);
+  assert.equal(s.undo.size, 2, "peeked, not popped");
+  assert.deepEqual(s.rig, rig_top);
+  assert.deepEqual(s.undo_step().object, { id: "crate", transform: t0 }, "a failed recompute keeps the step");
+  s.pop_object_step();
+  assert.equal(s.undo.size, 1);
+  s.pop_object_step(); // the top is a board step now: no-op
+  assert.equal(s.undo.size, 1);
+  const r = s.undo_step();
+  assert.equal(r.object, undefined);
+  assert.ok(r.changed && r.framing);
+  assert.equal(s.undo.size, 0);
+  assert.deepEqual(s.rig.f, s.initial.f, "the board step undone");
+  // reset stays board-only: it never records or touches an object step
+  s.record_object("crate", t0, t1);
+  s.reset();
+  assert.equal(s.undo.peek()?.kind, "object", "reset of an unchanged board records nothing");
 });
 
 // ------------------------------------------------------------------------------------------------ readouts

@@ -62,6 +62,35 @@ export function object_matrix(obj: SceneObject): THREE.Matrix4 {
   );
 }
 
+/**
+ * M11 (contract §5.8.2): the matrix that draws object `obj` (its current transform) with the geometry built at load
+ * for `obj0` (the loaded object): `object_matrix(obj)` for a primitive (built in its local frame), and the rigid delta
+ * `object_matrix(obj)·object_matrix(obj0)⁻¹` for a mesh whose geometry was built in world coordinates from its stage-A
+ * record (`world`; never rebuilt during a drag).
+ */
+export function display_matrix(obj: SceneObject, obj0: SceneObject, world: boolean): THREE.Matrix4 {
+  const M = object_matrix(obj);
+  return world ? M.multiply(object_matrix(obj0).invert()) : M;
+}
+
+/** Whether `build_scene3d` built object `obj` in world coordinates (a mesh with stage-A triangles: identity matrix). */
+export function built_in_world(obj: SceneObject, A?: StageA): boolean {
+  if (obj.type !== "mesh") return false;
+  const rec = A?.objects.find((o) => o.id === obj.id);
+  return rec !== undefined && rec.triangles !== undefined;
+}
+
+/** M11: set the matrix of object `id`'s mesh in a `build_scene3d` group (no-op without the group or the object). */
+export function set_object_matrix(group: THREE.Group | null, id: string, M: THREE.Matrix4): void {
+  if (group === null) return;
+  for (const c of group.children) {
+    if (c.userData[OBJECT_ID_KEY] !== id) continue;
+    c.matrix.copy(M);
+    c.matrixWorldNeedsUpdate = true;
+  }
+  group.updateMatrixWorld();
+}
+
 /** Scene centre and horizontal extent (from stage A's bounding box when given). */
 function extent_of(scene: Scene, A?: StageA): { centre: Vec3; extent: number } {
   if (A !== undefined) {

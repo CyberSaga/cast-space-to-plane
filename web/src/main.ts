@@ -17,8 +17,8 @@ import "./style.css";
 
 import * as THREE from "three";
 
-import { LAYER_IDS, compose, dumps, load_scene, load_scene_text, project_scene, shadow_geometry, write_svg } from "castplane";
-import type { CameraRecord, GeometryDocument, Scene, StageA, Vec2 } from "castplane";
+import { LAYER_IDS, compose, curved, dumps, load_scene, load_scene_text, project_scene, shadow_geometry, write_svg } from "castplane";
+import type { CameraRecord, GeometryDocument, Scene, SceneObject, StageA, Transform, Vec2, Vec3 } from "castplane";
 
 import { display_colours, display_colours_text } from "./colours.js";
 import { EXAMPLES } from "./examples.js";
@@ -33,17 +33,22 @@ import {
 import type { HandleHit } from "./observer.js";
 import { ObserverPane } from "./observer3d.js";
 import type { HandleInput } from "./observer3d.js";
+import {
+  LIVE_STAGE_A_MS, ObjectDrag, clone_transform, format_angle, ground_transform, object_rings, parse_angle, ring_drag_angle,
+  ring_radius, same_transform, set_rotation, snap_angle, world_centre,
+} from "./object_rotate.js";
+import type { Axis, ObjectRings } from "./object_rotate.js";
 import { IMG_MODE_THRESHOLD, Overlay } from "./overlay.js";
 import type { OverlayMode } from "./overlay.js";
 import { PlaneSession, arrow_drag, object_centres, ring_drag, ring_grab } from "./plane.js";
 import { arrowScreenVector, clone, equation, sync } from "./rig.js";
 import type { RigState, RingGrab, ViewName } from "./rig.js";
-import { build_scene3d } from "./scene3d.js";
+import { build_scene3d, built_in_world, display_matrix, set_object_matrix } from "./scene3d.js";
 import { Stage3D, letterbox } from "./stage.js";
 import { initial_toggles } from "./toggles.js";
 import {
-  $, WarningsTable, build_layer_boxes, controls, describe_error, fill_examples, fill_quick_equations, save, set_error_panel,
-  set_lines, set_rig_controls, status_text, umbra_count,
+  $, WarningsTable, build_layer_boxes, controls, describe_error, fill_examples, fill_object_select, fill_quick_equations,
+  object_centre_text, save, set_error_panel, set_lines, set_rig_controls, status_text, umbra_count,
 } from "./ui.js";
 
 THREE.Object3D.DEFAULT_UP.set(0, 0, 1);
@@ -73,7 +78,9 @@ interface State {
   layersChecked: Set<string>;
   doc: GeometryDocument | null;
   svg: string;
-  timings: { stage_a_ms: number; core_ms: number; dom_ms: number; mode: OverlayMode };
+  /** `stage_a_ms`: the last stage A (the load's, or M11 an object rotation's); `stage_a_runs`: stage A runs since the
+   * load (1 at load). */
+  timings: { stage_a_ms: number; stage_a_runs: number; core_ms: number; dom_ms: number; mode: OverlayMode };
   dragging: boolean;
   dirty: boolean;
   full_svg_length: number;
@@ -83,9 +90,17 @@ interface State {
   /** M9 observer (contract §5.6): whether a framing is pending, its last cost. */
   obs: { on: boolean; needs_framing: boolean; ms: number | null };
   /** M10: the handle being dragged in the observer pane, with its pointer-down state (§5.7.8 items 1, 4). */
-  handle: { kind: "ring"; rig0: RigState; grab: RingGrab } | { kind: "arrow"; rig0: RigState; v: Vec2 } | null;
+  handle: { kind: "ring"; rig0: RigState; grab: RingGrab } | { kind: "arrow"; rig0: RigState; v: Vec2 }
+    | { kind: "object"; id: string; axis: Axis; t0: Transform; A0: StageA; w: Vec3; r_c: Vec3; u_c: Vec3 } | null;
   /** M10: the last equation error (the field turns red with it), null when none. */
   equation_error: string | null;
+  /** M11 (contract §5.8): the scene and stage-A record as loaded (the 3D groups' geometry; 還原此物體), stage A's time
+   * at load (the slow-scene rule), the rotate mode and the selected object, and whether the error panel shows a failed
+   * stage-A recompute. */
+  loaded: { scene: Scene; A: StageA } | null;
+  load_stage_a_ms: number;
+  rotate: { on: boolean; id: string | null };
+  object_error: boolean;
 }
 
 const state: State = {
@@ -97,7 +112,7 @@ const state: State = {
   layersChecked: new Set(TOGGLES.layers),
   doc: null,
   svg: "",
-  timings: { stage_a_ms: 0, core_ms: 0, dom_ms: 0, mode: "dom" },
+  timings: { stage_a_ms: 0, stage_a_runs: 0, core_ms: 0, dom_ms: 0, mode: "dom" },
   dragging: false,
   dirty: false,
   full_svg_length: 0,
@@ -106,6 +121,10 @@ const state: State = {
   obs: { on: false, needs_framing: true, ms: null },
   handle: null,
   equation_error: null,
+  loaded: null,
+  load_stage_a_ms: 0,
+  rotate: { on: false, id: null },
+  object_error: false,
 };
 
 const ui = controls();
@@ -163,16 +182,28 @@ function load(name: string, make: () => Scene, colours: Map<string, number>): bo
     return false;
   }
   show_error(null);
+  // M11: an object drag held across the load belongs to the old scene (forgotten, nothing restored)
+  obj_drag.abandon();
+  state.object_error = false;
   state.scene = scene;
   state.sceneName = name;
   state.colours = colours;
   state.A = A;
+  state.loaded = { scene, A };
+  state.load_stage_a_ms = stage_a_ms;
   state.timings.stage_a_ms = stage_a_ms;
-  // §5.7.7: the rig of the load rule (scene-centre pivot); the scene camera itself is rendered until the first change
+  state.timings.stage_a_runs = 1;
+  // §5.7.7: the rig of the load rule (scene-centre pivot); the scene camera itself is rendered until the first change.
+  // M11 (§5.8.3): the objects' load-time poses give the local pivots and the 還原此物體 targets
+  const records = new Map(A.objects.map((o) => [o.id, o]));
   state.plane = new PlaneSession({
     camera: scene.camera, canvas_mm: scene.output.canvas_mm, centre: scene_centre(A), object_centres: object_centres(A.objects),
     vertices: A.vertices,
+    object_poses: scene.objects.map((o) => ({ id: o.id, transform: o.transform, vertices: records.get(o.id)?.mesh.vertices ?? [] })),
   });
+  // M11: the object selection (the only object is preselected); the rotate mode is page-level and kept
+  state.rotate.id = scene.objects.length === 1 ? scene.objects[0]!.id : null;
+  fill_object_select(ui.objectSelect, scene.objects.map((o) => o.id));
   state.obs.needs_framing = true;
   // a drag held across the load (keyboard on the examples menu, a drop) belongs to the old scene: drop it
   state.handle = null;
@@ -188,6 +219,7 @@ function load(name: string, make: () => Scene, colours: Map<string, number>): bo
   // output.hidden_lines do not reset them; the hidden style still comes from the scene
   hiddenStyle.value = scene.output.hidden_style ?? "dashed";
   sync_controls();
+  sync_object_panel();
   layout();
   document.title = `${name} — castplane web`;
   request_render();
@@ -315,7 +347,18 @@ ui.equation.addEventListener("blur", () => {
   sync_controls();
 });
 ui.undo.addEventListener("click", () => {
-  if (state.plane !== null) after_action(state.plane.undo_step());
+  const pl = state.plane;
+  if (pl === null || state.handle?.kind === "object") return; // an object step mid-drag would race the gesture's commit
+  const r = pl.undo_step();
+  if (r.object !== undefined) {
+    // M11 (§5.8.3): an object step is peeked, stage A recomputed, and popped only on success (else the history is kept)
+    if (apply_object_transform(r.object.id, r.object.transform)) pl.pop_object_step();
+    sync_controls();
+    sync_object_panel();
+    request_render();
+    return;
+  }
+  after_action(r);
 });
 ui.reset.addEventListener("click", () => {
   if (state.plane === null) return;
@@ -374,13 +417,29 @@ function obs_frame(): { W: number; H: number; basis: ReturnType<typeof observer_
 
 const handle_input: HandleInput = {
   hit: (p, touch): HandleHit => {
-    const o = obs_frame(), h = observer?.last_handles ?? null;
-    if (o === null || h === null || state.plane === null || state.dragging) return null;
-    return hit_handles(o.basis, o.W, o.H, p, touch, h);
+    const o = obs_frame();
+    if (o === null || observer === null || state.plane === null || state.dragging) return null;
+    // M11 (§5.8.4): in rotate mode only the object rings are handles (the board's are hidden and disabled)
+    if (state.rotate.on) {
+      const rings = observer.last_object_rings;
+      return rings === null ? null : hit_handles(o.basis, o.W, o.H, p, touch, null, rings);
+    }
+    const h = observer.last_handles;
+    return h === null ? null : hit_handles(o.basis, o.W, o.H, p, touch, h);
   },
   begin: (hit) => {
-    const pl = state.plane, o = obs_frame(), h = observer?.last_handles ?? null;
-    if (pl === null || o === null || h === null || observer === null) return;
+    const pl = state.plane, o = obs_frame();
+    if (pl === null || o === null || observer === null) return;
+    if (hit.kind === "object_ring") {
+      const rings = observer.last_object_rings;
+      const X = rings?.rings[hit.axis][hit.index];
+      if (rings === null || X === undefined) return;
+      start_object_drag(rings.id, hit.axis, { w: [X[0] - rings.centre[0], X[1] - rings.centre[1], X[2] - rings.centre[2]],
+        r_c: o.basis.r, u_c: o.basis.u });
+      return;
+    }
+    const h = observer.last_handles;
+    if (h === null) return;
     const rig0 = clone(pl.rig);
     if (hit.kind === "ring") {
       state.handle = { kind: "ring", rig0, grab: ring_grab(h.ring[hit.index]!, rig0.P, o.basis.r, o.basis.u) };
@@ -396,10 +455,21 @@ const handle_input: HandleInput = {
     const pl = state.plane, hd = state.handle;
     if (pl === null || hd === null) return;
     const snap = ui.snap.checked && !alt;
+    if (hd.kind === "object") {
+      // §5.8.4: the ring rule of §5.7.8 item 1 from the pointer-down grab and the total displacement; only the pending
+      // candidate is stored here, stage A runs at the start of the next frame (or at release)
+      obj_drag.move(snap_angle(ring_drag_angle(hd.axis, hd.w, hd.r_c, hd.u_c, dx, dy), snap));
+      request_render();
+      return;
+    }
     const next = hd.kind === "ring" ? ring_drag(hd.rig0, hd.grab, dx, dy, snap) : arrow_drag(hd.rig0, hd.v, dx, dy, snap);
     if (pl.drag(next)) request_render();
   },
   end: () => {
+    if (state.handle?.kind === "object") {
+      finish_object_drag();
+      return;
+    }
     state.plane?.end();
     state.handle = null;
     state.dragging = false;
@@ -407,6 +477,10 @@ const handle_input: HandleInput = {
     request_render();
   },
   cancel: () => {
+    if (state.handle?.kind === "object") {
+      cancel_object_drag();
+      return;
+    }
     state.plane?.cancel();
     state.handle = null;
     state.dragging = false;
@@ -415,11 +489,274 @@ const handle_input: HandleInput = {
   },
   click: (p) => {
     const pl = state.plane;
-    if (pl === null || observer === null || pl.pivot.mode !== "object") return;
+    if (pl === null || observer === null) return;
+    if (state.rotate.on) {
+      // §5.8.4: in rotate mode a click selects the object to rotate; the pivot's 「點選物體」 is suspended
+      const id = observer.pick_object(p);
+      if (id !== null) select_object(id);
+      return;
+    }
+    if (pl.pivot.mode !== "object") return;
     const id = observer.pick_object(p);
     if (id !== null) after_action(pl.pick_object(id));
   },
 };
+
+// ---------------------------------------------------------------------------- M11 single-object rotation (§5.8)
+/** The error panel's text when stage A throws on a rotated scene (a core bug, never a normal path; §5.8.2). */
+const NOTICE_CORE_FAILED = "核心重算失敗，請回報";
+/** The panel's hint for a scene whose stage A is too slow for a live drag (§5.8.2). */
+const NOTICE_SLOW_SCENE = "此場景拖動放開後更新";
+/** The sequence number of the last object gesture (§5.8.2: a stale number applies nothing). */
+let object_seq = 0;
+
+const object_in = (scene: Scene | null, id: string): SceneObject | undefined => scene?.objects.find((o) => o.id === id);
+
+/** The current transform of object `id` (a copy; null when unknown). */
+function current_transform(id: string | null): Transform | null {
+  const o = id === null ? undefined : object_in(state.scene, id);
+  return o === undefined ? null : clone_transform(o.transform);
+}
+
+/** Whether the scene is too slow at load for a live stage A during a drag (§5.8.2). */
+const slow_scene = (): boolean => state.load_stage_a_ms > LIVE_STAGE_A_MS;
+
+/** Both three.js groups (drawing pane and observer): draw object `id` at pose `t` (§5.8.2 step 4). */
+function set_object_pose_3d(id: string, t: Transform): void {
+  const L = state.loaded, obj0 = L === null ? undefined : object_in(L.scene, id);
+  if (L === null || obj0 === undefined) return;
+  const M = display_matrix({ ...obj0, transform: t }, obj0, built_in_world(obj0, L.A));
+  set_object_matrix(view.group, id, M);
+  set_object_matrix(observer?.stage.group ?? null, id, M);
+}
+
+/** Both three.js groups: every object at its pose in `state.scene` (after a group was rebuilt from the loaded scene). */
+function sync_object_poses_3d(): void {
+  for (const o of state.scene?.objects ?? []) set_object_pose_3d(o.id, o.transform);
+}
+
+/**
+ * Give object `id` the pose `t` (contract §5.8.2): (1) a copy of the scene with the new `transform` (the old one is not
+ * mutated, stage A's lists are shared by reference); (2) stage A on it; (3) `state.scene`, `state.A`, the timings and
+ * `plane.update_scene`; (4) the 3D matrices of both groups; (5) a frame (unless `request` is false: called from the
+ * frame itself). `record: "step"` adds one undo step (a discrete action). `live: false` moves only the 3D proxy. On a
+ * stage-A exception nothing is committed, the 3D matrices return to the committed pose and the error panel says
+ * 「核心重算失敗，請回報」. Returns whether the pose was committed.
+ */
+function apply_object_transform(id: string, t: Transform, record: { kind: "none" | "step" } = { kind: "none" }, live = true,
+  request = true): boolean {
+  const scene = state.scene, pl = state.plane, before = current_transform(id);
+  if (scene === null || pl === null || before === null) return false;
+  if (!live) {
+    set_object_pose_3d(id, t);
+    if (request) request_render();
+    return true;
+  }
+  const scene1: Scene = { ...scene, objects: scene.objects.map((o) => o.id === id ? { ...o, transform: clone_transform(t) } : o) };
+  let A1: StageA, ms: number;
+  try {
+    const t0 = performance.now();
+    A1 = shadow_geometry(scene1);
+    ms = performance.now() - t0;
+  } catch (e) {
+    state.object_error = true;
+    show_error(`${NOTICE_CORE_FAILED}\n${describe_error(e)}`);
+    set_object_pose_3d(id, before);
+    if (request) request_render();
+    return false;
+  }
+  if (state.object_error) {
+    state.object_error = false;
+    show_error(null);
+  }
+  state.scene = scene1;
+  state.A = A1;
+  state.timings.stage_a_ms = ms;
+  state.timings.stage_a_runs += 1;
+  pl.update_scene(A1.objects, A1);
+  set_object_pose_3d(id, t);
+  if (record.kind === "step") pl.record_object(id, before, t);
+  sync_object_panel();
+  if (request) request_render();
+  return true;
+}
+
+/** The object-drag state machine (§5.8.2) with this page's effects. */
+const obj_drag = new ObjectDrag<Scene, StageA>({
+  // from `frame()` (no extra frame request) and from `end()` (the caller requests the resting frame)
+  apply: (id, t) => apply_object_transform(id, t, { kind: "none" }, true, false),
+  proxy: (id, t) => set_object_pose_3d(id, t),
+  restore: (id, t0, scene0, A0) => {
+    state.scene = scene0;
+    state.A = A0;
+    state.plane?.update_scene(A0.objects, A0);
+    set_object_pose_3d(id, t0);
+    sync_object_panel();
+  },
+});
+
+/** Pointer-down of an object drag about world axis `axis` (a ring, or the `rotate_object` hook); false when it cannot
+ * start (no scene, unknown id, a gesture already running). */
+function start_object_drag(id: string, axis: Axis, grab: { w: Vec3; r_c: Vec3; u_c: Vec3 }): boolean {
+  const pl = state.plane, scene = state.scene, A = state.A, t0 = current_transform(id), c = pl?.local_centres.get(id);
+  if (pl === null || scene === null || A === null || t0 === null || c === undefined || state.dragging || state.handle !== null) return false;
+  object_seq += 1;
+  obj_drag.begin(id, t0, scene, A, object_seq, { live: !slow_scene(), axis, c_local: c });
+  pl.begin_object(id, t0);
+  state.handle = { kind: "object", id, axis, t0, A0: A, ...grab };
+  state.dragging = true;
+  request_render();
+  return true;
+}
+
+/** Release of an object drag: the last candidate committed synchronously (§5.8.2), one undo step when it changed. */
+function finish_object_drag(): void {
+  const res = obj_drag.end();
+  state.handle = null;
+  state.dragging = false;
+  if (res !== null && res.ok && res.changed) state.plane?.end_object(res.t);
+  else state.plane?.cancel_object();
+  sync_controls();
+  sync_object_panel();
+  request_render();
+}
+
+/** A second finger: the object drag is abandoned and the pointer-down state restored (§5.8.2), no step. */
+function cancel_object_drag(): void {
+  obj_drag.cancel();
+  state.plane?.cancel_object();
+  state.handle = null;
+  state.dragging = false;
+  sync_controls();
+  sync_object_panel();
+  request_render();
+}
+
+/** A discrete object action (numeric apply, 還原此物體, 落地): one undo step when the pose changed. */
+function object_action(id: string, t: Transform): boolean {
+  if (state.dragging || state.handle !== null) return false;
+  const before = current_transform(id);
+  if (before === null) return false;
+  if (same_transform(before, t)) return true;
+  const ok = apply_object_transform(id, t, { kind: "step" });
+  sync_controls();
+  return ok;
+}
+
+/** The numeric fields' pose for object `id` (spec-v0.3 §2.3): exact Euler angles `r`, the pivot fixed. */
+function apply_object_rotation(id: string, r: readonly number[]): boolean {
+  const t = current_transform(id), c = state.plane?.local_centres.get(id);
+  if (t === null || c === undefined || !r.every((x) => Number.isFinite(x))) return false;
+  return object_action(id, set_rotation(t, c, r));
+}
+
+/** 「套用」 / Enter in a field: a non-finite field turns red and nothing changes; an unedited field keeps the exact
+ * current angle (the field shows it rounded to 0.1°). */
+function apply_object_fields(): boolean {
+  const id = state.rotate.id, t = current_transform(id);
+  if (id === null || t === null) return false;
+  const vals = ui.objectFields.map((el, i) => el.value === el.dataset["shown"] ? t.rotation_deg[i]! : parse_angle(el.value));
+  let ok = true;
+  ui.objectFields.forEach((el, i) => {
+    const bad = vals[i] === null;
+    el.classList.toggle("bad", bad);
+    el.setAttribute("aria-invalid", bad ? "true" : "false");
+    if (bad) ok = false;
+  });
+  if (!ok) return false;
+  return apply_object_rotation(id, vals as number[]);
+}
+
+/** 落地 (spec-v0.3 §3.3; only with an unbounded `receivers[0]`): translate along its normal so that the object's minimum
+ * signed distance to it is 0 (the exact surface of a curved primitive, else the stage-A vertices). */
+function ground_object(id: string): boolean {
+  const scene = state.scene, A = state.A, t = current_transform(id);
+  const r0 = scene?.receivers[0], rec = A?.objects.find((o) => o.id === id);
+  if (t === null || r0 === undefined || r0.bounds !== null || rec === undefined) return false;
+  const n = r0.normal, pi = [n[0], n[1], n[2], r0.offset];
+  let dmin = Infinity;
+  if (rec.analytic !== null) dmin = curved.plane_min(rec.analytic, pi);
+  else for (const v of rec.mesh.vertices) dmin = Math.min(dmin, n[0] * v[0] + n[1] * v[1] + n[2] * v[2] + r0.offset);
+  if (!Number.isFinite(dmin) || dmin === 0) return false;
+  return object_action(id, ground_transform(t, dmin, n));
+}
+
+/** Select the object to rotate (the dropdown, a click in rotate mode, the hook); null clears the selection. */
+function select_object(id: string | null): void {
+  if (id !== null && object_in(state.scene, id) === undefined) return;
+  if (state.dragging || state.handle !== null) return;
+  state.rotate.id = id;
+  sync_object_panel();
+  request_render();
+}
+
+/** The 轉動物體 toggle (§5.8.4): not an undo step, not stored. Ignored during a gesture. */
+function set_rotate_mode(on: boolean): void {
+  if (on === state.rotate.on || state.dragging || state.handle !== null) return;
+  state.rotate.on = on;
+  sync_object_panel();
+  request_render();
+}
+
+/** The selected object's three rings in rotate mode (null without a selection). */
+function object_rings_now(): ObjectRings | null {
+  const id = state.rotate.id, pl = state.plane, t = current_transform(id);
+  const c = id === null ? undefined : pl?.local_centres.get(id), hd = id === null ? undefined : pl?.local_half_diagonals.get(id);
+  if (id === null || t === null || c === undefined || hd === undefined) return null;
+  return object_rings(id, world_centre(t, c), ring_radius(hd));
+}
+
+/** The panel's 物體 section from the state: dropdown, fields (unless focused), buttons, pivot readout, slow-scene hint. */
+function sync_object_panel(): void {
+  const scene = state.scene, pl = state.plane, id = state.rotate.id, t = current_transform(id);
+  ui.rotateMode.setAttribute("aria-pressed", state.rotate.on ? "true" : "false");
+  if (ui.objectSelect.value !== (id ?? "")) ui.objectSelect.value = id ?? "";
+  ui.objectFields.forEach((el, i) => {
+    el.disabled = t === null;
+    if (document.activeElement === el) return;
+    const text = t === null ? "" : format_angle(t.rotation_deg[i]!);
+    el.value = text;
+    el.dataset["shown"] = text;
+    el.classList.remove("bad");
+    el.setAttribute("aria-invalid", "false");
+  });
+  ui.objectApply.disabled = t === null;
+  const init = id === null ? null : pl?.initial_transform(id) ?? null;
+  ui.objectRestore.disabled = t === null || init === null || same_transform(t, init);
+  ui.objectGround.hidden = scene === null || scene.receivers[0]?.bounds !== null;
+  ui.objectGround.disabled = t === null;
+  const c = id === null ? undefined : pl?.local_centres.get(id);
+  ui.objectCentre.textContent = object_centre_text(t === null || c === undefined ? null : world_centre(t, c));
+  ui.objectNotice.textContent = scene !== null && slow_scene() ? NOTICE_SLOW_SCENE : "";
+}
+
+ui.rotateMode.addEventListener("click", () => set_rotate_mode(!state.rotate.on));
+ui.objectSelect.addEventListener("change", () => select_object(ui.objectSelect.value === "" ? null : ui.objectSelect.value));
+// 「套用」 must not take the focus first: the field's blur would re-sync it to the current pose before the click
+ui.objectApply.addEventListener("mousedown", (ev) => ev.preventDefault());
+ui.objectApply.addEventListener("click", () => {
+  if (apply_object_fields()) (document.activeElement as HTMLElement | null)?.blur();
+});
+for (const el of ui.objectFields) {
+  el.addEventListener("keydown", (ev) => {
+    if (ev.key === "Enter") {
+      ev.preventDefault();
+      if (apply_object_fields()) el.blur();
+    } else if (ev.key === "Escape") {
+      ev.stopPropagation(); // the field's Esc discards the typed text only; it does not also leave 預覽
+      el.blur();
+    }
+  });
+  // leaving a field discards its typed text (and its red state)
+  el.addEventListener("blur", () => sync_object_panel());
+}
+ui.objectRestore.addEventListener("click", () => {
+  const id = state.rotate.id, t = id === null ? null : state.plane?.initial_transform(id) ?? null;
+  if (id !== null && t !== null) object_action(id, t);
+});
+ui.objectGround.addEventListener("click", () => {
+  if (state.rotate.id !== null) ground_object(state.rotate.id);
+});
 
 // ---------------------------------------------------------------------------- layout (letterboxed to canvas_mm)
 function layout(): void {
@@ -453,8 +790,12 @@ function update_observer(rec: CameraRecord, doc: GeometryDocument): number {
     observer.view = frame_view(observer.view, framing_points(board, state.scene, pl.scene.centre), observer.aspect);
     state.obs.needs_framing = false;
   }
-  observer.update({ board, art, rays, handles: handles_of(rig, state.scene.camera.frame_mm),
-    pivot_id: pl.pivot.mode === "object" ? pl.pivot.object_id : null, active: state.handle?.kind ?? null });
+  // M11 (§5.8.4): in rotate mode the board's handles are hidden (null) and the selected object's rings drawn
+  const hd = state.handle, rot = state.rotate.on;
+  observer.update({ board, art, rays, handles: rot ? null : handles_of(rig, state.scene.camera.frame_mm),
+    pivot_id: pl.pivot.mode === "object" ? pl.pivot.object_id : null,
+    active: hd?.kind === "ring" || hd?.kind === "arrow" ? hd.kind : null,
+    object_rings: rot ? object_rings_now() : null, active_axis: hd?.kind === "object" ? hd.axis : null });
   observer.render();
   return performance.now() - t0;
 }
@@ -490,7 +831,11 @@ function set_observer(on: boolean): void {
   if (on && observer === null) {
     observer = new ObserverPane(ui.observerCanvas, ui.observerLabels);
     observer.attach_input(ui.observerPane, request_observer_render, handle_input);
-    if (state.scene !== null && state.A !== null) observer.set_scene(state.scene, state.A, state.colours);
+    // the group is built from the loaded scene (M11: a mesh's geometry is the loaded world one), then posed
+    if (state.loaded !== null) {
+      observer.set_scene(state.loaded.scene, state.loaded.A, state.colours);
+      sync_object_poses_3d();
+    }
   }
   layout();
   sync_controls();
@@ -530,6 +875,10 @@ function frame(): void {
   const pl = state.plane;
   if (!state.dirty || state.scene === null || state.A === null || pl === null) return;
   state.dirty = false;
+  // M11 (§5.8.2): the pending object pose of the current gesture first (at most one stage A per frame; the 3D proxy
+  // only for a slow scene); then stages B and C on the result
+  obj_drag.frame();
+  if (state.scene === null || state.A === null) return;
   const scene = state.scene;
   const block = pl.block(); // what the core renders: the scene camera until the first change, then the rig's (§5.7.7)
   const img_mode = state.dragging && state.full_svg_length > IMG_MODE_THRESHOLD;
@@ -690,6 +1039,45 @@ function frame(): void {
       constructions: d.constructions === undefined ? [] : Object.keys(d.constructions),
       umbra_pieces: umbra_count(d),
     };
+  },
+  /** M11 (contract §5.8.4): object `id`'s current transform (a copy; null when unknown). */
+  object_transform: (id: string) => current_transform(id),
+  /** M11: object `id`'s stage-A world vertices (`world_lists` of its record; null when unknown). */
+  object_vertices: (id: string) => {
+    const rec = state.A?.objects.find((o) => o.id === id);
+    return rec === undefined ? null : rec.world_lists.map((v) => [v[0], v[1], v[2]]);
+  },
+  /** M11: object `id`'s pivot `c_w` (the centre of its local bounding box in world coordinates). */
+  object_centre: (id: string) => {
+    const t = current_transform(id), c = state.plane?.local_centres.get(id);
+    return t === null || c === undefined ? null : world_centre(t, c);
+  },
+  /** M11: rotate object `id` about world axis `axis` (0 x, 1 y, 2 z) by `deg` as one drag would (begin, one move,
+   * release; no snapping): one undo step when the pose changed. Returns the new transform, or null when it cannot run. */
+  rotate_object: (id: string, axis: Axis, deg: number) => {
+    if (!start_object_drag(id, axis, { w: [1, 0, 0], r_c: [1, 0, 0], u_c: [0, 0, 1] })) return null;
+    obj_drag.move(deg);
+    finish_object_drag();
+    return current_transform(id);
+  },
+  /** M11: the numeric fields' action for object `id` (exact Euler angles, the pivot fixed): one undo step. */
+  set_object_rotation: (id: string, r: [number, number, number]) => apply_object_rotation(id, r),
+  /** M11: select the object to rotate (the dropdown / a click in rotate mode); null clears it. */
+  select_object: (id: string | null) => select_object(id),
+  /** M11: switch the 轉動物體 mode as its toggle would. */
+  set_rotate_mode: (on: boolean) => set_rotate_mode(on),
+  /** M11: the rotate mode, the selection, the slow-scene flag and the panel's state. */
+  get rotate() {
+    return { on: state.rotate.on, id: state.rotate.id, slow: slow_scene(), pressed: ui.rotateMode.getAttribute("aria-pressed"),
+      fields: ui.objectFields.map((el) => ({ value: el.value, bad: el.classList.contains("bad") })),
+      ground_shown: !ui.objectGround.hidden, centre: ui.objectCentre.textContent, notice: ui.objectNotice.textContent };
+  },
+  /** M11: the observer-pane px of the selected object's rings (per axis; `null` entries behind the observer), or null. */
+  get object_rings_px() {
+    const o = obs_frame(), r = observer?.last_object_rings ?? null;
+    if (o === null || r === null || observer === null) return null;
+    const pr = (X: readonly number[]) => observer_project(observer!.view, o.W, o.H, X);
+    return { id: r.id, centre: pr(r.centre), rings: r.rings.map((ring) => ring.map(pr)), size: [o.W, o.H] };
   },
   /** The scene camera's SVG / JSON through the bundled core (`project_scene(scene, A)` with no override). */
   reference_render: () => {

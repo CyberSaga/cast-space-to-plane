@@ -64,6 +64,15 @@ export interface Controls {
   observerPane: HTMLElement;
   observerCanvas: HTMLCanvasElement;
   observerLabels: HTMLDivElement;
+  /** M11 (contract §5.8.4): the 轉動物體 toggle and the panel's 物體 section. */
+  rotateMode: HTMLButtonElement;
+  objectSelect: HTMLSelectElement;
+  objectFields: [HTMLInputElement, HTMLInputElement, HTMLInputElement];
+  objectApply: HTMLButtonElement;
+  objectRestore: HTMLButtonElement;
+  objectGround: HTMLButtonElement;
+  objectCentre: HTMLDivElement;
+  objectNotice: HTMLDivElement;
 }
 
 export function controls(): Controls {
@@ -107,7 +116,38 @@ export function controls(): Controls {
     observerPane: $<HTMLElement>("observer"),
     observerCanvas: $<HTMLCanvasElement>("obs-gl"),
     observerLabels: $<HTMLDivElement>("obs-labels"),
+    rotateMode: $<HTMLButtonElement>("rotate-mode"),
+    objectSelect: $<HTMLSelectElement>("obj-select"),
+    objectFields: [$<HTMLInputElement>("obj-rx"), $<HTMLInputElement>("obj-ry"), $<HTMLInputElement>("obj-rz")],
+    objectApply: $<HTMLButtonElement>("obj-apply"),
+    objectRestore: $<HTMLButtonElement>("obj-restore"),
+    objectGround: $<HTMLButtonElement>("obj-ground"),
+    objectCentre: $<HTMLDivElement>("obj-centre"),
+    objectNotice: $<HTMLDivElement>("obj-notice"),
   };
+}
+
+/** M11: the object dropdown — "—" (none) and one `<option>` per object id (replacing the previous scene's). */
+export function fill_object_select(select: HTMLSelectElement, ids: readonly string[]): void {
+  const none = document.createElement("option");
+  none.value = "";
+  none.textContent = "—";
+  select.replaceChildren(none, ...ids.map((id) => {
+    const opt = document.createElement("option");
+    opt.value = id;
+    opt.textContent = id;
+    return opt;
+  }));
+}
+
+/** M11: the pivot readout of the panel (`c_w`, 3 decimals). */
+export function object_centre_text(c: readonly number[] | null): string {
+  if (c === null) return "";
+  const f3 = (x: number) => {
+    const t = x.toFixed(3);
+    return t === "-0.000" ? "0.000" : t;
+  };
+  return `中心 c_w = (${c.map(f3).join(", ")}) m`;
 }
 
 /** One checkbox per layer id in `box` (`data-layer` = id), checked iff the id is in `checked` (the page's initial

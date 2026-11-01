@@ -37,8 +37,15 @@
 // red and keeps the plane; undo and reset restore f, g, up (and the sliders); the eye is not draggable; the D slider
 // keeps the board; an object click sets the pivot; Download scene writes the picture_plane form and reloads to the
 // same SVG; the overlay is identical with the observer pane shown and hidden (預覽) for the same edited camera; 900 random rig
-// states render finite. With `--shots DIR` it also saves DIR/web_ui_plane_mode.png. Prints one JSON record. Exit 1 on
-// a page error or a failed check.
+// states render finite. With `--shots DIR` it also saves DIR/web_ui_plane_mode.png. M11 (contract §5.8.8, one object
+// rotated with the camera and the board fixed): basic's crate about z by 30° and directional's spire (cone) about x by
+// 20° keep the camera block, the rig and scene_block, keep the other objects' stage-A vertices value for value and
+// change the rotated one's (pivot fixed); undo gives the byte-identical SVG; the downloaded rotated scene rendered by
+// the Python CLI equals download_texts().svg; the x rotation reports OBJECT_BELOW_RECEIVER and 落地 clears it; a ring
+// drag records drag frames and live stage-A runs; the board's handles_px is null in rotate mode and back after it; a
+// pointerdown → one move → pointerup with no frame in between commits (one undo step); a second finger cancels (pose,
+// vertices, SVG and undo as before the press); a bad numeric field turns red and changes nothing; the numeric fields,
+// 還原此物體 and the panel in 預覽 work. Prints one JSON record. Exit 1 on a page error or a failed check.
 import { execSync } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { createRequire } from "node:module";
@@ -1049,6 +1056,260 @@ const plane = {};
   await frames2();
 }
 
+// M11 (contract §5.8.8): single-object rotation, camera and board fixed
+const objrot = {};
+{
+  const api = (fn, ...args) => page.evaluate(([fn, args]) => window.castplane_web[fn](...args), [fn, args]);
+  const get = (key) => page.evaluate((key) => window.castplane_web[key], key);
+  const near = (a, b, tol) => Math.abs(a - b) <= tol;
+  const wrap = (x) => { const w = x - 360 * Math.ceil((x - 180) / 360); return w <= -180 ? w + 360 : w; };
+  /** The fixed environment: camera block, the rig without its undo depth and readouts, scene_block. */
+  const env = async () => {
+    const r = await get("rig");
+    return { camera: JSON.stringify(await get("camera")), scene_block: r.scene_block,
+      rig: JSON.stringify({ f: r.f, up: r.up, g: r.g, D: r.D, a: r.a, b: r.b, roll_deg: r.roll_deg, focal: r.focal, P: r.P, E: r.E, Q: r.Q,
+        pivot: r.pivot }) };
+  };
+  const verts = async (ids) => Object.fromEntries(await Promise.all(ids.map(async (id) => [id, JSON.stringify(await api("object_vertices", id))])));
+  const warning_codes = () => page.evaluate(() => [...document.querySelectorAll("#warnings tbody tr td:first-child")].map((td) => td.textContent));
+  const undo_size = async () => (await get("rig")).undo;
+  /** Render a scene file with the Python CLI; its SVG text. */
+  const cli_svg = (path) => {
+    const out = join(outdir, "m11_cli");
+    mkdirSync(out, { recursive: true });
+    execSync(`python3 -c "import sys; from castplane.cli import main; sys.exit(main(sys.argv[1:]))" render ${JSON.stringify(path)} -o ${JSON.stringify(out)} --formats svg`,
+      { cwd: ROOT, stdio: "pipe" });
+    return readFileSync(join(out, path.split("/").at(-1).replace(/\.json$/, ".svg")), "utf-8");
+  };
+  await page.evaluate(() => window.castplane_web.set_observer(true));
+  await page.evaluate(() => window.castplane_web.load_example("basic"));
+  await frames2();
+  await frames2();
+  {
+    // basic: the crate about z by 30°
+    const e0 = await env(), v0 = await verts(["crate", "pillar"]), svg0 = await get("svg"), u0 = await undo_size();
+    const t0 = await api("object_transform", "crate"), c0 = await api("object_centre", "crate");
+    const t1 = await api("rotate_object", "crate", 2, 30);
+    await frames2();
+    const e1 = await env(), v1 = await verts(["crate", "pillar"]), svg1 = await get("svg"), c1 = await api("object_centre", "crate");
+    objrot.basic = { t0, t1 };
+    check(t1 !== null && near(wrap(t1.rotation_deg[2] - t0.rotation_deg[2] - 30), 0, 1e-9) && t1.rotation_deg[0] === t0.rotation_deg[0]
+      && t1.rotation_deg[1] === t0.rotation_deg[1], `M11: crate about z by 30° (${JSON.stringify(t1)})`);
+    check(JSON.stringify(e1) === JSON.stringify(e0), "M11: basic: camera block, rig and scene_block unchanged");
+    check(v1.pillar === v0.pillar && v1.crate !== v0.crate, "M11: basic: the pillar's vertices identical, the crate's changed");
+    check(c0.every((x, i) => near(x, c1[i], 1e-9)), "M11: the crate's pivot c_w is fixed");
+    check(svg1 !== svg0 && await undo_size() === u0 + 1, "M11: the drawing changes; one undo step");
+    // download the rotated scene: the Python CLI renders the same SVG as the page (all layers checked, as the file's)
+    await page.click("#construction-lines");
+    await frames2();
+    const page_svg = (await page.evaluate(() => window.castplane_web.download_texts())).svg;
+    const [dl] = await Promise.all([page.waitForEvent("download"), page.click("#dl-scene")]);
+    const path = join(outdir, "m11_basic_rotated.scene.json");
+    await dl.saveAs(path);
+    const saved = JSON.parse(readFileSync(path, "utf-8"));
+    const crate = saved.objects.find((o) => o.id === "crate");
+    check(JSON.stringify(crate.transform.rotation_deg) === JSON.stringify(t1.rotation_deg)
+      && JSON.stringify(crate.transform.position) === JSON.stringify(t1.position), "M11: Download scene writes the rotated transform");
+    let cli = null;
+    try {
+      cli = cli_svg(path);
+    } catch (e) {
+      objrot.cli_error = String(e.stderr ?? e);
+    }
+    objrot.cli = { same: cli === page_svg, cli_chars: cli?.length ?? null, page_chars: page_svg.length };
+    check(cli !== null && cli === page_svg, "M11: the downloaded rotated scene through the Python CLI gives download_texts().svg");
+    await page.click("#construction-lines");
+    await frames2();
+    // undo: the SVG byte-identical to the one before the rotation
+    await page.click("#undo");
+    await frames2();
+    const t2 = await api("object_transform", "crate");
+    check(JSON.stringify(t2) === JSON.stringify(t0) && await get("svg") === svg0 && JSON.stringify(await verts(["crate", "pillar"])) === JSON.stringify(v0)
+      && await undo_size() === u0, "M11: undo restores the pose, the vertices and the byte-identical SVG");
+  }
+  {
+    // rotate mode: the board's handles are null, the object rings are drawn; a ring drag with frames is live
+    const h_before = await get("handles_px");
+    await page.click("#rotate-mode");
+    await api("select_object", "crate");
+    await frames2();
+    await frames2();
+    const rot = await get("rotate");
+    check(rot.on && rot.pressed === "true" && rot.id === "crate" && await get("handles_px") === null && h_before !== null,
+      "M11: in rotate mode the board's handles_px is null");
+    const names = (await get("observer")).names;
+    check(["object-ring:x", "object-ring:y", "object-ring:z"].every((n) => names.includes(n)), "M11: the three object rings are drawn");
+    /** A hit-testable point of the selected object's ring `axis` with room around it (pane px), or null. */
+    const ring_point = (axis, touch = false) => page.evaluate(([axis, touch]) => {
+      const r = window.castplane_web.object_rings_px;
+      if (r === null) return null;
+      const [W, H] = r.size;
+      for (const q of r.rings[axis]) {
+        if (q === null || q[0] < 80 || q[0] > W - 80 || q[1] < 80 || q[1] > H - 80) continue;
+        const hit = window.castplane_web.hit_at(q[0], q[1]);
+        if (hit !== null && hit.kind === "object_ring" && hit.axis === axis) return q;
+      }
+      return null;
+    }, [axis, touch]);
+    const ob = await page.locator("#observer").boundingBox();
+    const q = await ring_point(2);
+    check(q !== null, "M11: a z-ring point is hit-testable");
+    if (q !== null) {
+      const t0 = await api("object_transform", "crate"), u0 = await undo_size();
+      const n0 = (await get("frames")).length, runs0 = (await get("timings")).stage_a_runs;
+      await page.click("#snap"); // snapping off: every step is a new pose (15° steps would repeat the same one)
+      await page.mouse.move(ob.x + q[0], ob.y + q[1]);
+      await page.mouse.down();
+      for (let i = 1; i <= 8; i++) {
+        await page.mouse.move(ob.x + q[0] + 6 * i, ob.y + q[1] + 4 * i);
+        await frames2();
+      }
+      const mid = await get("timings");
+      await page.mouse.up();
+      await frames2();
+      await page.click("#snap");
+      const fr = (await get("frames")).slice(n0), t1 = await api("object_transform", "crate");
+      objrot.drag = { drag_frames: fr.filter((f) => f.dragging).length, stage_a_runs: [runs0, mid.stage_a_runs], stage_a_ms: mid.stage_a_ms };
+      check(fr.filter((f) => f.dragging).length >= 3 && mid.stage_a_runs >= runs0 + 3 && typeof mid.stage_a_ms === "number",
+        `M11: a ring drag records drag frames with live stage-A runs (${JSON.stringify(objrot.drag)})`);
+      check(JSON.stringify(t1) !== JSON.stringify(t0) && t1.rotation_deg[0] === t0.rotation_deg[0] && t1.rotation_deg[1] === t0.rotation_deg[1]
+        && await undo_size() === u0 + 1, "M11: the z-ring drag turns rz only, one undo step");
+      await page.click("#undo");
+      await frames2();
+    }
+    // fast drag: pointerdown → one pointermove → pointerup in one task (no frame in between)
+    const q2 = await ring_point(2);
+    if (q2 !== null) {
+      const t0 = await api("object_transform", "crate"), u0 = await undo_size(), runs0 = (await get("timings")).stage_a_runs;
+      const fast = await page.evaluate(([x, y]) => {
+        const el = document.getElementById("observer"), b = el.getBoundingClientRect();
+        const ev = (type, dx, dy) => new PointerEvent(type, { bubbles: true, cancelable: true, pointerId: 1, pointerType: "mouse",
+          isPrimary: true, button: 0, buttons: type === "pointerup" ? 0 : 1, clientX: b.left + x + dx, clientY: b.top + y + dy });
+        let frames = 0;
+        const id = requestAnimationFrame(() => { frames += 1; });
+        el.dispatchEvent(ev("pointerdown", 0, 0));
+        el.dispatchEvent(ev("pointermove", 45, 30));
+        el.dispatchEvent(ev("pointerup", 45, 30));
+        const out = { frames, t: window.castplane_web.object_transform("crate"), undo: window.castplane_web.rig.undo,
+          runs: window.castplane_web.timings.stage_a_runs };
+        cancelAnimationFrame(id);
+        return out;
+      }, q2);
+      objrot.fast = fast;
+      check(fast.frames === 0 && JSON.stringify(fast.t) !== JSON.stringify(t0) && fast.undo === u0 + 1 && fast.runs === runs0 + 1,
+        `M11: pointerdown → one move → pointerup without a frame commits the last pose (${JSON.stringify(fast)})`);
+      await frames2();
+      await page.click("#undo");
+      await frames2();
+    } else check(false, "M11: a ring point for the fast drag");
+    // second-finger cancel (touch): pose, vertices, SVG and undo as before the press
+    const q3 = await ring_point(2, true);
+    if (q3 !== null) {
+      const t0 = await api("object_transform", "crate"), v0 = await verts(["crate"]), svg0 = await get("svg"), u0 = await undo_size();
+      const cdp = await page.context().newCDPSession(page);
+      const X = ob.x + q3[0], Y = ob.y + q3[1];
+      await cdp.send("Input.dispatchTouchEvent", { type: "touchStart", touchPoints: [{ x: X, y: Y, id: 1 }] });
+      for (let i = 1; i <= 4; i++) {
+        await cdp.send("Input.dispatchTouchEvent", { type: "touchMove", touchPoints: [{ x: X + 10 * i, y: Y + 6 * i, id: 1 }] });
+        await frames2();
+      }
+      const moved = await api("object_transform", "crate");
+      await cdp.send("Input.dispatchTouchEvent", { type: "touchStart", touchPoints: [{ x: X + 40, y: Y + 24, id: 1 }, { x: X - 120, y: Y + 80, id: 2 }] });
+      await frames2();
+      await cdp.send("Input.dispatchTouchEvent", { type: "touchEnd", touchPoints: [] });
+      await frames2();
+      await frames2();
+      await cdp.detach();
+      const t1 = await api("object_transform", "crate");
+      objrot.cancel = { moved: JSON.stringify(moved) !== JSON.stringify(t0), restored: JSON.stringify(t1) === JSON.stringify(t0) };
+      check(objrot.cancel.moved, "M11: the touch ring drag moved the crate before the second finger");
+      check(JSON.stringify(t1) === JSON.stringify(t0) && JSON.stringify(await verts(["crate"])) === JSON.stringify(v0)
+        && await get("svg") === svg0 && await undo_size() === u0, "M11: a second finger cancels (pose, vertices, SVG, undo as before)");
+    } else check(false, "M11: a ring point for the touch drag");
+    // a click on the pillar in rotate mode selects it (the pivot is not picked)
+    const pivot0 = (await get("rig")).pivot;
+    const objs = await get("objects_px");
+    if (objs.pillar !== null) {
+      await page.mouse.click(ob.x + objs.pillar[0], ob.y + objs.pillar[1]);
+      await frames2();
+      const r = await get("rotate");
+      check(r.id === "pillar" && JSON.stringify((await get("rig")).pivot) === JSON.stringify(pivot0)
+        && await page.evaluate(() => document.getElementById("obj-select").value) === "pillar",
+      "M11: a click in rotate mode selects the object (dropdown synced), the pivot unchanged");
+    }
+    await page.click("#rotate-mode");
+    await frames2();
+    await frames2();
+    check(await get("handles_px") !== null && !(await get("rotate")).on, "M11: the board's handles return when rotate mode is off");
+  }
+  {
+    // the panel: a bad field turns red and changes nothing; numeric entry; 還原此物體
+    await api("select_object", "crate");
+    await frames2();
+    const t0 = await api("object_transform", "crate"), u0 = await undo_size();
+    await page.fill("#obj-rz", "abc");
+    await page.press("#obj-rz", "Enter");
+    await frames2();
+    const bad = await get("rotate");
+    check(bad.fields[2].bad && JSON.stringify(await api("object_transform", "crate")) === JSON.stringify(t0) && await undo_size() === u0,
+      "M11: a non-finite field turns red, the pose is kept");
+    await page.fill("#obj-rz", "75");
+    await page.press("#obj-rz", "Enter");
+    await frames2();
+    const t1 = await api("object_transform", "crate");
+    check(t1.rotation_deg[2] === 75 && t1.rotation_deg[0] === 0 && !(await get("rotate")).fields[2].bad && await undo_size() === u0 + 1,
+      "M11: Enter in the rz field applies rz = 75 (one undo step)");
+    await page.click("#obj-restore");
+    await frames2();
+    check(JSON.stringify(await api("object_transform", "crate")) === JSON.stringify(t0) && await undo_size() === u0 + 2,
+      "M11: 還原此物體 returns to the load pose (one undo step)");
+    // 預覽: the observer is hidden, the panel still works
+    await page.evaluate(() => window.castplane_web.set_preview(true));
+    await frames2();
+    await page.fill("#obj-rx", "10");
+    await page.click("#obj-apply");
+    await frames2();
+    const tp = await api("object_transform", "crate");
+    check(tp.rotation_deg[0] === 10 && await undo_size() === u0 + 3, "M11: in 預覽 the panel's 套用 works");
+    await page.evaluate(() => window.castplane_web.set_preview(false));
+    await frames2();
+  }
+  {
+    // directional: the spire (cone) about x by 20°: the other three objects unchanged, OBJECT_BELOW_RECEIVER, 落地
+    await page.evaluate(() => window.castplane_web.load_example("directional"));
+    await frames2();
+    await frames2();
+    const others = ["post", "crate", "ball"];
+    const e0 = await env(), v0 = await verts([...others, "spire"]), svg0 = await get("svg"), c0 = await api("object_centre", "spire");
+    check(!(await warning_codes()).includes("OBJECT_BELOW_RECEIVER"), "M11: directional loads without OBJECT_BELOW_RECEIVER");
+    const t1 = await api("rotate_object", "spire", 0, 20);
+    await frames2();
+    const e1 = await env(), v1 = await verts([...others, "spire"]), c1 = await api("object_centre", "spire");
+    const codes = await warning_codes();
+    objrot.directional = { t1, codes };
+    check(t1 !== null && JSON.stringify(e1) === JSON.stringify(e0), "M11: directional: camera block, rig and scene_block unchanged");
+    check(others.every((id) => v1[id] === v0[id]) && v1.spire !== v0.spire, "M11: directional: the other objects' vertices identical, the cone's changed");
+    check(c0.every((x, i) => near(x, c1[i], 1e-9)), "M11: the cone's pivot c_w is fixed");
+    check(codes.includes("OBJECT_BELOW_RECEIVER"), `M11: the x rotation reports OBJECT_BELOW_RECEIVER (expected) (${codes})`);
+    await api("select_object", "spire");
+    await frames2();
+    const g = await get("rotate");
+    check(g.ground_shown, "M11: 落地 is shown for the unbounded ground");
+    await page.click("#obj-ground");
+    await frames2();
+    const tg = await api("object_transform", "spire");
+    check(!(await warning_codes()).includes("OBJECT_BELOW_RECEIVER") && JSON.stringify(tg.rotation_deg) === JSON.stringify(t1.rotation_deg)
+      && tg.position[2] > t1.position[2], "M11: 落地 lifts the cone onto the ground (warning gone, rotation kept)");
+    await page.click("#undo");
+    await frames2();
+    await page.click("#undo");
+    await frames2();
+    check(await get("svg") === svg0 && JSON.stringify(await verts([...others, "spire"])) === JSON.stringify(v0), "M11: directional: two undos restore the SVG byte for byte");
+  }
+  await page.evaluate(() => window.castplane_web.set_observer(false));
+  await frames2();
+}
+
 // page-wide drop, then the three downloads
 const dropped = readFileSync(join(ROOT, "examples", "curved_demo.json"), "utf-8");
 await page.evaluate((text) => {
@@ -1073,6 +1334,6 @@ await page.waitForFunction(() => document.getElementById("error").textContent.in
 const scene_error = await page.locator("#error").textContent();
 
 const engine = { chromium: browser.version() };
-console.log(JSON.stringify({ engine, first, toggles: toggle_checks, preview: preview_checks, rows, load_errors, phase2, observer, plane, failures, downloads, errors: { not_json, scene_error }, logs }, null, 1));
+console.log(JSON.stringify({ engine, first, toggles: toggle_checks, preview: preview_checks, rows, load_errors, phase2, observer, plane, objrot, failures, downloads, errors: { not_json, scene_error }, logs }, null, 1));
 await browser.close();
 process.exitCode = logs.some((l) => l.startsWith("pageerror")) || failures.length > 0 ? 1 : 0;

@@ -646,17 +646,55 @@ export function handles_of(rig: RigState, frame_mm: readonly number[]): Handles 
 }
 
 /** What a pointer-down at `p` grabs: the arrow tip, or the ring (with the index of the grabbed ring point: the nearer
- * end of the nearest hit segment), or nothing (an object pick or the observer orbit, decided by the caller). */
-export type HandleHit = { kind: "arrow" } | { kind: "ring"; index: number } | null;
+ * end of the nearest hit segment), M11 an object ring (its world axis and grabbed point index, contract §5.8.4), or
+ * nothing (an object pick or the observer orbit, decided by the caller). */
+export type HandleHit = { kind: "arrow" } | { kind: "ring"; index: number } | { kind: "object_ring"; axis: 0 | 1 | 2; index: number }
+  | null;
+
+/** M11 (contract §5.8.4): the three rings of the selected object in rotate mode (x, y, z; closed polylines). */
+export interface ObjectRingSet {
+  id: string;
+  centre: Vec3;
+  rings: [Vec3[], Vec3[], Vec3[]];
+}
+
+/** The nearest segment of a closed projected polyline within `tol` px: the index of its nearer end and the distance. */
+function nearest_ring_point(px: readonly (Vec2 | null)[], p: Vec2, tol: number): { index: number; d: number } | null {
+  let best: { index: number; d: number } | null = null, bd = tol;
+  for (let i = 0; i < px.length; i++) {
+    const j = (i + 1) % px.length;
+    const a = px[i], b = px[j];
+    if (a === null || a === undefined || b === null || b === undefined) continue;
+    const d = dist_point_segment(p, a, b);
+    if (d <= bd) {
+      bd = d;
+      best = { index: Math.hypot(a[0] - p[0], a[1] - p[1]) <= Math.hypot(b[0] - p[0], b[1] - p[1]) ? i : j, d };
+    }
+  }
+  return best;
+}
 
 /**
  * The handle hit test of the observer pane (§5.7.9, spec-v0.2 §3): the arrow tip within the hit radius (14 px mouse,
  * 26 px touch) wins over the ring (within 0.8 × the radius of one of its segments). The eye is never returned: it is
- * not a handle (D72), so a drag on it is an observer orbit.
+ * not a handle (D72), so a drag on it is an observer orbit. M11 (§5.8.4): in rotate mode the board's handles are
+ * null and the object rings are tested instead, with the ring rule (0.8 × the radius; the nearest of the three wins).
  */
 export function hit_handles(basis: { pos: Vec3; r: Vec3; u: Vec3; f: Vec3 }, W: number, H: number, p: Vec2, touch: boolean,
-  h: Handles): HandleHit {
+  h: Handles | null, object_rings: ObjectRingSet | null = null): HandleHit {
   const tol = touch ? HIT_PX_TOUCH : HIT_PX_MOUSE;
+  if (object_rings !== null) {
+    let best: HandleHit = null, bd = Infinity;
+    object_rings.rings.forEach((ring, axis) => {
+      const hit = nearest_ring_point(ring.map((X) => observer_project_with(basis, W, H, X)), p, tol * RING_HIT_FACTOR);
+      if (hit !== null && hit.d < bd) {
+        bd = hit.d;
+        best = { kind: "object_ring", axis: axis as 0 | 1 | 2, index: hit.index };
+      }
+    });
+    if (best !== null || h === null) return best;
+  }
+  if (h === null) return null;
   const tip = observer_project_with(basis, W, H, h.tip);
   if (tip !== null && Math.hypot(tip[0] - p[0], tip[1] - p[1]) <= tol) return { kind: "arrow" };
   const px = h.ring.map((X) => observer_project_with(basis, W, H, X));

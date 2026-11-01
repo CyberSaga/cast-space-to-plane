@@ -24,6 +24,14 @@ import {
 } from "../src/rig.js";
 import type { RigState, RingGrab, ViewName } from "../src/rig.js";
 
+/** Pop a board step of the shared undo stack (M11: `undo` returns a tagged step); null when empty. */
+function undoRig(undo: UndoStack, current: RigState): RigState | null {
+  const s = undo.undo(current);
+  if (s === null) return null;
+  assert.equal(s.kind, "rig");
+  return s.kind === "rig" ? s.rig : null;
+}
+
 // web/build/test/rig.test.js -> repository root
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..", "..");
 const scene_file = (...parts: string[]): Scene => load_scene(JSON.parse(readFileSync(resolve(ROOT, ...parts), "utf-8")));
@@ -607,7 +615,7 @@ test("pivot change: the eye faces the new pivot again (pan cleared), orbiting ke
   }
   // undo keeps the current pivot
   undo.record(r1, sixView(r1, "top"));
-  const back = undo.undo(setPivot(sixView(r1, "top"), P0))!;
+  const back = undoRig(undo, setPivot(sixView(r1, "top"), P0))!;
   assert.deepEqual(back.P, P0);
   assert.deepEqual(back.f, r1.f);
 });
@@ -681,7 +689,7 @@ test("undo details: a press without movement records nothing, a pivot change rec
   assert.equal(UNDO_MAX, 50);
   let last: RigState | null = null, n = 0;
   for (let cur = rig0; ; n++) {
-    const prev = undo.undo(cur);
+    const prev = undoRig(undo, cur);
     if (prev === null) break;
     last = prev;
     cur = prev;
@@ -703,15 +711,79 @@ test("undo and reset: restore f, g, up and the slider values D, ρ, focal of the
   const reset = initial();
   undo.record(rig, reset);
   assert.equal(undo.size, 2);
-  const a = undo.undo(reset)!;
+  const a = undoRig(undo, reset)!;
   assert.deepEqual([a.f, a.g, a.up, a.D, a.roll_deg, a.focal], [rig.f, rig.g, rig.up, 6, 15, 35]);
-  const b = undo.undo(a)!;
+  const b = undoRig(undo, a)!;
   assert.deepEqual(b, rig0);
   // lock-horizontal off → on is one step
   const on = setLockLevel(rig, true);
   assert.equal(on.up, null);
   assert.equal(undo.record(rig, on), true);
   assert.deepEqual(setLockLevel(on, false).up, basis(on.f, null).u0);
+});
+
+test("shared undo (M11, §5.8.3): object steps, interleaved with board steps in order; peek consumes nothing", () => {
+  const undo = new UndoStack();
+  const rig0 = initial();
+  const tA = { position: [2, 4, 0] as Vec3, rotation_deg: [0, 0, 30] as Vec3 };
+  const tB = { position: [2.1, 4, 0] as Vec3, rotation_deg: [0, 0, 60] as Vec3 };
+  const tC = { position: [2.1, 4, 0.2] as Vec3, rotation_deg: [10, 0, 60] as Vec3 };
+  // board step, object step (discrete), board step, object gesture
+  assert.equal(undo.record(rig0, sixView(rig0, "top")), true);
+  const rig1 = sixView(rig0, "top");
+  assert.equal(undo.record_object("crate", tA, tB), true);
+  assert.equal(undo.record(rig1, sixView(rig1, "left")), true);
+  undo.begin_object("pillar", tB);
+  assert.equal(undo.end_object(tC), true);
+  assert.equal(undo.size, 4);
+  // peek returns the top without consuming it (a copy)
+  const top = undo.peek()!;
+  assert.deepEqual(top, { kind: "object", id: "pillar", before: tB });
+  if (top.kind === "object") top.before.position[0] = 99;
+  assert.equal(undo.size, 4);
+  assert.deepEqual(undo.peek(), { kind: "object", id: "pillar", before: tB }, "peek copies");
+  const cur = sixView(rig1, "left");
+  const s1 = undo.undo(cur)!;
+  assert.deepEqual(s1, { kind: "object", id: "pillar", transform: tB });
+  const s2 = undo.undo(cur)!;
+  assert.equal(s2.kind, "rig");
+  if (s2.kind === "rig") assert.deepEqual(s2.rig.f, rig1.f);
+  const s3 = undo.undo(rig1)!;
+  assert.deepEqual(s3, { kind: "object", id: "crate", transform: tA });
+  const s4 = undo.undo(rig1)!;
+  assert.equal(s4.kind, "rig");
+  if (s4.kind === "rig") assert.deepEqual(s4.rig, rig0);
+  assert.equal(undo.undo(rig0), null);
+  assert.equal(undo.peek(), null);
+});
+
+test("shared undo (M11): an unchanged pose records nothing; cancel is shared; still at most 50 entries", () => {
+  const undo = new UndoStack();
+  const t = { position: [1, 2, 0] as Vec3, rotation_deg: [0, 0, 0] as Vec3 };
+  assert.equal(undo.record_object("crate", t, { position: [1, 2, 0], rotation_deg: [0, 0, 0] }), false, "equal poses");
+  undo.begin_object("crate", t);
+  assert.equal(undo.end_object({ position: [1, 2, 0], rotation_deg: [0, 0, 0] }), false, "a press without change");
+  undo.begin_object("crate", t);
+  undo.cancel();
+  assert.equal(undo.end_object({ position: [1, 2, 0], rotation_deg: [0, 0, 5] }), false, "cancelled gesture");
+  // a board end does not close an object gesture, and the reverse
+  undo.begin_object("crate", t);
+  assert.equal(undo.end(sixView(initial(), "top")), false);
+  undo.begin(initial());
+  assert.equal(undo.end_object({ position: [1, 2, 0], rotation_deg: [0, 0, 5] }), false);
+  assert.equal(undo.size, 0);
+  // 30 board steps then 40 object steps: capped at 50, the oldest dropped
+  const rig0 = initial();
+  for (let i = 0; i < 30; i++) undo.record({ ...rig0, g: i }, { ...rig0, g: i + 1 });
+  for (let i = 0; i < 40; i++) undo.record_object("crate", { ...t, rotation_deg: [0, 0, i] }, { ...t, rotation_deg: [0, 0, i + 1] });
+  assert.equal(undo.size, UNDO_MAX);
+  const kinds: string[] = [];
+  for (let s = undo.undo(rig0); s !== null; s = undo.undo(rig0)) kinds.push(s.kind === "rig" ? `rig:${s.rig.g}` : `object:${s.transform.rotation_deg[2]}`);
+  assert.equal(kinds.length, 50);
+  assert.equal(kinds[0], "object:39");
+  assert.equal(kinds[39], "object:0");
+  assert.equal(kinds[40], "rig:29");
+  assert.equal(kinds[49], "rig:20", "the oldest 20 board steps were dropped");
 });
 
 // ------------------------------------------------------------------------------------------------ readouts
