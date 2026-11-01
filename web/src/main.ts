@@ -694,8 +694,11 @@ function ground_object(id: string): boolean {
 function select_object(id: string | null): void {
   if (id !== null && object_in(state.scene, id) === undefined) return;
   if (state.dragging || state.handle !== null) return;
+  // D83 review: re-selecting the selected object (a second click on it, e.g. to re-pick the pivot) is not a selection
+  // change, so typed angle text survives it (the M11 review rule); only a real change rewrites every field
+  const changed = id !== state.rotate.id;
   state.rotate.id = id;
-  sync_object_panel(true);
+  sync_object_panel(changed);
   request_render();
 }
 

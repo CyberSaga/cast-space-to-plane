@@ -5970,3 +5970,10 @@ returns the object a click at pane px `(x, y)` would select. The object-pivot no
 (「請點一下左窗的物體，把它設為旋轉中心（目前暫用場景中心）」, and the 預覽 variant). `web/test/plane.test.ts` pins the hit
 order with both rings and board handles present, and `web/scripts/smoke.mjs` drives it with real mouse events
 (docs/DECISIONS.md D83, spec-v0.3 §7).
+
+**[implementation] (D83 review) Re-selecting the selected object.** Clarifies item (3) of the D83 note above and the
+"selection change" in the review-fix note's field rule: a click on the object that is already selected (for example a
+second click to re-pick the pivot with 「點選物體」), or `select_object` with the current id, is not a selection change.
+`select_object` rewrites the angle fields from the pose (`sync_object_panel(true)`) only when the id changes; otherwise
+the panel syncs unforced, so typed rx / ry / rz text survives until 「套用」 / Enter applies it or Escape drops it.
+`web/scripts/smoke.mjs` pins it with real mouse clicks.

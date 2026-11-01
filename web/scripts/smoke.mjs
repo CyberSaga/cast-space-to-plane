@@ -1299,6 +1299,25 @@ const objrot = {};
     objrot.pivot_click = { pivot: rp.pivot, selected: sp.id };
     check(cp2 !== null && rp.pivot.mode === "object" && rp.pivot.object_id === "crate" && sp.id === "crate" && rp.undo === u_p,
       `D83: pivot 點選物體 + a click on the crate sets the pivot and selects it (${JSON.stringify(objrot.pivot_click)})`);
+    // D83 review: a second click on the selected crate (re-picking the pivot) keeps an unapplied typed angle
+    // (the point is taken again now that the crate's rings are drawn, so the click is not on a ring)
+    const cp3 = await click_px("crate");
+    check(cp3 !== null, "D83 review: a clickable point on the selected crate");
+    if (cp3 !== null) {
+      const t_re = await api("object_transform", "crate"), u_re = await undo_size();
+      await page.fill("#obj-rx", "30");
+      await page.mouse.click(ob.x + cp3[0], ob.y + cp3[1]);
+      await frames2();
+      await frames2();
+      const re = { rx: await page.evaluate(() => document.getElementById("obj-rx").value), id: (await get("rotate")).id,
+        active: await page.evaluate(() => document.activeElement?.id ?? null) };
+      objrot.reclick_typed = re;
+      check(re.rx === "30" && re.id === "crate" && JSON.stringify(await api("object_transform", "crate")) === JSON.stringify(t_re)
+        && await undo_size() === u_re, `D83 review: a click on the selected object keeps the typed rx text (${JSON.stringify(re)})`);
+      await page.press("#obj-rx", "Escape");
+      await frames2();
+      check((await page.evaluate(() => document.getElementById("obj-rx").value)) !== "30", "D83 review: Escape then drops the typed rx text");
+    }
     await page.selectOption("#pivot-mode", "scene");
     await frames2();
     // a click on blank space clears the selection (rings gone, dropdown "—"); the board's handles stay
