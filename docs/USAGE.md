@@ -893,5 +893,5 @@ python3 tools/make_miki_model.py --only hair headband --preview DIR --context
 
 **預算。** 全部物件加起來 ≤ 6000 個多邊形與 ≤ 10000 個三角形（現在 4469 與 8154；castplane 的消隱成本隨三角形數上升，目前網頁上的靜止影格約 1.4 秒），每個物件的特徵輪廓頂點 ≤ 64（`MESH_MAX_RAYS`，超過會發 `MESH_RAYS_CAPPED`）。目前每個物件最多 39 個。每個殼都必須是封閉、方向一致的 2-流形，沒有低於地面的頂點。
 
-**時間（參考值）。** 建模約 18 秒；`--check` 約 26 秒；命令列渲染 `miki.json` 約 4–5 秒；TypeScript 移植（`ts/scripts/render.mjs`）約 1.8 秒；A 段約 0.13 秒；匯入 GLB 約 0.1 秒、OBJ 約 0.06 秒。檔案大小：`miki.json` 190 304 B、`miki.obj` 202 354 B、`miki.mtl` 1 000 B、`miki.glb` 182 364 B。
+**時間（參考值）。** 建模約 18 秒；`--check` 約 26 秒；命令列渲染 `miki.json` 約 4–5 秒；TypeScript 移植（`ts/scripts/render.mjs`）約 1.8 秒；A 段約 0.13 秒；匯入 GLB 約 0.1 秒、OBJ 約 0.06 秒。檔案大小：`miki.json` 192 377 B、`miki.obj` 202 660 B、`miki.mtl` 1 272 B、`miki.glb` 182 568 B。
 
