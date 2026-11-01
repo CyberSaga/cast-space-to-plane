@@ -6,16 +6,20 @@
  * no gesture there reaches the session. `main.ts` wires the DOM to it.
  */
 
-import type { Vec2, Vec3 } from "castplane";
+import type { Transform, Vec2, Vec3 } from "castplane";
 
 import {
   UndoStack, arrowDrag, bboxCentre, clone, deltaText, equation, frameMetres, fromCamera, measureRef, orbitRing,
   pictureDelta, readouts, sameState, setD, setFocal, setLockLevel, setPivot, setRoll, sixView, toCameraBlock,
 } from "./rig.js";
-import type { AnyCamera, PicturePlaneCamera, RigState, RingGrab, ViewName } from "./rig.js";
+import type { AnyCamera, GroupFramePose, ObjectPose, PicturePlaneCamera, RigState, RingGrab, UndoEntry, ViewName } from "./rig.js";
 import { EquationError, applyEquation } from "./equation.js";
+import { GROUP_VALUE_PREFIX } from "./groups.js";
+import { clone_group_frame, clone_transform, identity3, local_bbox, world_bbox } from "./object_rotate.js";
+import type { GroupFrame } from "./object_rotate.js";
 
-/** The pivot selection (§5.7.7): not part of an undo snapshot. */
+/** The pivot selection (§5.7.7): not part of an undo snapshot. D84: `object_id` is an object id or a group's key
+ * `group.<name>` (`groups.ts::selection_value`; object ids cannot contain `.`). */
 export interface PivotSelection {
   mode: "scene" | "object";
   object_id: string | null;
@@ -37,6 +41,13 @@ export interface SessionScene {
   object_centres: ReadonlyMap<string, Vec3>;
   /** Every stage-A vertex (the picture-delta readout). */
   vertices: readonly Vec3[];
+  /** M11 (contract §5.8.3): each object's load-time transform and stage-A world vertices (`mesh.vertices`), from
+   * which the session caches the local pivots and the load-time transforms (還原此物體). Optional: without it no object
+   * can be rotated. */
+  object_poses?: readonly { id: string; transform: Transform; vertices: readonly (readonly number[])[] }[];
+  /** D84: the groups with at least two members (`groups.ts::group_members`), member ids in scene order. Each gets a
+   * frame: `G = I` and `c` the centre of the load-time world bounding box of its members' `object_poses` vertices. */
+  groups?: ReadonlyMap<string, readonly string[]>;
 }
 
 /** What changed after a session action: `framing` asks for an observer re-framing (§5.6.4: views, equation, reset,
@@ -45,6 +56,11 @@ export interface ActionResult {
   changed: boolean;
   framing: boolean;
 }
+
+/** M11 (contract §5.8.3): an undo whose top entry is an object step reports it here without consuming it; the caller
+ * recomputes stage A with `transform` and, on success, calls {@link PlaneSession.pop_object_step}. */
+export type UndoResult = ActionResult & { object?: { id: string; transform: Transform };
+  objects?: { transforms: Map<string, Transform>; group: GroupFramePose | null } };
 
 /**
  * The plane-mode session of one loaded scene. Every rig change goes through it: handle drags in the observer pane
@@ -69,8 +85,45 @@ export class PlaneSession {
   private ref0: (Vec2 | null)[] | null = null;
   private gesture0: { rig: RigState; scene_block: boolean; delta: number | null } | null = null;
   private readonly clamped: boolean;
+  private scene_: SessionScene;
+  /** M11 (contract §5.8.1): per object id the centre of its local bounding box `c_local` (the rotation pivot), computed
+   * once at load; {@link update_scene} never changes it. */
+  readonly local_centres: ReadonlyMap<string, Vec3>;
+  /** M11: per object id half its local bounding-box diagonal (the ring radius, spec-v0.3 §3.2), computed at load. */
+  readonly local_half_diagonals: ReadonlyMap<string, number>;
+  /** M11: per object id its load-time transform (還原此物體). */
+  private readonly initial_transforms: ReadonlyMap<string, Transform>;
+  /** D84: per group (≥ 2 members) its member ids in scene order. */
+  readonly groups: ReadonlyMap<string, readonly string[]>;
+  /** D84: per group half the diagonal of its load-time world bounding box (the ring radius) and its load-time `c0`. */
+  readonly group_loads: ReadonlyMap<string, { c0: Vec3; half_diagonal: number }>;
+  /** D84: per group its current frame (`G` relative to the load, `c`). */
+  private readonly group_frames = new Map<string, GroupFrame>();
 
-  constructor(readonly scene: SessionScene) {
+  constructor(scene: SessionScene) {
+    this.scene_ = scene;
+    const centres = new Map<string, Vec3>(), diagonals = new Map<string, number>(), initial = new Map<string, Transform>();
+    for (const o of scene.object_poses ?? []) {
+      const b = local_bbox(o.transform, o.vertices);
+      centres.set(o.id, b.centre);
+      diagonals.set(o.id, b.half_diagonal);
+      initial.set(o.id, clone_transform(o.transform));
+    }
+    this.local_centres = centres;
+    this.local_half_diagonals = diagonals;
+    this.initial_transforms = initial;
+    const verts = new Map((scene.object_poses ?? []).map((o) => [o.id, o.vertices]));
+    const groups = new Map<string, readonly string[]>(), loads = new Map<string, { c0: Vec3; half_diagonal: number }>();
+    for (const [name, ids] of scene.groups ?? []) {
+      const members = ids.filter((id) => initial.has(id));
+      if (members.length < 2) continue;
+      const b = world_bbox(members.map((id) => verts.get(id) ?? []));
+      groups.set(name, members);
+      loads.set(name, { c0: b.centre, half_diagonal: b.half_diagonal });
+      this.group_frames.set(name, { name, G: identity3(), c: [b.centre[0], b.centre[1], b.centre[2]] });
+    }
+    this.groups = groups;
+    this.group_loads = loads;
     const res = fromCamera(scene.camera, scene.centre);
     this.rig = res.rig;
     this.initial = clone(res.rig);
@@ -79,6 +132,94 @@ export class PlaneSession {
     this.load_notices = [];
     if (res.clampedR) this.load_notices.push(NOTICE_R_CLAMPED);
     if (res.clampedD) this.load_notices.push(NOTICE_D_CLAMPED);
+  }
+
+  /** What the session knows of the scene (replaced by {@link update_scene} after an object rotation). */
+  get scene(): SessionScene {
+    return this.scene_;
+  }
+
+  /**
+   * M11 (contract §5.8.3): an object was rotated. From the new stage-A record only `object_centres` (`objects`' bounding
+   * box centres) and `vertices` change; the rig (with `P`), `initial`, the scene centre, the camera, `scene_block`,
+   * the load notices and the local pivots are kept. The picture-delta reference is cleared (it describes board drags).
+   */
+  update_scene(objects: readonly { id: string; bbox: readonly (readonly number[])[] }[], A: { vertices: readonly Vec3[] }): void {
+    this.scene_ = { ...this.scene_, object_centres: object_centres(objects), vertices: A.vertices };
+    this.ref0 = null;
+    this.delta = null;
+  }
+
+  /** M11: the load-time transform of object `id` (a copy; null for an unknown id). */
+  initial_transform(id: string): Transform | null {
+    const t = this.initial_transforms.get(id);
+    return t === undefined ? null : clone_transform(t);
+  }
+
+  /** D84: group `name`'s current frame (a copy; null for an unknown group). */
+  group_frame(name: string): GroupFrame | null {
+    const f = this.group_frames.get(name);
+    return f === undefined ? null : clone_group_frame(f);
+  }
+
+  /** D84: group `name`'s load-time frame (`G = I`, `c = c0`; null for an unknown group). */
+  initial_group_frame(name: string): GroupFrame | null {
+    const l = this.group_loads.get(name);
+    return l === undefined ? null : { name, G: identity3(), c: [l.c0[0], l.c0[1], l.c0[2]] };
+  }
+
+  /** D84: set group `frame.name`'s frame (a copy; ignored for an unknown group). Not an undo step by itself. */
+  set_group_frame(frame: GroupFrame): void {
+    if (this.group_frames.has(frame.name)) this.group_frames.set(frame.name, clone_group_frame(frame));
+  }
+
+  /** D84: one undo step for a discrete group action when a member's pose or the group frame changed. */
+  record_objects(before: ReadonlyMap<string, ObjectPose>, group_before: GroupFramePose | null, after: ReadonlyMap<string, ObjectPose>,
+    group_after: GroupFramePose | null): boolean {
+    return this.undo.record_objects(before, group_before, after, group_after);
+  }
+
+  /** D84: pointer-down of a group drag (opens one undo step). */
+  begin_objects(before: ReadonlyMap<string, ObjectPose>, group: GroupFramePose | null): void {
+    this.undo.begin_objects(before, group);
+  }
+
+  /** D84: release of a group drag: one undo step when anything changed. */
+  end_objects(after: ReadonlyMap<string, ObjectPose>, group: GroupFramePose | null): boolean {
+    return this.undo.end_objects(after, group);
+  }
+
+  /** M11: one undo step for a discrete object action (numeric apply, 還原此物體, 落地) when the pose changed. */
+  record_object(id: string, before: Transform, after: Transform): boolean {
+    return this.undo.record_object(id, before, after);
+  }
+
+  /** M11: pointer-down of an object drag (opens one undo step; the board's gesture state is not touched). */
+  begin_object(id: string, t0: Transform): void {
+    this.undo.begin_object(id, t0);
+  }
+
+  /** M11: release of an object drag with the committed pose `t`: one undo step when it differs from the pointer-down
+   * pose. */
+  end_object(t: Transform): boolean {
+    return this.undo.end_object(t);
+  }
+
+  /** M11: abandon an object drag (no step). */
+  cancel_object(): void {
+    this.undo.cancel();
+  }
+
+  /** The top undo entry without consuming it (null when empty). */
+  peek_undo(): UndoEntry | null {
+    return this.undo.peek();
+  }
+
+  /** M11: pop the top entry after its object step was applied successfully (no-op when the top is not an object step);
+   * an open board gesture is kept. */
+  pop_object_step(): void {
+    const k = this.undo.peek()?.kind;
+    if (k === "object" || k === "objects") this.undo.pop_top();
   }
 
   /** The picture-delta readout ("這次拖動右窗畫面變動", frame mm): the largest image displacement of the stage-A
@@ -218,10 +359,18 @@ export class PlaneSession {
     return this.move_pivot(this.pivot_point(), true);
   }
 
-  /** The pivot of the current selection (§5.7.7). */
+  /** D84: pick group `name` as the pivot (object mode only): its frame's `c`, as {@link pick_object} otherwise. */
+  pick_group(name: string): ActionResult {
+    if (this.pivot.mode !== "object" || !this.group_frames.has(name)) return { changed: false, framing: false };
+    this.pivot = { mode: "object", object_id: GROUP_VALUE_PREFIX + name };
+    return this.move_pivot(this.pivot_point(), true);
+  }
+
+  /** The pivot of the current selection (§5.7.7; D84 a group's key gives its frame's `c`). */
   pivot_point(): Vec3 {
     const id = this.pivot.mode === "object" ? this.pivot.object_id : null;
-    const c = id === null ? undefined : this.scene.object_centres.get(id);
+    const c = id === null ? undefined : id.startsWith(GROUP_VALUE_PREFIX)
+      ? this.group_frames.get(id.slice(GROUP_VALUE_PREFIX.length))?.c : this.scene.object_centres.get(id);
     return c === undefined ? [...this.scene.centre] as Vec3 : [...c] as Vec3;
   }
 
@@ -233,12 +382,20 @@ export class PlaneSession {
     return { changed, framing: changed };
   }
 
-  /** Undo (§5.7.8 item 13): restores the last snapshot (the current pivot kept); re-frames the observer. */
-  undo_step(): ActionResult {
+  /** Undo (§5.7.8 item 13): restores the last board snapshot (the current pivot kept) and re-frames the observer. M11
+   * (§5.8.3): an object step on top is only peeked and returned in `object`; the rig is not touched. */
+  undo_step(): UndoResult {
+    const top = this.undo.peek();
+    if (top === null) return { changed: false, framing: false };
+    if (top.kind === "object") return { changed: false, framing: false, object: { id: top.id, transform: top.before } };
+    if (top.kind === "objects") {
+      return { changed: false, framing: false, objects: { transforms: new Map([...top.before].map(([id, t]) => [id, clone_transform(t)])),
+        group: top.group } };
+    }
     const prev = this.undo.undo(this.rig);
-    if (prev === null) return { changed: false, framing: false };
+    if (prev === null || prev.kind !== "rig") return { changed: false, framing: false };
     this.ref0 = null;
-    const changed = this.assign(prev);
+    const changed = this.assign(prev.rig);
     return { changed, framing: true };
   }
 

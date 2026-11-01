@@ -5209,6 +5209,20 @@ The observer shows lights as in §5.4.10 (`scene3d`). Nothing in this table is w
   gesture is held (`state.dragging` or a held handle), so the board never moves with the pane hidden; Esc inside the
   equation field cancels the typed text only and does not also leave 預覽. The page markup starts in the edit view
   (`#panes.observer-on`, `#observer` not hidden).
+- **[decision, implementation] (D83) The left pane's 「板子」 checkbox.** A checkbox `#observer-board` (checked by default)
+  sits in the controls row next to 視線. Unchecked, the observer's board group (`observer-board`: eye, board patch,
+  frame with the drawing on it, frustum, principal point `Q`, `D` and `g` lines, pivot marker, and the board's ring and
+  arrow handles) is not built and is hidden (`board.visible = false`), and the board's labels (§5.6.5) are not placed.
+  The vertex rays (which keep following 視線) and the selected object's rings (§5.8 note D83) live in a second group,
+  `observer-extras`, which stays. `main.ts` passes `handles: null` and `board_visible: false` to
+  `ObserverPane.update`, so the board's handles are neither hit-tested nor hover-highlighted and a pointer-down there
+  orbits the observer or clicks (object pick). Left pane only: the drawing pane, the core outputs, the downloads, the
+  camera block, the undo stack and the framing of 整體顯示 (§5.6.4, which still includes the board) are unchanged; the
+  toggle is not an undo step, is not stored in the scene, and is kept across scene loads (page-level, like 視線).
+  Toggling re-draws the observer (`observer_refresh(true)`). A change while a board-handle drag (ring or arrow) is held
+  is ignored: the checkbox returns to its state, so the held board never vanishes under the pointer; during an
+  object-ring drag or an orbit it applies. Hooks: `set_board_visible(on)` (acts as the checkbox; returns the resulting
+  state), `board_visible()`, and the `observer` hook's `board_shown` and `labels_shown` (docs/DECISIONS.md D83).
 
 ### 5.7 M10 — plane mode, board-first (spec-v0.2 §1, §4, §5, §6, §7)
 
@@ -5737,3 +5751,328 @@ through the port's `resolve_picture_plane` and draws its readout camera through 
   drag or wheel can change the camera" is read as "while previewing (§5.6, D80 note)"; the 旁觀視角 switch is gone and
   the observer is shown by default, so the drag and wheel on the board are available in the edit view without any
   switch. The rest of the D79 note stands.
+
+### 5.8 M11 — single-object rotation (web UI, not core; spec-v0.3)
+
+The user rotates **one** object about a world axis through the centre of its local bounding box. The camera, the picture
+plane (board), the eye, the lights and the receivers stay fixed; the rest of the objects do not move. Everything in this
+section is web UI and is marked so; it adds no core behaviour (D82, spec-v0.3).
+
+#### 5.8.0 Scope and hard rules
+- **Core, TS port and conformance unchanged:** `castplane/`, `ts/src/` and `tests/conformance/` are not touched; no
+  warning code (§5.0.5 stays at 18), no new object type, no change to `rules.json`. The conformance set stays v8 / 63
+  cases; `regen_conformance.py --dry-run` reports 0 changes and `compare_svg.py` 0 mismatches.
+- **Unoperated output is byte-identical:** a scene that is loaded and not rotated renders exactly as before this
+  section (documents, SVG, downloads). A rotated scene is an ordinary valid scene (`transform` is already part of
+  §2.0; `validate_transform` accepts any finite angles): stage A runs on it unchanged and "Download scene" writes the
+  new `transform` (full doubles, §5.4.10), so the CLI reproduces the picture.
+- **Fixed environment:** the rig (including `P`, `initial`, `centre`, `scene_block`), the camera block, the lights and
+  the receivers are not modified by an object rotation. Only the rotated object's `transform` changes; `scene` is
+  replaced by a copy and the old one is never mutated (stage A's lists are shared by reference, §5.4).
+- **New module:** the maths and the drag state machine live in `web/src/object_rotate.ts` (pure, no DOM, unit-tested in
+  `web/test/object_rotate.test.ts`); it reuses the port's `transform_frame` and `euler_zyx_matrix`.
+
+#### 5.8.1 Maths (spec-v0.3 §2)
+Pose `(R, p)` from `transform_frame(transform)`; `R = Rz(rz)·Ry(ry)·Rx(rx)`, world `= R·local + p` (§2.0).
+- **Pivot [decision]:** `c_local = bbox_centre({Rᵀ(v − p) : v ∈ A.objects[i].mesh.vertices})`, computed once per
+  object at load and cached by id (`PlaneSession.local_centres`, never changed by `update_scene`);
+  `c_w = R·c_local + p`. It depends only on the shape, not on the pose the scene was loaded in.
+- **Drag:** with `Q` the right-handed rotation about the world axis by `θ`: `R′ = Q·R`, `p′ = c_w + Q·(p − c_w)`, where
+  `(R, p)` is the pose at pointer-down and `c_w` is computed from it. `θ` comes from the total displacement, never
+  incrementally.
+- **Numeric fields:** `R′ = euler_zyx_matrix([rx, ry, rz])`, `p′ = c_w + R′·Rᵀ·(p − c_w)`; `c_w` is unchanged, and a
+  drag and a numeric entry that reach the same `R′` also reach the same `p′`.
+- **`euler_zyx_from_matrix(R) → [rx, ry, rz]` (degrees):** `ry = atan2(−R₂₀, hypot(R₀₀, R₁₀))`; when
+  `hypot(R₀₀, R₁₀) ≥ 1e-9`: `rz = atan2(R₁₀, R₀₀)`, `rx = atan2(R₂₁, R₂₂)`; otherwise (gimbal lock, `ry = ±90°`)
+  `rx = 0` and `rz = atan2(−R₀₁, R₁₁)`. Euler angles are not unique, so correctness is the **matrix round trip**
+  `euler_zyx_matrix(euler_zyx_from_matrix(R)) ≈ R` (< 1e-12 per element), never an angle comparison.
+- **Range and display:** results are in `(−180°, 180°]` (`ry` in `[−90°, 90°]`) and are **not unwrapped**: a rotation
+  about `z` past 180° makes `rz` jump to `−180°`; the panel shows 0.1°, the written file the full double. Tests compare
+  angles modulo 360.
+- **Snap:** the drag angle `θ` snaps to multiples of `OBJECT_SNAP_DEG` (the 吸附 checkbox; Alt suspends, spec-v0.2 §5.1).
+- **Ground (落地):** only when `receivers[0].type === "plane"` (unbounded); translate along the plane normal so that the
+  minimum signed distance of the new stage-A vertices to the plane is 0. One undo step.
+
+#### 5.8.2 Drag lifecycle (web UI, not core; spec-v0.3 §3.5)
+`apply_object_transform(id, transform, record, live)` in `web/src/main.ts`: (1) copy the scene with the object's new
+`transform` (the old scene is not mutated); (2) `A′ = shadow_geometry(scene′)`; (3) update `state.scene`, `state.A`,
+`state.timings.stage_a_ms` and `plane.update_scene(...)`; (4) apply the 3D matrices; (5) request a frame. The 3D matrix
+is `object_matrix(obj′)` for a primitive and the rigid delta `object_matrix(obj′)·object_matrix(obj₀)⁻¹` (loaded
+object `obj₀`) for a mesh, applied to both three.js groups (the drawing pane's `view.group` and the observer's group);
+meshes are never rebuilt during a drag.
+
+`ObjectDrag` (pure state machine in `object_rotate.ts`):
+- `begin(id, t0, scene0, A0, seq)`: remembers the pressed transform, the scene and A record (by reference, no
+  recompute) and the gesture sequence number.
+- `move(θ)`: updates only the pending candidate transform; no stage A. `main.ts` then requests a frame.
+- `frame()` start: if a pending candidate exists and its sequence number is the current gesture's, run steps 1–4 with
+  `record: none`, then stages B and C. At most one stage A per frame.
+- `end()`: **take the last pending candidate, run steps 1–4 synchronously, and only on success record the undo step**;
+  nothing is recorded when the candidate equals the committed pose. It never waits for a frame, so a pointer-up that
+  arrives before the next frame still commits the last candidate. The slow-scene path ends here too.
+- `cancel()`: invalidates the sequence number (a later frame sees a stale number and applies nothing), restores
+  `state.scene = scene0`, `state.A = A0`, `plane.update_scene(A0)`, resets both 3D groups to `t0`, records nothing.
+- **Stage-A exception:** a rotated scene is valid and the core warns on degeneracy instead of raising, so an exception
+  is a core bug and not a normal path. The pose is not committed, the 3D matrices return to the committed transform,
+  the history is untouched, and the error panel reads 「核心重算失敗，請回報」. It is never swallowed silently.
+- **Stage B** keeps the existing `!dragging` rule: umbra and hidden lines are off while dragging and computed in full at
+  release.
+- **`LIVE_STAGE_A_MS = 150`:** if `stage_a_ms` measured at load exceeds it, a drag updates only the 3D matrices
+  (`pending` is still recorded), stage A runs at `end()`, and the panel shows 「此場景拖動放開後更新」.
+
+#### 5.8.3 Session and undo (web UI, not core; amends §5.7.8 item 13 by reference)
+- **`PlaneSession.update_scene(objects, A)`:** replaces `scene` and, from the new A, only `object_centres` (the bounding
+  box centres used by pivot picking and labels) and `vertices`. It keeps `rig` (including `P`), `initial`, `centre`
+  (the load-time scene centre), `scene_block`, `load_notices` and `local_centres`; it clears `ref0` and `delta`
+  (the "這次拖動右窗畫面變動" readout describes board drags only; without the clear the next measurement would count the
+  object rotation).
+- **Shared undo stack (amends §5.7.8 item 13):** `UndoStack` holds a tagged union `{kind: "rig", rig: RigState} |
+  {kind: "object", id, before: Transform}`; the limit stays 50 and `size` / `canUndo` are unchanged. `undo(current)`
+  returns `{kind: "rig", rig} | {kind: "object", id, transform}` (the rig's `P` still taken from the current value).
+  `peek()` returns the top step without consuming it: an object step is peeked, stage A is recomputed, and only on
+  success is it popped; on failure the history is kept (§5.8.2).
+- `record_object(id, before, after)` records nothing when the two transforms are equal; `begin_object(id, t0)` /
+  `end_object(t)` bracket a gesture and record nothing when the pose is unchanged; `cancel` is shared.
+- `PlaneSession.undo_step()` returns `ActionResult & { object?: {id, transform} }`; a rig step goes through the existing
+  `assign`, an object step does not touch the rig.
+- **Reset (§5.7.8 item 13) stays board-only** and does not move objects. "還原此物體" returns one object to its load-time
+  transform as one step; 落地 and numeric apply are one step each.
+
+#### 5.8.4 Interaction (web UI, not core; amends §5.7.9 hit order by reference)
+- **Rotate mode:** a toolbar toggle 「轉動物體」 (`aria-pressed`, default off). While on, the hit order of §5.7.9 is
+  replaced by: object ring > object (click only, pointer-up within `CLICK_PX` = 5 px of pointer-down; selects it) >
+  blank (observer orbit, §5.6.4). The board's orange ring and blue arrow are hidden and disabled (`handles: null`),
+  and the pivot's 「點選物體」 click (§5.7.8 item 10) is suspended. While off, §5.7.9 applies unchanged and the object rings
+  are hidden. The mode is not an undo step and is not stored.
+- **Rings:** for the selected object, three rings centred at `c_w`, x red / y green / z blue, each in the plane
+  perpendicular to its world axis, radius `1.2 × ½ × (bounding-box diagonal)` with a 0.3 m minimum, 72 segments each,
+  drawn thick while dragged. `ObserverGeometry` gains `object_rings?: {id, centre, rings: [Vec3[], Vec3[], Vec3[]]} |
+  null`; `HandleHit` gains `{kind: "object_ring", axis: 0 | 1 | 2, index}`; `hit_handles` gains the ring branch with
+  the same radii (14 px mouse, 26 px touch, 0.8 factor for a ring).
+- **Ring drag angle (same rule as §5.7.8 item 1):** at pointer-down record `w = X − c_w` (the grabbed ring point) and
+  the observer's `r_c`, `u_c`. Tangent `t = axis × w`, screen tangent `t_s = (t·r_c, −t·u_c)` normalised;
+  `θ = κ·(Δ·t_s)` with `κ = 0.32°/px` and `Δ` the total pointer displacement; when `|t_s| < 1e-6` take
+  `t_s = (1, 0)`. Then snap, then `Q = rot(axis, θ)`. `state.handle` gains
+  `{kind: "object", id, axis, t0: Transform, A0: StageA, w: Vec3, r_c, u_c}`.
+- **Panel 「物體」 section:** object dropdown (synced with the click selection; the only object is preselected),
+  rx / ry / rz fields (Enter or 「套用」 applies; a non-finite entry turns the field red and keeps the old value),
+  「還原此物體」, 「落地」 (only when `receivers[0]` is an unbounded plane), the `c_w` readout and the slow-scene hint.
+  **Preview** (§5.6.4, D80): the observer is hidden, so only the panel works.
+- **Test hooks** on `window.castplane_web`: `object_transform(id)`, `object_vertices(id)` (the `world_lists` of the A
+  record), `rotate_object(id, axis, deg)` (one drag-equivalent step), `set_object_rotation(id, [rx, ry, rz])`,
+  `select_object(id)`, `set_rotate_mode(on)`, `object_centre(id)`.
+
+#### 5.8.5 Pivot (amends §5.7.7 by reference)
+The board's pivot `P` (§5.7.7: the scene centre, or the bounding-box centre of the picked object) is **not** updated
+when an object rotates: `rig.P` lives in the rig, which an object rotation never changes, and it is not an undo item.
+If `P` was the rotated object's centre it stays where it was, so the board keeps looking at the same world point;
+picking the object again (§5.7.8 item 10, outside rotate mode) re-centres the pivot on the object's new bounding-box
+centre. The scene centre `centre` of the load rule is likewise unchanged.
+
+#### 5.8.6 Constants (web UI, not core)
+| constant | value | constant | value |
+| --- | --- | --- | --- |
+| `OBJECT_SNAP_DEG` | 15 | `LIVE_STAGE_A_MS` | 150 |
+| ring radius factor, minimum | 1.2 × ½ × bbox diagonal, 0.3 m | ring segments | 72 |
+| `KAPPA_DEG_PER_PX`, `CLICK_PX`, `UNDO_MAX` | 0.32, 5, 50 (§5.7.11) | `HIT_PX_MOUSE`, `HIT_PX_TOUCH`, ring factor | 14, 26, 0.8 (§5.7.11) |
+| gimbal threshold `hypot(R₀₀, R₁₀)` | 1e-9 | edge-on ring `\|t_s\|` | 1e-6 |
+
+#### 5.8.7 Degenerate cases (spec-v0.3 §4)
+| situation | handling |
+| --- | --- |
+| rotation takes the object through the receiver | computed as is; the core emits `OBJECT_BELOW_RECEIVER` (expected) and clips; 落地 returns it to the plane |
+| gimbal lock (`ry = ±90°`) | `rx = 0`, `rz = atan2(−R₀₁, R₁₁)`; the matrix round trip holds |
+| ring seen edge-on (`\|t_s\| < 1e-6`) | `t_s = (1, 0)` |
+| stage A at load > `LIVE_STAGE_A_MS` | 3D proxy during the drag, stage A at release |
+| stage A throws | pose not committed, committed view restored, history kept, error 「核心重算失敗，請回報」 |
+| `rig.P` points at the rotated object | `rig.P` stays; re-pick to re-centre (§5.8.5) |
+| non-finite numeric field | field turns red; the scene is unchanged |
+
+#### 5.8.8 Testing contract (spec-v0.3 §5)
+Unit (`web/test/object_rotate.test.ts`, `plane.test.ts`, `rig.test.ts`):
+| test | criterion |
+| --- | --- |
+| matrix round trip | random `R` and `R` with `ry = ±90°`: `euler_zyx_matrix(euler_zyx_from_matrix(R))` within 1e-12 per element |
+| pivot fixed | ten 37° rotations about each world axis, incl. cone and prism: `c_w` within 1e-9 m |
+| pivot independent of load pose | the same prism loaded with `rz = 0` and `rz = 50°` gives the same `c_local` within 1e-12 |
+| numeric ≡ drag | the same target gives the same `R′` and `p′` |
+| rotation about `z` | `(rz − rz₀ − θ) mod 360 ≈ 0` (< 1e-9) incl. 170° + 30° → −160°; `rx`, `ry` unchanged |
+| `ObjectDrag` | move then immediate end commits the last candidate and records one step; a candidate equal to the committed pose records nothing; after cancel a stale-sequence apply is rejected; slow scene: move runs no stage A, end runs one |
+| `update_scene` | `rig`, `block()`, `rig_block()`, `scene_block`, `initial` identical afterwards; `ref0` / `delta` cleared |
+| shared undo | object steps undo correctly; interleaved with board steps in order; still capped at 50; an unchanged pose records nothing; `peek` consumes nothing |
+
+Smoke (`web/scripts/smoke.mjs`, Playwright; Chromium at `/opt/pw-browsers/chromium`):
+- Load `basic`: `rotate_object("crate", 2, 30)` (about `z`); load `directional`: rotate the cone about `x` by 20°.
+- Camera block, `rig`, `scene_block` unchanged; the other objects' `object_vertices` identical value for value and the
+  rotated one's different; after undo the SVG is bit-identical to the one before the rotation.
+- The downloaded scene through `castplane render` gives the same SVG as `download_texts().svg`.
+- During a drag `frames` records and `stage_a_ms` updates; after a rotation about `x` the warnings include
+  `OBJECT_BELOW_RECEIVER` (expected).
+- In rotate mode the board's `handles_px` is null; it returns when the mode is switched off.
+- Fast drag: real pointer events down → one move → immediate up (no frame wait): `object_transform` is updated and
+  `rig.undo` grows by one. Second-finger cancel: `object_transform`, `object_vertices` and the SVG equal the values
+  before the press, `undo` unchanged.
+
+Gates: `npm ci && npm test`, `npm run -w web build`, `node web/scripts/smoke.mjs`,
+`node tools/web_frame_bench.mjs examples/directional.json 5`, and the unchanged
+`python3 tools/regen_conformance.py --reason "check" --dry-run` (0 changes) and `python3 tools/compare_svg.py`
+(0 mismatches).
+
+#### Implementation notes
+
+**[implementation] M11 web code (spec-v0.3).** `web/src/object_rotate.ts` holds the maths (`local_bbox`,
+`local_centre`, `world_centre`, `rotate_about_world_axis`, `set_rotation`, `euler_zyx_from_matrix`, `wrap_angle`,
+`snap_angle`, `parse_angle` / `format_angle`, `ring_points` / `object_rings` / `ring_radius`, `ring_drag_angle`,
+`ground_transform`) and `ObjectDrag<S, A>`, whose side effects are injected by `main.ts` as `{apply, proxy, restore}`
+(stage A + session + 3D; 3D only; back to `scene0` / `A0` / `t0`), so the state machine is unit-tested without a page.
+`begin(id, t0, scene0, A0, seq, {live, axis, c_local})` carries the axis and the pivot in an options argument;
+`move(θ)` stores the pending candidate; `frame(seq)` applies it only for the current sequence number; `end()` returns
+`{id, t0, t, ok, changed}`; `abandon()` forgets a gesture without a restore (a scene load). `PlaneSession` gains the
+optional `SessionScene.object_poses` (load-time transforms and stage-A `mesh.vertices`), from which it caches
+`local_centres`, `local_half_diagonals` and the load-time transforms (`initial_transform(id)`, 還原此物體);
+`update_scene(objects, A)` takes stage A's object records (their `bbox`) and `A.vertices`. `undo_step()` reports an
+object step in `object` without consuming it and `pop_object_step()` pops it after a successful recompute. The 3D
+matrices come from `scene3d.ts::display_matrix(obj, obj0, built_in_world(obj0, A0))` and `set_object_matrix` on both
+groups; the observer's group is always built from the loaded scene and then posed. `hit_handles` takes `h: Handles |
+null` and an optional `ObjectRingSet` (rotate mode passes `h = null`). `window.castplane_web` also gains `rotate` (mode,
+selection, slow flag, panel state) and `object_rings_px`; `timings.stage_a_runs` counts stage-A runs since the load (the
+smoke test's evidence of live recomputes, since `stage_a_ms` is a coarse timer value).
+
+**[decision, implementation] M11 clarifications of spec-v0.3 (web UI, not core).** (1) **Rotation about `z` writes
+exact angles:** `rotate_about_world_axis` with axis `z` keeps `rx`, `ry` as they are and sets `rz′ = wrap(rz + θ)`
+(`Rz(θ)·Rz(rz)·Ry·Rx = Rz(rz + θ)·Ry·Rx`, the same `R′ = Q·R` up to rounding), instead of decomposing `Q·R`; about `x`
+or `y` the matrix is decomposed as §5.8.1 says. So a z drag never perturbs `rx`, `ry` by an ulp. (2) **落地 uses the exact
+surface of a curved primitive:** for a sphere, cylinder or cone the minimum signed distance is the core's
+`curved.plane_min(analytic, π)` (the surface the core tests for `OBJECT_BELOW_RECEIVER`), not the minimum over the
+stage-A vertices of its polygonal mesh, which after a tilt can sit above the true lowest rim point and leave the
+warning on; polyhedra and meshes use the stage-A vertices. (3) **Ring radius:** "bounding-box diagonal" is the local
+bounding box's (the one whose centre is `c_local`), so the rings keep their size while the object turns. (4) **A
+stage-A exception at release** restores the pointer-down state (`scene0`, `A0`, `t0`), not an intermediate pose a
+live frame had committed during the same gesture, and records nothing; during the drag a failed frame keeps the last
+good pose and the drag continues. (5) **Numeric fields:** a field whose text is still the one the panel wrote keeps
+the exact current angle on 「套用」 (the 0.1° display is not applied back to the pose). (6) **Selection:** with several
+objects none is preselected (the dropdown shows "—"); the selection survives switching the rotate mode off and on and
+is reset by a scene load. (7) The 「轉動物體」 toggle sits in the toolbar's observer group (`#observer-controls`), so it is
+hidden with the observer pane in 預覽, where only the panel works. (8) The undo button is ignored while an object drag
+is held (an object step undone mid-gesture would race the gesture's commit). (9) The smoke test compares the CLI's SVG
+of the downloaded rotated scene with `download_texts().svg` with all six layers checked (作圖線 switched on for the
+check), so that the page's checked layers equal the file's `output.layers`.
+
+**[decision, implementation] M11 review fixes (web UI, not core).** (1) **The three angle fields are one entry**
+(amends clarification (5) above and the panel row of §5.8.4 by reference): a field counts as edited when its text
+differs from the text the panel last wrote (`dataset.shown`), not when it has the focus. A re-sync of the panel leaves
+an edited field's text and red state alone; leaving a field keeps its text; 「套用」 / Enter applies all three at once
+(an unedited field still keeps the exact current angle). Every field is rewritten from the pose after a successful
+numeric apply, 還原此物體 or 落地, on Escape in a field (which drops all typed angles), at the start of a ring drag, on a
+selection change and on a scene load. An unedited focused field follows the pose like any other, and a ring drag or a
+discrete object action takes the focus off an angle field, so the fields never show a stale angle. (2) **復原 is ignored
+and disabled while any drag is held** (board or object; amends clarification (8) above, which covered object drags
+only), and `PlaneSession.pop_object_step()` drops the peeked step with `UndoStack.pop_top()`, which never touches an
+open gesture, so an object step popped during a held board drag can no longer cancel that drag's step. (3) With the
+pivot mode 「點選物體」 and no object picked, the notice in rotate mode says the pivot click is suspended there, since
+the click there selects the object to rotate (§5.8.4):
+「轉動模式中暫停點選旋轉中心；關閉「轉動物體」後再點左窗的物體（目前暫用場景中心）」, and in 預覽
+「按「返回編輯」並關閉「轉動物體」後點一下左窗的物體，把它設為旋轉中心（目前暫用場景中心）」.
+
+**[decision, implementation] (D83) Modeless object selection.** Amends, by reference and with the existing text
+unchanged, the "Rotate mode" bullet of §5.8.4, the dropdown's "the only object is preselected" in its panel bullet,
+`set_rotate_mode(on)` in its test-hook bullet, "outside rotate mode" in §5.8.5, the rotate-mode row of the §5.8.8 smoke
+list, "(rotate mode passes `h = null`)" and the `rotate` hook's "mode" in the first note above, clarifications (6) and
+(7) of the second note, and item (3) of the review-fix note. (1) **No mode.** The 「轉動物體」 toolbar toggle is removed
+(`#rotate-mode`, `state.rotate.on`, `set_rotate_mode`). Whenever an object is selected its three rings are drawn in the
+observer pane together with the board's ring and arrow (`handles_of(rig, frame_mm)` and `object_rings` are both passed
+to `ObserverPane.update`). (2) **Hit order on pointer-down** (amends §5.7.9 by reference): the selected object's
+rings > the board's arrow tip > the board's ring > (a click, pointer-up within `CLICK_PX`) object pick > blank
+(observer orbit). `hit_handles(basis, W, H, p, touch, h, rings)` already tests the rings first and returns the board's result
+only when no ring is hit; `main.ts` now always passes both (`h` is null only while the board is hidden, §5.6 note on
+「板子」), and the hover cursor (`on-handle`) uses the same test, so it covers the object rings. (3) **Click.** A click
+on an object selects it (the rings appear, the 物體 panel fills, the dropdown follows); with the pivot mode 「點選物體」 the
+same click also picks the pivot exactly as §5.7.8 item 10 says (no undo step). A click with no object under the pointer
+(`pick_object` returns null; receivers, lights and grids do not count) clears the selection; the pivot is kept. The
+dropdown still selects and clears ("—"). (4) **Load.** A scene load clears the selection; no object is preselected,
+also in a single-object scene. (5) **Unchanged:** the drag lifecycle (§5.8.2), the live stage-A threshold, the shared
+undo stack, 套用 / 還原此物體 / 落地, the numeric fields and 預覽 (only the panel works). (6) **Hooks:** `set_rotate_mode` is
+removed; `rotate` reports `{id, slow, fields, ground_shown, centre, notice}` (no `on`, no `pressed`); `pick_at(x, y)`
+returns the object a click at pane px `(x, y)` would select. The object-pivot notice no longer has rotate-mode variants
+(「請點一下左窗的物體，把它設為旋轉中心（目前暫用場景中心）」, and the 預覽 variant). `web/test/plane.test.ts` pins the hit
+order with both rings and board handles present, and `web/scripts/smoke.mjs` drives it with real mouse events
+(docs/DECISIONS.md D83, spec-v0.3 §7).
+
+**[implementation] (D83 review) Re-selecting the selected object.** Clarifies item (3) of the D83 note above and the
+"selection change" in the review-fix note's field rule: a click on the object that is already selected (for example a
+second click to re-pick the pivot with 「點選物體」), or `select_object` with the current id, is not a selection change.
+`select_object` rewrites the angle fields from the pose (`sync_object_panel(true)`) only when the id changes; otherwise
+the panel syncs unforced, so typed rx / ry / rz text survives until 「套用」 / Enter applies it or Escape drops it.
+`web/scripts/smoke.mjs` pins it with real mouse clicks.
+
+**[decision, implementation] (D84) Groups of parts and the whole → part click cycle.** Amends, by reference and with the
+existing text unchanged, item (3) "Click" of the D83 note above, the D83 review note's "re-selecting the selected
+object", the dropdown of §5.8.4's panel bullet, §5.8.1's single pivot (a whole group turns about its own `c`, below),
+§5.8.3's undo entry (one object's pose) and the `rotate` hook. (1) **Web-only key.** An object may carry
+`objects[i].group`, a string; it is a group name iff `typeof v === "string" && v.trim() !== ""`, kept verbatim (not
+trimmed). Like `display_color` (§5.4 note D81) the validators ignore it (§2.0), so the core, the TS port, the documents,
+SVG, warnings and the conformance set (v8 / 63 cases) never see it; `web/src/groups.ts::object_groups(raw) -> Map<id,
+name>` reads it from the raw scene at the same load sites as `display_colours` (malformed values: no group, no
+SceneError, no warning), a load replaces the map and clears the selection, and `scene_blob(..., colours?, groups?)`
+writes each valid value back unchanged. It is unrelated to OBJ `g` groups and to a mesh's `data.smooth_groups`; no
+nesting, no geometric inference and no stored pivot. Follow-up, out of scope: `castplane import` stamping `group` when
+one file yields two or more objects. (2) **Units.** A unit is a group with at least two members present in the scene
+(`group_members`, members in scene order), or a single object (no group, or a group name used once: that object behaves
+exactly as in D83). (3) **Selection and the click cycle.** The selection is `null | {kind: "group", group} | {kind:
+"part", id}`; `next_selection(current, clicked, groups, members)` is pure and unit-tested: an object not in a ≥ 2 group
+gives `{part, clicked}`; for an object of group G, null or a selection outside G gives `{group G}`, `{group G}` gives
+`{part clicked}`, and `{part p}` with `p` in G gives `{group G}` when `p` is the clicked object and `{part clicked}`
+otherwise (the focus moves to the other part). A click on blank space clears the selection; orbit and ring drags never
+change it; the hit order is D83's with "the selected object's rings" read as "the selected unit's rings". A click on an
+ungrouped object that is already selected is still not a selection change (the D83 review rule); a grouped click always
+is (the cycle). With 旋轉中心 = 點選物體 the click sets `P` to the newly selected unit's centre: a group's `c`
+(`PlaneSession.pick_group`, pivot id `group.<name>`, label 「旋轉中心：<name>（整組）」), a part's stage-A bbox centre as before;
+no undo step. Nothing is selected on load. (4) **Dropdown and panel.** The 物體 dropdown lists one entry per ≥ 2 group
+first (value `group.<name>`, which no object id can equal since object ids cannot contain `.`; label 「<name>（整組，<n>
+個部件）」, set with `textContent` only), then every object; "—" clears; dropdown and clicks stay in sync. A line
+`#obj-selected` names the selection (「已選：<name>（整組）」, 「已選：<id>（<group> 的部件）」, 「已選：<id>」). (5) **Group maths**
+(`object_rotate.ts`, pure). Per group the session (`PlaneSession`) keeps a frame `{G, c}`: `G` the rotation relative to
+the load (identity at load; display only), `c` the centre of the axis-aligned world bbox of all members' stage-A world
+vertices at load (`world_bbox`, the vertex source of `local_bbox`). A ring drag of the group by `Q` about a world axis:
+every member `R_i′ = Q·R_i`, `p_i′ = c + Q(p_i − c)` (`rotate_about_point`: exact `rz` about z, `euler_zyx_from_matrix`
+otherwise, the M11 wrap and gimbal rules), `G′ = Q·G`, `c` unchanged. Numeric entry `e`: `G_t = euler_zyx_matrix(e)`, `Q
+= G_t·Gᵀ`, every member rotated by `Q` about `c` (decomposed), `G′ = G_t`; the fields show `euler_zyx_from_matrix(G)`,
+an unedited field keeps that exact value. Rotating a part (part focus) changes only that member; `G` and `c` are
+unchanged, so after a part is turned or a part-only 還原 the group's fields keep their value, and `c` stays frozen at its
+load position (the group rings do not follow a part dragged away; `c` moves only by the group's 落地 and returns by its
+還原). 還原此物體 on a group: every member to its load transform, `G = I`, `c = c0`; on a part: that part only. 落地 on a group:
+one common translation along the receiver normal by the minimum over all members (`curved.plane_min` for curved members,
+the stage-A vertices otherwise), `c` translated with it (`translate_pose`). Group rings: centre `c`, radius
+`ring_radius(½ × the load-time group bbox diagonal)` (≥ 0.3 m), world axes, the M11 colours and hit rules; rings hit on
+their band only, so a click inside a large group ring still picks the part under it. (6) **Drag lifecycle.**
+`ObjectDrag` is generalised to `UnitDrag<S, A>` over a `UnitPose = {transforms: Map<id, Transform>, group: {name, G, c}
+| null}` with the same semantics (pending candidate, at most one stage A per frame under `LIVE_STAGE_A_MS`, `end`
+commits synchronously, `cancel` restores `scene0` / `A0` and the group frame, a stage-A exception keeps the committed
+pose); `ObjectDrag` remains as M11's one-object API on top of it. `main.ts`'s `apply_pose` is `apply_object_transform`
+for one or more objects plus the group frame (one stage A for all members). (7) **Undo.** The shared stack (50 entries)
+gains an entry `{kind: "objects", before: Map<id, ObjectPose>, group: {name, G, c} | null}` (`UndoStack.record_objects`
+/ `begin_objects` / `end_objects`): one group action is one step with every member's pose and the frame; undo restores
+them in one stage A (peeked, popped on success as §5.8.3). A step is recorded when any member's pose or the frame
+changed; part and ungrouped actions still record one-object steps; LIFO with board steps; undo stays disabled during a
+held drag. (8) **Hooks.** D83's hooks are kept (`select_object(id)` still selects the object as a part, also when it is
+grouped); added `click_object(id | null)` (the cycle, null = blank), `selection()` (`{kind: "group", group, members} |
+{kind: "part", id, group | null} | null`), `select_group(name)`, `rotate_group(name, axis, deg)` (one drag, one undo
+step), `set_group_rotation(name, r)`, `group_rotation(name)` (the display Euler), `group_centre(name)` and
+`object_groups()`; `rotate` also reports `selection` (the dropdown value) and `selected_text`, and its `id` is the
+selected part (null for a whole group). `web/test/groups.test.ts` pins the parsing, the cycle table, the rigid rotation
+about a fixed `c` (10 × 37°, < 1e-9, against stage A), numeric entry ≡ the equivalent drags, the display round trip, 還原
+/ 落地 of a group, the group pivot and group undo interleaved with board and part steps; `web/scripts/smoke.mjs` drives
+the cycle with real clicks on `web/test/fixtures/basic_grouped.json` (docs/DECISIONS.md D84, spec-v0.3 §8).
+
+**[decision, implementation] (D84 review) Group names must be UTF-8 encodable; an unedited 套用 is no action.** Amends,
+by reference and with the D84 note's text unchanged, its items (1) and (5). (1) A group name must also be encodable as
+UTF-8: a string with a lone surrogate (valid JSON such as `"\ud800x"`) is no group, like the other malformed values
+(no SceneError, no warning, not written back), because `scene_blob`'s `dumps` cannot encode it and *Download scene*
+would fail; `is_group_name` is `typeof v === "string" && v.trim() !== ""` and no lone surrogate. (5) 套用 / Enter with
+no field edited (every field's text is the value it shows) does nothing: no stage A, no undo step. Independently,
+`set_group_rotation(pose, e)` returns the pose unchanged (a copy) when `e` equals `euler_zyx_from_matrix(G)` component
+by component (`===`): recomputing `Q = G_t·Gᵀ` from the displayed angles is not the identity to the last bit, so it
+would perturb every member by ulp noise and record a spurious `objects` step, while M11's single-object
+`set_rotation` keeps `rotation_deg` verbatim and is already exact. `web/test/groups.test.ts` pins both;
+`web/scripts/smoke.mjs` clicks 套用 unedited on the whole group at load and after a ring drag (no undo step, members
+unchanged) and downloads a scene loaded with a lone-surrogate group name.
