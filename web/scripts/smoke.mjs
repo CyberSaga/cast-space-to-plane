@@ -1728,6 +1728,12 @@ const objrot = {};
       && jw0 !== null && near(jw0[0], 2, 1e-12) && near(jw0[1], 4, 1e-12) && near(jw0[2], 1.3, 1e-12)
       && r2.centre === "關節 j_w = (2.000, 4.000, 1.300) m" && r2.ground_shown === false,
     `D85: the arm's rings are centred on its world joint, the readout names the joint, 落地 is hidden (${JSON.stringify(d85.click)})`);
+    // D85 review: a script click on the hidden 落地 of a part with a parent is no action (the button is hidden, not the rule)
+    const vg0 = JSON.stringify(await verts(ALL)), ug0 = await undo_size();
+    await page.evaluate(() => document.getElementById("obj-ground").click());
+    await frames2();
+    check(await undo_size() === ug0 && JSON.stringify(await verts(ALL)) === vg0,
+      "D85: a script click on the hidden 落地 of the arm moves nothing and records no undo step");
     // rotate_object on the arm: the arm and the flag move (vertices, 3D matrices in both panes), nothing else does
     const e0 = await env(), v0 = await verts(ALL), m0 = await mats(ALL), svg0 = await get("svg"), u0 = await undo_size();
     const gc0 = await api("group_centre", "g"), gr0 = await api("group_rotation", "g");

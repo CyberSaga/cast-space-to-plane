@@ -824,8 +824,10 @@ function apply_object_fields(): boolean {
 /** 落地 (spec-v0.3 §3.3; only with an unbounded `receivers[0]`): translate along its normal so that the unit's minimum
  * signed distance to it is 0 (the exact surface of a curved primitive, else the stage-A vertices). D84: a group moves
  * as one, by the minimum over all its members, and its `c` with it. D85: a root part with descendants moves its
- * subtree as one; the button is hidden for a part with a parent (`sync_object_panel`). */
+ * subtree as one; the button is hidden for a part with a parent (`sync_object_panel`) and the function refuses it too. */
 function ground_unit(sel: Selection): boolean {
+  // D85 review: the function enforces the rule the panel shows, so a script click on the hidden button moves nothing
+  if (sel?.kind === "part" && state.plane?.parent_of(sel.id) !== null) return false;
   const scene = state.scene, A = state.A, pose = unit_pose(sel);
   const r0 = scene?.receivers[0];
   if (pose === null || A === null || r0 === undefined || r0.bounds !== null) return false;
