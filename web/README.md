@@ -144,8 +144,8 @@ drag):
     `object_transform`, `object_vertices`, `object_centre`, `rotate` (selection and panel state), `object_rings_px`,
     `pick_at(x, y)` (the object a click there selects), `set_board_visible(on)` and `board_visible()` (D83).
 - **Groups of parts** (D84, contract §5.8 notes, spec-v0.3 §8; `src/groups.ts`, the group maths of
-  `src/object_rotate.ts`). An object may carry the web-only key `group` (a non-empty, non-whitespace string, kept
-  verbatim; the core ignores it, *Download scene* writes it back; unrelated to OBJ `g` groups and `smooth_groups`).
+  `src/object_rotate.ts`). An object may carry the web-only key `group` (a non-empty, non-whitespace, UTF-8
+  encodable string, kept verbatim; the core ignores it, *Download scene* writes it back; unrelated to OBJ `g` groups and `smooth_groups`).
   A group with two or more members in the scene is one unit; other objects behave as in D83.
   - A click on a grouped object selects the whole group, the next click the clicked part, the next the whole group
     again; after part focus a click on another part of the group moves the focus there; only a click on blank space

@@ -18,12 +18,17 @@ export const GROUP_KEY = "group";
  * (`ts/src/scene.ts::id`), so `group.<name>` never equals an object id. */
 export const GROUP_VALUE_PREFIX = "group.";
 
+/** A UTF-16 code unit that is a surrogate without its pair (`String.prototype.isWellFormed` is not in the ES2022 lib). */
+const LONE_SURROGATE = /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/;
+
 /** The left pane's selection: nothing, a whole group (≥ 2 members), or one object (a part, or an ungrouped object). */
 export type Selection = null | { kind: "group"; group: string } | { kind: "part"; id: string };
 
-/** Whether `value` is a valid group name: a string that is not empty or whitespace only (kept verbatim, not trimmed). */
+/** Whether `value` is a valid group name: a string that is not empty or whitespace only (kept verbatim, not trimmed)
+ * and is encodable as UTF-8 (D84 review: no lone surrogate such as JSON `"\ud800"`, which the downloaded scene's
+ * `dumps` could not write). */
 export function is_group_name(value: unknown): value is string {
-  return typeof value === "string" && value.trim() !== "";
+  return typeof value === "string" && value.trim() !== "" && !LONE_SURROGATE.test(value);
 }
 
 /**

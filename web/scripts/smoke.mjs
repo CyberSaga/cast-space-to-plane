@@ -56,7 +56,7 @@
 // part after part focus takes the focus, an ungrouped object selects as in D83; the group's rings are larger and a
 // real drag on them turns every member; rotate_group keeps c, the camera block, the rig and scene_block, changes every
 // member and not the ungrouped object, and undo restores the SVG byte for byte; the fields and 還原此物體 act on the
-// whole group; 點選物體 puts the pivot on the group's c; Download scene keeps the group keys. Prints one JSON record.
+// whole group (an unedited 套用 records no step); 點選物體 puts the pivot on the group's c; Download scene keeps the group keys. Prints one JSON record.
 // Exit 1 on a page error or a failed check.
 import { execSync } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
@@ -1559,6 +1559,11 @@ const objrot = {};
     await page.selectOption("#obj-select", "group.g");
     await frames2();
     const s10 = await sel();
+    // D84 review: 套用 with no field edited is a no-op on a group (no undo step, no ulp drift of the members)
+    await page.click("#obj-apply");
+    await frames2();
+    check(await undo_size() === u0 && await get("svg") === svg0 && JSON.stringify(await verts(["crate", "pillar", "post"])) === JSON.stringify(v0),
+      "D84 review: an unedited 套用 on the whole group records no undo step and keeps every member");
     await page.fill("#obj-rz", "45");
     await page.press("#obj-rz", "Enter");
     await frames2();
@@ -1592,6 +1597,10 @@ const objrot = {};
     const v2 = await verts(["crate", "pillar", "post"]);
     check(zr !== null && v2.crate !== v0.crate && v2.pillar !== v0.pillar && v2.post === v0.post && await undo_size() === u0 + 1
       && (await sel())?.kind === "group", "D84: a real drag on the group's z ring turns every member (one undo step, selection kept)");
+    await page.click("#obj-apply"); // unedited fields after a drag (G ≠ I): still no step, no drift
+    await frames2();
+    check(await undo_size() === u0 + 1 && JSON.stringify(await verts(["crate", "pillar", "post"])) === JSON.stringify(v2),
+      "D84 review: an unedited 套用 after a group drag records no undo step and keeps every member");
     await page.click("#undo");
     await frames2();
     // 旋轉中心 = 點選物體: a click selecting the whole group puts the pivot on its c (no undo step)
@@ -1620,6 +1629,17 @@ const objrot = {};
     d84.download = saved.objects.map((o) => [o.id, o.group ?? null]);
     check(JSON.stringify(d84.download) === JSON.stringify([["crate", "g"], ["pillar", "g"], ["post", null]]),
       `D84: Download scene keeps the group keys (${JSON.stringify(d84.download)})`);
+    // D84 review: a lone-surrogate group name (valid JSON "\ud800x") is no group, so Download scene still writes
+    const lone = text.replace(/"group": "g"/g, '"group": "\\ud800x"');
+    const loaded_lone = await page.evaluate((t) => window.castplane_web.load_text("basic_lone", t), lone);
+    await frames2();
+    const units_lone = (await api("object_groups")).units;
+    const [dl_lone] = await Promise.all([page.waitForEvent("download"), page.click("#dl-scene")]);
+    const path_lone = join(outdir, "d84_lone_surrogate.scene.json");
+    await dl_lone.saveAs(path_lone);
+    const saved_lone = JSON.parse(readFileSync(path_lone, "utf-8"));
+    check(lone !== text && loaded_lone && JSON.stringify(units_lone) === "{}" && saved_lone.objects.every((o) => o.group === undefined),
+      `D84 review: a lone-surrogate group is ignored and Download scene still works (${JSON.stringify(units_lone)})`);
     await page.evaluate(() => window.castplane_web.load_example("basic"));
     await frames2();
     await frames2();

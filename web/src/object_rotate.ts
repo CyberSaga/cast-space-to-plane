@@ -350,11 +350,16 @@ export function rotate_group_pose(pose: UnitPose, axis: Axis, deg: number): Unit
 
 /**
  * The numeric fields of a group (D84): `G_t = euler_zyx_matrix(e)`, `Q = G_t·Gᵀ`, every member rotated by `Q` through
- * `c` ({@link rotate_by_matrix}); `G′ = G_t`, `c` unchanged.
+ * `c` ({@link rotate_by_matrix}); `G′ = G_t`, `c` unchanged. D84 review: angles equal (`===`, component-wise) to the
+ * displayed `euler_zyx_from_matrix(G)` return the pose unchanged (a copy), so an unedited 套用 is an exact no-op and
+ * records no undo step, as M11's {@link set_rotation} keeps a single object's `rotation_deg` verbatim; recomputing
+ * `Q = G_t·Gᵀ` would perturb every member by ulp noise.
  */
 export function set_group_rotation(pose: UnitPose, e: readonly number[]): UnitPose {
   const g = pose.group;
   if (g === null) throw new Error("set_group_rotation: not a group pose");
+  const shown = euler_zyx_from_matrix(g.G);
+  if (shown[0] === e[0] && shown[1] === e[1] && shown[2] === e[2]) return clone_pose(pose);
   const Gt = euler_zyx_matrix(e);
   const Q = matmul_t(Gt, g.G);
   const transforms = new Map([...pose.transforms].map(([id, t]) => [id, rotate_by_matrix(t, g.c, Q)]));

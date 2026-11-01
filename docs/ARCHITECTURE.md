@@ -6036,3 +6036,16 @@ selected part (null for a whole group). `web/test/groups.test.ts` pins the parsi
 about a fixed `c` (10 × 37°, < 1e-9, against stage A), numeric entry ≡ the equivalent drags, the display round trip, 還原
 / 落地 of a group, the group pivot and group undo interleaved with board and part steps; `web/scripts/smoke.mjs` drives
 the cycle with real clicks on `web/test/fixtures/basic_grouped.json` (docs/DECISIONS.md D84, spec-v0.3 §8).
+
+**[decision, implementation] (D84 review) Group names must be UTF-8 encodable; an unedited 套用 is no action.** Amends,
+by reference and with the D84 note's text unchanged, its items (1) and (5). (1) A group name must also be encodable as
+UTF-8: a string with a lone surrogate (valid JSON such as `"\ud800x"`) is no group, like the other malformed values
+(no SceneError, no warning, not written back), because `scene_blob`'s `dumps` cannot encode it and *Download scene*
+would fail; `is_group_name` is `typeof v === "string" && v.trim() !== ""` and no lone surrogate. (5) 套用 / Enter with
+no field edited (every field's text is the value it shows) does nothing: no stage A, no undo step. Independently,
+`set_group_rotation(pose, e)` returns the pose unchanged (a copy) when `e` equals `euler_zyx_from_matrix(G)` component
+by component (`===`): recomputing `Q = G_t·Gᵀ` from the displayed angles is not the identity to the last bit, so it
+would perturb every member by ulp noise and record a spurious `objects` step, while M11's single-object
+`set_rotation` keeps `rotation_deg` verbatim and is already exact. `web/test/groups.test.ts` pins both;
+`web/scripts/smoke.mjs` clicks 套用 unedited on the whole group at load and after a ring drag (no undo step, members
+unchanged) and downloads a scene loaded with a lone-surrogate group name.

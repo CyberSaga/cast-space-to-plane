@@ -790,6 +790,9 @@ function apply_object_fields(): boolean {
     if (bad) ok = false;
   });
   if (!ok) return false;
+  // D84 review: 套用 with no field edited is not an action (no undo step, no ulp drift of a group's members); the loop
+  // above has already cleared any stale red state
+  if (ui.objectFields.every((el) => !field_edited(el))) return true;
   return sel.kind === "group" ? apply_group_rotation(sel.group, vals as number[]) : apply_object_rotation(sel.id, vals as number[]);
 }
 

@@ -88,8 +88,12 @@ test("object_groups: valid iff a non-empty, non-whitespace string, kept verbatim
     { id: "a", group: "miki" }, { id: "b", group: " miki " }, { id: "c", group: "" }, { id: "d", group: "   " },
     { id: "e", group: 3 }, { id: "f", group: null }, { id: "g", group: ["x"] }, { id: "h", group: { n: 1 } }, { id: "i" },
     { group: "orphan" }, { id: 7, group: "x" }, null, "text", [1, 2], { id: "j", group: "\t" }, { id: "k", group: "中文 群組" },
+    { id: "m", group: "\ud800" }, { id: "n", group: "x\udc00" }, { id: "o", group: "\udc00\ud800" }, { id: "q", group: "😀" },
   ] };
-  assert.deepEqual([...object_groups(raw)], [["a", "miki"], ["b", " miki "], ["k", "中文 群組"]]);
+  assert.deepEqual([...object_groups(raw)], [["a", "miki"], ["b", " miki "], ["k", "中文 群組"], ["q", "😀"]]);
+  // D84 review: a lone surrogate (valid JSON via "\ud800") is not a group name: the downloaded scene could not encode it
+  assert.equal(object_groups_text('{"objects": [{"id": "m", "group": "\\ud800x"}]}').size, 0);
+  assert.ok(!is_group_name("\ud800") && !is_group_name("a\udfff") && is_group_name("\ud83d\ude00"));
   for (const bad of [null, 3, "x", [], {}, { objects: 3 }, { objects: null }]) assert.equal(object_groups(bad).size, 0);
   assert.equal(object_groups_text("{not json").size, 0);
   assert.deepEqual([...object_groups_text(fixture_text())], [["crate", "g"], ["pillar", "g"]]);
@@ -265,6 +269,27 @@ test("group numeric entry = the equivalent drags (x by rx, y by ry, z by rz); di
     assert.equal(t.rotation_deg[1], t0.rotation_deg[1]);
     close(t.rotation_deg[2], t0.rotation_deg[2] + 30, 1e-12, `${id}: rz`);
   }
+});
+
+test("D84 review: an unedited 套用 on a group (the shown angles) is an exact no-op and records no undo step", () => {
+  const l = load(fixture());
+  const s = l.session;
+  const pose0 = group_pose(l, "g");
+  const cases: UnitPose[] = [pose0];
+  for (const [axis, deg] of [[0, 37], [1, 37], [2, 37], [0, -12.5], [1, 90], [2, 30], [0, 1e-3]] as [Axis, number][]) {
+    cases.push(rotate_group_pose(pose0, axis, deg));
+  }
+  cases.push(set_group_rotation(pose0, [20, -35, 110]));
+  for (const p of cases) {
+    const again = set_group_rotation(p, euler_zyx_from_matrix(p.group!.G));
+    assert.ok(same_pose(p, again), "the same pose bit for bit");
+    assert.notEqual(again.transforms, p.transforms, "a copy, not the same maps");
+    const before = s.undo.size;
+    assert.equal(s.record_objects(p.transforms, p.group, again.transforms, again.group), false);
+    assert.equal(s.undo.size, before, "no undo step");
+  }
+  // a changed angle still rotates
+  assert.ok(!same_pose(pose0, set_group_rotation(pose0, [0, 0, 1e-9])));
 });
 
 test("還原 and 落地 of a group: the load pose and frame; one common translation along the normal (curved members exact)", () => {
