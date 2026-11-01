@@ -5182,6 +5182,20 @@ The observer shows lights as in §5.4.10 (`scene3d`). Nothing in this table is w
   gesture is held (`state.dragging` or a held handle), so the board never moves with the pane hidden; Esc inside the
   equation field cancels the typed text only and does not also leave 預覽. The page markup starts in the edit view
   (`#panes.observer-on`, `#observer` not hidden).
+- **[decision, implementation] (D83) The left pane's 「板子」 checkbox.** A checkbox `#observer-board` (checked by default)
+  sits in the controls row next to 視線. Unchecked, the observer's board group (`observer-board`: eye, board patch,
+  frame with the drawing on it, frustum, principal point `Q`, `D` and `g` lines, pivot marker, and the board's ring and
+  arrow handles) is not built and is hidden (`board.visible = false`), and the board's labels (§5.6.5) are not placed.
+  The vertex rays (which keep following 視線) and the selected object's rings (§5.8 note D83) live in a second group,
+  `observer-extras`, which stays. `main.ts` passes `handles: null` and `board_visible: false` to
+  `ObserverPane.update`, so the board's handles are neither hit-tested nor hover-highlighted and a pointer-down there
+  orbits the observer or clicks (object pick). Left pane only: the drawing pane, the core outputs, the downloads, the
+  camera block, the undo stack and the framing of 整體顯示 (§5.6.4, which still includes the board) are unchanged; the
+  toggle is not an undo step, is not stored in the scene, and is kept across scene loads (page-level, like 視線).
+  Toggling re-draws the observer (`observer_refresh(true)`). A change while a board-handle drag (ring or arrow) is held
+  is ignored: the checkbox returns to its state, so the held board never vanishes under the pointer; during an
+  object-ring drag or an orbit it applies. Hooks: `set_board_visible(on)` (acts as the checkbox; returns the resulting
+  state), `board_visible()`, and the `observer` hook's `board_shown` and `labels_shown` (docs/DECISIONS.md D83).
 
 ### 5.7 M10 — plane mode, board-first (spec-v0.2 §1, §4, §5, §6, §7)
 
@@ -5932,3 +5946,27 @@ pivot mode 「點選物體」 and no object picked, the notice in rotate mode sa
 the click there selects the object to rotate (§5.8.4):
 「轉動模式中暫停點選旋轉中心；關閉「轉動物體」後再點左窗的物體（目前暫用場景中心）」, and in 預覽
 「按「返回編輯」並關閉「轉動物體」後點一下左窗的物體，把它設為旋轉中心（目前暫用場景中心）」.
+
+**[decision, implementation] (D83) Modeless object selection.** Amends, by reference and with the existing text
+unchanged, the "Rotate mode" bullet of §5.8.4, the dropdown's "the only object is preselected" in its panel bullet,
+`set_rotate_mode(on)` in its test-hook bullet, "outside rotate mode" in §5.8.5, the rotate-mode row of the §5.8.8 smoke
+list, "(rotate mode passes `h = null`)" and the `rotate` hook's "mode" in the first note above, clarifications (6) and
+(7) of the second note, and item (3) of the review-fix note. (1) **No mode.** The 「轉動物體」 toolbar toggle is removed
+(`#rotate-mode`, `state.rotate.on`, `set_rotate_mode`). Whenever an object is selected its three rings are drawn in the
+observer pane together with the board's ring and arrow (`handles_of(rig, frame_mm)` and `object_rings` are both passed
+to `ObserverPane.update`). (2) **Hit order on pointer-down** (amends §5.7.9 by reference): the selected object's
+rings > the board's arrow tip > the board's ring > (a click, pointer-up within `CLICK_PX`) object pick > blank
+(observer orbit). `hit_handles(basis, W, H, p, touch, h, rings)` already tests the rings first and returns the board's result
+only when no ring is hit; `main.ts` now always passes both (`h` is null only while the board is hidden, §5.6 note on
+「板子」), and the hover cursor (`on-handle`) uses the same test, so it covers the object rings. (3) **Click.** A click
+on an object selects it (the rings appear, the 物體 panel fills, the dropdown follows); with the pivot mode 「點選物體」 the
+same click also picks the pivot exactly as §5.7.8 item 10 says (no undo step). A click with no object under the pointer
+(`pick_object` returns null; receivers, lights and grids do not count) clears the selection; the pivot is kept. The
+dropdown still selects and clears ("—"). (4) **Load.** A scene load clears the selection; no object is preselected,
+also in a single-object scene. (5) **Unchanged:** the drag lifecycle (§5.8.2), the live stage-A threshold, the shared
+undo stack, 套用 / 還原此物體 / 落地, the numeric fields and 預覽 (only the panel works). (6) **Hooks:** `set_rotate_mode` is
+removed; `rotate` reports `{id, slow, fields, ground_shown, centre, notice}` (no `on`, no `pressed`); `pick_at(x, y)`
+returns the object a click at pane px `(x, y)` would select. The object-pivot notice no longer has rotate-mode variants
+(「請點一下左窗的物體，把它設為旋轉中心（目前暫用場景中心）」, and the 預覽 variant). `web/test/plane.test.ts` pins the hit
+order with both rings and board handles present, and `web/scripts/smoke.mjs` drives it with real mouse events
+(docs/DECISIONS.md D83, spec-v0.3 §7).
