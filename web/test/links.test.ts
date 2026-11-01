@@ -837,3 +837,24 @@ test("panel text carries the count; update_scene keeps the links and joints; par
   // the drag pivot is the world joint
   assert.deepEqual(s.part_pivot("arm", page.t("arm")), world_centre(page.t("arm"), [-0.3, 0, 0]));
 });
+
+test("a part with children but no joint turns its subtree about its own c_w (D82 pivot), carrying the children", () => {
+  const page = new Page(load(patched((obj) => { delete obj("arm")["joint"]; })));
+  const s = page.s;
+  assert.equal(s.joint("arm"), null);
+  assert.ok(s.linked("arm"), "descendants make it linked");
+  const t0 = page.t("arm"), c_local = s.local_centres.get("arm")!;
+  assert.deepEqual(s.pivot_local("arm"), c_local);
+  assert.deepEqual(s.part_pivot("arm", t0), world_centre(t0, c_local));
+  const rel0 = relative(t0, page.t("flag"));
+  const res = page.drag("arm", 1, 37);
+  assert.deepEqual([...res.pose.transforms.keys()], ["arm", "flag"]);
+  close_rel(relative(page.t("arm"), page.t("flag")), rel0, 1e-9, "flag carried");
+  close3(world_centre(page.t("arm"), c_local), world_centre(t0, c_local), 1e-9, "c_w stays");
+  assert.ok(same_transform(page.t("mast"), s.initial_transform("mast")!) && same_transform(page.t("lamp"), s.initial_transform("lamp")!));
+  // numeric entry about c_w: the arm's angles verbatim, the flag by the same Q
+  const typed = s.part_numeric_pose("arm", [0, 0, 20], page.current)!;
+  assert.deepEqual(typed, set_part_rotation(s.part_pose("arm", page.current)!, "arm", c_local, [0, 0, 20]));
+  assert.deepEqual(typed.transforms.get("arm"), set_rotation(page.t("arm"), c_local, [0, 0, 20]));
+  close_rel(relative(typed.transforms.get("arm")!, typed.transforms.get("flag")!), rel0, 1e-9, "flag carried by the entry");
+});
