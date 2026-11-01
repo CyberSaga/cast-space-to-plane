@@ -11,7 +11,7 @@ import { test } from "node:test";
 import { fileURLToPath } from "node:url";
 
 import { curved, euler_zyx_matrix, load_scene, load_scene_text, shadow_geometry, transform_frame } from "castplane";
-import type { Mat3, Scene, StageA, Transform, Vec3 } from "castplane";
+import type { Mat3, Scene, StageA, Vec3 } from "castplane";
 
 import { display_colours } from "../src/colours.js";
 import { scene_blob } from "../src/download.js";
