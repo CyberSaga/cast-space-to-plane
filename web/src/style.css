@@ -70,3 +70,10 @@ body { display: flex; flex-direction: column; }
 #equation-error { color: #a00; font-size: 12px; max-width: 22em; }
 #quick-equations button { font-family: ui-monospace, monospace; padding: 1px 4px; }
 .obs-label-arrow { color: #1d4ed8; }
+/* M11 single-object rotation (contract §5.8.4; D83: modeless): the panel's 物體 section */
+#obj-panel .obj-angle { font-family: ui-monospace, monospace; width: 5.5em; }
+#obj-panel .obj-angle.bad { border-color: #d33; background: #fff4f4; color: #a00; outline-color: #d33; }
+#obj-selected { font-size: 12px; color: #2f2e29; min-height: 1.3em; }
+#obj-centre { font-variant-numeric: tabular-nums; font-size: 12px; color: #47463f; }
+#obj-notice { color: #a14b00; font-size: 12px; min-height: 1.3em; }
+#obj-panel button[hidden] { display: none; }

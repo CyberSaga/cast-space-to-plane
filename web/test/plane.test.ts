@@ -11,7 +11,7 @@ import { test } from "node:test";
 import { fileURLToPath } from "node:url";
 
 import { LAYER_IDS, compose, dumps, load_scene, load_scene_text, project_scene, shadow_geometry, validate_camera, write_svg } from "castplane";
-import type { Scene, StageA, Vec2, Vec3 } from "castplane";
+import type { Scene, StageA, Transform, Vec2, Vec3 } from "castplane";
 
 import {
   ARROW_LABEL, HIT_PX_MOUSE, HIT_PX_TOUCH, LABEL_GAP_PX, LABEL_H_PX, LABEL_OFFSET_PX, RING_HIT_FACTOR, RING_SEGMENTS, board_labels,
@@ -31,6 +31,7 @@ import {
 } from "../src/rig.js";
 import type { RigState } from "../src/rig.js";
 import { LAYERS_OFF_AT_START, initial_toggles } from "../src/toggles.js";
+import { clone_transform, object_rings, rotate_about_world_axis } from "../src/object_rotate.js";
 import { OBJECT_ID_KEY, RECEIVER_ID_KEY, object_id_of } from "../src/helpers3d.js";
 import type { TaggedNode } from "../src/helpers3d.js";
 
@@ -224,6 +225,118 @@ test("undo keeps the current pivot; reset restores the load state, the scene piv
   assert.equal(s.rig.focal, 80, "undo of the reset");
 });
 
+// ------------------------------------------------------------------------------------------------ M11 object rotation
+
+/** `basic` with the M11 object poses in its session scene. */
+function load_with_poses(data: Record<string, unknown>): Loaded {
+  const l = load(data);
+  const recs = new Map(l.A.objects.map((o) => [o.id, o]));
+  return { ...l, ss: { ...l.ss, object_poses: l.scene.objects.map((o) => ({ id: o.id, transform: o.transform, vertices: recs.get(o.id)!.mesh.vertices })) } };
+}
+
+/** `scene` with object `id` at pose `t`, and its stage A. */
+function rotated(l: Loaded, id: string, t: Transform): { scene: Scene; A: StageA } {
+  const scene = { ...l.scene, objects: l.scene.objects.map((o) => o.id === id ? { ...o, transform: t } : o) };
+  return { scene, A: shadow_geometry(scene) };
+}
+
+test("update_scene (M11, §5.8.3): rig, block(), rig_block(), scene_block, initial, centre and local pivots unchanged; ref0 / delta cleared", () => {
+  const l = load_with_poses(raw("basic"));
+  const s = new PlaneSession(l.ss);
+  // a board drag first, so that the picture delta and its reference exist
+  s.begin();
+  s.drag(pushed(clone(s.rig), 20));
+  s.end();
+  assert.ok(s.delta !== null && s.delta > 0);
+  const rig = clone(s.rig), block = JSON.stringify(s.block()), rig_block = JSON.stringify(s.rig_block());
+  const initial = clone(s.initial), scene_block = s.scene_block, centre = [...s.scene.centre];
+  const local = new Map(s.local_centres), P = [...s.rig.P];
+  const c = s.local_centres.get("crate")!;
+  const crate = l.scene.objects.find((o) => o.id === "crate")!;
+  const t1 = rotate_about_world_axis(crate.transform, c, 0, 40);
+  const r = rotated(l, "crate", t1);
+  s.update_scene(r.A.objects, r.A);
+  assert.deepEqual(s.rig, rig);
+  assert.deepEqual(s.rig.P, P, "rig.P stays (§5.8.5)");
+  assert.equal(JSON.stringify(s.block()), block);
+  assert.equal(JSON.stringify(s.rig_block()), rig_block);
+  assert.deepEqual(s.initial, initial);
+  assert.equal(s.scene_block, scene_block);
+  assert.deepEqual(s.scene.centre, centre, "the load-time scene centre");
+  assert.deepEqual(new Map(s.local_centres), local, "local pivots unchanged");
+  assert.equal(s.delta, null, "ref0 / delta cleared");
+  assert.equal(s.scene.vertices, r.A.vertices, "the new vertices");
+  assert.deepEqual(s.scene.object_centres.get("crate"), object_centres(r.A.objects).get("crate"), "the new object centre");
+  assert.notDeepEqual(s.scene.object_centres.get("crate"), object_centres(l.A.objects).get("crate"));
+  // the next board gesture measures from the new scene: a press reads 0
+  s.begin();
+  assert.equal(s.delta, 0);
+  s.end();
+  // a scene-block session stays on the scene camera after an object rotation
+  const s2 = new PlaneSession(l.ss);
+  s2.update_scene(r.A.objects, r.A);
+  assert.equal(s2.scene_block, true);
+  assert.equal(s2.block(), l.scene.camera);
+});
+
+test("session undo (M11): an object step is peeked by undo_step and popped only by pop_object_step; board steps as before", () => {
+  const l = load_with_poses(raw("basic"));
+  const s = new PlaneSession(l.ss);
+  const crate = l.scene.objects.find((o) => o.id === "crate")!;
+  const t0 = crate.transform;
+  assert.deepEqual(s.initial_transform("crate"), t0);
+  assert.equal(s.initial_transform("nope"), null);
+  close3(s.local_centres.get("crate")!, [0, 0, 0.3], 1e-12, "the crate's local pivot");
+  close(s.local_half_diagonals.get("crate")!, Math.hypot(1.0, 0.8, 0.6) / 2, 1e-12, "half diagonal");
+  s.view("top");
+  const rig_top = clone(s.rig);
+  const t1 = rotate_about_world_axis(t0, s.local_centres.get("crate")!, 2, 30);
+  assert.equal(s.record_object("crate", t0, t1), true);
+  assert.equal(s.record_object("crate", t1, clone_transform(t1)), false, "unchanged: no step");
+  s.begin_object("crate", t1);
+  assert.equal(s.end_object(clone_transform(t1)), false, "a press without change");
+  s.begin_object("crate", t1);
+  s.cancel_object();
+  assert.equal(s.undo.size, 2);
+  // the object step: reported, not consumed, the rig untouched
+  const u = s.undo_step();
+  assert.deepEqual(u.object, { id: "crate", transform: t0 });
+  assert.equal(u.changed, false);
+  assert.equal(s.undo.size, 2, "peeked, not popped");
+  assert.deepEqual(s.rig, rig_top);
+  assert.deepEqual(s.undo_step().object, { id: "crate", transform: t0 }, "a failed recompute keeps the step");
+  s.pop_object_step();
+  assert.equal(s.undo.size, 1);
+  s.pop_object_step(); // the top is a board step now: no-op
+  assert.equal(s.undo.size, 1);
+  const r = s.undo_step();
+  assert.equal(r.object, undefined);
+  assert.ok(r.changed && r.framing);
+  assert.equal(s.undo.size, 0);
+  assert.deepEqual(s.rig.f, s.initial.f, "the board step undone");
+  // reset stays board-only: it never records or touches an object step
+  s.record_object("crate", t0, t1);
+  s.reset();
+  assert.equal(s.undo.peek()?.kind, "object", "reset of an unchanged board records nothing");
+});
+
+test("session undo (M11 review): popping an object step never cancels an open board gesture", () => {
+  const l = load_with_poses(raw("basic"));
+  const s = new PlaneSession(l.ss);
+  const t0 = l.scene.objects.find((o) => o.id === "crate")!.transform;
+  const t1 = rotate_about_world_axis(t0, s.local_centres.get("crate")!, 2, 30);
+  s.record_object("crate", t0, t1);
+  const rig0 = clone(s.rig);
+  s.begin(); // a held board drag with an object step on top of the shared stack
+  assert.deepEqual(s.undo_step().object, { id: "crate", transform: t0 });
+  s.pop_object_step();
+  assert.equal(s.undo.size, 0);
+  assert.ok(s.drag(pushed(rig0, 20)));
+  assert.equal(s.end(), true, "the board drag still records its step");
+  assert.equal(s.undo.size, 1);
+  assert.equal(s.undo.peek()?.kind, "rig");
+});
+
 // ------------------------------------------------------------------------------------------------ readouts
 
 test("readouts: the spec-v0.2 §5.8 lines, the picture delta of a gesture, the eye-below-ground notice", () => {
@@ -312,6 +425,35 @@ test("hit test: arrow tip > ring (0.8 × radius); touch radius 26 px; the eye is
   const h2 = handles_of(s2.rig, BASIC.scene.camera.frame_mm);
   const tip2 = observer_project(VIEW, W, H, h2.tip)!;
   assert.deepEqual(hit_handles(basis, W, H, tip2, true, h2), { kind: "arrow" });
+});
+
+test("D83 hit order (modeless): object rings > arrow tip > board ring, with both present; board hidden: rings only", () => {
+  const s = session();
+  const h = handles_of(s.rig, BASIC.scene.camera.frame_mm);
+  const basis = observer_basis(VIEW);
+  const px = (X: readonly number[]): Vec2 => observer_project_with(basis, W, H, X)!;
+  // object rings of radius 0.3 m whose z ring (index 0) and y ring (index 18) pass exactly through the arrow tip
+  const c: Vec3 = [h.tip[0] - 0.3, h.tip[1], h.tip[2]];
+  const rings = object_rings("crate", c, 0.3);
+  const tip = px(h.tip);
+  assert.deepEqual(hit_handles(basis, W, H, tip, false, h), { kind: "arrow" }, "board handles alone: the arrow");
+  const both = hit_handles(basis, W, H, tip, false, h, rings);
+  assert.equal(both?.kind, "object_ring", "an object ring wins over the arrow tip it overlaps");
+  // a board-ring point away from the object rings: the board ring is still hit with the object rings present
+  const far = h.ring.findIndex((X) => {
+    const q = px(X);
+    return Math.hypot(q[0] - tip[0], q[1] - tip[1]) > 120 && hit_handles(basis, W, H, q, true, null, rings) === null;
+  });
+  assert.ok(far >= 0, "a board-ring point far from the object rings");
+  assert.equal(hit_handles(basis, W, H, px(h.ring[far]!), false, h, rings)?.kind, "ring");
+  // the board hidden (h = null): the object rings are hit, the board's tip and ring are not
+  assert.equal(hit_handles(basis, W, H, tip, false, null, rings)?.kind, "object_ring");
+  assert.equal(hit_handles(basis, W, H, px(h.ring[far]!), false, null, rings), null);
+  // a ring point's hit names its axis and grabbed index
+  const z5 = px(rings.rings[2][5]!);
+  const hz = hit_handles(basis, W, H, z5, false, h, rings);
+  assert.ok(hz !== null && hz.kind === "object_ring");
+  assert.equal(hit_handles(basis, W, H, z5, false, h, null)?.kind === "object_ring", false, "no rings: never an object ring");
 });
 
 test("left-pane drags: ring and arrow mappings from the pointer-down state (the eye moves rigidly / along f)", () => {

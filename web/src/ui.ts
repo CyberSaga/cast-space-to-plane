@@ -61,9 +61,21 @@ export interface Controls {
   observerControls: HTMLSpanElement;
   observerFrame: HTMLButtonElement;
   observerRays: HTMLInputElement;
+  /** D83 (contract §5.6 note): the left pane's 「板子」 checkbox (hides the observer's board group and its labels). */
+  observerBoard: HTMLInputElement;
   observerPane: HTMLElement;
   observerCanvas: HTMLCanvasElement;
   observerLabels: HTMLDivElement;
+  /** M11 (contract §5.8.4; D83: modeless, no toggle): the panel's 物體 section. */
+  objectSelect: HTMLSelectElement;
+  objectFields: [HTMLInputElement, HTMLInputElement, HTMLInputElement];
+  objectApply: HTMLButtonElement;
+  objectRestore: HTMLButtonElement;
+  objectGround: HTMLButtonElement;
+  objectCentre: HTMLDivElement;
+  objectNotice: HTMLDivElement;
+  /** D84: the line naming the selection (whole group or part). */
+  objectSelected: HTMLDivElement;
 }
 
 export function controls(): Controls {
@@ -104,10 +116,43 @@ export function controls(): Controls {
     observerControls: $<HTMLSpanElement>("observer-controls"),
     observerFrame: $<HTMLButtonElement>("observer-frame"),
     observerRays: $<HTMLInputElement>("observer-rays"),
+    observerBoard: $<HTMLInputElement>("observer-board"),
     observerPane: $<HTMLElement>("observer"),
     observerCanvas: $<HTMLCanvasElement>("obs-gl"),
     observerLabels: $<HTMLDivElement>("obs-labels"),
+    objectSelect: $<HTMLSelectElement>("obj-select"),
+    objectFields: [$<HTMLInputElement>("obj-rx"), $<HTMLInputElement>("obj-ry"), $<HTMLInputElement>("obj-rz")],
+    objectApply: $<HTMLButtonElement>("obj-apply"),
+    objectRestore: $<HTMLButtonElement>("obj-restore"),
+    objectGround: $<HTMLButtonElement>("obj-ground"),
+    objectCentre: $<HTMLDivElement>("obj-centre"),
+    objectNotice: $<HTMLDivElement>("obj-notice"),
+    objectSelected: $<HTMLDivElement>("obj-selected"),
   };
+}
+
+/** M11: the object dropdown — "—" (none) and one `<option>` per object id (replacing the previous scene's). D84: first
+ * one `<option>` per group of `groups` (value and label given, e.g. `group.<name>` and 「<name>（整組，n 個部件）」), then
+ * the objects. Labels are set with `textContent` only (group names come from the scene file). */
+export function fill_object_select(select: HTMLSelectElement, ids: readonly string[],
+  groups: readonly { value: string; label: string }[] = []): void {
+  const option = (value: string, label: string): HTMLOptionElement => {
+    const opt = document.createElement("option");
+    opt.value = value;
+    opt.textContent = label;
+    return opt;
+  };
+  select.replaceChildren(option("", "—"), ...groups.map((g) => option(g.value, g.label)), ...ids.map((id) => option(id, id)));
+}
+
+/** M11: the pivot readout of the panel (`c_w`, 3 decimals). */
+export function object_centre_text(c: readonly number[] | null): string {
+  if (c === null) return "";
+  const f3 = (x: number) => {
+    const t = x.toFixed(3);
+    return t === "-0.000" ? "0.000" : t;
+  };
+  return `中心 c_w = (${c.map(f3).join(", ")}) m`;
 }
 
 /** One checkbox per layer id in `box` (`data-layer` = id), checked iff the id is in `checked` (the page's initial

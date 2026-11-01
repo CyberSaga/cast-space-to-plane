@@ -11,7 +11,7 @@ npm run -w ts build        # the core package "castplane" the UI imports
 npm run -w web dev         # vite dev server
 npm run -w web build       # tsc type check + vite build -> web/dist (static, base './')
 npm run -w web preview     # serve web/dist locally
-npm run -w web test        # orbit / download / colours / rig / equation / observer / plane unit tests (node:test, web/test/; 113 tests)
+npm run -w web test        # orbit / download / colours / rig / equation / observer / plane / object-rotation unit tests (node:test, web/test/; 151 tests)
 ```
 
 ![web UI](../docs/images/web_ui.png)
@@ -63,7 +63,8 @@ drag):
   `castplane_web.load_text` hook) into a `Map` by object id (`display_colours`); malformed entries are skipped silently.
   `PALETTE` moved from `scene3d.ts` to `colours.ts`, its values unchanged.
 - **Modules**: `src/main.ts` keeps the page state, loading, the wiring and the render loop. `src/plane.ts` is plane
-  mode's session (the rig of `src/rig.ts`, undo, pivot, readouts; pure, unit-tested). The drawing pane has no input
+  mode's session (the rig of `src/rig.ts`, undo, pivot, readouts; pure, unit-tested). `src/object_rotate.ts` (pure)
+  holds the object-rotation maths and the `ObjectDrag` state machine (M11, below). The drawing pane has no input
   handler (below). `src/stage.ts` is one three.js view (`Stage3D`, plus `letterbox` for the canvas size), `src/input.ts`
   handles the page-wide file drop, `src/colours.ts` (pure) holds the display colours of the 3D views (above), and `src/ui.ts` drives the controls and the side panel (layer boxes, examples menu,
   sliders, readouts, error panel, warnings table, status line, `save` for downloads). `src/orbit.ts` (the M7 camera)
@@ -104,6 +105,61 @@ drag):
   Until the first change after a load or 重設, the core renders the scene's own camera, so the document and the
   downloads equal the CLI's. From then on it renders the rig's explicit `picture_plane` block (`position` plus
   `picture_plane {normal, offset[, up]}`; `up` only when not lock-horizontal or roll ≠ 0).
+- **Rotate one object** (M11, contract §5.8, spec-v0.3, D82, D83; `src/object_rotate.ts`, `PlaneSession.update_scene`).
+  Modeless (D83): there is no toggle; clicking an object in the observer pane selects it and its rings appear next to
+  the board's handles. The camera, the board (rig, pivot `P`, plane), the eye, the lights and the receivers never
+  change, only the selected object's `transform` does. Web only: the core, the port and the conformance set are untouched, and an unrotated scene renders
+  byte-identically to before.
+  - The observer pane's hit order on pointer-down is the selected object's rings > the board's arrow tip > its orange
+    ring > object (a click of less than 5 px selects it; with the pivot set to *點選物體* the same click also picks it
+    as the pivot) > empty space (a drag orbits the observer camera, a click clears the selection and hides the rings).
+    Nothing is selected after a load, also in a single-object scene. The hover cursor covers the object rings too.
+  - The *板子* checkbox (next to *視線*, on by default) hides, in the observer pane only, the board group (eye, board
+    patch, frame with the drawing, frustum, principal point, `D` and `g` lines, pivot marker, the orange ring and the
+    blue arrow) and its labels; the board's handles are then not hit-tested, so a press there orbits or clicks. The
+    object rings and the *視線* rays stay; the drawing pane, the outputs, the camera block, undo and *整體顯示* are
+    unchanged; it is not an undo step and not stored in the scene. A change while a board-handle drag is held is
+    ignored.
+  - The selected object gets three rings around its pivot `c_w` (the centre of its **local** bounding box, which does
+    not move while it rotates): x red, y green, z blue, about the world axes. Dragging a ring turns the object by the
+    total pointer displacement (0.32°/px, snapped to 15° with *吸附*, Alt suspends it) and stage A re-runs live, at most
+    once per frame, so the shadow and the drawing follow the drag. The object's `position` changes with the rotation so
+    that `c_w` stays put.
+  - The panel's *物體* section: the object dropdown (kept in sync with a click in the observer pane; "—" clears the
+    selection), the `rx` `ry` `rz` fields in degrees with *套用* (or Enter; angles typed into several
+    fields apply together, Esc drops them; a field that is not a finite number turns red and keeps its value),
+    *還原此物體* (back to the load-time transform), *落地* (shown only when `receivers[0]` is an unbounded plane: moves
+    the object along its normal until the lowest vertex touches it) and the `c_w` readout. Angles are shown to 0.1° in
+    (−180°, 180°] and are not unwrapped (170° plus 30° reads −160°). While previewing (*預覽*) the observer pane is
+    hidden and only the panel works.
+  - A ring drag, a *套用*, a *還原此物體* and a *落地* are one undo step each, in the same 50-step stack as the board
+    (*復原*); *重設* still resets only the board. A drag released at once still commits its last pose, and a second
+    finger cancels the gesture and restores the pressed pose.
+  - Turning about x or y can push the object through the ground: the core clips it and warns `OBJECT_BELOW_RECEIVER`
+    (expected; *落地* puts it back on the ground). A scene whose stage A took more than `LIVE_STAGE_A_MS` = 150 ms at
+    load only moves the 3D proxy while dragging and recomputes on release, with the notice 此場景拖動放開後更新. A
+    failed recompute keeps the committed pose and shows 核心重算失敗，請回報.
+  - *Download scene* writes the rotated `transform` (full doubles), so `castplane render` of the file reproduces the
+    drawing. Hooks for the smoke test: `castplane_web.rotate_object`, `set_object_rotation`, `select_object`,
+    `object_transform`, `object_vertices`, `object_centre`, `rotate` (selection and panel state), `object_rings_px`,
+    `pick_at(x, y)` (the object a click there selects), `set_board_visible(on)` and `board_visible()` (D83).
+- **Groups of parts** (D84, contract §5.8 notes, spec-v0.3 §8; `src/groups.ts`, the group maths of
+  `src/object_rotate.ts`). An object may carry the web-only key `group` (a non-empty, non-whitespace, UTF-8
+  encodable string, kept verbatim; the core ignores it, *Download scene* writes it back; unrelated to OBJ `g` groups and `smooth_groups`).
+  A group with two or more members in the scene is one unit; other objects behave as in D83.
+  - A click on a grouped object selects the whole group, the next click the clicked part, the next the whole group
+    again; after part focus a click on another part of the group moves the focus there; only a click on blank space
+    clears. The dropdown lists the groups first (`group.<name>`, label 「<name>（整組，<n> 個部件）」), and a line
+    under it names the selection. With the pivot set to *點選物體* the click puts `P` on the selected unit's centre.
+  - A whole group turns rigidly about `c`, the centre of the load-time world bounding box of its members (frozen:
+    only the group's *落地* and *還原此物體* move it). Its rings are centred on `c` with a radius from that box (larger
+    than a part's; they hit on the band only, so a click inside still picks a part); the fields show the rotation
+    relative to the load; *還原此物體* restores every member and *落地* moves the whole group by one common amount.
+    A part keeps M11's behaviour and never changes the group's reading or `c`. One group action is one undo step with
+    every member and the group frame (`UnitDrag`, `UndoStack.record_objects`).
+  - Hooks: `click_object(id | null)`, `selection()`, `select_group(name)`, `rotate_group(name, axis, deg)`,
+    `set_group_rotation(name, r)`, `group_rotation(name)`, `group_centre(name)`, `object_groups()`; `select_object(id)`
+    still selects an object as a part.
 - **Overlay** (`src/overlay.ts`): an `<svg>` over the canvas with the same CSS box and `viewBox`. On each
   animation frame where something changed, the frame runs `project_scene` → `compose` → `write_svg` (all six
   layers) against the cached stage A. Pointer events only update the state and at most one core render runs per
@@ -150,7 +206,7 @@ drag):
   scene's camera clamped into 0.5–12 m), the frame on it (the canvas rectangle unprojected with the core's
   `unproject_to_plane`) with the current drawing laid on it 0.012 m towards the eye, the frustum (dotted on to 1.9×),
   the principal point `Q`, the `D` line, the pivot (the orbit target) with the `g` line (`g = R − D`), the plane's
-  equation, and with *視線* (default on) the vertex rays of the first object: sight lines `E → P` with their crossings
+  equation (all hidden with the *板子* checkbox off, D83), and with *視線* (default on) the vertex rays of the first object: sight lines `E → P` with their crossings
   `P′` on the board, the light rays `L → S` of its vertices, the sight lines `E → S` and their crossings `S′`. The
   drawing on the frame follows the layer checkboxes; SVG arcs are drawn with 32 segments, ellipses with 72. Every
   drawing-camera change (handle drag, sliders, views, equation, example load, 重設) updates it in the same frame. In the
@@ -312,6 +368,12 @@ The script needs a Playwright installed outside the repository; it is not a depe
     hovering the arrow tip shows the pointer cursor; the observer labels do not overlap.
 
   With `--shots DIR` it saves `DIR/web_ui_plane_mode.png`.
+- D84 (groups of parts, on the fixture `web/test/fixtures/basic_grouped.json`: `basic` with both objects in group
+  `g` plus an ungrouped post): real clicks cycle whole group → part → whole group, blank space clears, another part
+  after part focus takes the focus; the group's rings are larger and a real drag on them turns every member;
+  `rotate_group` keeps `c`, the camera block, the rig and `scene_block`, leaves the post alone, and undo restores the
+  SVG byte for byte; the dropdown's group entry, the fields and *還原此物體* act on the whole group; *點選物體* puts the
+  pivot on `c`; *Download scene* keeps the `group` keys.
 
 Last run (phase 2, part 5; exit 0, no failed check, no page error):
 
