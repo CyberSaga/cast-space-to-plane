@@ -423,6 +423,8 @@ def test_literals_shared_with_the_builders():
     from miki_model import body as _body
     bib = next(r for r in ac.profile() if r.name == "clear:body.collar^body.bib")
     assert bib.faces_b.outward_from[2] == _body.BIB_AWAY_Z
+    import inspect
+    assert inspect.signature(mk.lift_band_borders).parameters["samples"].default == ac.BAND_CHORD_SAMPLES
     castplane_scene = pytest.importorskip("castplane.scene")
     assert checks.SMOOTH_ANGLE_DEG == castplane_scene.MESH_SMOOTH_ANGLE_DEFAULT
 
