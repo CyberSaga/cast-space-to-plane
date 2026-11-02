@@ -648,14 +648,16 @@ def test_miki_every_intersecting_pair_is_accounted_for(miki_report):
             assert "join" in kinds or "FAIL" in p["verdicts"] or "INDETERMINATE" in p["verdicts"], p
 
 
-#: The accepted verdict set of Miki at rest (profile v3): every required requirement that does not PASS, and the
-#: per-kind counts.  A change to either is deliberate: update these with the reason in the commit message.
+#: The accepted verdict set of Miki at rest (profile v3; v4 replaced the ``pose:rest-only`` stub with the seven
+#: advisory poses of ``poses.POSES``, INDETERMINATE "not tested" without ``--poses``): every required requirement that
+#: does not PASS, and the per-kind counts.  A change to either is deliberate: update these with the reason in the
+#: commit message.  The posed results are pinned in tests/test_miki_poses.py.
 MIKI_NON_PASS_REQUIRED = ()
 MIKI_COUNTS = {
     "clear": {"PASS": 44, "FAIL": 2, "INDETERMINATE": 0, "NOT_EXERCISED": 12},
     "generic": {"PASS": 98, "FAIL": 0, "INDETERMINATE": 0, "NOT_EXERCISED": 0},
     "join": {"PASS": 77, "FAIL": 0, "INDETERMINATE": 0, "NOT_EXERCISED": 19},
-    "pose": {"PASS": 0, "FAIL": 0, "INDETERMINATE": 1, "NOT_EXERCISED": 0},
+    "pose": {"PASS": 0, "FAIL": 0, "INDETERMINATE": 7, "NOT_EXERCISED": 0},
     "proportion": {"PASS": 2, "FAIL": 0, "INDETERMINATE": 0, "NOT_EXERCISED": 0},
 }
 MIKI_INTERSECTING_PAIRS = 70

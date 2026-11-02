@@ -15,7 +15,9 @@ Kinds:
 * **clear** -- faces of ``a`` must clear faces of ``b`` by ``[min, max]``.
 * **proportion** -- a lofted part must match the profile table it is lofted from (gated); free-form parts get a
   width table only (``DIAGNOSTIC_WIDTHS``, never gated: no written rule exists yet).
-* **pose** -- a pose that must be tested (milestone 2; a stub here, so the report can say it was not tested).
+* **pose** -- a named pose of :data:`poses.POSES` (milestone 2: ``steps`` and the ``sweeps`` tested); without
+  ``--poses`` it is reported as not tested, with ``--poses`` the cross pairs are re-checked at every swept angle
+  (advisory: the angles are "tested clearance", never a safe range).
 * **generic** -- every part pair without a join: any triangle-triangle crossing, coincident patch or
   containment is a FAIL (``checks.py`` adds one generic requirement per pair; they are not listed here).
 
@@ -38,7 +40,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from . import body, hair, head, limbs
+from . import body, hair, head, limbs, poses
 from .rig import Rig
 
 __all__ = ["PROFILE_VERSION", "PROFILE_NAME", "Select", "Zone", "Join", "Clear", "Proportion", "Pose",
@@ -47,8 +49,9 @@ __all__ = ["PROFILE_VERSION", "PROFILE_NAME", "Select", "Zone", "Join", "Clear",
 
 #: Bump when a requirement is added, removed or changed (the report records it).  3: the close round (joins
 #: bangs~sidelock_{l,r} and sidelock_{l,r}~back, the scarf tips' root rim, the sidelock root depth with the
-#: turned inner edge).
-PROFILE_VERSION = "3"
+#: turned inner edge).  4: milestone 2, one advisory ``Pose`` per pose of :data:`poses.POSES` (replacing the
+#: ``pose:rest-only`` stub).
+PROFILE_VERSION = "4"
 PROFILE_NAME = "miki"
 
 #: A face "faces" a direction when its unit normal's dot product with it is at least this (60 degrees).
@@ -216,11 +219,18 @@ class Proportion:
 
 @dataclass(frozen=True)
 class Pose:
+    """A named pose (:data:`poses.POSES`): ``steps`` ``((object, axis, deg), ...)`` with ``deg`` ``"+"`` / ``"-"``
+    (plus / minus the swept angle) or fixed degrees, and the ``sweeps`` (degrees) tested.  ``checks --poses``
+    re-checks every cross pair (one part moved, the other not) at each swept angle; without ``--poses`` the pose is
+    INDETERMINATE (not tested)."""
+
     name: str
     pose: str
     constant: str
     reason: str
     level: str = "advisory"
+    steps: tuple = ()
+    sweeps: tuple = ()
     kind: str = "pose"
 
 
@@ -610,9 +620,11 @@ def profile(rig: Rig | None = None) -> list:
     """Every requirement of the Miki acceptance profile, in a fixed order."""
     rig = Rig() if rig is None else rig
     reqs = _decal_requirements(rig) + _hair_requirements(rig) + _body_requirements(rig) + _proportions(rig)
-    reqs.append(Pose("pose:rest-only", "named poses (head turn / nod, arms raised, walking step)",
-                     "SILHOUETTE PLAN milestone 2",
-                     "milestone 1 tests the rest pose only; the posed checks are milestone 2 (advisory until then)"))
+    for name, spec in poses.POSES.items():
+        reqs.append(Pose(f"pose:{name}", spec.label, f"poses.POSES[{name!r}]",
+                         "tested clearance of a drawing-reference pose (milestone 2): advisory until the user sets which "
+                         "poses must stay clean (then they move to required with their tested angles cited)",
+                         steps=spec.steps, sweeps=spec.sweeps))
     names = [r.name for r in reqs]
     assert len(names) == len(set(names)), "duplicate requirement names"
     return reqs

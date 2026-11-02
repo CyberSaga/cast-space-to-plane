@@ -1,6 +1,6 @@
-"""Clearance / poke-through and proportion checks of the Miki model (milestone 1: the rest pose).
+"""Clearance / poke-through and proportion checks of the Miki model (the rest pose; ``--poses``: the named poses).
 
-    python -m tools.miki_model.checks [--report-only] [--out PATH]
+    python -m tools.miki_model.checks [--report-only] [--out PATH] [--poses]
 
 Builds the model with :func:`assemble.assemble` and checks the rounded, exported geometry of every part
 (``Assembly.parts``, ``assemble.DECIMALS``; never the builders' float output) against the acceptance profile
@@ -15,7 +15,13 @@ Builds the model with :func:`assemble.assemble` and checks the rounded, exported
   penetrations: they are counted and located, and pass.
 
 ``clear`` requirements measure gaps on selected faces, ``proportion`` requirements compare lofted parts with
-their profile tables, ``pose`` requirements are milestone 2 stubs.
+their profile tables.  ``pose`` requirements (advisory) are INDETERMINATE "not tested" unless ``--poses`` is given:
+then :func:`add_poses` re-checks, at every swept angle of every pose (:mod:`poses`), the cross pairs (exactly one part
+moved), with every face mask and rim taken from the rest pose (the profile's selectors and zones are written in the
+rest pose's world frame): a join is tested for containment, its euclid rim depth and that its parts still meet (its
+zone is not tested in poses), a clear is re-measured, every other pair goes through the generic rule.  The report
+then gains ``poses`` (``[pose][angle]``: the requirements whose verdict differs from rest) and ``pose_tables`` (the
+first failing angle of each cross pair); the rest of the report is unchanged.
 
 **Degenerate-intersection policy.**  ``eps = max(weld tolerance, sqrt(3) / 2 * 10**-DECIMALS)``, the rounding
 error of the exported grid (8.7 um).  Triangle pairs are classified by :func:`meshkit.triangle_intersections`
@@ -47,10 +53,12 @@ import numpy as np
 from . import acceptance as ac
 from . import assemble as asm
 from . import meshkit as mk
+from . import poses as ps
 from .rig import Rig
 
 __all__ = ["WELD_TOLERANCE", "policy_eps", "contact_tolerance", "PartGeom", "Checker", "run", "main",
-           "PASS", "FAIL", "INDETERMINATE", "NOT_EXERCISED"]
+           "PASS", "FAIL", "INDETERMINATE", "NOT_EXERCISED", "PosedPartGeom", "PosedChecker", "run_pose",
+           "pose_table", "add_poses", "format_poses"]
 
 PASS, FAIL, INDETERMINATE = "PASS", "FAIL", "INDETERMINATE"
 #: The per-kind count of PASS verdicts that measured nothing (a join whose parts never meet where contact is
@@ -753,7 +761,8 @@ class Checker:
         return out
 
     def _pose(self, p: ac.Pose, eps: float) -> dict:
-        return {"verdict": INDETERMINATE, "verdict_reason": f"pose not tested: {p.pose} (milestone 2)", "findings": []}
+        return {"verdict": INDETERMINATE, "verdict_reason": f"pose not tested: {p.pose} (run with --poses)",
+                "findings": []}
 
 
 def section_extents(P: PartGeom, z: float):
@@ -857,6 +866,8 @@ def _describe(req) -> dict:
         d["relation"] = "proportion: profile table"
     else:
         d["relation"] = "pose"
+        d["steps"] = [list(st) for st in getattr(req, "steps", ())]
+        d["sweeps"] = [_f(a) for a in getattr(req, "sweeps", ())]
     return d
 
 
@@ -1009,6 +1020,347 @@ def run(parts_list, profile=None, reports=None, eps=None, only=None) -> dict:
     return report
 
 
+# ---------------------------------------------------------------------------------------------------------------
+# posed checks (milestone 2: "tested clearance")
+# ---------------------------------------------------------------------------------------------------------------
+
+def _rotate_rows(R, X) -> np.ndarray:
+    """``R x`` for the rows of ``X`` (fixed 3-term sums: no BLAS)."""
+    out = np.empty_like(X)
+    for i in range(3):
+        out[:, i] = R[i, 0] * X[:, 0] + R[i, 1] * X[:, 1] + R[i, 2] * X[:, 2]
+    return out + 0.0
+
+
+class PosedPartGeom(PartGeom):
+    """A rest :class:`PartGeom` moved rigidly by its object's transform ``t = (position, rotation_deg)``
+    (:func:`poses.pose_transforms`): vertices, face centroids and normals transformed; the topology (triangles,
+    shells, groups, sides, areas) and the facet bulge (rigid-invariant) shared with the rest part.  It never selects
+    faces: :class:`PosedChecker` takes every mask and rim from the rest pose."""
+
+    def __init__(self, rest: PartGeom, t):
+        self.rest = rest
+        self.name, self.obj = rest.name, rest.obj
+        self.V = ps.apply_transform(t, rest.V)
+        self.mesh = mk.Mesh(self.V, rest.mesh.faces, rest.mesh.groups)
+        R = np.asarray(ps.transform_matrix(t), dtype=np.float64)
+        self.tris, self.tri_face = rest.tris, rest.tri_face
+        self.normal, self.area = _rotate_rows(R, rest.normal), rest.area
+        self.centroid = ps.apply_transform(t, rest.centroid)
+        self.sides, self.groups = rest.sides, rest.groups
+        self.lo, self.hi = self.V.min(axis=0), self.V.max(axis=0)
+        self.vl, self.n_shells = rest.vl, rest.n_shells
+        self._bulge = None
+        self._edge_bulge = None
+
+    def bulge(self) -> np.ndarray:
+        if self._bulge is None:
+            self._bulge = self.rest.bulge()
+            self._edge_bulge = self.rest._edge_bulge
+        return self._bulge
+
+    def select(self, sel: ac.Select, eps: float) -> np.ndarray:
+        raise RuntimeError(f"{self.name}: a posed part takes its face selections from the rest pose")
+
+    def rim(self, mask, sel: ac.Select, eps: float) -> np.ndarray:
+        raise RuntimeError(f"{self.name}: a posed part takes its rim from the rest pose")
+
+
+class PosedChecker(Checker):
+    """A :class:`Checker` on posed parts.  The profile's selectors and zones are written in the rest pose's world
+    frame, so every face mask and rim comes from ``rest`` (a :class:`Checker` on the rest parts; the topology is the
+    same, so the indices carry over), cached in ``masks`` across poses.  A cross-pair join is tested for containment,
+    its euclid rim depth and that its parts still meet (zone not tested); a clear is re-measured (euclid); a generic
+    pair is evaluated as at rest."""
+
+    def __init__(self, parts: dict, rest: Checker, masks: dict, reports: dict | None = None):
+        super().__init__(parts, eps=rest.eps, ctol=rest.ctol, reports=reports)
+        self.rest = rest
+        self.masks = masks
+
+    def sel(self, name: str, sel: ac.Select, eps: float) -> np.ndarray:
+        key = ("faces", name, sel, eps)
+        m = self.masks.get(key)
+        if m is None:
+            m = self.rest.sel(name, sel, eps)
+            self.masks[key] = m
+        return m
+
+    def rest_rim(self, name: str, sel: ac.Select, eps: float) -> np.ndarray:
+        key = ("rim", name, sel, eps)
+        r = self.masks.get(key)
+        if r is None:
+            r = self.rest.parts[name].rim(self.sel(name, sel, eps), sel, eps)
+            self.masks[key] = r
+        return r
+
+    def eval_requirement(self, req, eps: float) -> dict:
+        if req.kind == "join":
+            return self._pose_join(req, eps)
+        if req.kind == "clear":
+            if req.metric != "euclid":
+                return {"verdict": INDETERMINATE, "verdict_reason": f"clear metric {req.metric!r} is not evaluated "
+                        "across a pose (only euclid: its direction / band frame belongs to one part)", "findings": []}
+            return self._clear(req, eps)
+        if req.kind == "generic":
+            return self._generic(req, eps)
+        return {"verdict": INDETERMINATE, "verdict_reason": f"a {req.kind} requirement is not re-evaluated in poses",
+                "findings": []}
+
+    def _pose_join(self, j: ac.Join, eps: float) -> dict:
+        miss = self._missing((j.buried, j.host) + tuple(n for n, _ in j.stack) + tuple(j.also))
+        if miss:
+            return miss
+        if j.rim is not None and j.depth_metric != "euclid":
+            return {"verdict": INDETERMINATE, "verdict_reason": f"rim depth metric {j.depth_metric!r} is not evaluated "
+                    "in poses (only euclid)", "findings": []}
+        pd = self.pair(j.buried, j.host)
+        r = self.classify(pd, eps)
+        k = r["kind"]
+        n_cr, n_ct, n_co = (int(np.sum(k == x)) for x in (mk.TT_CROSSING, mk.TT_CONTACT, mk.TT_COINCIDENT))
+        ins = int(np.sum(np.nan_to_num(pd.sdepth_a, nan=-np.inf) > eps) +
+                  np.sum(np.nan_to_num(pd.sdepth_b, nan=-np.inf) > eps))
+        findings, verdict, n_wholly = [], PASS, 0
+        for _which, s, P in (("a", pd.sdepth_a, pd.a), ("b", pd.sdepth_b, pd.b)):
+            for sh in range(P.n_shells):
+                vs = s[P.vl == sh]
+                if len(vs) and np.all(np.nan_to_num(vs, nan=-np.inf) > eps):
+                    n_wholly += 1
+                    verdict = FAIL
+                    findings.append({"what": "shell wholly inside the other part", "part": P.name, "shell": sh})
+        meets = bool(n_cr or n_co or ins)
+        measured = {"crossings": n_cr, "contacts": n_ct, "coincident": n_co, "vertices_inside": ins,
+                    "shells_wholly_inside": n_wholly, "parts_meet": meets}
+        required = {"shells_wholly_inside": 0, "parts_meet": j.contact == "expected"}
+        if j.rim is not None:
+            A = self.parts[j.buried]
+            rim = self.rest_rim(j.buried, j.rim, eps)
+            if not len(rim):
+                return {"verdict": INDETERMINATE, "verdict_reason": "rim selection is empty: " + (j.rim.note or "?"),
+                        "findings": findings, "measured": measured, "required": required, "units": "m"}
+            depth, req_d, allow = self._rim_depths(j, A, rim, eps)
+            if np.all(np.isnan(depth)):
+                return {"verdict": INDETERMINATE, "verdict_reason": "no rim depth could be measured",
+                        "findings": findings, "measured": measured, "required": required, "units": "m"}
+            fail = np.nan_to_num(depth, nan=-np.inf) < req_d
+            order = np.argsort(np.nan_to_num(depth - req_d, nan=-np.inf), kind="stable")
+            k0 = int(order[0])
+            measured.update({"rim_vertices": int(len(rim)), "rim_depth_min": _f(np.nanmin(depth)),
+                             "rim_depth_at_worst": _f(depth[k0]),
+                             "rim_margin_min": _f(np.nan_to_num(depth - req_d, nan=-np.inf)[k0])})
+            required.update({"rim_depth": _f(j.depth), "rim_depth_metric": j.depth_metric,
+                             "rim_required_at_worst": _f(req_d[k0]), "rim_allowance_at_worst": _f(allow[k0])})
+            if np.any(fail):
+                verdict = FAIL
+                for i in [i for i in order if fail[i]][:MAX_FINDINGS]:
+                    findings.append({"what": "rim vertex not buried by the required depth", "part": j.buried,
+                                     "vertex": int(rim[i]), "xyz": _xyz(A.V[rim[i]]), "depth": _f(depth[i]),
+                                     "required": _f(req_d[i]), "allowance": _f(allow[i])})
+        if j.contact == "expected" and not meets:
+            verdict = FAIL
+            gap, where = _closest(pd)
+            findings.append({"what": "the parts no longer meet (the builder makes them meet)", "part": j.buried,
+                             "other_part": j.host, "gap": _f(gap), "xyz": _xyz(where)})
+        return {"verdict": verdict, "findings": findings, "measured": measured, "required": required, "units": "m",
+                "near_band": int(np.sum(r["near_band"])), "zone": "not tested in poses"}
+
+
+def _closest(pd: PairData):
+    """``(gap, xyz)``: the closest approach of the two parts of ``pd`` (the nearest vertex of either part to the
+    other part's triangles)."""
+    best = (math.inf, pd.a.V[0])
+    for P, Q in ((pd.a, pd.b), (pd.b, pd.a)):
+        d = mk.point_triangle_distance(P.V, Q.V, Q.tris)[0]
+        i = int(np.argmin(d))
+        if float(d[i]) < best[0]:
+            best = (float(d[i]), P.V[i])
+    return best
+
+
+def _status(e: dict) -> str:
+    """A report entry's verdict, ``NOT_EXERCISED`` for a pass that measured nothing."""
+    return NOT_EXERCISED if e["verdict"] == PASS and e.get("exercised") is False else e["verdict"]
+
+
+def _req_names(req) -> tuple:
+    if req.kind == "join":
+        return (req.buried, req.host) + tuple(n for n, _ in req.stack) + tuple(req.also)
+    return _req_parts(req)
+
+
+def run_pose(rest: Checker, parts_list, profile, steps, rest_by_name: dict, masks: dict, rig=None, links=None,
+             reports=None) -> dict:
+    """The posed checks of one pose ``steps`` (:func:`poses.pose_steps`): every requirement whose parts the pose moves
+    relative to each other (the cross pairs: their objects lie in different :func:`poses.motion_groups`; for a
+    one-step pose, one part in the turned subtree and the other not) is evaluated on the posed parts (:class:`PosedChecker`, at the
+    three eps of :data:`EPS_SCALES` for joins and generic pairs, as at rest); every other pair keeps its rest verdict
+    (a rigid motion).  Generic cross pairs are every pair without a join whose posed boxes touch.  Returns the angle's
+    report: the steps and their world pivots, the moved objects, the per-kind counts and the requirements whose
+    verdict differs from rest (``rest_verdict``; a pair with no rest requirement, its boxes disjoint at rest, counts as
+    PASS at rest)."""
+    pivots = []
+    T = ps.pose_transforms(rig, steps, links, pivots=pivots)
+    moved_objs = ps.moved_objects(steps)
+    group = ps.motion_groups(steps)
+    sig = {p.name: group[p.obj] for p in parts_list}
+    moved = {p.name for p in parts_list if p.obj in moved_objs}
+    parts = {p.name: (PosedPartGeom(rest.parts[p.name], T[p.obj]) if p.name in moved else rest.parts[p.name])
+             for p in parts_list}
+    chk = PosedChecker(parts, rest, masks, reports=reports)
+    eps0 = chk.eps
+    joined = set()
+    reqs = []
+    for r in profile:
+        if r.kind == "join":
+            joined.add(frozenset((r.buried, r.host)))
+        if r.kind in ("join", "clear"):
+            names = _req_names(r)
+            if all(n in sig for n in names) and len({sig[n] for n in names}) > 1:
+                reqs.append(r)
+    names = [p.name for p in parts_list]
+    pad = max(EPS_SCALES) * eps0
+    for i in range(len(names)):
+        for j in range(i + 1, len(names)):
+            a, b = names[i], names[j]
+            if sig[a] == sig[b] or frozenset((a, b)) in joined:
+                continue
+            if _boxes_touch(parts[a], parts[b], pad):
+                reqs.append(Generic(f"generic:{a}|{b}", a, b))
+    results = []
+    for req in reqs:
+        per = {}
+        scales = EPS_SCALES if req.kind in STABILITY_KINDS else (1.0,)
+        for s in scales:
+            per[s] = chk.eval_requirement(req, s * eps0)
+        main_res = dict(per[1.0])
+        verdicts = {s: per[s]["verdict"] for s in scales}
+        if len(set(verdicts.values())) > 1:
+            main_res["verdict"] = INDETERMINATE
+            main_res["verdict_reason"] = "tolerance-sensitive: " + ", ".join(
+                f"{s:g} eps -> {v}" for s, v in verdicts.items())
+            main_res["tolerance_sensitive"] = _near_band_detail(chk, req, eps0)
+        entry = _describe(req)
+        entry.update(main_res)
+        at_rest = rest_by_name.get(req.name)
+        if at_rest is None:
+            entry["rest_verdict"] = PASS
+            entry["rest_note"] = "no requirement at rest (the boxes are disjoint)"
+        else:
+            entry["rest_verdict"] = _status(at_rest)
+        results.append(entry)
+    results.sort(key=lambda e: e["name"])
+    counts = {}
+    for e in results:
+        c = counts.setdefault(e["kind"], {PASS: 0, FAIL: 0, INDETERMINATE: 0, NOT_EXERCISED: 0})
+        c[_status(e)] += 1
+    changed = [e for e in results if _status(e) != e["rest_verdict"]]
+    return {"steps": [[o, a, _f(d)] for o, a, d in steps], "pivots": [_xyz(p) for p in pivots],
+            "moved_objects": list(moved_objs), "moved_parts": len(moved),
+            "motion_groups": [[o for o in asm.OBJECT_IDS if group[o] == g] for g in sorted(set(group.values()))],
+            "evaluated": len(results),
+            "counts": counts, "changed": changed,
+            "failing": [e["name"] for e in changed if e["verdict"] == FAIL],
+            "indeterminate": [e["name"] for e in changed if e["verdict"] == INDETERMINATE]}
+
+
+def _pair_key(entry: dict) -> str:
+    return "|".join(sorted(entry["parts"][:2]))
+
+
+def pose_table(sweeps, per_angle: dict) -> dict:
+    """The per-pose table: the tested angles, and for each cross pair (``"a|b"``, names sorted) that FAILs at some
+    tested angle while it does not fail at rest, the first failing angle in each direction of the sweep (the smallest
+    ``|angle|`` of each sign, ``"+"`` first); ``by_requirement``: the same per requirement; ``indeterminate``: the
+    angles at which a requirement became INDETERMINATE."""
+    keys = [ps.angle_key(a) for a in sweeps]
+    pair_first, req_first, indet = {}, {}, {}
+    for sign in (1.0, -1.0):
+        angles = sorted((a for a in sweeps if math.copysign(1.0, a) == sign), key=abs)
+        for a in angles:
+            k = ps.angle_key(a)
+            for e in per_angle[k]["changed"]:
+                if e["verdict"] == FAIL and e["rest_verdict"] != FAIL:
+                    for table, key in ((pair_first, _pair_key(e)), (req_first, e["name"])):
+                        got = table.setdefault(key, [])
+                        if not any(x[0] == ("+" if sign > 0 else "-") for x in got):
+                            got.append(k)
+                elif e["verdict"] == INDETERMINATE:
+                    indet.setdefault(e["name"], []).append(k)
+    return {"tested_angles": keys, "first_failing": pair_first, "by_requirement": req_first,
+            "indeterminate": indet}
+
+
+def add_poses(report: dict, parts_list, rig=None, profile=None, reports=None, eps=None, links=None) -> dict:
+    """The ``--poses`` run: evaluate every ``pose`` requirement of ``profile`` with steps and sweeps at each swept
+    angle (:func:`run_pose`) and add ``report["poses"][pose][angle]`` and ``report["pose_tables"][pose]``
+    (:func:`pose_table`).  The pose entries of ``report["requirements"]`` get their verdict (PASS when no cross pair
+    changes at any tested angle, FAIL when one fails, else INDETERMINATE), and ``summary.counts["pose"]`` /
+    ``required_pass`` follow; nothing else in ``report`` changes.  ``links``: :func:`assemble.part_links` of ``rig``
+    by default (the joints the poses turn about).  Returns ``report``."""
+    rig = Rig() if rig is None else rig
+    profile = ac.profile(rig) if profile is None else list(profile)
+    links = asm.part_links(rig) if links is None else links
+    parts = {p.name: PartGeom(p.name, p.obj, p.mesh) for p in parts_list}
+    rest = Checker(parts, eps=eps, reports=reports)
+    rest_by_name = {e["name"]: e for e in report["requirements"]}
+    masks = {}
+    out, tables = {}, {}
+    for req in profile:
+        if req.kind != "pose" or not req.steps or not req.sweeps:
+            continue
+        name = req.name.split(":", 1)[1]
+        per = {}
+        for a in req.sweeps:
+            per[ps.angle_key(a)] = run_pose(rest, parts_list, profile, ps.pose_steps(req, a), rest_by_name, masks,
+                                            rig=rig, links=links, reports=reports)
+        out[name] = per
+        table = pose_table(req.sweeps, per)
+        tables[name] = table
+        entry = rest_by_name.get(req.name)
+        if entry is None:
+            continue
+        n_fail = len(table["by_requirement"])
+        res = {"verdict": FAIL if n_fail else (INDETERMINATE if table["indeterminate"] else PASS),
+               "measured": {"tested_angles": table["tested_angles"], "failing_requirements": n_fail,
+                            "first_failing": table["first_failing"]},
+               "required": {"failing_requirements": 0}, "units": "deg",
+               "findings": [{"what": "cross pair fails at a tested angle", "pair": k, "first_failing": v}
+                            for k, v in sorted(table["first_failing"].items())][:MAX_FINDINGS]}
+        entry.pop("verdict_reason", None)
+        if n_fail:
+            res["verdict_reason"] = (f"tested clearance: {n_fail} cross requirement(s) fail at a tested angle "
+                                     f"(first failing: report pose_tables[{name!r}])")
+        elif table["indeterminate"]:
+            res["verdict_reason"] = "tested clearance: a cross requirement is INDETERMINATE at a tested angle"
+        entry.update(res)
+    report["poses"] = out
+    report["pose_tables"] = tables
+    counts = report["summary"]["counts"]
+    c = {PASS: 0, FAIL: 0, INDETERMINATE: 0, NOT_EXERCISED: 0}
+    for e in report["requirements"]:
+        if e["kind"] == "pose":
+            c[_status(e)] += 1
+    if any(e["kind"] == "pose" for e in report["requirements"]):
+        counts["pose"] = c
+    report["summary"]["required_pass"] = all(e["verdict"] == PASS for e in report["requirements"]
+                                             if e["level"] == "required")
+    return report
+
+
+def format_poses(report: dict) -> str:
+    """The posed run's printed table: per pose the tested angles and the first failing angle of each cross pair."""
+    lines = []
+    for name, t in sorted(report.get("pose_tables", {}).items()):
+        lines.append(f"pose {name}: tested {' '.join(t['tested_angles'])} deg (tested clearance, never a safe range)")
+        for pair, first in sorted(t["first_failing"].items()):
+            lines.append(f"  {pair}: first fails at {', '.join(first)}")
+        for n, angles in sorted(t["indeterminate"].items()):
+            lines.append(f"  INDETERMINATE {n} at {', '.join(angles)}")
+        if not t["first_failing"] and not t["indeterminate"]:
+            lines.append("  no cross pair changes at any tested angle")
+    return "\n".join(lines)
+
+
 def _near_band_detail(chk: Checker, req, eps: float) -> list:
     """The near-band triangle pairs of the requirement's part pair (indices and XYZ), for a tolerance-sensitive
     verdict."""
@@ -1068,14 +1420,19 @@ def main(argv=None) -> int:
     ap = argparse.ArgumentParser(prog="python -m tools.miki_model.checks", description=__doc__.split("\n\n")[0])
     ap.add_argument("--report-only", action="store_true", help="print everything, always exit 0")
     ap.add_argument("--out", default=None, help="write the JSON report here")
+    ap.add_argument("--poses", action="store_true", help="also check the named poses (poses.POSES; advisory)")
     args = ap.parse_args(argv)
     model = asm.assemble(Rig(), strict=False)
     report = run(model.parts, reports=model.reports)
+    if args.poses:
+        add_poses(report, model.parts, rig=model.rig, reports=model.reports)
     report["exit"] = 0 if (args.report_only or report["summary"]["required_pass"]) else 1
     if args.out:
         with open(args.out, "w", encoding="utf-8") as fh:
             fh.write(dumps(report))
     print(format_summary(report))
+    if args.poses:
+        print(format_poses(report))
     return report["exit"]
 
 
