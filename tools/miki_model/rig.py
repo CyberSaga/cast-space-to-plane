@@ -321,13 +321,16 @@ class Rig:
     # -- C.4 stray strand (H5): exactly one, on her LEFT (+x) -------------------------------------------------
     strand_points: tuple = (
         (0.022, -0.086, 1.474),    # P0 root on H1, just above/behind the band
-        (0.030, -0.093, 1.463),    # P1 arches over the band
+        (0.030, -0.098, 1.466),    # P1 arches over the band (fix: was -0.093, 1.463, inside the band's front)
         (0.040, -0.096, 1.432),    # P2 crosses the bangs, passing their cut
         (0.053, -0.086, 1.400),    # P3 diagonally outward over the forehead (r4 tech F4: x was 0.052)
         (0.066, -0.074, 1.368),    # P4 passes outside the brow's outer end (r4 tech F4: x was 0.063)
         (0.0785, -0.047, 1.335),   # P5 outside the eye's outer corner, 5 mm off the cheek (r2: follows
         (0.080, -0.036, 1.305),    # P6 tip, on the sidelock's front face near its inner edge  the lock back)
     )
+    #: fix (defect 4): 12 equal-arc samples (was 9): with 9 the first swept segment was a straight chord from P0
+    #: to ~21 mm along that skipped P1 and cut the band's top-outer corner
+    strand_samples: int = 12
     strand_width: float = 0.004                 # 4-6 sided section, Catmull-Rom through the points
     strand_thickness: float = 0.002
     strand_taper_length: float = 0.030          # tapers to a point over the last 30 mm (length ~0.19)
