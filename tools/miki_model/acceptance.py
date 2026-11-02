@@ -381,6 +381,53 @@ def _hair_requirements(rig: Rig) -> list:
         Zone(z=(hair.DOME_BACK_BOTTOM_Z, rig.curtain_top_rows[0][0])),
         Select(vz=(rig.curtain_top_rows[0][0], INF), note="the curtain's top row"), 0.0,
         "rig.curtain_top_rows", "hair.py H2: the curtain starts inside the dome and emerges from under it"))
+    # the hair tuck idiom between the locks and the bangs / the side curtain (the look rounds 1-4 accepted)
+    x_r, x_l = hair.bangs_outer_strip_x(rig)
+    g_back = rig.bangs_strips + 1
+    for side, s in SIDES:
+        lock, strip = f"hair.sidelock_{s}", (rig.bangs_strips if side > 0 else 1)
+        outer = Select(groups=(strip, g_back), x=(x_l, INF) if side > 0 else (-INF, x_r),
+                       note=f"the bangs' outermost strip (group {strip}: its front and end faces; group {g_back}: "
+                            "its back and top faces), beyond the next strip's border (hair.bangs_outer_strip_x)")
+        out.append(Join(
+            f"join:hair.bangs~{lock}", "hair.bangs", lock,
+            Zone(faces=("a", outer), note="the lock lies over the bangs' outermost strip and end only; a leak onto "
+                 "the next strip fails"),
+            None, 0.0, "hair.BANGS_END_X / rig.sidelock_rows / hair.bangs_outer_strip_x",
+            "rig.sidelock_rows (round 2, F7): the lock's inner edge passes through the bangs' end down to the cut "
+            "(no slot beside it); the lock lies over the bangs' end at the temple, the look accepted in rounds 1-4"))
+    # the curtain's front edge (hair._back_hair): the rows at or above CURTAIN_TUCK_MIN_Z end at CURTAIN_FRONT_Y,
+    # the next one at its table y_end, the end face linear between the rows; the zone is the end face and the
+    # first CURTAIN_END_THICKNESS of the outer / inner faces behind it, in z steps of `step`
+    edge = [(z, hair._front_y(z)) for z, _off, _t in rig.curtain_top_rows]
+    edge += [(r[0], hair._front_y(r[0]) if r[0] >= hair.CURTAIN_TUCK_MIN_Z else r[5]) for r in rig.curtain_rows[1:]]
+    edge.sort()                                                                      # ascending z
+
+    def edge_y(z):
+        for (za, ya), (zb, yb) in zip(edge[:-1], edge[1:]):
+            if za <= z <= zb:
+                return ya + (yb - ya) * (z - za) / (zb - za)
+        raise ValueError(z)
+
+    step, z_top = 0.005, edge[-1][0]
+    zs = sorted({round(hair.CURTAIN_TUCK_MIN_Z + k * step, 9)
+                 for k in range(int((z_top - hair.CURTAIN_TUCK_MIN_Z) / step) + 1)}
+                | {z for z, _y in edge if z >= hair.CURTAIN_TUCK_MIN_Z} | {z_top})
+    boxes = []
+    for z0, z1 in zip(zs[:-1], zs[1:]):
+        y0, y1 = edge_y(z0), edge_y(z1)
+        boxes.append(Zone(z=(z0, z1), y=(min(y0, y1), max(y0, y1) + hair.CURTAIN_END_THICKNESS)))
+    front_edge = Zone(any_of=tuple(boxes), note="the curtain's front edge: from its end face (hair.CURTAIN_FRONT_Y, "
+                      "linear between the curtain rows) back by hair.CURTAIN_END_THICKNESS, z from "
+                      "hair.CURTAIN_TUCK_MIN_Z to the top curtain row")
+    for _side, s in SIDES:
+        lock = f"hair.sidelock_{s}"
+        out.append(Join(
+            f"join:{lock}~hair.back", lock, "hair.back", front_edge, None, 0.0,
+            "hair.CURTAIN_FRONT_Y / hair.CURTAIN_END_THICKNESS",
+            "hair.CURTAIN_FRONT_Y (round 3, F1): the curtain's front edge ends ~3 mm in front of the lock's back "
+            "(outer) edge, the curtain outside the lock: in profile it covers the lock's back 3 mm and the lock "
+            "is the front-most hair; the lock's outer edge tucks into that front edge"))
     return out
 
 
