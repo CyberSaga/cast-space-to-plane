@@ -1056,8 +1056,10 @@ def format_summary(report: dict) -> str:
 
 def _short(e: dict) -> str:
     m = e.get("measured") or {}
-    keys = ("max_observed_depth", "outside_zone", "shells_wholly_inside", "rim_depth_min", "min")
+    keys = ("max_observed_depth", "outside_zone", "shells_wholly_inside", "rim_depth_min", "max_excess")
     bits = [f"{k} {m[k]}" for k in keys if k in m and m[k] not in (None, 0)]
+    if e["kind"] == "clear" and m.get("min") is not None:
+        bits.insert(0, f"min {m['min']}")
     return (" [" + ", ".join(bits) + "]") if bits else ""
 
 

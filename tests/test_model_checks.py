@@ -647,6 +647,73 @@ def test_miki_every_intersecting_pair_is_accounted_for(miki_report):
     assert miki_report["summary"]["intersecting_pairs"] >= 80
 
 
+#: The accepted verdict set of Miki at rest (profile v2): every required requirement that does not PASS, and the
+#: per-kind counts.  A change to either is deliberate: update these with the reason in the commit message.
+MIKI_NON_PASS_REQUIRED = (
+    ("clear:body.collar^body.bib", "FAIL"),
+    ("clear:body.ring_stripe0^body.ring", "FAIL"),
+    ("clear:body.ring_stripe1^body.ring", "FAIL"),
+    ("clear:head.lid_l^head.iris_l", "FAIL"),
+    ("clear:head.lid_r^head.iris_r", "FAIL"),
+    ("clear:head.lower_lid_l^head.sclera_l", "FAIL"),
+    ("clear:head.lower_lid_r^head.sclera_r", "FAIL"),
+    ("generic:body.bib|body.blouse", "FAIL"),
+    ("generic:body.bib|body.collar", "FAIL"),
+    ("generic:body.blouse|body.collar", "FAIL"),
+    ("generic:body.blouse|body.ring", "FAIL"),
+    ("generic:body.blouse|body.scarf_ribbon_l", "FAIL"),
+    ("generic:body.blouse|body.scarf_ribbon_r", "FAIL"),
+    ("generic:body.scarf_ribbon_l|body.ring_stripe1", "FAIL"),
+    ("generic:body.scarf_ribbon_r|body.ring_stripe1", "FAIL"),
+    ("generic:body.scarf_tip_l|body.ring_stripe0", "FAIL"),
+    ("generic:body.scarf_tip_r|body.ring_stripe0", "FAIL"),
+    ("generic:body.scarf_tip_r|body.scarf_tip_l", "FAIL"),
+    ("generic:hair.bangs|hair.sidelock_l", "FAIL"),
+    ("generic:hair.bangs|hair.sidelock_r", "FAIL"),
+    ("generic:hair.sidelock_l|hair.back", "FAIL"),
+    ("generic:hair.sidelock_r|hair.back", "FAIL"),
+    ("generic:hair.strand|hair.headband", "FAIL"),
+    ("generic:head.skin|hair.bangs", "FAIL"),
+    ("join:body.scarf_tip_l~body.ring", "FAIL"),
+    ("join:body.scarf_tip_r~body.ring", "FAIL"),
+    ("join:hair.bangs~hair.dome", "FAIL"),
+    ("join:hair.headband_ridge~hair.headband", "FAIL"),
+    ("join:head.highlight_l~head.skin", "FAIL"),
+    ("join:head.highlight_r~head.skin", "FAIL"),
+    ("join:head.iris_l~head.skin", "FAIL"),
+    ("join:head.iris_r~head.skin", "FAIL"),
+    ("join:head.lid_l~head.iris_l", "INDETERMINATE"),
+    ("join:head.lid_l~head.skin", "FAIL"),
+    ("join:head.lid_r~head.iris_r", "FAIL"),
+    ("join:head.lid_r~head.skin", "FAIL"),
+    ("join:head.pupil_l~head.skin", "FAIL"),
+    ("join:head.pupil_r~head.skin", "FAIL"),
+    ("join:limbs.leg_l~limbs.sock_l", "FAIL"),
+    ("join:limbs.leg_r~limbs.sock_r", "FAIL"),
+    ("join:limbs.sock_l~limbs.shoe_l", "FAIL"),
+    ("join:limbs.sock_r~limbs.shoe_r", "FAIL"),
+    ("join:limbs.thumb_l~limbs.hand_l", "FAIL"),
+    ("join:limbs.thumb_r~limbs.hand_r", "FAIL"),
+)
+MIKI_COUNTS = {
+    "clear": {"PASS": 37, "FAIL": 9, "INDETERMINATE": 0, "NOT_EXERCISED": 12},
+    "generic": {"PASS": 92, "FAIL": 17, "INDETERMINATE": 0, "NOT_EXERCISED": 0},
+    "join": {"PASS": 54, "FAIL": 19, "INDETERMINATE": 1, "NOT_EXERCISED": 18},
+    "pose": {"PASS": 0, "FAIL": 0, "INDETERMINATE": 1, "NOT_EXERCISED": 0},
+    "proportion": {"PASS": 2, "FAIL": 0, "INDETERMINATE": 0, "NOT_EXERCISED": 0},
+}
+MIKI_INTERSECTING_PAIRS = 84
+
+
+def test_miki_verdict_set_is_pinned(miki_report):
+    """The headline accounting is regression-tested (review finding: nothing pinned it)."""
+    got = tuple(sorted((e["name"], e["verdict"]) for e in miki_report["requirements"]
+                       if e["level"] == "required" and e["verdict"] != checks.PASS))
+    assert got == MIKI_NON_PASS_REQUIRED
+    assert miki_report["summary"]["counts"] == MIKI_COUNTS
+    assert miki_report["summary"]["intersecting_pairs"] == MIKI_INTERSECTING_PAIRS
+
+
 def test_miki_named_pairs_are_tested_even_without_a_contact(miki_report):
     """A pair the profile names is always evaluated (the bbox screen only orders the generic work)."""
     clear = [e for e in miki_report["requirements"] if e["kind"] == "clear"]
