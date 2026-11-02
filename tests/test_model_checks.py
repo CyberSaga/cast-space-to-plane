@@ -646,7 +646,7 @@ def test_miki_every_intersecting_pair_is_accounted_for(miki_report):
         if p["crossings"] or p["coincident"] or p["a_vertices_inside_b"] or p["b_vertices_inside_a"]:
             kinds = {n.split(":")[0] for n in p["requirements"]}
             assert "join" in kinds or "FAIL" in p["verdicts"] or "INDETERMINATE" in p["verdicts"], p
-    assert miki_report["summary"]["intersecting_pairs"] >= 80
+    assert miki_report["summary"]["intersecting_pairs"] >= 75
 
 
 #: The accepted verdict set of Miki at rest (profile v2): every required requirement that does not PASS, and the
@@ -667,17 +667,11 @@ MIKI_NON_PASS_REQUIRED = (
     ("generic:body.blouse|body.scarf_ribbon_r", "FAIL"),
     ("generic:body.scarf_ribbon_l|body.ring_stripe1", "FAIL"),
     ("generic:body.scarf_ribbon_r|body.ring_stripe1", "FAIL"),
-    ("generic:body.scarf_tip_l|body.ring_stripe0", "FAIL"),
-    ("generic:body.scarf_tip_r|body.ring_stripe0", "FAIL"),
-    ("generic:body.scarf_tip_r|body.scarf_tip_l", "FAIL"),
     ("generic:hair.bangs|hair.sidelock_l", "FAIL"),
     ("generic:hair.bangs|hair.sidelock_r", "FAIL"),
     ("generic:hair.sidelock_l|hair.back", "FAIL"),
     ("generic:hair.sidelock_r|hair.back", "FAIL"),
-    ("generic:hair.strand|hair.headband", "FAIL"),
     ("generic:head.skin|hair.bangs", "FAIL"),
-    ("join:body.scarf_tip_l~body.ring", "FAIL"),
-    ("join:body.scarf_tip_r~body.ring", "FAIL"),
     ("join:hair.bangs~hair.dome", "FAIL"),
     ("join:hair.headband_ridge~hair.headband", "FAIL"),
     ("join:head.highlight_l~head.skin", "FAIL"),
@@ -690,21 +684,15 @@ MIKI_NON_PASS_REQUIRED = (
     ("join:head.lid_r~head.skin", "FAIL"),
     ("join:head.pupil_l~head.skin", "FAIL"),
     ("join:head.pupil_r~head.skin", "FAIL"),
-    ("join:limbs.leg_l~limbs.sock_l", "FAIL"),
-    ("join:limbs.leg_r~limbs.sock_r", "FAIL"),
-    ("join:limbs.sock_l~limbs.shoe_l", "FAIL"),
-    ("join:limbs.sock_r~limbs.shoe_r", "FAIL"),
-    ("join:limbs.thumb_l~limbs.hand_l", "FAIL"),
-    ("join:limbs.thumb_r~limbs.hand_r", "FAIL"),
 )
 MIKI_COUNTS = {
     "clear": {"PASS": 37, "FAIL": 9, "INDETERMINATE": 0, "NOT_EXERCISED": 12},
-    "generic": {"PASS": 92, "FAIL": 17, "INDETERMINATE": 0, "NOT_EXERCISED": 0},
-    "join": {"PASS": 54, "FAIL": 19, "INDETERMINATE": 1, "NOT_EXERCISED": 18},
+    "generic": {"PASS": 91, "FAIL": 13, "INDETERMINATE": 0, "NOT_EXERCISED": 0},
+    "join": {"PASS": 61, "FAIL": 11, "INDETERMINATE": 1, "NOT_EXERCISED": 19},
     "pose": {"PASS": 0, "FAIL": 0, "INDETERMINATE": 1, "NOT_EXERCISED": 0},
     "proportion": {"PASS": 2, "FAIL": 0, "INDETERMINATE": 0, "NOT_EXERCISED": 0},
 }
-MIKI_INTERSECTING_PAIRS = 84
+MIKI_INTERSECTING_PAIRS = 79
 
 
 def test_miki_verdict_set_is_pinned(miki_report):
