@@ -357,6 +357,13 @@ they are, not fixed:
   strap face, including the strap's end faces, which physically meet the shoe. The gated rule is the builder's
   border-chord clearance (`clear:limbs.strap_{l,r}^limbs.shoe_{l,r}`), which passes.
 - `pose:rest-only` stays INDETERMINATE (advisory) until the named poses are tested (milestone 2).
+- Known minor, not a check result: at the bangs' ends (|x| 0.062-0.072, z 1.456-1.4585) the dome's front rim shows
+  1-2 mm in front of the outermost strips just under the band in the shaded close-ups (a sub-pixel patch at 400 x 600;
+  nothing in the line renders). `_dome_bottom_z` follows the rig's band line, which lies ~3 mm below the band mesh's
+  real lower edge there (the band is built on the radial projection of that line, `_band_frames`), and the bangs' top
+  row cannot come further forward without crossing the band's face. The clean fix seats the dome's front boundary on
+  the projected band with a ring vertex at the span edge, then re-seats the sidelock roots and the back blend rings: a
+  coordinated dome / band / root change for a later round.
 
 ### Adding a requirement
 
