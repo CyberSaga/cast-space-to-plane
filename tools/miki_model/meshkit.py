@@ -1390,3 +1390,433 @@ def split_twisted(mesh: Mesh, max_deg: float, only=None) -> Mesh:
         faces.append(f)
         groups.append(g)
     return Mesh(V.copy(), faces, groups)
+
+
+# --- additions by model-checks M1: exact distances and robust triangle-triangle intersection ---------------------
+#
+# Used by ``checks.py`` (the clearance / poke-through report).  Everything is numpy, chunked to bound memory, and
+# deterministic: candidate pairs come out in lexicographic (triangle of A, triangle of B) order and every reduction
+# is a fixed-shape expression, so the same input gives the same output on every run.
+
+#: Kinds returned by :func:`triangle_intersections`.
+TT_NONE, TT_CROSSING, TT_CONTACT, TT_COINCIDENT = 0, 1, 2, 3
+TT_KINDS = {TT_NONE: "none", TT_CROSSING: "crossing", TT_CONTACT: "contact", TT_COINCIDENT: "coincident"}
+
+
+def _dot(a, b):
+    return np.einsum("...i,...i->...", a, b)
+
+
+def closest_point_on_triangle(P, A, B, C) -> np.ndarray:
+    """Closest point of triangle ``(A, B, C)`` to ``P``, elementwise over broadcastable ``(..., 3)`` arrays
+    (Ericson, *Real-Time Collision Detection* 5.1.5: Voronoi regions of the vertices, edges and face).  A
+    degenerate triangle (a repeated vertex, collinear vertices: ``|ab x ac|^2 <= 1e-24 |ab|^2 |ac|^2``, where the
+    region tests are not valid) returns the nearest of the closest points of its three edges instead."""
+    P, A, B, C = np.broadcast_arrays(*(np.asarray(x, dtype=np.float64) for x in (P, A, B, C)))
+    out = _closest_point_on_triangle_regions(P, A, B, C)
+    ab, ac = B - A, C - A
+    cr = np.cross(ab, ac)
+    degen = _dot(cr, cr) <= 1e-24 * _dot(ab, ab) * _dot(ac, ac)
+    if np.any(degen):
+        best, bd = None, None
+        for X, Y in ((A, B), (B, C), (C, A)):
+            q = _closest_point_on_segment(P, X, Y)
+            d = _dot(q - P, q - P)
+            if best is None:
+                best, bd = q, d
+            else:
+                better = d < bd
+                best, bd = np.where(better[..., None], q, best), np.where(better, d, bd)
+        out = np.where(degen[..., None], best, out)
+    return out
+
+
+def _closest_point_on_segment(P, X, Y) -> np.ndarray:
+    """Closest point of segment ``X``-``Y`` to ``P`` (elementwise; a zero-length segment is its point)."""
+    d = Y - X
+    dd = _dot(d, d)
+    with np.errstate(divide="ignore", invalid="ignore"):
+        t = np.where(dd > 0, _dot(P - X, d) / np.where(dd > 0, dd, 1.0), 0.0)
+    return X + np.clip(t, 0.0, 1.0)[..., None] * d
+
+
+def _closest_point_on_triangle_regions(P, A, B, C) -> np.ndarray:
+    """The Voronoi-region evaluation of :func:`closest_point_on_triangle` (valid for non-degenerate triangles)."""
+    ab, ac, ap = B - A, C - A, P - A
+    d1, d2 = _dot(ab, ap), _dot(ac, ap)
+    bp = P - B
+    d3, d4 = _dot(ab, bp), _dot(ac, bp)
+    cp = P - C
+    d5, d6 = _dot(ab, cp), _dot(ac, cp)
+    va = d3 * d6 - d5 * d4
+    vb = d5 * d2 - d1 * d6
+    vc = d1 * d4 - d3 * d2
+    with np.errstate(divide="ignore", invalid="ignore"):
+        den = va + vb + vc
+        v_f = np.where(den != 0, vb / np.where(den != 0, den, 1.0), 0.0)
+        w_f = np.where(den != 0, vc / np.where(den != 0, den, 1.0), 0.0)
+        out = A + v_f[..., None] * ab + w_f[..., None] * ac                       # face region (default)
+        # edge BC
+        t_bc = (d4 - d3) / np.where((d4 - d3) + (d5 - d6) != 0, (d4 - d3) + (d5 - d6), 1.0)
+        m = (va <= 0) & (d4 - d3 >= 0) & (d5 - d6 >= 0)
+        out = np.where(m[..., None], B + t_bc[..., None] * (C - B), out)
+        # edge AC
+        t_ac = d2 / np.where(d2 - d6 != 0, d2 - d6, 1.0)
+        m = (vb <= 0) & (d2 >= 0) & (d6 <= 0)
+        out = np.where(m[..., None], A + t_ac[..., None] * ac, out)
+        # edge AB
+        t_ab = d1 / np.where(d1 - d3 != 0, d1 - d3, 1.0)
+        m = (vc <= 0) & (d1 >= 0) & (d3 <= 0)
+        out = np.where(m[..., None], A + t_ab[..., None] * ab, out)
+    # vertex regions (checked last, so they win over the edge tests on their boundaries)
+    out = np.where(((d6 >= 0) & (d5 <= d6))[..., None], C, out)
+    out = np.where(((d3 >= 0) & (d4 <= d3))[..., None], B, out)
+    out = np.where(((d1 <= 0) & (d2 <= 0))[..., None], A, out)
+    return out
+
+
+def point_triangle_distance(points, V, tris, chunk: int = 1_000_000):
+    """Exact Euclidean distance from each point ``(P, 3)`` to the triangle set ``tris`` ``(T, 3)`` over ``V``:
+    ``(distance (P,), nearest triangle (P,), nearest point (P, 3))``; ties go to the lowest triangle index.
+    Chunked so that at most ``chunk`` point-triangle pairs are in memory.  With no triangles the distance is
+    ``inf`` and the triangle ``-1``."""
+    X = np.asarray(points, dtype=np.float64).reshape(-1, 3)
+    tris = np.asarray(tris, dtype=np.int64).reshape(-1, 3)
+    n = X.shape[0]
+    dist = np.full(n, np.inf)
+    near = np.full(n, -1, dtype=np.int64)
+    foot = np.full((n, 3), np.nan)
+    if not len(tris) or not n:
+        return dist, near, foot
+    A, B, C = V[tris[:, 0]], V[tris[:, 1]], V[tris[:, 2]]
+    step = max(1, chunk // len(tris))
+    for k0 in range(0, n, step):
+        x = X[k0:k0 + step, None, :]
+        q = closest_point_on_triangle(x, A[None], B[None], C[None])                # (p, T, 3)
+        d2 = _dot(q - x, q - x)
+        j = np.argmin(d2, axis=1)
+        r = np.arange(len(j))
+        dist[k0:k0 + len(j)] = np.sqrt(d2[r, j])
+        near[k0:k0 + len(j)] = j
+        foot[k0:k0 + len(j)] = q[r, j]
+    return dist, near, foot
+
+
+def closest_points_segments(P0, P1, Q0, Q1):
+    """Closest points ``(on P0-P1, on Q0-Q1)`` of two segments, elementwise over ``(..., 3)`` arrays (Ericson
+    5.1.9, with the degenerate cases of zero-length segments)."""
+    P0, P1, Q0, Q1 = np.broadcast_arrays(*(np.asarray(x, dtype=np.float64) for x in (P0, P1, Q0, Q1)))
+    d1, d2, r = P1 - P0, Q1 - Q0, P0 - Q0
+    a, e, f = _dot(d1, d1), _dot(d2, d2), _dot(d2, r)
+    c, b = _dot(d1, r), _dot(d1, d2)
+    tiny = 1e-30
+    den = a * e - b * b
+    with np.errstate(divide="ignore", invalid="ignore"):
+        s = np.where(den > tiny * np.maximum(a * e, tiny), np.clip((b * f - c * e) / np.where(den != 0, den, 1.0),
+                                                                    0.0, 1.0), 0.0)
+        s = np.where(a <= tiny, 0.0, s)
+        t = np.where(e > tiny, (b * s + f) / np.where(e > tiny, e, 1.0), 0.0)
+        # clamp t, then recompute s for the clamped t
+        s_lo = np.where(a > tiny, np.clip(-c / np.where(a > tiny, a, 1.0), 0.0, 1.0), 0.0)
+        s_hi = np.where(a > tiny, np.clip((b - c) / np.where(a > tiny, a, 1.0), 0.0, 1.0), 0.0)
+        s = np.where(t < 0.0, s_lo, np.where(t > 1.0, s_hi, s))
+        t = np.clip(t, 0.0, 1.0)
+        s = np.where((a <= tiny) & (e > tiny), 0.0, s)
+        t = np.where((a <= tiny) & (e > tiny), np.clip(f / np.where(e > tiny, e, 1.0), 0.0, 1.0), t)
+        t = np.where((e <= tiny) & (a > tiny), 0.0, t)
+        s = np.where((e <= tiny) & (a > tiny), np.clip(-c / np.where(a > tiny, a, 1.0), 0.0, 1.0), s)
+    return P0 + s[..., None] * d1, Q0 + t[..., None] * d2
+
+
+def triangle_pair_distance(TA, TB):
+    """Exact distance between paired triangles ``TA[k]`` / ``TB[k]`` (``(K, 3, 3)`` each) when they do not
+    intersect (0 or a rounding-sized value when they do; use :func:`triangle_intersections` for that):
+    ``(distance (K,), point on A (K, 3), point on B (K, 3))``.  The minimum of the 6 vertex-to-triangle and 9
+    edge-to-edge distances, in that fixed order (ties: the first)."""
+    TA = np.asarray(TA, dtype=np.float64).reshape(-1, 3, 3)
+    TB = np.asarray(TB, dtype=np.float64).reshape(-1, 3, 3)
+    cand_a, cand_b = [], []
+    for i in range(3):                                   # A's vertices to B
+        cand_a.append(TA[:, i])
+        cand_b.append(closest_point_on_triangle(TA[:, i], TB[:, 0], TB[:, 1], TB[:, 2]))
+    for i in range(3):                                   # B's vertices to A
+        cand_a.append(closest_point_on_triangle(TB[:, i], TA[:, 0], TA[:, 1], TA[:, 2]))
+        cand_b.append(TB[:, i])
+    for i in range(3):
+        for j in range(3):
+            pa, pb = closest_points_segments(TA[:, i], TA[:, (i + 1) % 3], TB[:, j], TB[:, (j + 1) % 3])
+            cand_a.append(pa)
+            cand_b.append(pb)
+    PA, PB = np.stack(cand_a, axis=1), np.stack(cand_b, axis=1)          # (K, 15, 3)
+    d = np.sqrt(_dot(PA - PB, PA - PB))
+    j = np.argmin(d, axis=1)
+    r = np.arange(len(j))
+    return d[r, j], PA[r, j], PB[r, j]
+
+
+def triangle_bbox_pairs(VA, tris_a, VB, tris_b, pad: float = 0.0, chunk: int = 2_000_000):
+    """Candidate triangle pairs ``(ia (K,), ib (K,))`` whose bounding boxes, each grown by ``pad``, overlap; in
+    lexicographic ``(ia, ib)`` order.  Chunked over A's triangles."""
+    ta = np.asarray(tris_a, dtype=np.int64).reshape(-1, 3)
+    tb = np.asarray(tris_b, dtype=np.int64).reshape(-1, 3)
+    if not len(ta) or not len(tb):
+        return np.zeros(0, dtype=np.int64), np.zeros(0, dtype=np.int64)
+    PA, PB = VA[ta], VB[tb]
+    alo, ahi = PA.min(axis=1) - pad, PA.max(axis=1) + pad
+    blo, bhi = PB.min(axis=1), PB.max(axis=1)
+    out_a, out_b = [], []
+    step = max(1, chunk // len(tb))
+    for k0 in range(0, len(ta), step):
+        lo, hi = alo[k0:k0 + step, None, :], ahi[k0:k0 + step, None, :]
+        hit = np.all((lo <= bhi[None]) & (hi >= blo[None]), axis=2)
+        i, j = np.nonzero(hit)
+        out_a.append(i + k0)
+        out_b.append(j)
+    return np.concatenate(out_a), np.concatenate(out_b)
+
+
+def _plane_distances(T, R):
+    """Signed distances ``(K, 3)`` of the vertices of ``T`` to the planes of ``R`` (unit ``R`` normals, right
+    hand ``(r1 - r0) x (r2 - r0)``), and those unit normals ``(K, 3)``."""
+    n = np.cross(R[:, 1] - R[:, 0], R[:, 2] - R[:, 0])
+    ln = np.linalg.norm(n, axis=1)
+    n = n / np.where(ln > 0, ln, 1.0)[:, None]
+    return _dot(T - R[:, None, 0], n[:, None, :]), n
+
+
+def _plane_cut(T, d):
+    """The two end points ``(K, 2, 3)`` of the zero set of the signed distances ``d`` ``(K, 3)`` on triangles ``T``
+    that straddle their plane (one ``d > 0`` and one ``d < 0``): the edge points where ``d`` changes sign and any
+    vertex with ``d == 0``.  The two candidates farthest apart are kept."""
+    pts = []
+    for i, j in ((0, 1), (1, 2), (2, 0)):
+        di, dj = d[:, i], d[:, j]
+        cross = (di * dj) < 0
+        t = np.where(cross, di / np.where(cross, di - dj, 1.0), np.nan)
+        pts.append(T[:, i] + t[:, None] * (T[:, j] - T[:, i]))
+    for i in range(3):
+        pts.append(np.where((d[:, i] == 0)[:, None], T[:, i], np.nan))
+    P = np.stack(pts, axis=1)                                                   # (K, 6, 3), nan = absent
+    ok = np.all(np.isfinite(P), axis=2)
+    Q = np.where(ok[..., None], P, 0.0)
+    D = np.linalg.norm(Q[:, :, None, :] - Q[:, None, :, :], axis=3)
+    D = np.where(ok[:, :, None] & ok[:, None, :], D, -1.0)
+    flat = np.argmax(D.reshape(len(T), -1), axis=1)
+    i0, i1 = flat // 6, flat % 6
+    r = np.arange(len(T))
+    return np.stack([Q[r, i0], Q[r, i1]], axis=1)
+
+
+def _clip_convex_2d(poly, clip):
+    """Sutherland-Hodgman: convex polygon ``poly`` ``(n, 2)`` clipped by the convex CCW polygon ``clip``."""
+    out = [tuple(p) for p in poly]
+    m = len(clip)
+    for k in range(m):
+        a, b = clip[k], clip[(k + 1) % m]
+        ex, ey = b[0] - a[0], b[1] - a[1]
+
+        def side(p):
+            return ex * (p[1] - a[1]) - ey * (p[0] - a[0])
+
+        src, out = out, []
+        if not src:
+            break
+        for i in range(len(src)):
+            p, q = src[i], src[(i + 1) % len(src)]
+            sp, sq = side(p), side(q)
+            if sp >= 0:
+                out.append(p)
+            if (sp >= 0) != (sq >= 0):
+                t = sp / (sp - sq)
+                out.append((p[0] + t * (q[0] - p[0]), p[1] + t * (q[1] - p[1])))
+    return np.array(out, dtype=np.float64).reshape(-1, 2)
+
+
+def _polygon_area_2d(P) -> float:
+    if len(P) < 3:
+        return 0.0
+    x, y = P[:, 0], P[:, 1]
+    return 0.5 * float(np.sum(x * np.roll(y, -1) - np.roll(x, -1) * y))
+
+
+def _coplanar_overlap(ta, tb, ref):
+    """Overlap polygon ``(n, 3)`` of two (near-)coplanar triangles ``ta``, ``tb`` ``(3, 3)``, both projected onto
+    the plane of ``ref`` (``ta`` or ``tb``), and its area."""
+    o = ref[0]
+    n = np.cross(ref[1] - ref[0], ref[2] - ref[0])
+    n = n / np.linalg.norm(n)
+    u = ref[1] - ref[0]
+    u = u / np.linalg.norm(u)
+    w = np.cross(n, u)
+
+    def to2(T):
+        P = np.stack([_dot(T - o, u), _dot(T - o, w)], axis=1)
+        return P if _polygon_area_2d(P) >= 0 else P[::-1]
+
+    poly = _clip_convex_2d(to2(ta), to2(tb))
+    area = abs(_polygon_area_2d(poly))
+    return o + poly[:, :1] * u + poly[:, 1:2] * w, area
+
+
+def _edge_crossings(VX, tx, ix, X, dX, Y, nY, eps: float) -> list:
+    """Crossings of a surface X through triangle Y along an edge of X (the edge-crossing pass of
+    :func:`triangle_intersections`): for each contact pair ``k`` (X triangle ``tx[ix[k]]`` with vertices ``X[k]``
+    and plane distances ``dX[k]`` to triangle ``Y[k]`` of unit normal ``nY[k]``), an edge of the X triangle with
+    both ends within ``eps`` of Y's plane, whose two triangles' opposite vertices lie beyond ``+eps`` and ``-eps``
+    of it, and which runs through the interior of Y's triangle (clipped to the triangle shrunk by ``eps`` in its
+    plane, a positive length is left) is a crossing.  Returns ``[(k, segment start, segment end)]`` with the edge
+    clipped to Y's (unshrunk) triangle.  An edge on a mesh boundary (one triangle; e.g. a face subset) is never
+    one.  An X edge lying along a Y edge (both surfaces creased on the same line) is left a contact: there the
+    sign test alone cannot tell crossing from touching (a known limit)."""
+    out = []
+    flat = np.abs(dX) <= eps
+    cand = [(k, i) for k in range(len(X)) for i in range(3) if flat[k, i] and flat[k, (i + 1) % 3]]
+    if not cand:
+        return out
+    for k, i in cand:
+        t = tx[ix[k]]
+        u, v, w = int(t[i]), int(t[(i + 1) % 3]), int(t[(i + 2) % 3])
+        d1 = float(dX[k, (i + 2) % 3])
+        on_edge = np.nonzero(np.sum((tx == u) | (tx == v), axis=1) == 2)[0]
+        if len(on_edge) != 2:
+            continue
+        other = tx[on_edge[0]] if int(on_edge[1]) == int(ix[k]) else tx[on_edge[1]]
+        w2 = [int(q) for q in other if int(q) not in (u, v)]
+        if len(w2) != 1 or w2[0] == w:
+            continue
+        d2 = float(_dot(VX[w2[0]] - Y[k, 0], nY[k]))
+        if not ((d1 > eps and d2 < -eps) or (d1 < -eps and d2 > eps)):
+            continue
+        P, Q = VX[u], VX[v]
+        lo, hi = 0.0, 1.0
+        lo_s, hi_s = 0.0, 1.0                                                  # clipped to the shrunk triangle
+        for j in range(3):
+            a, b, c = Y[k, j], Y[k, (j + 1) % 3], Y[k, (j + 2) % 3]
+            m = np.cross(nY[k], b - a)
+            lm = float(np.linalg.norm(m))
+            if lm == 0.0:
+                lo = hi = lo_s = hi_s = None
+                break
+            m = m / lm
+            if float(_dot(c - a, m)) < 0:
+                m = -m
+            sp, sq = float(_dot(P - a, m)), float(_dot(Q - a, m))
+            for off, which in ((0.0, "full"), (eps, "shrunk")):
+                l0, l1 = (lo, hi) if which == "full" else (lo_s, hi_s)
+                if sp == sq:
+                    if sp < off:
+                        l0, l1 = 1.0, 0.0
+                else:
+                    t0 = (off - sp) / (sq - sp)
+                    if sq > sp:
+                        l0 = max(l0, t0)
+                    else:
+                        l1 = min(l1, t0)
+                if which == "full":
+                    lo, hi = l0, l1
+                else:
+                    lo_s, hi_s = l0, l1
+        if lo is None or hi_s <= lo_s:
+            continue
+        out.append((k, P + lo * (Q - P), P + hi * (Q - P)))
+    return out
+
+
+def triangle_intersections(VA, tris_a, VB, tris_b, eps: float, pairs=None) -> dict:
+    """Classify every candidate triangle pair of two triangle sets under the tolerance ``eps`` (metres).
+
+    ``pairs`` is ``(ia, ib)`` (default: :func:`triangle_bbox_pairs` with ``pad = eps``).  From the signed
+    distances of each triangle's vertices to the other triangle's plane:
+
+    * **coincident** (:data:`TT_COINCIDENT`): all three vertices of one triangle lie within ``eps`` of the other's
+      plane and the two overlap in that plane by more than ``eps**2`` in area; the overlap polygon is returned;
+    * **crossing** (:data:`TT_CROSSING`): both triangles have a vertex above ``+eps`` and one below ``-eps``, and
+      their cuts along the planes' intersection line overlap (any positive length: a short segment is still a
+      crossing); the segment is returned;
+    * **contact** (:data:`TT_CONTACT`): any other pair whose exact distance is ``<= eps`` (touching at a vertex or
+      an edge, or coplanar within ``eps`` with no area to speak of); the nearest point pair is returned;
+    * **crossing along an edge** (also :data:`TT_CROSSING`; the edge-crossing pass over the contact pairs, both
+      directions, :func:`_edge_crossings`): an edge of one triangle lies within ``eps`` of the other's plane, inside
+      it, and the two triangles on that edge leave on opposite sides beyond ``eps`` -- the surface crosses along its
+      own edge (a ring row exactly on the other part's plane), which no single triangle pair shows.  Both triangles
+      on the edge are marked, each with the edge clipped to the other triangle as its segment.  It needs the edge's
+      second triangle in the same triangle set, so on a face subset a boundary edge is never one;
+    * none (dropped): everything else.
+
+    Returns ``{"ia", "ib", "kind", "seg" (K, 2, 3), "polys" (list of (n, 3) or None), "near_band" (K,) bool,
+    "n_candidates", "n_near_band"}`` for the classified (not-none) pairs, in candidate order.  ``seg`` holds the
+    crossing segment, the coincident polygon's bbox diagonal or the contact point twice.  ``near_band`` marks a pair
+    with a vertex-to-plane distance in ``[eps / 10, 10 eps]`` (its kind may depend on ``eps``);
+    ``n_near_band`` counts them over all candidates."""
+    ta = np.asarray(tris_a, dtype=np.int64).reshape(-1, 3)
+    tb = np.asarray(tris_b, dtype=np.int64).reshape(-1, 3)
+    if pairs is None:
+        pairs = triangle_bbox_pairs(VA, ta, VB, tb, pad=eps)
+    ia, ib = (np.asarray(p, dtype=np.int64) for p in pairs)
+    empty = {"ia": ia[:0], "ib": ib[:0], "kind": np.zeros(0, dtype=np.int64), "seg": np.zeros((0, 2, 3)),
+             "polys": [], "near_band": np.zeros(0, dtype=bool), "n_candidates": int(len(ia)), "n_near_band": 0}
+    if not len(ia):
+        return empty
+    A, B = VA[ta[ia]], VB[tb[ib]]                                                   # (K, 3, 3)
+    dA, nB = _plane_distances(A, B)
+    dB, nA = _plane_distances(B, A)
+    absd = np.concatenate([np.abs(dA), np.abs(dB)], axis=1)
+    near_band = np.any((absd >= eps / 10.0) & (absd <= 10.0 * eps), axis=1)
+    copA = np.all(np.abs(dA) <= eps, axis=1)
+    copB = np.all(np.abs(dB) <= eps, axis=1)
+    sepA = np.all(dA > eps, axis=1) | np.all(dA < -eps, axis=1)
+    sepB = np.all(dB > eps, axis=1) | np.all(dB < -eps, axis=1)
+    strA = np.any(dA > eps, axis=1) & np.any(dA < -eps, axis=1)
+    strB = np.any(dB > eps, axis=1) & np.any(dB < -eps, axis=1)
+    kind = np.zeros(len(ia), dtype=np.int64)
+    seg = np.zeros((len(ia), 2, 3))
+    polys = [None] * len(ia)
+    # coplanar within eps: coincident or (thin) contact
+    cop = np.nonzero((copA | copB) & ~(sepA | sepB))[0]
+    for k in cop:
+        ref = B[k] if copA[k] else A[k]
+        poly, area = _coplanar_overlap(A[k], B[k], ref)
+        if area > eps * eps:
+            kind[k] = TT_COINCIDENT
+            polys[k] = poly
+            seg[k] = (poly.min(axis=0), poly.max(axis=0))
+    # crossing: both straddle beyond eps and the cuts overlap along the line
+    cr = np.nonzero(strA & strB & ~(copA | copB))[0]
+    if len(cr):
+        L = np.cross(nA[cr], nB[cr])
+        L = L / np.linalg.norm(L, axis=1)[:, None]
+        SA = _plane_cut(A[cr], dA[cr])
+        SB = _plane_cut(B[cr], dB[cr])
+        tA, tB = _dot(SA, L[:, None, :]), _dot(SB, L[:, None, :])                  # (n, 2)
+        oA = np.argsort(tA, axis=1, kind="stable")
+        r = np.arange(len(cr))
+        tA0, tA1 = tA[r, oA[:, 0]], tA[r, oA[:, 1]]
+        PA0, PA1 = SA[r, oA[:, 0]], SA[r, oA[:, 1]]
+        lo = np.maximum(tA0, np.minimum(tB[:, 0], tB[:, 1]))
+        hi = np.minimum(tA1, np.maximum(tB[:, 0], tB[:, 1]))
+        ok = hi > lo
+        span = np.where(tA1 > tA0, tA1 - tA0, 1.0)
+        s0, s1 = (lo - tA0) / span, (hi - tA0) / span
+        kind[cr[ok]] = TT_CROSSING
+        seg[cr[ok], 0] = (PA0 + s0[:, None] * (PA1 - PA0))[ok]
+        seg[cr[ok], 1] = (PA0 + s1[:, None] * (PA1 - PA0))[ok]
+    # contact: whatever is left and not separated, if the exact distance is within eps
+    rest = np.nonzero((kind == TT_NONE) & ~(sepA | sepB))[0]
+    if len(rest):
+        d, pa, pb = triangle_pair_distance(A[rest], B[rest])
+        hit = d <= eps
+        kind[rest[hit]] = TT_CONTACT
+        seg[rest[hit], 0] = pa[hit]
+        seg[rest[hit], 1] = pb[hit]
+    # crossing along a mesh edge: every triangle pair there is a contact (each triangle has one vertex off the
+    # other's plane, on one side only), but the two triangles on the edge leave on opposite sides
+    ct = np.nonzero(kind == TT_CONTACT)[0]
+    if len(ct):
+        for k, s0, s1 in _edge_crossings(VA, ta, ia[ct], A[ct], dA[ct], B[ct], nB[ct], eps) + \
+                _edge_crossings(VB, tb, ib[ct], B[ct], dB[ct], A[ct], nA[ct], eps):
+            kind[ct[k]] = TT_CROSSING
+            seg[ct[k]] = (s0, s1)
+    keep = np.nonzero(kind != TT_NONE)[0]
+    return {"ia": ia[keep], "ib": ib[keep], "kind": kind[keep], "seg": seg[keep],
+            "polys": [polys[k] for k in keep], "near_band": near_band[keep], "n_candidates": int(len(ia)),
+            "n_near_band": int(np.sum(near_band))}

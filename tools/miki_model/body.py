@@ -53,6 +53,7 @@ COLLAR_LAPEL_Y = -0.03                 # collar columns in front of this are the
 COLLAR_SHOULDER_ROUNDING = 12         # moving-average half window (samples of 400) rounding the O3-O5 turn
 COLLAR_EDGE_THICKNESS = 0.0030        # the 4 mm collar thins to this at its outer / inner edges
 COLLAR_BIB_CLEARANCE = 0.0006        # the collar's inner edge underside clears the bib's top by this (r3 F4)
+BIB_AWAY_Z = 1.15                    # the bib is thickened inward, away from (0, neck centre y, BIB_AWAY_Z)
 COLLAR_BIB_PASSES = 8                 # ... raised in up to this many passes
 COLLAR_RAISED_MIN_THICKNESS = 0.0012  # ... and the slab there thins to keep its top: at least this thick
 NECK_POINTS = 14
@@ -322,7 +323,7 @@ def _bib(rig: Rig, torso: Torso, inner_edge):
         rows.append([inner] + [inner + t * (out - inner) for t in (0.15, 0.4, 0.7, 1.0)])
     P = np.array(rows)
     grid = np.concatenate([P[:, :1], lay_on(torso, P[:, 1:], rig.bib_lift, margin=0.0013)], axis=1)
-    return mk.thicken(grid, 0.0015, offset="inward", away_from=(0.0, cy, 1.15), groups="single")
+    return mk.thicken(grid, 0.0015, offset="inward", away_from=(0.0, cy, BIB_AWAY_Z), groups="single")
 
 
 # ---------------------------------------------------------------------------------------------------

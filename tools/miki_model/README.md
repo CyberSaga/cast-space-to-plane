@@ -26,6 +26,7 @@ elsewhere in the repository means `docs/spec/spec-v0.1.md`.
 | `assemble.py` | parts to castplane objects (`OBJECTS`, `MATERIALS`, `assemble`, statistics, `BUDGET`) |
 | `export.py` | the scene JSON (`SCENE_SETTINGS`, `DESCRIPTION`), the OBJ + MTL and the GLB writers |
 | `preview.py` | shaded colour renders, castplane line renders, contact sheets, the camera presets |
+| `checks.py`, `acceptance.py` | the clearance and proportion checks and the acceptance profile they evaluate (see "Checks") |
 
 Regions per module: `head.py` has `head`, `eyes`, `face_marks`; `hair.py` has `hair`, `headband`; `body.py` has
 `neck`, `torso`, `collar`, `scarf`, `skirt`; `limbs.py` has `arms`, `hands`, `legs`, `socks`, `shoes`. A module whose
@@ -259,6 +260,99 @@ These are castplane's mesh rules (contract §5.2) and what the generator adds on
 An OBJ or GLB imported with `castplane import` does not meet rules 3 and 7 (a GLB has no smooth groups and an OBJ
 imports as one object), so it renders with `MESH_*` warnings; only `examples/miki.json` has to render with
 `warnings: []`.
+
+## Checks (clearance and proportions)
+
+`checks.py` turns the questions a review round used to answer by eye (does a part poke through another, is a gap too
+small, do the proportions match the tables they were lofted from) into requirements that end PASS, FAIL or
+INDETERMINATE. It only reads the model: it builds it with `assemble.assemble` and checks the rounded, exported
+geometry of the pre-merge parts (`Assembly.parts`, `assemble.DECIMALS`), never the 18 merged objects and never the
+builders' float output. It writes no model file, so `make_miki_model.py --check` stays byte-identical.
+
+```sh
+python -m tools.miki_model.checks                        # the gate: exit 0 only if every required check passes
+python -m tools.miki_model.checks --report-only          # print everything, always exit 0 (use while modelling)
+python -m tools.miki_model.checks --out report.json      # also write the JSON report
+```
+
+The review round runs the gate. While modelling, use `--report-only`. The report goes only where `--out` says (the
+default is the printed summary); it has sorted keys and is deterministic.
+
+### Verdicts and the exit code
+
+- **PASS**: the requirement was measured and holds.
+- **FAIL**: it was measured and does not hold. A FAIL is never widened to pass (see "Adding a requirement").
+- **INDETERMINATE**: there is no trustworthy verdict, and it never counts as a pass. The reason is in the report:
+  a missing measurement, invalid geometry, a pose that was not tested, a join whose parts never meet where the
+  builder says they do, or `tolerance-sensitive` (below).
+- A join or clearance that is allowed to have no contact and has none is reported as `NOT_EXERCISED`: it does not
+  block the gate and is not counted as a PASS.
+
+Exit status: 0 when every `required` requirement is PASS (or not exercised), 1 otherwise. An `advisory` requirement
+is printed and never changes the exit status. `--report-only` always exits 0.
+
+### The three pair relations
+
+Burial is this model's construction idiom (the neck ends inside the torso and the head, the bib inside the neck,
+the leg inside the sock, the sidelock roots inside the dome, every decal's back under the skin), so a generic
+"no part may intersect another" gate would fail on day one. Every pair of parts, across objects and inside one
+object (`collar` merges the collar, the dickey and the stripe), therefore falls under exactly one relation:
+
+- **join**: part A is buried in part B on purpose. The requirement names the buried part, the host, the zone where
+  the A/B intersection curve may lie (a z or y range, faces of either part, "inside" or "near" a part) and the depth
+  from the builder constant. Every segment of the curve, and every edge of a coincident patch, must lie wholly inside
+  the zone (dilated by eps), the buried rim must stay under the host's surface by at least the depth, and no shell
+  of either part may lie wholly inside the other without being the declared burial. A segment outside the zone, or
+  a rim that surfaces, is a FAIL.
+- **clear**: faces of A must clear faces of B by `[min, max]` (collar underside against the bib, straps, decal
+  fronts against the skin, the colour stripes). A contact or a coincident patch is a gap of 0, below the minimum.
+  A finite maximum is enforced only where a builder places a part a stated distance off its host.
+- **everything else** (the generic relation, one requirement per remaining pair): any triangle-triangle crossing,
+  coincident patch or containment is a FAIL. A contact within eps is not a penetration; it is counted and located.
+
+### Degenerate intersections
+
+An intersection is not always a clean segment, so each candidate triangle pair is classified by the signed
+distances of its vertices to the other triangle's plane, against `eps = max(weld tolerance, sqrt(3)/2 * 10^-DECIMALS)`
+(8.7 micrometres, the rounding error of the exported grid):
+
+- **crossing**: the pair yields a segment, however short, so a narrow poke is never dropped by length;
+- **contact**: the triangles touch at a vertex or edge within eps (no penetration; a gap of 0 for a `clear`);
+- **coincident**: they lie in one plane and overlap by more than eps squared in area (a z-fight, an unstable hidden
+  line); it FAILs under the generic relation and `clear`, and passes a join only when the patch is inside the zone.
+
+A verdict must not depend on eps: every join and generic requirement is evaluated at eps/10, eps and 10 eps, and
+when the three differ it is INDETERMINATE (`tolerance-sensitive`) with the near-band triangle pairs listed.
+Containment (a winding test per shell, both directions) and the buried-rim depth run independently of the segment
+classifier, and a FAIL from either stands. Bounding boxes only order and screen the work; a pair the profile names
+is always tested.
+
+### The report
+
+The JSON report records the profile and geometry versions, each requirement's measured and required values with
+units, the part, the face or vertex indices and the full XYZ of each finding (the worst first, at most 12), the
+relation that applied, a table of every intersecting part pair, and a width table every 5 mm for the free-form
+parts (hair, skirt), which is diagnostic only: it becomes a gate once a written rule exists. The printed summary
+gives the counts per kind, the passes that rely on the facet-bulge allowance, the zones that are exempt or
+approximate, and every requirement that is not PASS.
+
+### Adding a requirement
+
+Requirements live in `acceptance.py` (`Join`, `Clear`, `Proportion`, `Pose`; `profile()` returns them in a fixed
+order, and `PROFILE_VERSION` is bumped when one is added, removed or changed).
+- Take the numbers from `rig.py` and the builder modules' constants by import (`NECK_BLOUSE_INSET`, `BIB_SINK`,
+  `SIDELOCK_ROOT_INSET`, `rig.band_embed`, `COLLAR_BIB_CLEARANCE`, ...), never by copying a value. SPEC.md is not
+  the reference: where the code departed from it, the code wins.
+- Fill in `constant` (where the number comes from) and `reason` (why it exists). Select faces geometrically with
+  `Select`, since a `Part` has no named face groups.
+- Calibrating a number to the model as it stands is allowed only when the reason says "accepted in round N" with the
+  round cited. Any other miss is reported as FAIL and is fixed in the generator, not in the profile.
+- A new join is also how a pair stops being judged by the generic relation: declare it, with its zone and depth,
+  rather than excusing the FAIL.
+
+`tests/test_model_checks.py` holds the detector fixtures (synthetic meshes: a crossing that vertex samples miss, a
+shell wholly inside another, a contact inside the tolerance, a join that leaks past its zone, a join whose rim
+surfaces, a positive gap below the minimum, a pose that was not tested) and pins Miki's verdict set.
 
 ## How the files are checked
 
