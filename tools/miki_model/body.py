@@ -631,8 +631,12 @@ def _tip(rig: Rig, torso: Torso, side: int):
     A2 = mk.resample_polyline(np.array(A), n) if len(A) != n else np.array(A)
     B2 = mk.resample_polyline(np.array(B), n) if len(B) != n else np.array(B)
 
+    o_root = np.array([o[0], 0.0, 0.0])               # the root edge is level: both root corners at root z
+
     def place(st):
-        p = root + st[0] * a + st[1] * o
+        # the root (s = 0) edge is level, so the whole root cap sits in the ring's ~3 mm bottom-cap window
+        # (above the dome, below its side wall; acceptance join:body.scarf_tip_*~body.ring)
+        p = root + st[0] * a + st[1] * (o_root if st[0] == 0.0 else o)
         hw, yf, yb = torso.section(p[2])
         q = torso.onto(np.array([p[0], yf, p[2]]), 0.0)
         y_surface = q[1] - 0.0015 - 0.5 * rig.scarf_tip_thickness - front

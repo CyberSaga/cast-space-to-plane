@@ -421,16 +421,18 @@ class Rig:
     stripe_float: float = 0.00025               # decal bands (collar stripe, ring stripes, cuff stripes) float
     #                                            this far above the surface they decorate
     scarf_tip_thickness: float = 0.004          # flat blades 1-2 mm off the blouse front
-    scarf_tip_root: tuple = (0.008, -0.116, 1.064)   # tip B (her left, in front); tip A: scarf_tip_root_right
-    scarf_tip_root_right: tuple = (-0.008, -0.113, 1.064)   # tip A (her right, behind)
-    scarf_tip_root_width: float = 0.018
-    scarf_tip_angle_deg: float = 20.0           # from vertical, outward
-    scarf_tip_length: float = 0.090
+    # the roots sit in the ring's bottom-cap window (above its 5 mm cone-shaped bottom, below z 1.059 where its
+    # side wall starts), so the blades leave the ring through its bottom; the root edge is level (body._tip)
+    scarf_tip_root: tuple = (0.006, -0.115, 1.0588)   # tip B (her left, in front); tip A: scarf_tip_root_right
+    scarf_tip_root_right: tuple = (-0.006, -0.1105, 1.0588)   # tip A (her right, behind; 4.5 mm behind tip B)
+    scarf_tip_root_width: float = 0.014
+    scarf_tip_angle_deg: float = 20.0           # from vertical, outward (spec; built: root -> point, ~22 deg)
+    scarf_tip_length: float = 0.0859            # |point - root|
     scarf_tip_max_width: tuple = (0.050, 0.65)  # widest, at this fraction of the length
     scarf_tip_cut_deg: float = 45.0             # oblique end cut, the point on the outer side
-    scarf_tip_point: tuple = (0.0388, -0.116, 0.9794)   # tip B point (root + length * (sin a, 0, -cos a));
+    scarf_tip_point: tuple = (0.0388, -0.115, 0.9794)   # tip B point (root + length * (sin a, 0, -cos a));
     #                                                   tip A mirrors x at scarf_tip_root_right's y
-    scarf_tip_front_offset: float = 0.003       # tip B lies 3 mm in front of tip A where they overlap
+    scarf_tip_front_offset: float = 0.005       # tip B lies 5 mm in front of tip A where they overlap (> thickness)
 
     # =====================================================================================================
     # D.4 Sleeves, cuffs, hands
