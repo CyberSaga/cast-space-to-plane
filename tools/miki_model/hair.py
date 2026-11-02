@@ -402,6 +402,10 @@ BANGS_STRIP_WEIGHTS = (1.0, 0.7, 1.2, 0.8, 1.1, 0.9, 1.3, 0.8)
 #: boundary instead re-facets the dome under the band and the sidelock roots.)
 BANGS_DOME_CLEARANCE = 0.0002
 BANGS_DOME_ACROSS = 6               # probe samples between two columns (the dome facets are narrower than a strip)
+#: Merge review: each column's forward shift is the largest need within this many columns of it (a running
+#: envelope), so neighbouring columns do not step by 2 mm: an end column left behind its neighbour showed a tab
+#: of dome at the outermost strip's top corner, next to the sidelock.
+BANGS_DOME_SHIFT_SPREAD = 2
 #: Clearance pass (bangs / skin): the back face's chords between the strip borders cut the convex forehead
 #: just above the cut (up to 1.4 mm inside the skin on the widest strips); the back vertices move toward the
 #: front (the slab thins there, the front stays) until every sample of the back face is in front of the faceted
@@ -539,7 +543,10 @@ def _bangs_clear_dome(rig: Rig, dome: mk.Mesh, F, Bk):
         return 0.0 if y is None else p[1] - (y - BANGS_DOME_CLEARANCE)
 
     shift = _fit_rows([F[:, 0], F[:, 1], F[:, 2]], deficit, [False, True, False], -1.0, across=BANGS_DOME_ACROSS)
-    dy = shift[1][:, None] * np.array([0.0, 1.0, 0.0])
+    need = shift[1]
+    r = BANGS_DOME_SHIFT_SPREAD
+    smooth = np.array([need[max(0, i - r):i + r + 1].max() for i in range(len(need))])
+    dy = smooth[:, None] * np.array([0.0, 1.0, 0.0])
     F, Bk = F.copy(), Bk.copy()
     F[:, 1] -= dy
     Bk[:, 1] -= dy
