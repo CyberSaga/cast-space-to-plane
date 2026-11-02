@@ -1658,6 +1658,70 @@ def _coplanar_overlap(ta, tb, ref):
     return o + poly[:, :1] * u + poly[:, 1:2] * w, area
 
 
+def _edge_crossings(VX, tx, ix, X, dX, Y, nY, eps: float) -> list:
+    """Crossings of a surface X through triangle Y along an edge of X (the edge-crossing pass of
+    :func:`triangle_intersections`): for each contact pair ``k`` (X triangle ``tx[ix[k]]`` with vertices ``X[k]``
+    and plane distances ``dX[k]`` to triangle ``Y[k]`` of unit normal ``nY[k]``), an edge of the X triangle with
+    both ends within ``eps`` of Y's plane, whose two triangles' opposite vertices lie beyond ``+eps`` and ``-eps``
+    of it, and which runs through the interior of Y's triangle (clipped to the triangle shrunk by ``eps`` in its
+    plane, a positive length is left) is a crossing.  Returns ``[(k, segment start, segment end)]`` with the edge
+    clipped to Y's (unshrunk) triangle.  An edge on a mesh boundary (one triangle; e.g. a face subset) is never
+    one.  An X edge lying along a Y edge (both surfaces creased on the same line) is left a contact: there the
+    sign test alone cannot tell crossing from touching (a known limit)."""
+    out = []
+    flat = np.abs(dX) <= eps
+    cand = [(k, i) for k in range(len(X)) for i in range(3) if flat[k, i] and flat[k, (i + 1) % 3]]
+    if not cand:
+        return out
+    for k, i in cand:
+        t = tx[ix[k]]
+        u, v, w = int(t[i]), int(t[(i + 1) % 3]), int(t[(i + 2) % 3])
+        d1 = float(dX[k, (i + 2) % 3])
+        on_edge = np.nonzero(np.sum((tx == u) | (tx == v), axis=1) == 2)[0]
+        if len(on_edge) != 2:
+            continue
+        other = tx[on_edge[0]] if int(on_edge[1]) == int(ix[k]) else tx[on_edge[1]]
+        w2 = [int(q) for q in other if int(q) not in (u, v)]
+        if len(w2) != 1 or w2[0] == w:
+            continue
+        d2 = float(_dot(VX[w2[0]] - Y[k, 0], nY[k]))
+        if not ((d1 > eps and d2 < -eps) or (d1 < -eps and d2 > eps)):
+            continue
+        P, Q = VX[u], VX[v]
+        lo, hi = 0.0, 1.0
+        lo_s, hi_s = 0.0, 1.0                                                  # clipped to the shrunk triangle
+        for j in range(3):
+            a, b, c = Y[k, j], Y[k, (j + 1) % 3], Y[k, (j + 2) % 3]
+            m = np.cross(nY[k], b - a)
+            lm = float(np.linalg.norm(m))
+            if lm == 0.0:
+                lo = hi = lo_s = hi_s = None
+                break
+            m = m / lm
+            if float(_dot(c - a, m)) < 0:
+                m = -m
+            sp, sq = float(_dot(P - a, m)), float(_dot(Q - a, m))
+            for off, which in ((0.0, "full"), (eps, "shrunk")):
+                l0, l1 = (lo, hi) if which == "full" else (lo_s, hi_s)
+                if sp == sq:
+                    if sp < off:
+                        l0, l1 = 1.0, 0.0
+                else:
+                    t0 = (off - sp) / (sq - sp)
+                    if sq > sp:
+                        l0 = max(l0, t0)
+                    else:
+                        l1 = min(l1, t0)
+                if which == "full":
+                    lo, hi = l0, l1
+                else:
+                    lo_s, hi_s = l0, l1
+        if lo is None or hi_s <= lo_s:
+            continue
+        out.append((k, P + lo * (Q - P), P + hi * (Q - P)))
+    return out
+
+
 def triangle_intersections(VA, tris_a, VB, tris_b, eps: float, pairs=None) -> dict:
     """Classify every candidate triangle pair of two triangle sets under the tolerance ``eps`` (metres).
 
@@ -1671,6 +1735,12 @@ def triangle_intersections(VA, tris_a, VB, tris_b, eps: float, pairs=None) -> di
       crossing); the segment is returned;
     * **contact** (:data:`TT_CONTACT`): any other pair whose exact distance is ``<= eps`` (touching at a vertex or
       an edge, or coplanar within ``eps`` with no area to speak of); the nearest point pair is returned;
+    * **crossing along an edge** (also :data:`TT_CROSSING`; the edge-crossing pass over the contact pairs, both
+      directions, :func:`_edge_crossings`): an edge of one triangle lies within ``eps`` of the other's plane, inside
+      it, and the two triangles on that edge leave on opposite sides beyond ``eps`` -- the surface crosses along its
+      own edge (a ring row exactly on the other part's plane), which no single triangle pair shows.  Both triangles
+      on the edge are marked, each with the edge clipped to the other triangle as its segment.  It needs the edge's
+      second triangle in the same triangle set, so on a face subset a boundary edge is never one;
     * none (dropped): everything else.
 
     Returns ``{"ia", "ib", "kind", "seg" (K, 2, 3), "polys" (list of (n, 3) or None), "near_band" (K,) bool,
@@ -1738,6 +1808,14 @@ def triangle_intersections(VA, tris_a, VB, tris_b, eps: float, pairs=None) -> di
         kind[rest[hit]] = TT_CONTACT
         seg[rest[hit], 0] = pa[hit]
         seg[rest[hit], 1] = pb[hit]
+    # crossing along a mesh edge: every triangle pair there is a contact (each triangle has one vertex off the
+    # other's plane, on one side only), but the two triangles on the edge leave on opposite sides
+    ct = np.nonzero(kind == TT_CONTACT)[0]
+    if len(ct):
+        for k, s0, s1 in _edge_crossings(VA, ta, ia[ct], A[ct], dA[ct], B[ct], nB[ct], eps) + \
+                _edge_crossings(VB, tb, ib[ct], B[ct], dB[ct], A[ct], nA[ct], eps):
+            kind[ct[k]] = TT_CROSSING
+            seg[ct[k]] = (s0, s1)
     keep = np.nonzero(kind != TT_NONE)[0]
     return {"ia": ia[keep], "ib": ib[keep], "kind": kind[keep], "seg": seg[keep],
             "polys": [polys[k] for k in keep], "near_band": near_band[keep], "n_candidates": int(len(ia)),

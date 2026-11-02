@@ -338,6 +338,38 @@ def test_mesh_crossing_shorter_than_eps_is_a_crossing():
     assert np.max(np.linalg.norm(seg[:, 1] - seg[:, 0], axis=1)) < EPS
 
 
+def _rod_rows(x, y, zs, r=0.005, n=12) -> mk.Mesh:
+    return mk.loft([mk.ellipse_ring(r, r, n, (x, y, z)) for z in zs], "flat", "flat")
+
+
+def test_crossing_along_a_mesh_edge_is_a_crossing():
+    """A ring row exactly on the other part's plane: each triangle pair there is a contact (one far vertex, one
+    side), yet the surface crosses along the row's edges.  The edge-crossing pass finds it (review finding)."""
+    slab = _box((-0.05, -0.05, 0.0), (0.05, 0.05, 0.002))
+    for zs in ((-0.01, 0.012), (-0.01, 0.0, 0.002, 0.012)):            # control; ring rows on both slab faces
+        rep = checks.run(_parts(slab=slab, rod=_rod_rows(0.0, 0.0, zs)), profile=[])
+        g = _generic(rep, "slab", "rod")
+        assert g["verdict"] == checks.FAIL and g["measured"]["crossings"] > 0, (zs, g["measured"])
+    # a join: the rod sunk through the box's top also leaves through its bottom face (outside the zone),
+    # with a ring row exactly on the bottom plane, and 5 um above it (no longer tolerance-sensitive)
+    box = _box((-0.05, -0.05, -0.05), (0.05, 0.05, 0.05))
+    join = ac.Join("join:rod~box", "rod", "box", ac.Zone(z=(0.05, 0.05)), None, 0.0, "fixture", "through the top")
+    for zs in ((-0.1, 0.1), (-0.1, -0.05, 0.1), (-0.1, -0.05 + 5e-6, 0.1)):
+        j = _req(checks.run(_parts(box=box, rod=_rod_rows(0.0, 0.0, zs)), profile=[join]), "join:rod~box")
+        assert j["verdict"] == checks.FAIL and j["measured"]["outside_zone"] > 0, (zs, j["measured"])
+    # the segment is the edge clipped to the triangle it crosses
+    X = np.array([[0.2, 0.2, 0.0], [0.6, 0.2, 0.0], [0.4, 0.5, 0.3], [0.4, -0.1, -0.3]])
+    T = np.array([[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0]])
+    r = mk.triangle_intersections(X, [[0, 1, 2], [1, 0, 3]], T, [[0, 1, 2]], EPS)
+    assert [mk.TT_KINDS[int(q)] for q in r["kind"]] == ["crossing", "crossing"]
+    np.testing.assert_allclose(sorted(map(tuple, r["seg"][0])), [(0.2, 0.2, 0.0), (0.6, 0.2, 0.0)])
+    # the same two triangles on the same side of the plane only touch it: contact
+    X2 = X.copy()
+    X2[3, 2] = 0.3
+    r = mk.triangle_intersections(X2, [[0, 1, 2], [1, 0, 3]], T, [[0, 1, 2]], EPS)
+    assert [mk.TT_KINDS[int(q)] for q in r["kind"]] == ["contact", "contact"]
+
+
 def test_verdict_that_flips_with_eps_is_tolerance_sensitive():
     """A sphere pole 3 eps into a box: a crossing at eps / 10 and eps, a contact at 10 eps -> INDETERMINATE."""
     sphere = mk.ellipsoid((0.0, 0.0, 0.05 - 3.0 * EPS), (0.05, 0.05, 0.05), nu=12, nv=12)
