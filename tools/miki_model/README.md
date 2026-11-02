@@ -101,7 +101,7 @@ Authoring rules, which the web UI enforces by ignoring a bad link silently:
 | 16 | `ring` | scarf ring, its 2 pink stripes |
 | 17 | `neck` | neck and décolleté bib |
 
-Currently 58 parts (58 closed shells), 4181 vertices, 4469 polygons and 8154 triangles. To add, split or reorder
+Currently 58 parts (58 closed shells), 4225 vertices, 4513 polygons and 8242 triangles. To add, split or reorder
 objects, change `OBJECTS` and keep `DISPLAY_MATERIALS` and `PARENTS` in the same order (asserts check it), give a
 new object its joint in `part_links`, then update the object lists that `export.DESCRIPTION`, `examples/README.md`
 and the §5.4 note quote.
@@ -241,7 +241,7 @@ These are castplane's mesh rules (contract §5.2) and what the generator adds on
    object instead of deleting designed lines. Prefer `thicken(groups="single")` slabs, whose borders draw only as
    silhouettes and cost no rays, and give a rim its own group only where the line must show.
 8. **Budget.** At most 6000 polygons and 10000 triangles in total (`assemble.BUDGET`, polygons = faces as written,
-   triangles = castplane's fan triangulation; now 4469 and 8154) and a scene file of at most 700 KiB (188 KiB now).
+   triangles = castplane's fan triangulation; now 4513 and 8242) and a scene file of at most 700 KiB (190 KiB now).
    Hidden-line time grows with the number of drawn edge samples times the number of triangles, and shrinks when
    objects are compact. `node tools/web_frame_bench.mjs examples/miki.json 5` times the web path (the figures
    depend on the machine, so compare against a baseline measured on the same machine).

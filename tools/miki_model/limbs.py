@@ -42,8 +42,14 @@ SLEEVE_CAP_RINGS = 2               # review r4 (F1): rings of the round sleeve c
 #                                    with square corners: the "coat-hanger" shoulder in the front views)
 LEG_POINTS = 10
 SOCK_POINTS = 12
-LEG_Z = (0.720, 0.700, 0.500, 0.420, 0.370)          # the leg ends inside the sock
+LEG_Z = (0.720, 0.700, 0.500, 0.420, 0.390, 0.370)   # the leg ends inside the sock (0.390: just above its top)
 SOCK_Z = (0.025, 0.065, 0.200, 0.320, 0.385)          # from inside the shoe to the sock top
+#: The leg's buried end ring (LEG_Z[-1]) is this much thinner: the sock's 12-gon chords cut further in than
+#: rig.sock_ease, and the leg's 10-gon corners poked through the sock wall (checks: join leg~sock).
+LEG_END_INSET = 0.002
+#: The sock's bottom ring (SOCK_Z[0], inside the shoe) is this much thinner: at the back-lateral side the
+#: straight sock wall grazed the shoe's upper just under the topline instead of entering through the opening.
+SOCK_BOTTOM_INSET = 0.002
 SHOE_OUTLINE_DEG = (0.0, 20.0, 42.0, 68.0, 98.0, 130.0, 158.0, 180.0)   # one side, toe -> heel
 #: Sole half-width factor B(u) along the foot (u from the heel back); half-width = B * sin(theta).
 SHOE_WIDTH = ((0.0, 0.060), (0.020, 0.056), (0.050, 0.0455), (0.100, 0.0435), (0.155, 0.0455),
@@ -65,6 +71,9 @@ HAND_FINGER_HALF_WIDTH = (0.029, 0.021)   # middle of the fingers, fingertips
 #: knuckles than ``rig.finger_curl_deg``, and the palm / finger half-widths times HAND_NARROW.
 HAND_EXTRA_KNUCKLE_CURL_DEG = 15.0
 HAND_NARROW = 0.9
+#: The thumb's buried root station: this far back from its base ring along the base direction (staying in front
+#: of the sleeve's recessed disc at the wrist), with this width = thickness, so its flat cap lies in the palm.
+THUMB_ROOT = (0.006, 0.008)
 
 
 def _side_name(side: int) -> str:
@@ -177,10 +186,14 @@ def _hand(rig: Rig, side: int):
     q1 = base + 0.024 * d_a
     q2 = q1 + 0.5 * (rig.thumb_length - 0.024) * d_b
     q3 = q1 + (rig.thumb_length - 0.024) * d_b
-    tp = np.array([base, q1, q2, q3])
+    # the root station is buried in the palm (THUMB_ROOT): the base ring stuck out of the hand's side, and so did
+    # the flat cap closing it (checks: join thumb~hand); on the line q1 -> base the base ring keeps its frame
+    q0 = base - THUMB_ROOT[0] * d_a
+    tp = np.array([q0, base, q1, q2, q3])
     th = rig.thumb_thickness
-    thumb = _sweep_loft(tp, np.array([0.022, 0.020, 0.017, 0.014]), np.array([th, th, 0.9 * th, 0.8 * th]),
-                        mk.profile_ellipse(6), np.tile(p, (4, 1)), "flat", ("dome", 0.006, 1), cap_groups=(1, None))
+    thumb = _sweep_loft(tp, np.array([THUMB_ROOT[1], 0.022, 0.020, 0.017, 0.014]),
+                        np.array([THUMB_ROOT[1], th, th, 0.9 * th, 0.8 * th]),
+                        mk.profile_ellipse(6), np.tile(p, (5, 1)), "flat", ("dome", 0.006, 1), cap_groups=(1, None))
     return hand, thumb
 
 
@@ -188,15 +201,16 @@ def _hand(rig: Rig, side: int):
 # legs, socks
 # ---------------------------------------------------------------------------------------------------
 
-def _leg_tube(rig: Rig, side: int, zs, ease: float, n: int):
+def _leg_tube(rig: Rig, side: int, zs, ease: float, n: int, end_inset: float = 0.0):
     path = np.array([rig.leg_point(side, z) for z in zs])
     rad = np.array([rig.leg_radius(z) for z in zs]) + ease
+    rad[-1] -= end_inset
     return mk.sweep(path, width=2 * rad, profile=mk.profile_ellipse(n), up=(0.0, -1.0, 0.0), start="flat",
                     end="flat", cap_groups=(1, 1 if ease == 0 else None))
 
 
 def _leg(rig: Rig, side: int):
-    return _leg_tube(rig, side, LEG_Z, 0.0, LEG_POINTS)
+    return _leg_tube(rig, side, LEG_Z, 0.0, LEG_POINTS, LEG_END_INSET)
 
 
 def _sock(rig: Rig, side: int):
@@ -204,6 +218,7 @@ def _sock(rig: Rig, side: int):
     zs = SOCK_Z
     path = np.array([rig.leg_point(side, z) for z in zs])
     rad = np.array([rig.leg_radius(z) for z in zs]) + rig.sock_ease
+    rad[0] -= SOCK_BOTTOM_INSET
     return mk.sweep(path, width=2 * rad, profile=mk.profile_ellipse(SOCK_POINTS), up=(0.0, -1.0, 0.0),
                     start="flat", end="flat", cap_groups=(1, None))
 
