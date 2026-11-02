@@ -52,14 +52,18 @@ COLLAR_END_WIDTH = 0.004               # each lapel ends at the V tip with this 
 COLLAR_LAPEL_Y = -0.03                 # collar columns in front of this are the lapels (feature-line edges)
 COLLAR_SHOULDER_ROUNDING = 12         # moving-average half window (samples of 400) rounding the O3-O5 turn
 COLLAR_EDGE_THICKNESS = 0.0030        # the 4 mm collar thins to this at its outer / inner edges
-COLLAR_BIB_CLEARANCE = 0.0006        # the collar's inner edge underside clears the bib's top by this (r3 F4)
+COLLAR_BIB_CLEARANCE = 0.0006        # the collar's underside clears the bib's top by this (r3 F4)
 BIB_AWAY_Z = 1.15                    # the bib is thickened inward, away from (0, neck centre y, BIB_AWAY_Z)
 COLLAR_BIB_PASSES = 8                 # ... raised in up to this many passes
 COLLAR_RAISED_MIN_THICKNESS = 0.0012  # ... and the slab there thins to keep its top: at least this thick
 NECK_POINTS = 14
 RING_POINTS = 8                        # scarf ring (and its stripes) section points
+RIBBON_PROFILE_POINTS = 8              # scarf ribbon lens section points
+RIBBON_LIFT_PASSES = 6                 # the ribbon stations lift off the faceted blouse in up to this many passes
 BIB_COLUMNS = 13
 BIB_SINK = 0.002                       # the bib's top row lies this far inside the neck surface
+BIB_THICKNESS = 0.0015                 # the bib slab grows this far inward from its laid top face
+BIB_MIN_THICKNESS = 0.0005             # ... and thins to no less than this off the faceted blouse
 BIB_UNDER_COLLAR = 0.009               # the bib reaches this far under the collar inner edge (6 mm left blouse
 #                                        showing between two columns at the lapel after the r1 shoulder change)
 SKIRT_FACING_INSET = 0.007             # the facing's top ring inside the pleated surface
@@ -81,6 +85,11 @@ NECK_TILT_DEG = 8.0                    # the axis leans forward: the top is in f
 NECK_RING_Z = (1.180, 1.215, 1.236, 1.285)   # neck sections (ends inside torso / head; few: hidden-line cost)
 NECK_BLOUSE_INSET = 0.003              # the blouse's neck-root row stays this far inside the neck
 NECK_FIT = 0.85                        # ... and its ring within this ellipse measure of the neck (~2 mm in)
+#: Parts laid on the blouse (collar, bib, scarf ribbons) clear its FACETED loft by at least this (body.faceted_deficit):
+#: laid on the analytic Torso alone, the collar's twisted back-flap quads dipped 1.2 mm into the loft along their fan
+#: diagonals, the ribbons' inner lens edges 1.3 mm and the bib's back face 0.2 mm (the clearance checks'
+#: generic:body.blouse|body.collar, |body.scarf_ribbon_*, generic:body.bib|body.blouse)
+FACETED_CLEARANCE = 0.0002
 #: A point inside the chest (the collar slab's and its stripe's normals point away from it).
 TORSO_CENTRE = (0.0, 0.012, 1.12)
 
@@ -200,10 +209,136 @@ class Torso:
         return np.stack([x, y, np.full(n, z)], axis=1)
 
 
-def lay_on(torso: Torso, P, gap, margin=0.0006, passes=6):
+def _surface_heights(T, points, directions, reach: float = 0.02, chunk: int = 64):
+    """:func:`meshkit.surface_clearance` on the triangles ``T`` ``(K, 3, 3)`` (the same rule: signed height of each
+    point along its unit direction above the triangles, the hit nearest to the point wins, ``nan`` on a miss) for
+    the hits within ``reach`` of the points (a farther one may read ``nan``), vectorised over chunks of points
+    against the triangles near each chunk (the laid-on parts run it every pass)."""
+    T = np.asarray(T, dtype=np.float64)
+    P = np.asarray(points, dtype=np.float64)
+    D = np.asarray(directions, dtype=np.float64)
+    lo, hi = T.min(axis=1), T.max(axis=1)
+    out = np.full(len(P), np.nan)
+    for k0 in range(0, len(P), chunk):
+        X = P[k0:k0 + chunk]
+        near = np.nonzero(np.all((lo <= X.max(axis=0) + reach) & (hi >= X.min(axis=0) - reach), axis=1))[0]
+        if not len(near):
+            continue
+        a, b, c = T[near, 0], T[near, 1], T[near, 2]
+        e1, e2 = b - a, c - a
+        d = -D[k0:k0 + chunk, None, :]                                   # (p, 1, 3)
+        h = np.cross(d, e2[None])                                        # (p, T, 3)
+        det = np.einsum("tj,ptj->pt", e1, h)
+        ok = np.abs(det) > 1e-14
+        f = np.where(ok, 1.0 / np.where(ok, det, 1.0), 0.0)
+        sv = X[:, None, :] - a[None]
+        u = f * np.einsum("ptj,ptj->pt", sv, h)
+        q = np.cross(sv, e1[None])
+        v = f * np.einsum("ptj,ptj->pt", q, np.broadcast_to(d, q.shape))
+        t = f * np.einsum("tj,ptj->pt", e2, q)
+        hit = ok & (u >= 0.0) & (v >= 0.0) & (u + v <= 1.0)
+        at = np.where(hit, np.abs(t), np.inf)
+        j = np.argmin(at, axis=1)
+        r = np.arange(len(j))
+        out[k0:k0 + len(j)] = np.where(np.isfinite(at[r, j]), t[r, j], np.nan)
+    return out
+
+
+#: The four triangles of a grid quad's two fans (castplane draws one; ``fan_fold`` decides which).
+QUAD_FANS = ((0, 1, 2), (0, 2, 3), (0, 1, 3), (1, 2, 3))
+
+
+def _grid_quads(U: int, V: int, periodic_v: bool = False) -> np.ndarray:
+    """``(Q, 4)`` flat corner indices of the quads of a ``(U, V)`` grid (``u`` major)."""
+    return np.array([[j * V + i, (j + 1) * V + i, (j + 1) * V + (i + 1) % V, j * V + (i + 1) % V]
+                     for j in range(U - 1) for i in range(V if periodic_v else V - 1)])
+
+
+def _lower_fans(Gf, quads, up) -> np.ndarray:
+    """``(Q, 2, 3)``: per quad the fan whose diagonal midpoint lies lower along the mean ``up`` of its corners -- the
+    fan ``fan_fold`` gives a slab's valley-folded top and its ridge-folded underside."""
+    D = np.asarray(up, dtype=np.float64)[quads].sum(axis=1)
+    P = Gf[quads]
+    low02 = np.einsum("qi,qi->q", 0.5 * (P[:, 0] + P[:, 2]) - 0.5 * (P[:, 1] + P[:, 3]), D) <= 0.0
+    local = np.where(low02[:, None, None], np.array(QUAD_FANS[:2])[None], np.array(QUAD_FANS[2:])[None])
+    return np.take_along_axis(np.repeat(quads[:, None, :], 2, axis=1), local, axis=2)
+
+
+def _distance_deficit(Gf, quads, VB, tris_b, height: float, fans=None) -> np.ndarray:
+    """Per grid vertex (flat ``Gf``): how far ``height`` exceeds the exact distance from the fan triangles of the
+    quads it is a corner of (``fans`` ``(Q, k, 3)``, default both fans of each quad) to the triangles ``tris_b`` over
+    ``VB`` (a crossing pair counts as 0: the pair distance of two triangles that pierce each other is not 0); 0 where
+    they are farther apart."""
+    fans = quads[:, QUAD_FANS] if fans is None else np.asarray(fans)
+    per = fans.shape[1]
+    fans = fans.reshape(-1, 3)
+    need = np.zeros(len(Gf))
+    ia, ib = mk.triangle_bbox_pairs(Gf, fans, VB, tris_b, pad=height)
+    if len(ia):
+        d, _pa, _pb = mk.triangle_pair_distance(Gf[fans[ia]], VB[tris_b[ib]])
+        cut = mk.triangle_intersections(Gf, fans, VB, tris_b, 1e-9, pairs=(ia, ib))
+        crossing = set(zip(cut["ia"].tolist(), cut["ib"].tolist()))
+        d = np.where([(a, b) in crossing for a, b in zip(ia.tolist(), ib.tolist())], 0.0, d)
+        np.maximum.at(need, quads[ia // per].reshape(-1), np.repeat(np.maximum(height - d, 0.0), 4))
+    return need
+
+
+def faceted_deficit(mesh: mk.Mesh, grid, up, height, periodic_v: bool = False):
+    """Per grid vertex ``(U, V)``: how much it must rise along ``up`` ``(U, V, 3)`` so that the quads of ``grid``
+    ``(U, V, 3)`` lie at least ``height`` above ``mesh`` -- the FACETED surface (the blouse loft as built), measured
+    along ``up`` as :func:`meshkit.surface_clearance` does.  Every quad is sampled at its corners, edge midpoints,
+    both diagonal midpoints and the centroids of the four triangles of its two possible fans (a twisted quad's fan
+    diagonal dips well below its corner mean, and ``fan_fold`` may pick either); a sample's deficit goes to the
+    corners it is made of.  Every one of those four triangles of each quad must also be ``height`` from the mesh's
+    triangles by the exact distance (a ridge of the faceted mesh can cross a fan diagonal between the samples; the
+    samples along ``up`` catch a quad sunk deeper than ``height``); a quad's distance deficit goes to its four
+    corners.  ``periodic_v`` closes the grid in ``v`` (a swept section)."""
+    G = np.asarray(grid, dtype=np.float64)
+    U, V = G.shape[:2]
+    Gf = G.reshape(-1, 3)
+    Df = np.asarray(up, dtype=np.float64).reshape(-1, 3)
+    W, rows, cols, quads = _quad_samples(U, V, periodic_v)
+    pts = np.einsum("sv,vi->si", W, Gf)                 # fixed-order sums (no BLAS kernel in the vertices)
+    dirs = np.einsum("sv,vi->si", W, Df)
+    dirs /= np.linalg.norm(dirs, axis=1)[:, None]
+    tris, _ = mk.triangulate(mesh.faces)
+    h = _surface_heights(mesh.vertices[tris], pts, dirs)
+    deficit = np.where(np.isfinite(h), height - np.nan_to_num(h), 0.0)
+    need = np.zeros(U * V)
+    np.maximum.at(need, cols, np.maximum(deficit[rows], 0.0))
+    # and by the exact distance: a ridge of the faceted mesh may cross a fan diagonal of the grid between the samples
+    need = np.maximum(need, _distance_deficit(Gf, quads, mesh.vertices, tris, height))
+    return need.reshape(U, V)
+
+
+def _quad_samples(U: int, V: int, periodic_v: bool):
+    """The samples of :func:`faceted_deficit` on a ``(U, V)`` grid: ``(W, rows, cols, quads)``, ``W``
+    ``(S, U * V)`` the sample weights (each sample the mean of the corners it is made of), ``(rows, cols)`` the
+    sample -> corner pairs and ``quads`` ``(Q, 4)`` the flat corner indices of each quad."""
+    quads = _grid_quads(U, V, periodic_v)
+    sets = []
+    for quad in quads.tolist():
+        sets += [[q] for q in quad]
+        sets += [[quad[k], quad[(k + 1) % 4]] for k in range(4)]
+        sets += [[quad[0], quad[2]], [quad[1], quad[3]]]
+        sets += [[quad[k] for k in tri] for tri in QUAD_FANS]
+    sets = [list(k) for k in dict.fromkeys(tuple(sorted(own)) for own in sets)]   # each sample once, in order
+    W = np.zeros((len(sets), U * V))
+    rows, cols = [], []
+    for k, own in enumerate(sets):
+        W[k, own] = 1.0 / len(own)
+        rows += [k] * len(own)
+        cols += own
+    return W, np.array(rows), np.array(cols), quads
+
+
+def lay_on(torso: Torso, P, gap, margin=0.0006, passes=6, mesh: mk.Mesh | None = None, return_gap: bool = False):
     """Grid ``P`` ``(U, V, 3)`` laid on the blouse: each point moved onto the surface plus its ``gap``
     ``(U, V)``; then, wherever a quad's centre or an edge midpoint (a chord of the faceted grid) dips closer
-    than ``margin`` to the curved surface, the gaps of its corners grow until it clears."""
+    than ``margin`` to the curved surface, the gaps of its corners grow until it clears.  With ``mesh`` (the
+    blouse loft as built) the grid also clears that faceted surface by FACETED_CLEARANCE (:func:`faceted_deficit`).
+    ``return_gap`` also returns the grown gaps ``(U, V)`` (a caller that raises the grid further adds to these: a
+    rise below what the margin passes already added would otherwise be absorbed)."""
     P = np.asarray(P, dtype=np.float64)
     U, V = P.shape[:2]
     G = np.array(np.broadcast_to(np.asarray(gap, dtype=np.float64), (U, V)))
@@ -233,11 +368,13 @@ def lay_on(torso: Torso, P, gap, margin=0.0006, passes=6):
                     if d > 0:
                         for a, b in corners:
                             bump[a, b] = max(bump[a, b], d)
+        if mesh is not None:
+            bump = np.maximum(bump, faceted_deficit(mesh, grid, nrm, FACETED_CLEARANCE))
         if not np.any(bump > 1e-6):
             break
         G += bump
         grid = base + G[..., None] * nrm
-    return grid
+    return (grid, G) if return_gap else grid
 
 
 def torso_model(rig: Rig) -> Torso:
@@ -296,10 +433,10 @@ def _neck_point(rig: Rig, phi, z, sink=0.0):
     return np.array([(a - sink) * math.cos(phi), cy + (b - sink) * math.sin(phi), z])
 
 
-def _bib(rig: Rig, torso: Torso, inner_edge):
+def _bib(rig: Rig, torso: Torso, inner_edge, blouse: mk.Mesh):
     """Skin sheet filling the collar's V opening: columns around the front half of the neck, each from
     inside the neck out to under the collar's inner edge (or under the dickey's top edge at the front),
-    lying ``bib_lift`` above the blouse."""
+    lying ``bib_lift`` above the blouse (its back face FACETED_CLEARANCE above the ``blouse`` loft)."""
     cy = _neck_section(rig, torso.rows[0][0])[1]
     ie = np.asarray(inner_edge)                     # her left inner edge I3 ... I7 (dense), on the blouse
     az = np.arctan2(ie[:, 1] - cy, ie[:, 0])
@@ -323,7 +460,15 @@ def _bib(rig: Rig, torso: Torso, inner_edge):
         rows.append([inner] + [inner + t * (out - inner) for t in (0.15, 0.4, 0.7, 1.0)])
     P = np.array(rows)
     grid = np.concatenate([P[:, :1], lay_on(torso, P[:, 1:], rig.bib_lift, margin=0.0013)], axis=1)
-    return mk.thicken(grid, 0.0015, offset="inward", away_from=(0.0, cy, BIB_AWAY_Z), groups="single")
+    # the top stays where the analytic lay put it (under the collar and the dickey); where the back face would
+    # come closer than FACETED_CLEARANCE to the faceted blouse (its top row inside the neck, BIB_SINK + the
+    # thickness deeper than NECK_BLOUSE_INSET; the laid rows, whose back face lies on the analytic surface) the
+    # slab thins (acceptance generic:body.bib|body.blouse)
+    away = (0.0, cy, BIB_AWAY_Z)
+    out = _grid_normals(grid, away)
+    need = faceted_deficit(blouse, grid, out, BIB_THICKNESS + FACETED_CLEARANCE)
+    return mk.thicken(grid, np.maximum(BIB_MIN_THICKNESS, BIB_THICKNESS - need), offset="inward", away_from=away,
+                      groups="single")
 
 
 # ---------------------------------------------------------------------------------------------------
@@ -403,9 +548,10 @@ def _fold_band(band: mk.Mesh) -> mk.Mesh:
     return mk.fan_fold(band, [True] * band.n_faces)
 
 
-def _collar(rig: Rig, torso: Torso, under: mk.Mesh | None = None):
+def _collar(rig: Rig, torso: Torso, under: mk.Mesh | None = None, blouse: mk.Mesh | None = None):
     """The collar slab (underside on the blouse + gap, 4 mm thick, thinner at the edges), the floating pink
-    stripe band, and the left inner edge (for the bib).  ``under``: the bib, which the inner edge clears."""
+    stripe band, and the left inner edge (for the bib).  ``under``: the bib, which the underside clears;
+    ``blouse``: the loft as built, which the underside clears by FACETED_CLEARANCE."""
     outer, inner, lift = _collar_edges(rig)
     mirror = np.array([-1.0, 1.0, 1.0])
     outer = np.concatenate([outer[:0:-1] * mirror, outer])
@@ -448,30 +594,45 @@ def _collar(rig: Rig, torso: Torso, under: mk.Mesh | None = None):
             v = i / (len(pts) - 1.0)
             P[j, i] = p
             G[j, i] = rig.collar_gap + lift[j] * (1.0 - v) ** 1.3
-    grid = lay_on(torso, P, G)
+    grid0 = lay_on(torso, P, G)                         # on the analytic Torso: the collar's top stays here
+    grid, G = lay_on(torso, P, G, mesh=blouse, return_gap=True)
 
     def thick(u, v):
         edge = min(v, 1.0 - v) * 5.0
         return COLLAR_EDGE_THICKNESS + (rig.collar_thickness - COLLAR_EDGE_THICKNESS) * min(1.0, edge)
 
     T = np.array([[thick(j / (U - 1.0), i / (len(vfrac) - 1.0)) for i in range(len(vfrac))] for j in range(U)])
-    if under is not None:                               # review r3 (F4): the inner edge clears the bib
-        grid0 = grid
+    if under is not None:                               # review r3 (F4): the underside clears the bib
+        away = (0.0, _neck_section(rig, torso.rows[0][0])[1], BIB_AWAY_Z)
         for _ in range(COLLAR_BIB_PASSES):
-            rise = _inner_edge_raise(grid[:, -1], under)
+            rise = _inner_edge_raise(grid, under, away)
             if not np.any(rise > 1e-6):
                 break
-            G[:, -1] += rise
-            G[:, -2] += 0.5 * rise
-            grid = lay_on(torso, P, G)
-        # the top stays where it was: the raised underside thins the slab (no taller inner wall)
-        for i in (-1, -2):
-            up = np.linalg.norm(grid[:, i] - grid0[:, i], axis=1)
-            T[:, i] = np.maximum(COLLAR_RAISED_MIN_THICKNESS, T[:, i] - up)
-
-    col, sides = mk.thicken(grid, T, offset="outward", away_from=TORSO_CENTRE,
-                            groups={"front": 1, "back": 2, "rim": {"v0": 3, "v1": 4, "u0": 5, "u1": 5}},
-                            return_sides=True)
+            grid, G = lay_on(torso, P, G + rise, mesh=blouse, return_gap=True)
+    # the top stays where the analytic lay put it: the underside raised off the faceted blouse and the bib thins
+    # the slab (no taller walls; the collar's look, its stripe and the hair fitted over it unchanged), down to
+    # COLLAR_RAISED_MIN_THICKNESS, where the top rises with it
+    slab_groups = {"front": 1, "back": 2, "rim": {"v0": 3, "v1": 4, "u0": 5, "u1": 5}}
+    _col0, sides0 = mk.thicken(grid0, T, offset="outward", away_from=TORSO_CENTRE, groups=slab_groups,
+                               return_sides=True)
+    n0 = (sides0["front"] - grid0) / T[..., None]
+    left = np.einsum("uvi,uvi->uv", sides0["front"] - grid, n0)
+    top = np.where((left < COLLAR_RAISED_MIN_THICKNESS)[..., None], grid + COLLAR_RAISED_MIN_THICKNESS * n0,
+                   sides0["front"])
+    # ... and between the vertices too: on the twisted back-flap quads the top's (valley) and the underside's
+    # (ridge) fan diagonals of a thinned slab crossed (its back showed, magenta, in the back views)
+    quads = _grid_quads(U, len(vfrac))
+    up0 = n0.reshape(-1, 3)
+    under_fans = _lower_fans(grid.reshape(-1, 3), quads, up0).reshape(-1, 3)
+    for _ in range(COLLAR_BIB_PASSES):
+        need = _distance_deficit(top.reshape(-1, 3), quads, grid.reshape(-1, 3), under_fans,
+                                 COLLAR_RAISED_MIN_THICKNESS, _lower_fans(top.reshape(-1, 3), quads, up0))
+        need = need.reshape(top.shape[:2])
+        if not np.any(need > 1e-6):
+            break
+        top = top + need[..., None] * n0
+    col = mk.thicken(grid, T, offset="outward", away_from=TORSO_CENTRE, groups=slab_groups)   # vertices: top, bottom
+    col = mk.Mesh(np.concatenate([top.reshape(-1, 3), grid.reshape(-1, 3)]), col.faces, col.groups)
     # groups: on the lapels (the dickey, the bib and the scarf lie under their edges, so the underside
     # silhouette would be hidden) the walls + underside are a second group and both edges always draw;
     # around the back and the shoulders the whole collar is one group: its edges draw once, as outlines
@@ -488,8 +649,7 @@ def _collar(rig: Rig, torso: Torso, under: mk.Mesh | None = None):
     # the inner edge's silhouette at the nape and chopped it into dashes.  Top faces fold on the valley
     # diagonal (every facet inside its edges), the underside on the ridge (away from the top: no crossing)
     col = mk.fan_fold(col, [g == 2 for g in col.groups]).with_groups(groups)
-    top = sides["front"]
-    nrm = _grid_normals(top, TORSO_CENTRE)[:, 1:3]
+    nrm =_grid_normals(top, TORSO_CENTRE)[:, 1:3]
     base = top[:, 1:3] + rig.stripe_float * nrm
     stripe = _fold_band(mk.ridge_band(base[:, 0], base[:, 1], 0.5 * (nrm[:, 0] + nrm[:, 1]),
                                       rig.collar_stripe_relief, periodic=False))
@@ -497,38 +657,24 @@ def _collar(rig: Rig, torso: Torso, under: mk.Mesh | None = None):
     return col, stripe, left_inner
 
 
-def _inner_edge_raise(edge, under: mk.Mesh, samples: int = 7):
-    """Per collar column, how much more the underside's inner edge (points ``edge``, column order) must rise so
-    that each of its chords clears the top of ``under`` (the bib) by COLLAR_BIB_CLEARANCE (review r3, F4).
-    The bib reaches 9 mm under the collar and its chords are lifted 1.3 - 3 mm off the blouse there, while the
-    collar's inner edge chords (up to 36 mm long beside the neck) sag to 1.2 mm: the bib cut through the inner
-    wall, hid the wall's lower edge (the outline beside the neck) in the front views and chopped the lapel's
-    inner edge into dashes.  A chord sample's deficit goes to both of its columns."""
-    U = len(edge)
-    pts, dirs, owners = [], [], []
-    for j in range(U - 1):
-        t = edge[j + 1] - edge[j]
-        for s in np.linspace(0.0, 1.0, samples):
-            q = edge[j] + s * t
-            d = np.cross(t, (0.0, 0.0, 1.0))
-            d = np.cross(d, t)                            # "up", perpendicular to the chord
-            d = d / np.linalg.norm(d) if np.linalg.norm(d) > 1e-12 else np.array([0.0, 0.0, 1.0])
-            if d[2] < 0:
-                d = -d
-            pts.append(q)
-            dirs.append(d)
-            owners.append((j, j + 1))
-    probe = 0.01
-    pts, dirs = np.array(pts), np.array(dirs)
-    c = mk.surface_clearance(under, pts + probe * dirs, dirs)   # from above: the top face of the bib
-    need = np.zeros(U)
-    for own, cv in zip(owners, c):
-        if not np.isfinite(cv) or cv < 0.0:
-            continue
-        deficit = COLLAR_BIB_CLEARANCE - (cv - probe)     # cv - probe = height of the edge above the bib top
-        for j in own:
-            need[j] = max(need[j], deficit)
-    return need
+def _inner_edge_raise(grid, under: mk.Mesh, away):
+    """Per collar underside vertex ``(U, V)`` (``grid``, the laid underside), how much more it must rise so that
+    every underside quad clears the top of ``under`` (the bib: its faces whose normal points away from ``away``)
+    by COLLAR_BIB_CLEARANCE, by the exact triangle-triangle distance (both fans of each quad; a quad's deficit
+    goes to its four corners).  Review r3 (F4): the bib reaches 9 mm under the collar and its chords are lifted
+    1.3 - 3 mm off the blouse there, while the collar's inner edge chords (up to 36 mm long beside the neck) sag to
+    1.2 mm: the bib cut through the inner wall, hid the wall's lower edge (the outline beside the neck) in the
+    front views and chopped the lapel's inner edge into dashes.  Measured over the whole underside (not only the
+    inner-edge chords, probed vertically: the strip beside the inner edge still touched the bib where its top
+    is steep next to the neck; acceptance clear:body.collar^body.bib)."""
+    U, V = grid.shape[:2]
+    nb, _ = mk.face_normals(under)
+    cb = np.array([under.vertices[f].mean(axis=0) for f in under.faces])
+    top = np.einsum("fi,fi->f", nb, cb - np.asarray(away, dtype=np.float64)) > 0.0
+    tb, owner = mk.triangulate(under.faces)
+    need = _distance_deficit(grid.reshape(-1, 3), _grid_quads(U, V), under.vertices, tb[top[owner]],
+                             COLLAR_BIB_CLEARANCE)
+    return need.reshape(U, V)
 
 
 def _dickey(rig: Rig, torso: Torso):
@@ -554,12 +700,15 @@ def _dickey(rig: Rig, torso: Torso):
 # scarf ribbons, ring + stripes, tips
 # ---------------------------------------------------------------------------------------------------
 
-def _ribbon(rig: Rig, torso: Torso, side: int):
+def _ribbon(rig: Rig, torso: Torso, side: int, blouse: mk.Mesh):
+    """A scarf ribbon: a lens section swept along ``rig.scarf_path`` (SPEC.md §D.3) from under the lapel into the
+    ring, its stations lifted where the section comes closer than FACETED_CLEARANCE to the ``blouse`` loft."""
     S = np.array(rig.scarf_path) * [side, 1.0, 1.0]
     n = len(S)
     s = np.linspace(0.0, 1.0, n)
     w = np.interp(s, [0.0, 0.8, 1.0], [rig.scarf_width[0], rig.scarf_width[1], rig.scarf_width[1]])
     w[0] = rig.scarf_start_width                        # review r3 (F7): stays under the lapel
+    w[-2:] = rig.scarf_ring_width                       # S4, S5: gathered into the ring
     th = np.interp(s, [0.0, 0.8, 1.0], [rig.scarf_thickness[0], rig.scarf_thickness[1], rig.scarf_thickness[1]])
     th[0] = rig.scarf_start_thickness
     for k, dz in enumerate(rig.scarf_tuck_z):            # S0, S1 lowered under the lifted lapel
@@ -573,8 +722,32 @@ def _ribbon(rig: Rig, torso: Torso, side: int):
     W = np.interp(ss, s, w)
     TH = np.interp(ss, s, th)
     nrm = np.array([torso.normal(p) for p in path])
-    return mk.sweep(path, width=W, thickness=TH, profile=mk.profile_lens(8, 0.55), normals=nrm,
-                    start="flat", end="flat", cap_groups=(1, 1))
+    M = RIBBON_PROFILE_POINTS
+    rib = mk.sweep(path, width=W, thickness=TH, profile=mk.profile_lens(M, 0.55), normals=nrm, start="flat",
+                   end="flat", cap_groups=(1, 1))
+    # laid on the analytic Torso, the lens's lower edge dipped 1.3 mm into the faceted loft over the front of the
+    # shoulder: lift the section there along the station normal, per lateral position (profile points k and M - k
+    # together, so the section keeps its thickness and its other edge stays).  The stations up to S1 (tucked under
+    # the lapel, scarf_tuck_z: lifted, the ribbon's edge came out through the lapel's top) and S5 (inside the ring)
+    # stay, so the end caps stay flat.
+    rings = rib.vertices.reshape(m, M, 3)               # flat caps: the vertices are the sections
+    up = np.repeat(nrm[:, None, :], M, axis=1)
+    lateral = np.minimum(np.arange(M), M - np.arange(M))
+    seg = np.linalg.norm(np.diff(path, axis=0), axis=1)
+    arc = np.concatenate([[0.0], np.cumsum(seg)]) / seg.sum()
+    tucked = arc <= arc[int(np.argmin(np.linalg.norm(path - P[len(rig.scarf_tuck_z) - 1], axis=1)))] + 1e-9
+    for _ in range(RIBBON_LIFT_PASSES):
+        need = faceted_deficit(blouse, rings, up, FACETED_CLEARANCE, periodic_v=True)
+        col = np.zeros((m, M // 2 + 1))
+        for k in range(M):
+            col[:, lateral[k]] = np.maximum(col[:, lateral[k]], need[:, k])
+        lift = col[:, lateral]
+        lift[tucked] = 0.0
+        lift[-1] = 0.0
+        if not np.any(lift > 1e-6):
+            break
+        rings = rings + lift[..., None] * up
+    return mk.Mesh(rings.reshape(-1, 3), rib.faces, rib.groups)
 
 
 def _ring(rig: Rig):
@@ -587,11 +760,20 @@ def _ring(rig: Rig):
     zs = (c[2] - (0.5 * h - r), c[2] + (0.5 * h - r))
     rings = [mk.rounded_rect_ring(w, d, r, n, (c[0], c[1], z)) for z in zs]
     box = mk.loft(rings, ("dome", r, 1), ("dome", r, 1))
+    # the stripe stations: the ring's own polygon vertices, each moved stripe_float out along the rounded
+    # rectangle's normal there (a separately resampled, larger rounded rectangle put its corner stations 0.32 mm
+    # off the ring's corner chords; acceptance clear:body.ring_stripe*^body.ring)
+    ring_xy = mk.rounded_rect_ring(w, d, r, n)[:, :2]
+    hx, hy = 0.5 * w - r, 0.5 * d - r
+    # from the nearest point of the inner rectangle (the arc centres): axis-aligned on a flat, radial on an arc
+    out_xy = ring_xy - np.stack([np.clip(ring_xy[:, 0], -hx, hx), np.clip(ring_xy[:, 1], -hy, hy)], axis=1)
+    out_xy /= np.linalg.norm(out_xy, axis=1)[:, None]
     stripes = []
     for zc in rig.ring_stripe_z:
         hh = 0.5 * rig.ring_stripe_height
         g = rig.stripe_float
-        lo, hi = (mk.rounded_rect_ring(w + 2 * g, d + 2 * g, r + g, n, (c[0], c[1], zc + dz)) for dz in (-hh, hh))
+        lo, hi = (np.column_stack([c[0] + ring_xy[:, 0] + g * out_xy[:, 0], c[1] + ring_xy[:, 1] + g * out_xy[:, 1],
+                                   np.full(n, zc + dz)]) for dz in (-hh, hh))
         out = 0.5 * (lo + hi) - np.array([c[0], c[1], zc])
         out[:, 2] = 0.0
         stripes.append(mk.ridge_band(lo, hi, out, rig.ring_stripe_relief))
@@ -739,16 +921,18 @@ def build(rig: Rig):
     """Parts of :data:`REGIONS` for ``rig``."""
     torso = torso_model(rig)
     parts = []
-    bib = _bib(rig, torso, np.array([torso.onto(p, 0.0) for p in _collar_edges(rig)[1]]))
-    col, stripe, left_inner = _collar(rig, torso, under=bib)
+    blouse = _blouse(rig, torso)
+    bib = _bib(rig, torso, np.array([torso.onto(p, 0.0) for p in _collar_edges(rig)[1]]), blouse)
+    col, stripe, left_inner = _collar(rig, torso, under=bib, blouse=blouse)
     parts.append(Part("body.neck", "skin", _neck(rig), "neck"))
     parts.append(Part("body.bib", "skin", mk.split_twisted(bib, BIB_TWIST_SPLIT_DEG), "neck"))
-    parts.append(Part("body.blouse", "uniform", _blouse(rig, torso), "torso"))
+    parts.append(Part("body.blouse", "uniform", blouse, "torso"))
     parts.append(Part("body.collar", "collar", col, "collar"))
     parts.append(Part("body.collar_stripe", "uniform", stripe, "collar"))
     parts.append(Part("body.dickey", "collar", _dickey(rig, torso), "collar"))
     for side in SIDES:
-        parts.append(Part(f"body.scarf_ribbon_{_side_name(side)}", "scarf", _ribbon(rig, torso, side), "scarf"))
+        parts.append(Part(f"body.scarf_ribbon_{_side_name(side)}", "scarf", _ribbon(rig, torso, side, blouse),
+                          "scarf"))
     for side in (-1, 1):                              # tip A (her right, behind) first, then tip B
         parts.append(Part(f"body.scarf_tip_{_side_name(side)}", "scarf", _tip(rig, torso, side), "scarf"))
     box, stripes = _ring(rig)

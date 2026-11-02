@@ -340,6 +340,26 @@ def _band_embed(rig: Rig, P) -> np.ndarray:
     return rig.band_embed + BAND_DIVE * _smoothstep(rig.band_tuck_y, BAND_END_Y, P[:, 1])
 
 
+def _ridge_sink(band: mk.Mesh, outer, nrm, half) -> np.ndarray:
+    """Per station, how far below the band's outer face line ``outer`` (along ``nrm``) the ridge's base goes so
+    that both base vertices (``+-half`` across, the base narrowed to RIDGE_SHRINK) lie :data:`RIDGE_SINK` inside
+    the band's faceted outer face (group 1), measured perpendicular to it.  Clearance pass: where the band dives
+    (``BAND_DIVE``, from ``rig.band_tuck_y`` back) its outer face bends in at the station, so a base RIDGE_SINK
+    along the station normal was only ~174 um under the next facet."""
+    faces = [f for f, g in zip(band.faces, band.groups) if g == 1]
+    tris, _ = mk.triangulate(faces)
+    s = np.full(len(outer), RIDGE_SINK)
+    for _ in range(20):
+        bot = outer - s[:, None] * nrm
+        Q = np.concatenate([bot - half, bot + half])
+        d = mk.point_triangle_distance(Q, band.vertices, tris)[0].reshape(2, -1).min(axis=0)
+        short = RIDGE_SINK - d
+        if short.max() <= 1e-9:
+            break
+        s += np.maximum(short, 0.0) + 1e-7
+    return s
+
+
 def _headband(rig: Rig, dome: mk.Mesh):
     P, N, Bx = _band_frames(rig, dome)
     base = P - _band_embed(rig, P)[:, None] * N
@@ -356,7 +376,7 @@ def _headband(rig: Rig, dome: mk.Mesh):
     o, n, b = outer[k0:k1 + 1], N[k0:k1 + 1], Bx[k0:k1 + 1]
     rw = 0.5 * rig.band_ridge_width
     top = o + rig.band_ridge_height * n
-    bot = o - RIDGE_SINK * n
+    bot = o - _ridge_sink(band, o, n, rw * RIDGE_SHRINK * b)[:, None] * n
     F = np.stack([top - rw * b, top + rw * b], axis=1)
     Bk = np.stack([bot - rw * b, bot + rw * b], axis=1)
     ridge = _band_slab(F, Bk, RIDGE_SHRINK, single=True)
@@ -374,6 +394,24 @@ BANGS_UNDER_BAND = 0.0005
 BANGS_END_X = 0.072                 # vertical end faces (= rig.bangs_half_width)
 #: Round 1 (F15): relative widths of the strips, her right to her left (irregular strand lines).
 BANGS_STRIP_WEIGHTS = (1.0, 0.7, 1.2, 0.8, 1.1, 0.9, 1.3, 0.8)
+#: Clearance pass (bangs / dome): the dome ends DOME_BAND_DROP below the rig's band line, which at |x| 0.02 -
+#: 0.07 lies 1 - 3 mm under the band the radial projection builds (_band_frames), so the dome's front rim showed
+#: in front of the bangs' top for up to 3 mm below the band's lower edge.  The top row moves forward (with its
+#: back) until, seen from the front, the bangs' front stays this far in front of the dome below the band's
+#: lower outer edge and inside the sidelocks: the bangs come out of the dome under the band.  (Moving the dome's
+#: boundary instead re-facets the dome under the band and the sidelock roots.)
+BANGS_DOME_CLEARANCE = 0.0002
+BANGS_DOME_ACROSS = 6               # probe samples between two columns (the dome facets are narrower than a strip)
+#: Merge review: each column's forward shift is the largest need within this many columns of it (a running
+#: envelope), so neighbouring columns do not step by 2 mm: an end column left behind its neighbour showed a tab
+#: of dome at the outermost strip's top corner, next to the sidelock.
+BANGS_DOME_SHIFT_SPREAD = 2
+#: Clearance pass (bangs / skin): the back face's chords between the strip borders cut the convex forehead
+#: just above the cut (up to 1.4 mm inside the skin on the widest strips); the back vertices move toward the
+#: front (the slab thins there, the front stays) until every sample of the back face is in front of the faceted
+#: skin by ``rig.bangs_skin_gap`` along its column's offset direction (:func:`_bangs_clear_skin`).
+#: BANGS_BACK_SAMPLES per quad side, on both diagonal splits.
+BANGS_BACK_SAMPLES = 8
 
 
 def _band_x_frames(rig: Rig, dome: mk.Mesh):
@@ -436,8 +474,10 @@ def _bangs(rig: Rig, dome: mk.Mesh) -> mk.Mesh:
     rows = 4                                                  # under-band top, band edge, curl start, cut
     F = np.zeros((ncol, rows, 3))
     Bk = np.zeros((ncol, rows, 3))
+    M = np.zeros((ncol, 3))
     for i, x in enumerate(xs):
         oc, m = outer_cut(column_at(x))
+        M[i] = m
         top = corner_at(x) + BANGS_UNDER_BAND * np.array([m[0], m[1], 0.0])
         top[0] = x
         lean_cut = oc + curl_d * m                            # where the cut would be without the curl
@@ -453,6 +493,8 @@ def _bangs(rig: Rig, dome: mk.Mesh) -> mk.Mesh:
         for j, o in enumerate(outer):
             F[i, j] = o
             Bk[i, j] = o - T * m
+    F, Bk = _bangs_clear_dome(rig, dome, F, Bk)
+    Bk = _bangs_clear_skin(rig, surf, Bk, M)
     front = np.zeros((ncol - 1, rows - 1), dtype=np.int64)
     for i in range(ncol - 1):
         front[i, :] = 1 + i // BANGS_STRIP_COLS               # strips 1..6: 5 strand lines
@@ -461,6 +503,114 @@ def _bangs(rig: Rig, dome: mk.Mesh) -> mk.Mesh:
     # rims: v0 = top (hidden under the band), v1 = the cut, u0 / u1 = the end faces in their strip's group
     # (round 1, T5: they draw only as silhouettes, no hook at the ends)
     return slab(F, Bk, (front, g_back, g_back, g_cut, 1, nstrip))
+
+
+@functools.lru_cache(maxsize=4)
+def bangs_outer_strip_x(rig: Rig) -> tuple:
+    """``(x_r, x_l)``: the inner border of the bangs' outermost strips (her right, strip 1; her left, strip
+    ``rig.bangs_strips``), the innermost x of that column's front and back vertices -- every face of the
+    outermost strip (front, back, top, cut, end) lies beyond it, every face of the next strip inside it (the
+    acceptance profile's sidelock / bangs zone)."""
+    m = _bangs(rig, _dome(rig))
+    ncol = rig.bangs_strips * BANGS_STRIP_COLS + 1
+    V = np.asarray(m.vertices).reshape(2, ncol, 4, 3)
+    return float(V[:, BANGS_STRIP_COLS, :, 0].max()), float(V[:, ncol - 1 - BANGS_STRIP_COLS, :, 0].min())
+
+
+def _band_low_z(rig: Rig, dome: mk.Mesh):
+    """z of the headband's lower outer edge (its lowest line seen from the front) as a function of x."""
+    P, N, Bx = _band_frames(rig, dome)
+    low = P - _band_embed(rig, P)[:, None] * N - 0.5 * rig.band_width * Bx + rig.band_thickness * N
+    order = np.argsort(low[:, 0])
+    return lambda x: float(np.interp(x, low[order, 0], low[order, 2]))
+
+
+def _bangs_clear_dome(rig: Rig, dome: mk.Mesh, F, Bk):
+    """Move the bangs' top row (band edge, row 1 of the ``(U, 4, 3)`` grids, front and back together) forward
+    along -y until, where they show from the front (below the band's lower outer edge, inside the sidelocks'
+    inner edges), the front strips stay :data:`BANGS_DOME_CLEARANCE` in front of the dome mesh (probed along y
+    at the rows, along the chords to the neighbouring rows and between the columns, :func:`_fit_rows`).  The
+    bangs' ends lie under the sidelocks, where the dome, fuller than the bangs, covers them."""
+    tris, _ = dome.triangles()
+    T = dome.vertices[tris]
+    z_low = _band_low_z(rig, dome)
+    lock = np.array((_sidelock_root_row(rig),) + tuple(rig.sidelock_rows))[::-1]      # ascending z
+
+    def deficit(p):
+        if p[2] >= z_low(p[0]) or abs(p[0]) >= np.interp(p[2], lock[:, 0], lock[:, 1]):
+            return 0.0                                        # behind the band or a sidelock
+        y = _outfit_y(T, p[0], p[2], True)
+        return 0.0 if y is None else p[1] - (y - BANGS_DOME_CLEARANCE)
+
+    shift = _fit_rows([F[:, 0], F[:, 1], F[:, 2]], deficit, [False, True, False], -1.0, across=BANGS_DOME_ACROSS)
+    need = shift[1]
+    r = BANGS_DOME_SHIFT_SPREAD
+    smooth = np.array([need[max(0, i - r):i + r + 1].max() for i in range(len(need))])
+    dy = smooth[:, None] * np.array([0.0, 1.0, 0.0])
+    F, Bk = F.copy(), Bk.copy()
+    F[:, 1] -= dy
+    Bk[:, 1] -= dy
+    return F, Bk
+
+
+def _front_y_of(T: np.ndarray, X: np.ndarray) -> np.ndarray:
+    """Front-most y of the triangles ``T`` ``(K, 3, 3)`` on the lines ``(x, *, z)`` through the points ``X``
+    ``(P, 3)`` (``+inf`` where a line misses them)."""
+    a, b, c = T[None, :, 0], T[None, :, 1], T[None, :, 2]
+    x, z = X[:, None, 0], X[:, None, 2]
+    d = (b[..., 0] - a[..., 0]) * (c[..., 2] - a[..., 2]) - (b[..., 2] - a[..., 2]) * (c[..., 0] - a[..., 0])
+    w0 = (c[..., 0] - b[..., 0]) * (z - b[..., 2]) - (c[..., 2] - b[..., 2]) * (x - b[..., 0])
+    w1 = (a[..., 0] - c[..., 0]) * (z - c[..., 2]) - (a[..., 2] - c[..., 2]) * (x - c[..., 0])
+    w2 = (b[..., 0] - a[..., 0]) * (z - a[..., 2]) - (b[..., 2] - a[..., 2]) * (x - a[..., 0])
+    ok = np.abs(d) > 1e-14
+    sg = np.where(d < 0, -1.0, 1.0)
+    m = ok & (w0 * sg >= 0) & (w1 * sg >= 0) & (w2 * sg >= 0)
+    y = (w0 * a[..., 1] + w1 * b[..., 1] + w2 * c[..., 1]) / np.where(ok, d, 1.0)
+    return np.where(m, y, np.inf).min(axis=1)
+
+
+def _bangs_clear_skin(rig: Rig, surf: SkinSurface, Bk, M):
+    """Move back vertices of the bangs ``Bk`` ``(U, V, 3)`` toward the front, along their column's offset
+    direction ``M`` ``(U, 3)``, until every sample of the back face (:data:`BANGS_BACK_SAMPLES` per side on both
+    diagonal splits of each quad) is in front of the faceted skin by at least the builder's own gap at the cut:
+    ``rig.bangs_skin_gap`` along the offset direction, i.e. ``bangs_skin_gap * |m_y|`` along y (the vertices
+    already are; the chords between them cut the convex forehead).  A sample's deficit is shared by its
+    triangle's corners with the minimum-norm weights ``w / |w|^2``."""
+    tris, _ = surf.mesh.triangles()
+    T = surf.mesh.vertices[tris]
+    lo, hi = Bk.reshape(-1, 3).min(axis=0) - 0.01, Bk.reshape(-1, 3).max(axis=0) + 0.01
+    T = T[np.all((T.max(axis=1) >= lo) & (T.min(axis=1) <= hi), axis=1) & (np.cross(
+        T[:, 1] - T[:, 0], T[:, 2] - T[:, 0])[:, 1] < 0.0)]           # the skin under the bangs, facing -y
+    gap = rig.bangs_skin_gap
+    U, R = Bk.shape[:2]
+    my = np.abs(M[:, 1])
+    n = BANGS_BACK_SAMPLES
+    W = np.array([(a / n, b / n, 1.0 - (a + b) / n) for a in range(n + 1) for b in range(n + 1 - a)])
+    splits = ((0, 1, 2), (0, 2, 3), (0, 1, 3), (1, 2, 3))
+    cells = [(i, j) for i in range(U - 1) for j in range(R - 1)]
+    Bk = Bk.copy()
+    for _ in range(60):
+        corners, X, Ws = [], [], []
+        for i, j in cells:
+            quad = ((i, j), (i + 1, j), (i + 1, j + 1), (i, j + 1))
+            for tri in splits:
+                cs = [quad[k] for k in tri]
+                X.append(W @ np.array([Bk[c] for c in cs]))
+                corners += [cs] * len(W)
+                Ws.append(W)
+        X, Ws = np.concatenate(X), np.concatenate(Ws)
+        cm = np.array([[my[c[0]] for c in cs] for cs in corners])
+        need = gap * np.einsum("pk,pk->p", Ws, cm) - (_front_y_of(T, X) - X[:, 1])
+        if need.max() <= 0.0:
+            break
+        shift = np.zeros((U, R))
+        for k in np.nonzero(need > 0.0)[0]:
+            w = Ws[k]
+            for c, wc, mc in zip(corners[k], w, cm[k]):
+                if wc > 0.0:
+                    shift[c] = max(shift[c], (need[k] + 1e-5) * wc / (mc * float(w @ w)))
+        Bk += shift[:, :, None] * M[:, None, :]
+    return Bk
 
 
 # ---------------------------------------------------------------------------------------------------------
@@ -570,6 +720,11 @@ def _fit_rows(rows, deficit, movable, axis_sign, across: int = 0):
 #: SIDELOCK_ROOT_Z, its edges SIDELOCK_ROOT_INSET inside the dome surface (the root cap never shows).
 SIDELOCK_ROOT_Z = 1.466
 SIDELOCK_ROOT_INSET = 0.005
+#: Clearance pass: the root row's inner edge moves this far (arc length along the dome section at
+#: SIDELOCK_ROOT_Z) toward the side, so the lock rises into the dome through the bangs' outermost strip only:
+#: on her left (the narrowest strip, BANGS_STRIP_WEIGHTS) its inner edge cut 0.6 mm into the next strip's top
+#: face under the band.  Hidden: the root is inside the dome, the lock face below it moves < 1 mm.
+SIDELOCK_ROOT_INNER_TURN = 0.0012
 #: Round 1 (F1): a sharp-edged lens section, ``(u across the width -1..1 (1 = outer edge), front side?)``;
 #: front v = SIDELOCK_FRONT_SHARE * thickness * (1 - u^2)^SIDELOCK_FULLNESS, back the rest.  The edges are
 #: real ridges (~60 degrees), so in front-ish views the silhouette runs along the edge itself: one line per
@@ -580,15 +735,29 @@ SIDELOCK_FULLNESS = 0.8
 SIDELOCK_ROOT_THICKNESS = 0.5       # the root row is this fraction of the lock thickness (it hides in the dome)
 
 
-def _sidelock_root_row(rig: Rig):
-    """``(z, x_in, y_in, x_out, y_out)`` of the root row: the first table row's edges carried up to
-    :data:`SIDELOCK_ROOT_Z` along their dome azimuths, :data:`SIDELOCK_ROOT_INSET` inside the dome."""
+def _sidelock_root_edges(rig: Rig):
+    """``((p_in, n_in), (p_out, n_out))``: the dome-section points at :data:`SIDELOCK_ROOT_Z` above the root
+    row's inner and outer edges and the section's horizontal outward normals there (the inner one turned
+    :data:`SIDELOCK_ROOT_INNER_TURN` toward the side).  Shared with acceptance._sidelock_root_depth."""
     c = np.array(rig.dome_center)
     z0, xi, yi, xo, yo = rig.sidelock_rows[0]
-    out = [SIDELOCK_ROOT_Z]
-    for x, y in ((xi, yi), (xo, yo)):
+    out = []
+    for x, y, turn in ((xi, yi, SIDELOCK_ROOT_INNER_TURN), (xo, yo, 0.0)):
         psi = math.atan2(x, y - c[1])
         p, n = _dome_section_point(rig, SIDELOCK_ROOT_Z, psi)
+        if turn:
+            psi -= turn / math.hypot(p[0], p[1] - c[1])
+            p, n = _dome_section_point(rig, SIDELOCK_ROOT_Z, psi)
+        out.append((p, n))
+    return tuple(out)
+
+
+def _sidelock_root_row(rig: Rig):
+    """``(z, x_in, y_in, x_out, y_out)`` of the root row: the first table row's edges carried up to
+    :data:`SIDELOCK_ROOT_Z` along their dome azimuths (the inner one turned :data:`SIDELOCK_ROOT_INNER_TURN`
+    toward the side), :data:`SIDELOCK_ROOT_INSET` inside the dome (:func:`_sidelock_root_edges`)."""
+    out = [SIDELOCK_ROOT_Z]
+    for p, n in _sidelock_root_edges(rig):
         q = p - SIDELOCK_ROOT_INSET * n
         out += [float(q[0]), float(q[1])]
     return tuple(out)

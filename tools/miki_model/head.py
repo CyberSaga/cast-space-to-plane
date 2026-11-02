@@ -551,6 +551,23 @@ class DecalStack:
                 req = min(req, y - self.clear_layer)
         return req
 
+    def vertices_xz(self) -> np.ndarray:
+        """``(P, 2)`` (x, z) of every placed layer's front vertices (extra samples of :func:`_clear`)."""
+        if not self.layers:
+            return np.zeros((0, 2))
+        return np.concatenate([s.mesh.vertices[:, [0, 2]] for s in self.layers])
+
+    def edges_xz(self) -> np.ndarray:
+        """``(S, 2, 2)`` (x, z) ends of every placed layer's front triangle edges (extra samples of
+        :func:`_clear` where they cross the decal's edges)."""
+        if not self.layers:
+            return np.zeros((0, 2, 2))
+        out = []
+        for s in self.layers:
+            A, B, C = (P[:, [0, 2]] for P in (s.A, s.B, s.C))
+            out += [np.stack([A, B], axis=1), np.stack([B, C], axis=1), np.stack([C, A], axis=1)]
+        return np.concatenate(out)
+
     def top_y(self, x: float, z: float) -> float:
         """y of the front-most surface (skin or a placed decal) at ``(x, z)``."""
         top = self.skin.y(x, z)
@@ -559,6 +576,10 @@ class DecalStack:
             if y is not None:
                 top = min(top, y)
         return top
+
+
+#: Rounds of :func:`_clear` at most (it stops at the first round that moves nothing).
+CLEAR_ROUNDS = 6
 
 
 def _samples(G):
@@ -574,24 +595,86 @@ def _samples(G):
     return out
 
 
-def _clear(F, N, G, required, sign: float, rounds: int = 6):
+def _chord_samples(F, points):
+    """Samples ``(vertex indices, barycentric weights)`` of ``points`` ``(P, 2)`` (x, z) on the front chord
+    triangles of the ``(U, V, 3)`` grid ``F`` (the fan diagonal ``(u, v)-(u+1, v+1)``, as :func:`_samples`)
+    over them, in the xz projection of ``F`` as it stands; a point over no triangle gives no sample."""
+    U, V = F.shape[:2]
+    out = []
+    if not len(points):
+        return out
+    for u in range(U - 1):
+        for v in range(V - 1):
+            for t in (((u, v), (u + 1, v), (u + 1, v + 1)), ((u, v), (u + 1, v + 1), (u, v + 1))):
+                a, b, c = (F[k][[0, 2]] for k in t)
+                e1, e2 = b - a, c - a
+                den = e1[0] * e2[1] - e2[0] * e1[1]
+                if abs(den) <= 1e-16:
+                    continue
+                r = points - a
+                l1 = (r[:, 0] * e2[1] - e2[0] * r[:, 1]) / den
+                l2 = (e1[0] * r[:, 1] - r[:, 0] * e1[1]) / den
+                l0 = 1.0 - l1 - l2
+                for q in np.nonzero((l0 >= -1e-9) & (l1 >= -1e-9) & (l2 >= -1e-9))[0]:
+                    out.append((t, (float(l0[q]), float(l1[q]), float(l2[q]))))
+    return out
+
+
+def _crossing_samples(F, G, segments):
+    """Samples ``(vertex indices, weights)`` where the ``(S, 2, 2)`` (x, z) ``segments`` cross the edges of
+    the ``(U, V, 3)`` grid ``F`` (the :func:`_samples` edges of ``G``'s topology, in the xz projection of ``F``
+    as it stands)."""
+    out = []
+    if not len(segments):
+        return out
+    P, Q = segments[:, 0], segments[:, 1]
+    e = Q - P
+    for _xz, idx in _samples(G):
+        if len(idx) != 2:
+            continue
+        a, b = (F[k][[0, 2]] for k in idx)
+        d = b - a
+        den = d[0] * e[:, 1] - d[1] * e[:, 0]
+        ok = np.abs(den) > 1e-16
+        den = np.where(ok, den, 1.0)
+        r = P - a
+        s = (r[:, 0] * e[:, 1] - r[:, 1] * e[:, 0]) / den        # along the decal edge
+        t = (r[:, 0] * d[1] - r[:, 1] * d[0]) / den              # along the segment
+        for q in np.nonzero(ok & (s > 0.0) & (s < 1.0) & (t >= 0.0) & (t <= 1.0))[0]:
+            out.append((idx, (1.0 - float(s[q]), float(s[q]))))
+    return out
+
+
+def _clear(F, N, G, required, sign: float, rounds: int = CLEAR_ROUNDS, points=None, segments=None):
     """Move vertices of ``F`` along their normals ``N`` until every sample's (chord) y is on the right side
     of ``required(x, z)``: ``sign = +1`` keeps ``y <= required`` (in front), ``-1`` keeps ``y >= required``.
-    A two-row grid (a band) moves whole columns, so its narrow quads never twist."""
+    A two-row grid (a band) moves whole columns, so its narrow quads never twist.
+
+    ``required`` is evaluated at each sample's current chord point (x, z) every round, not at the grid's: a
+    vertex placed or moved along a tilted normal has left its grid (x, z), and where the skin is steep (the
+    lash flick, the eye layers' outer edges) the y it must clear differs there by up to a millimetre (the
+    checks measure along y at the vertex itself).  ``points`` ``(P, 2)``: further fixed sample points (x, z),
+    the front vertices of the layers below (:meth:`DecalStack.vertices_xz`), each tested on the chord
+    triangle of ``F`` over it, and ``segments`` ``(S, 2, 2)``, their front edges
+    (:meth:`DecalStack.edges_xz`), tested where they cross the edges of ``F``: an edge or corner of a layer
+    below pokes up between the decal's own samples where a long chord spans it (the lid band's lower edge
+    over the iris's outer top edge).  With both, the front clears the layers below exactly (two piecewise
+    flat surfaces are closest at a vertex of either or where their edges cross)."""
     V = F.shape[1]
-    samples = []
-    for xz, idx in _samples(G):
-        moved_idx = idx
-        if V == 2:
-            moved_idx = tuple(sorted({(i, j) for i, _ in idx for j in range(V)}))
-        samples.append((xz, idx, moved_idx, required(*xz)))
+
+    def columns(idx):
+        return tuple(sorted({(i, j) for i, _ in idx for j in range(V)})) if V == 2 else idx
+
+    own = [(idx, (1.0 / len(idx),) * len(idx)) for _xz, idx in _samples(G)]
+    points = np.zeros((0, 2)) if points is None else np.asarray(points, dtype=np.float64).reshape(-1, 2)
+    segments = np.zeros((0, 2, 2)) if segments is None else np.asarray(segments, dtype=np.float64)
     for _ in range(rounds):
         moved = False
-        for xz, idx, moved_idx, req in samples:
-            y = sum(F[k][1] for k in idx) / len(idx)
-            d = sign * (y - req)
+        for idx, w in own + _chord_samples(F, points) + _crossing_samples(F, G, segments):
+            p = sum(wk * F[k] for wk, k in zip(w, idx))
+            d = sign * (p[1] - required(p[0], p[2]))
             if d > 1e-8:
-                for k in moved_idx:
+                for k in columns(idx):
                     n = N[k]
                     F[k] = F[k] + sign * (d + 1e-6) * max(0.2, -n[1]) * n     # y gap d = normal gap d n_y
                 moved = True
@@ -624,7 +707,7 @@ def _decal(rig: Rig, grid_xz, relief: float, depth: float | None = None, stack: 
             p, n = smooth_face(rig, *G[i, j])
             F[i, j] = p + rel[i] * n
             N[i, j] = n
-    _clear(F, N, G, stack.required_front_y, +1.0)
+    _clear(F, N, G, stack.required_front_y, +1.0, points=stack.vertices_xz(), segments=stack.edges_xz())
     mode, k = shrink
     if mode == "centroid":
         c = G.reshape(-1, 2).mean(axis=0)
@@ -871,8 +954,9 @@ def _lower_lid(rig: Rig, side: int, stack: DecalStack) -> mk.Mesh:
     half[-1] *= 0.7
     g = band_grid(np.stack([xs, zc], axis=1), half)
     g[..., 0] *= side
-    del stack                                                 # beside the sclera, not on it: own stack (skin)
-    return _decal(rig, g, rig.lower_lid_relief, rig.eye_slab_depth + 1.5 * LAYER_DEPTH_STEP,
+    # beside the sclera, overlapping its outer lower corner: on the eye stack, so its front clears the sclera
+    # there too (and its back sits under the front-most surface, as acceptance._decal_layers measures it)
+    return _decal(rig, g, rig.lower_lid_relief, rig.eye_slab_depth + 1.5 * LAYER_DEPTH_STEP, stack,
                   shrink=("across", BAND_SHRINK))
 
 
