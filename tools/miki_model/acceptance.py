@@ -439,10 +439,14 @@ def _body_requirements(rig: Rig) -> list:
             Zone(any_of=(Zone(z=(cz + 0.5 * h - r, INF)), Zone(faces=("b", Select(facing=(BACKWARD, FACING_COS))))),
                  note="the ribbon enters the ring through its top cap or its back face"),
             None, 0.0, "rig.scarf_path[-1] / rig.ring_center", "body._ribbon: S5 stays inside the ring"))
+        z_tip = (rig.scarf_tip_root if s == "l" else rig.scarf_tip_root_right)[2]
         out.append(Join(
             f"join:body.scarf_tip_{s}~body.ring", f"body.scarf_tip_{s}", "body.ring",
-            Zone(z=(-INF, cz - (0.5 * h - r)), note="the tip leaves the ring through its bottom cap"), None, 0.0,
-            "rig.scarf_tip_root / rig.ring_size", "body._tip: a flat blade below the ring, its root inside the ring"))
+            Zone(z=(-INF, cz - (0.5 * h - r)), note="the tip leaves the ring through its bottom cap"),
+            Select(vz=(z_tip - 1e-4, z_tip + 1e-4), note="the tip's root edge (body._tip keeps it level at root z)"),
+            0.0, "rig.scarf_tip_root / rig.scarf_tip_root_right / rig.ring_size",
+            "body._tip: a flat blade below the ring, its root inside the ring (the root cap is a quad: its 4 vertices "
+            "lie at the root z, every other station is lower)"))
         out.append(Join(
             f"join:{rib}~body.scarf_tip_{s}", rib, f"body.scarf_tip_{s}", Zone(inside="body.ring",
                                                                              note="hidden inside the ring"),
