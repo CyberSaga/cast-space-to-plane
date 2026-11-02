@@ -330,10 +330,10 @@ class Checker:
     def _missing(self, names):
         bad = [n for n in names if n not in self.parts]
         if bad:
-            return {"verdict": INDETERMINATE, "reason": "missing part(s): " + ", ".join(bad), "findings": []}
+            return {"verdict": INDETERMINATE, "verdict_reason": "missing part(s): " + ", ".join(bad), "findings": []}
         invalid = [n for n in names if n in self.reports and not self.reports[n].ok]
         if invalid:
-            return {"verdict": INDETERMINATE, "reason": "invalid geometry: " + ", ".join(invalid), "findings": []}
+            return {"verdict": INDETERMINATE, "verdict_reason": "invalid geometry: " + ", ".join(invalid), "findings": []}
         return None
 
     def _curve(self, pd: PairData, eps: float):
@@ -442,11 +442,11 @@ class Checker:
             A = self.parts[j.buried]
             rim = A.rim(self.sel(j.buried, j.rim, eps), j.rim, eps)
             if not len(rim):
-                return {"verdict": INDETERMINATE, "reason": "rim selection is empty: " + (j.rim.note or "?"),
+                return {"verdict": INDETERMINATE, "verdict_reason": "rim selection is empty: " + (j.rim.note or "?"),
                         "findings": findings, "measured": measured, "required": required, "units": "m"}
             depth, req_d, allow = self._rim_depths(j, A, rim, eps)
             if np.all(np.isnan(depth)):
-                return {"verdict": INDETERMINATE, "reason": "no rim depth could be measured (the rays miss the host)",
+                return {"verdict": INDETERMINATE, "verdict_reason": "no rim depth could be measured (the rays miss the host)",
                         "findings": findings, "measured": measured, "required": required, "units": "m"}
             fail = np.nan_to_num(depth, nan=-np.inf) < req_d
             order = np.argsort(np.nan_to_num(depth - req_d, nan=-np.inf), kind="stable")
@@ -502,7 +502,7 @@ class Checker:
         A, B = self.parts[c.a], self.parts[c.b]
         ma, mb = self.sel(c.a, c.faces_a, eps), self.sel(c.b, c.faces_b, eps)
         if not ma.any() or not mb.any():
-            return {"verdict": INDETERMINATE, "reason": "empty face selection", "findings": []}
+            return {"verdict": INDETERMINATE, "verdict_reason": "empty face selection", "findings": []}
         findings = []
         ta = A.tris[A.tris_of(ma)]
         P = A.V[ta]
@@ -521,7 +521,7 @@ class Checker:
             ok = ~np.isnan(h)
             if not ok.any():
                 if c.need_overlap:
-                    return {"verdict": INDETERMINATE, "reason": "no sample of the selected faces lies over the other "
+                    return {"verdict": INDETERMINATE, "verdict_reason": "no sample of the selected faces lies over the other "
                             "part", "findings": []}
                 return {"verdict": PASS, "findings": [], "measured": {"samples_over": 0}, "units": "m",
                         "required": {"min": _f(c.min), "max": _f(c.max)}, "note": "no overlap"}
@@ -590,7 +590,7 @@ class Checker:
                 "measured": {"rows": rows_out}, "required": {"table": p.constant}}
 
     def _pose(self, p: ac.Pose, eps: float) -> dict:
-        return {"verdict": INDETERMINATE, "reason": f"pose not tested: {p.pose} (milestone 2)", "findings": []}
+        return {"verdict": INDETERMINATE, "verdict_reason": f"pose not tested: {p.pose} (milestone 2)", "findings": []}
 
 
 def section_extents(P: PartGeom, z: float):
@@ -735,7 +735,7 @@ def run(parts_list, profile=None, reports=None, eps=None, only=None) -> dict:
         verdicts = {s: per[s]["verdict"] for s in scales}
         if len(set(verdicts.values())) > 1:
             main_res["verdict"] = INDETERMINATE
-            main_res["reason"] = "tolerance-sensitive: " + ", ".join(
+            main_res["verdict_reason"] = "tolerance-sensitive: " + ", ".join(
                 f"{s:g} eps -> {v}" for s, v in verdicts.items())
             main_res["tolerance_sensitive"] = _near_band_detail(chk, req, eps0)
         entry = _describe(req)
@@ -743,8 +743,11 @@ def run(parts_list, profile=None, reports=None, eps=None, only=None) -> dict:
         results.append(entry)
     results.sort(key=lambda e: e["name"])
     # the pair table: every pair with an intersection, a contact or a contained vertex at eps
-    pairs = []
+    pairs, seen = [], set()
     for (a, b), pd in sorted(chk._pairs.items()):
+        if frozenset((a, b)) in seen:
+            continue
+        seen.add(frozenset((a, b)))
         r = chk.classify(pd, eps0)
         k = r["kind"]
         ins_a = int(np.sum(np.nan_to_num(pd.sdepth_a, nan=-np.inf) > eps0))
@@ -822,7 +825,7 @@ def format_summary(report: dict) -> str:
     for e in report["requirements"]:
         if e["verdict"] != PASS:
             tag = "" if e["level"] == "required" else " (advisory)"
-            lines.append(f"{e['verdict']:13s} {e['name']}{tag}: {e.get('reason', '')}{_short(e)}")
+            lines.append(f"{e['verdict']:13s} {e['name']}{tag}: {e.get('verdict_reason') or e['relation']}{_short(e)}")
     lines.append("required checks: " + ("all PASS" if s["required_pass"] else "NOT all PASS"))
     return "\n".join(lines)
 

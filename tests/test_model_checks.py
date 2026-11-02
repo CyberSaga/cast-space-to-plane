@@ -262,7 +262,7 @@ def test_required_pose_not_tested_is_indeterminate():
     pose = ac.Pose("pose:arms-raised", "arms raised", "fixture", "posed clearance", level="required")
     rep = checks.run(_parts(a=_box((0, 0, 0), (0.01, 0.01, 0.01))), profile=[pose])
     p = _req(rep, "pose:arms-raised")
-    assert p["verdict"] == checks.INDETERMINATE and "not tested" in p["reason"]
+    assert p["verdict"] == checks.INDETERMINATE and "not tested" in p["verdict_reason"]
     assert rep["summary"]["required_pass"] is False                 # INDETERMINATE never passes
     advisory = dataclasses.replace(pose, level="advisory")
     assert checks.run(_parts(a=_box((0, 0, 0), (0.01, 0.01, 0.01))), profile=[advisory])["summary"]["required_pass"]
@@ -322,7 +322,7 @@ def test_verdict_that_flips_with_eps_is_tolerance_sensitive():
     sphere = mk.ellipsoid((0.0, 0.0, 0.05 - 3.0 * EPS), (0.05, 0.05, 0.05), nu=12, nv=12)
     rep = checks.run(_parts(box=_box((-0.1, -0.1, -0.02), (0.1, 0.1, 0.0)), ball=sphere), profile=[])
     g = _generic(rep, "box", "ball")
-    assert g["verdict"] == checks.INDETERMINATE and g["reason"].startswith("tolerance-sensitive")
+    assert g["verdict"] == checks.INDETERMINATE and g["verdict_reason"].startswith("tolerance-sensitive")
     assert g["tolerance_sensitive"] and all("xyz" in f and "face" in f for f in g["tolerance_sensitive"])
     assert rep["summary"]["tolerance_sensitive"] == 1 and rep["summary"]["required_pass"] is False
 
@@ -393,7 +393,7 @@ def test_miki_every_requirement_has_a_verdict(miki_report):
     for e in rep["requirements"]:
         assert e["kind"] in ("join", "clear", "generic", "proportion", "pose")
         if e["verdict"] == checks.INDETERMINATE:
-            assert e.get("reason"), e["name"]                       # it says what is missing
+            assert e.get("verdict_reason"), e["name"]               # it says what is missing
     names = {e["name"] for e in rep["requirements"]}
     assert {r.name for r in ac.profile()} <= names                  # every profile requirement was evaluated
     assert rep["summary"]["required_pass"] == all(e["verdict"] == checks.PASS for e in rep["requirements"]
