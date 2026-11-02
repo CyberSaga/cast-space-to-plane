@@ -145,14 +145,15 @@ export function fill_object_select(select: HTMLSelectElement, ids: readonly stri
   select.replaceChildren(option("", "—"), ...groups.map((g) => option(g.value, g.label)), ...ids.map((id) => option(id, id)));
 }
 
-/** M11: the pivot readout of the panel (`c_w`, 3 decimals). */
-export function object_centre_text(c: readonly number[] | null): string {
+/** M11: the pivot readout of the panel (`c_w`, 3 decimals). D85: `joint` (the pivot is a part's world joint) gives
+ * 「關節 j_w = (x, y, z) m」 instead of 「中心 c_w = …」. */
+export function object_centre_text(c: readonly number[] | null, joint = false): string {
   if (c === null) return "";
   const f3 = (x: number) => {
     const t = x.toFixed(3);
     return t === "-0.000" ? "0.000" : t;
   };
-  return `中心 c_w = (${c.map(f3).join(", ")}) m`;
+  return `${joint ? "關節 j_w" : "中心 c_w"} = (${c.map(f3).join(", ")}) m`;
 }
 
 /** One checkbox per layer id in `box` (`data-layer` = id), checked iff the id is in `checked` (the page's initial

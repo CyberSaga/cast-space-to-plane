@@ -6049,3 +6049,100 @@ would perturb every member by ulp noise and record a spurious `objects` step, wh
 `set_rotation` keeps `rotation_deg` verbatim and is already exact. `web/test/groups.test.ts` pins both;
 `web/scripts/smoke.mjs` clicks 套用 unedited on the whole group at load and after a ring drag (no undo step, members
 unchanged) and downloads a scene loaded with a lone-surrogate group name.
+
+**[decision, implementation] (D85) Linked parts: rotating a part of a grouped model carries its descendants about its
+joint.** Amends, by reference and with the existing text unchanged, "Pivot [decision]" of §5.8.1 (`c_local` becomes
+`pivot_local`: the joint, else the bounding-box centre), the §5.8.3 line "還原此物體 returns one object to its load-time
+transform", the rings "centred at `c_w`" and the panel readout of §5.8.4, the rows of §5.8.7 (its 落地 is hidden for a
+part with a parent, and 還原此物體 gains a no-op tolerance), the unit tests and the smoke list of §5.8.8, the `begin(…,
+{live, axis, c_local})` of the first M11 note above, items (1) "no stored pivot", (5) rotation / 還原此物體 / 落地 of a part,
+(6) drag lifecycle, (7) one-object steps and (8) hooks of the D84 note, and item (5) of the D84 review note. (1)
+**Web-only keys.** An object may carry `objects[i].parent` and `objects[i].joint`. `parent` is parse-valid iff `typeof v
+=== "string"`, `v !== ""` and `v` has no lone surrogate (`groups.ts::is_utf8_text`, the test of the D84 review); it is
+kept verbatim (not trimmed). `joint` is parse-valid iff it is an array of exactly three finite numbers, stored as `[x +
+0, y + 0, z + 0]`; it is a point in the object's **local** frame (the frame of `data.vertices` or of the primitive
+before `transform`), so its world image `j_w = R·joint + p` rides with the object and *Download scene* needs no
+conversion. Like `group` and `display_color` the validators ignore both keys (§2.0), so the core, the TS port, the
+documents, SVG, warnings and the conformance set (v8 / 63 cases) never see them. `web/src/links.ts` is pure:
+`object_links(raw) -> Map<id, RawLink>` and `object_links_text(text)` read the parse-valid keys at the same four load
+sites as `object_groups` (an entry exists iff at least one key is parse-valid and a malformed key is simply absent: no
+SceneError, no warning), a load replaces `state.links`, and `scene_blob(..., colours?, groups?, links?)` writes `parent`
+verbatim and `joint` as three numbers back, also for a link the resolution of (2) dropped (a reload drops it again).
+`joint` without `parent` is allowed (a root's own joint; also on an ungrouped object, which then turns about it);
+`parent` without `joint` is allowed (the part turns about its `c_w`, D82, and carries its subtree). (2) **Resolution, at
+load only.** `resolve_links(raw, ids, group_of) -> LinkForest {parent, children, joints}` is called once by the
+`PlaneSession` constructor with the `object_poses` ids in scene order and the ≥ 2 groups it kept, so a link counts only
+between two members of one unit and no action ever moves an object outside the selected unit. A link `c → par` is
+dropped silently (the scene behaves as D84 for it) when `par` is `c`, is no object of the scene, or `c` and `par` do not
+share a ≥ 2 group. Cycles: every node has at most one parent, so a component holds at most one cycle; a three-colour
+walk drops the parent link of **every** node on it (trees hanging off the cycle keep theirs), with no tiebreak, so the
+result does not depend on the scene order. `children` lists are in scene order; `joints` holds every parse-valid joint
+of an object of the scene, whatever its parent or group. `subtree(forest, id)` is the preorder with `id` first and
+siblings in scene order (the numeric fields show the first entry's angles, so the order is load-bearing). `PlaneSession`
+exposes `links`, `parent_of`, `children_of`, `subtree`, `joint` (local), `pivot_local(id) = joint(id) ??
+local_centres.get(id)` and `linked(id)` (it has a joint or children); `update_scene` never changes them, like
+`local_centres`. Nothing else is stored: no joint angles, no world joints, no rig state. (3) **Part rotation.** A ring
+drag of part P moves `S(P) = subtree(P)` rigidly about the one world point `c = world_centre(T_P, pivot_local(P))`,
+computed once at pointer-down: `rotate_unit(pose, axis, deg, c_locals, pivot)` gained the argument `pivot` (null: the
+M11 per-object path, unchanged) and with a pivot every member goes through `rotate_about_point` (exact about z,
+decomposed about x or y, the M11 wrap and gimbal rules); `UnitDrag.begin` takes `pivot` in its options and copies it
+into the gesture, `move` passes it. P's joint therefore stays on its unmoved parent; ancestors, siblings, `G` and `c`
+are never written, so a part action never changes a group's reading or rings (D84 (5) extended to subtrees).
+`PlaneSession.part_pose(id, current)` returns the pose over `S(P)` (P first, `group: null`; `single_pose` for a leaf)
+and `part_pivot(id, t0)` the drag pivot, non-null only when `linked(id)`; any other part, and every part of a scene
+without the keys, takes the D84 path byte for byte. The ring drag angle, snapping, the live stage-A threshold and the
+slow-scene path (§5.8.4, §5.8.2) are unchanged. (4) **Numeric fields.** A part's fields show P's own `rotation_deg`
+(M11, world Euler). 套用 of `r` on a linked part goes through `PlaneSession.part_numeric_pose` to `set_part_rotation(pose,
+id, pivot_local, r)`: P gets `set_rotation` (the angles `r` verbatim, `p′ = c + R′Rᵀ(p − c)`) and every other member the
+rotation `Q = R′Rᵀ` through `c` (`rotate_by_matrix`), so a drag and an entry reaching the same `R′` reach the same poses
+(the D82 rule). If `r` equals P's `rotation_deg` component by component (`===`) the pose is returned unchanged (a copy):
+the D84-review rule extended to the subtree, so `Q` never smears ulp noise over the descendants and no step is recorded.
+A part with neither a joint nor children keeps the M11 `set_rotation` path. (5) **還原此物體 on a part (forward
+kinematics).** `restore_part_pose(pose, id, t_load, parent)` puts P back to its load pose relative to its parent's
+current pose, `W* = W_par(now)·W_par(load)⁻¹·W_P(load)`, and carries the subtree by the delta `W*·W_P(now)⁻¹` with
+`rigid_map(t, Q, from, to)` (`R′ = Q·R`, `p′ = to + Q(p − from)`, one rounding pass; `rotate_by_matrix(t, c, Q)` is
+`rigid_map(t, Q, c, c)`); descendants keep their own adjustments relative to P. With no parent, or a parent still at its
+load pose (`same_transform`), the target is `t_load` verbatim, as D84. **[decision] No-op rule:** when P is already at
+the target, nothing is written and no step is recorded; "already" is `same_transform`, or, for a part with a parent
+only, `near_transform(a, b, RESTORE_EPS)` with `RESTORE_EPS = 1e-9` (scene metres for positions, dimensionless for
+rotation-matrix elements; it compares the `transform_frame` positions and matrix elements, never the Euler angles, which
+wrap at ±180° and change branch at gimbal lock). This covers a part that is only carried (turn `blouse`, 還原 an untouched
+`head`), which would otherwise record a spurious step and smear ulps over its subtree. The tolerance gates the decision
+only, never a write, and is the one non-exact equality of the UI: a part with a parent turned +10° and then −10° is
+within it, so its 還原 is disabled while a lone object's is not; a root part and a lone object keep the exact compare and
+the verbatim write. `main.ts::initial_pose` returns the target pose for a part (`PlaneSession.part_restore_pose`), so
+the button is disabled exactly when 還原 would be a no-op; a group's 還原 is unchanged. (6) **落地.** A subtree moves as one,
+by a single translation along the receiver normal and the minimum over all its members (`ground_unit` already iterates
+`pose.transforms`). **[decision]** The button is hidden (`#obj-ground.hidden`, `rotate.ground_shown` false) for a part
+with a parent, and `ground_unit` itself refuses such a part (D85 review: a script click on the hidden button
+moves nothing): a translation cannot keep its joint on the unmoved parent, and moving the parent would move an object
+outside the selected unit; the group's 落地 is one click away. A root part, a D84 part and a lone object keep it; `G` and
+`c` are not moved by it. (7) **Panel and rings.** `selection_text(sel, groups, members, carried = 0)`: with `carried >
+0` (`subtree(P).length − 1`) the line reads 「已選：<id>（<group> 的部件，帶動 <n> 個部件）」, otherwise the D84 strings. A part's rings
+are centred on `world_centre(t, pivot_local(P))` with the radius from its own local bounding box as before, and the
+readout `object_centre_text(c, joint)` says 「關節 j_w = (x, y, z) m」 when the pivot is a joint and 「中心 c_w = …」 otherwise.
+The dropdown labels, the click cycle and the hit order are unchanged. (8) **Undo and drag lifecycle.** A subtree action
+is the D84 entry `{kind: "objects", before: Map<id, ObjectPose>, group: null}`: one step holding every moved member and
+no group frame (`sameFrame(null, null)` is true); a single part stays `{kind: "object"}`. `start_unit_drag` and
+`finish_object_drag` choose `begin_object` / `end_object` or `begin_objects` / `end_objects` by `transforms.size === 1`,
+not by `group === null`: `end_object` refuses an `objects` entry, so a subtree opened as one object would record
+nothing. Undo restores every member in one stage A; `apply_pose` (one stage A for all members), the 3D matrices of every
+moved member in both panes, the cancel and stage-A-exception restore and the 50-step cap are unchanged. (9) **Board
+pivot unchanged.** 旋轉中心 = 點選物體 still picks the part's stage-A bounding-box centre (§5.8.5, D84 (3)); the joint is a
+rotation pivot, not a viewing target. (10) **Hooks.** The hooks that act on a part (`rotate_object`,
+`set_object_rotation`, `select_object` with the panel buttons) run the UI's own path, so on a part with descendants they
+move its subtree exactly as a ring drag, 套用 or 還原 would. Added to `window.castplane_web`: `object_links()` (`{links,
+parent, children}`: the parse-valid map and the resolved forest), `object_joint(id)` (`j_w`, or null without a joint),
+`descendants(id)` (`subtree(id).slice(1)`; null for an unknown id), `object_matrices(id)` (`{view, observer}`: the 3D
+matrices of both panes) and `world_px([x, y, z])` (observer-pane px); `selection()` and the keys of `rotate` are
+unchanged (`rotate.selected_text` carries the count). (11) **Tests.** `web/test/links.test.ts` (15 tests; 166 web tests
+in all) on the new fixture `web/test/fixtures/basic_linked.json` (group `g`: base → mast → {arm → flag, lamp}, plus an
+ungrouped post; `basic_grouped.json` stays untouched) pins the parse and resolve tables (unknown id, self, cross-group,
+singleton group, 2- and 3-cycles, scene-order independence), the subtree order, the attachment invariant (seven drags
+each of base, mast and arm: every descendant's pose relative to its parent unchanged < 1e-9 against stage A, ancestors,
+siblings and the post untouched, `G` and `c` deepEqual, the joint fixed), the D84 regression bit for bit, numeric entry
+≡ the x, y, z drags and the unedited copy, 還原 relative to the parent with its no-op rules, 落地 of a subtree, undo
+interleaved with board, part and group steps, the download round trip, malformed links behaving as D84, and the panel
+text; `web/scripts/smoke.mjs` drives real clicks, a ring drag, `#obj-restore`, `#obj-apply`, `#obj-ground`, `#undo` and
+`#dl-scene` on the fixture. Core, TS port, conformance set and warning codes are unchanged, and a scene without the keys
+behaves exactly as D84 (docs/DECISIONS.md D85, spec-v0.3 §9).

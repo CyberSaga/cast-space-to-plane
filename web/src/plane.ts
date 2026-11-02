@@ -15,8 +15,13 @@ import {
 import type { AnyCamera, GroupFramePose, ObjectPose, PicturePlaneCamera, RigState, RingGrab, UndoEntry, ViewName } from "./rig.js";
 import { EquationError, applyEquation } from "./equation.js";
 import { GROUP_VALUE_PREFIX } from "./groups.js";
-import { clone_group_frame, clone_transform, identity3, local_bbox, world_bbox } from "./object_rotate.js";
-import type { GroupFrame } from "./object_rotate.js";
+import { resolve_links, subtree } from "./links.js";
+import type { LinkForest, RawLink } from "./links.js";
+import {
+  clone_group_frame, clone_transform, identity3, local_bbox, restore_part_pose, set_part_rotation, set_rotation, single_pose,
+  world_bbox, world_centre,
+} from "./object_rotate.js";
+import type { GroupFrame, UnitPose } from "./object_rotate.js";
 
 /** The pivot selection (§5.7.7): not part of an undo snapshot. D84: `object_id` is an object id or a group's key
  * `group.<name>` (`groups.ts::selection_value`; object ids cannot contain `.`). */
@@ -48,6 +53,9 @@ export interface SessionScene {
   /** D84: the groups with at least two members (`groups.ts::group_members`), member ids in scene order. Each gets a
    * frame: `G = I` and `c` the centre of the load-time world bounding box of its members' `object_poses` vertices. */
   groups?: ReadonlyMap<string, readonly string[]>;
+  /** D85: the raw scene's parse-valid link keys by object id (`links.ts::object_links`), resolved once at load against
+   * the `object_poses` ids and the ≥ 2 groups kept ({@link PlaneSession.links}). */
+  links?: ReadonlyMap<string, RawLink>;
 }
 
 /** What changed after a session action: `framing` asks for an observer re-framing (§5.6.4: views, equation, reset,
@@ -99,6 +107,9 @@ export class PlaneSession {
   readonly group_loads: ReadonlyMap<string, { c0: Vec3; half_diagonal: number }>;
   /** D84: per group its current frame (`G` relative to the load, `c`). */
   private readonly group_frames = new Map<string, GroupFrame>();
+  /** D85: the resolved links (`links.ts::resolve_links` over the `object_poses` ids, in scene order, and the ≥ 2 groups
+   * of {@link groups}), computed once at load; {@link update_scene} never changes them (like {@link local_centres}). */
+  readonly links: LinkForest;
 
   constructor(scene: SessionScene) {
     this.scene_ = scene;
@@ -124,6 +135,9 @@ export class PlaneSession {
     }
     this.groups = groups;
     this.group_loads = loads;
+    const member_group = new Map<string, string>();
+    for (const [name, ids] of groups) for (const id of ids) member_group.set(id, name);
+    this.links = resolve_links(scene.links ?? new Map(), [...initial.keys()], (id) => member_group.get(id) ?? null);
     const res = fromCamera(scene.camera, scene.centre);
     this.rig = res.rig;
     this.initial = clone(res.rig);
@@ -154,6 +168,94 @@ export class PlaneSession {
   initial_transform(id: string): Transform | null {
     const t = this.initial_transforms.get(id);
     return t === undefined ? null : clone_transform(t);
+  }
+
+  // ---------------------------------------------------------------------------------------------- D85 links
+
+  /** D85: part `id`'s resolved parent (null for a root, an unknown id or a dropped link). */
+  parent_of(id: string): string | null {
+    return this.links.parent.get(id) ?? null;
+  }
+
+  /** D85: part `id`'s children in scene order (empty for a leaf or an unknown id). */
+  children_of(id: string): readonly string[] {
+    return this.links.children.get(id) ?? [];
+  }
+
+  /** D85: the ids a rotation of part `id` moves, `id` first, then its descendants in preorder (`links.ts::subtree`). */
+  subtree(id: string): string[] {
+    return subtree(this.links, id);
+  }
+
+  /** D85: part `id`'s joint in its local frame (a copy; null when it has none). */
+  joint(id: string): Vec3 | null {
+    const j = this.links.joints.get(id);
+    return j === undefined ? null : [j[0], j[1], j[2]];
+  }
+
+  /** D85: part `id`'s local pivot: its joint, else its local bounding-box centre `c_local` (D82; a copy; null for an
+   * unknown id). */
+  pivot_local(id: string): Vec3 | null {
+    const c = this.joint(id) ?? this.local_centres.get(id);
+    return c === undefined ? null : [c[0], c[1], c[2]];
+  }
+
+  /** D85: whether a rotation of part `id` takes the linked path (it has a joint or descendants): the drag pivot and
+   * the numeric dispatch; otherwise the M11 / D84 single-object path runs unchanged. (還原此物體 always resolves
+   * against the parent, {@link part_restore_pose}.) */
+  linked(id: string): boolean {
+    return this.links.joints.has(id) || this.children_of(id).length > 0;
+  }
+
+  /** D85: the world pivot of a drag of part `id` at its pointer-down transform `t0`: `world_centre(t0, pivot_local(id))`
+   * when {@link linked}, else null (the M11 per-object path, `UnitDrag.begin`'s `pivot` left out). */
+  part_pivot(id: string, t0: Transform): Vec3 | null {
+    const c = this.linked(id) ? this.pivot_local(id) : null;
+    return c === null ? null : world_centre(t0, c);
+  }
+
+  /** D85: the pose of part `id`'s rotation unit: its {@link subtree} (P first) at the current transforms `current`
+   * (copies); `single_pose` for a part without descendants (as D84). Null when a transform is unknown. */
+  part_pose(id: string, current: (id: string) => Transform | null): UnitPose | null {
+    const ids = this.subtree(id);
+    if (ids.length === 1) {
+      const t = current(id);
+      return t === null ? null : single_pose(id, t);
+    }
+    const transforms = new Map<string, Transform>();
+    for (const k of ids) {
+      const t = current(k);
+      if (t === null) return null;
+      transforms.set(k, clone_transform(t));
+    }
+    return { transforms, group: null };
+  }
+
+  /** D85: the numeric fields' pose of part `id` with the angles `r`: `object_rotate.ts::set_part_rotation` over its
+   * {@link part_pose} about {@link pivot_local} when {@link linked}; else M11's `set_rotation(t, c_local, r)` on the
+   * part alone (byte-identical to D84). Null when unknown. */
+  part_numeric_pose(id: string, r: readonly number[], current: (id: string) => Transform | null): UnitPose | null {
+    const pose = this.part_pose(id, current);
+    if (pose === null) return null;
+    if (this.linked(id)) {
+      const c = this.pivot_local(id);
+      return c === null ? null : set_part_rotation(pose, id, c, r);
+    }
+    const t = pose.transforms.get(id)!, c = this.local_centres.get(id);
+    return c === undefined ? null : single_pose(id, set_rotation(t, c, r));
+  }
+
+  /** D85: the 還原此物體 target of part `id` (G3): `object_rotate.ts::restore_part_pose` over its {@link part_pose} with
+   * its load transform and, when it has a parent, the parent's current (`current`) and load transforms. For a lone
+   * object or a D84 part this is its load transform (as D84). Null when unknown. */
+  part_restore_pose(id: string, current: (id: string) => Transform | null): UnitPose | null {
+    const pose = this.part_pose(id, current), t_load = this.initial_transform(id);
+    if (pose === null || t_load === null) return null;
+    const par = this.parent_of(id);
+    if (par === null) return restore_part_pose(pose, id, t_load, null);
+    const now = current(par), load = this.initial_transform(par);
+    if (now === null || load === null) return null;
+    return restore_part_pose(pose, id, t_load, { now: clone_transform(now), load });
   }
 
   /** D84: group `name`'s current frame (a copy; null for an unknown group). */

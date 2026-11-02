@@ -11,6 +11,8 @@ import type { Camera, GeometryDocument, Scene, SceneObject } from "castplane";
 
 import { DISPLAY_COLOR_KEY, display_color_text } from "./colours.js";
 import { GROUP_KEY } from "./groups.js";
+import { JOINT_KEY, PARENT_KEY } from "./links.js";
+import type { RawLink } from "./links.js";
 import type { TargetCamera } from "./orbit.js";
 
 export interface DownloadFile {
@@ -49,22 +51,28 @@ export function json_blob(doc: GeometryDocument, sceneName: string): DownloadFil
  * scene that has one gets it back as `display_color: "#rrggbb"` (lower case), so the file reloads with the same 3D
  * colours; the core ignores the key (§2.0), so the CLI's output is that of the file without it. D84: `groups` (the loaded
  * raw scene's group names by object id, `groups.ts::object_groups`) likewise: each object that has one gets it back as
- * `group` (the string verbatim), so the file reloads with the same groups.
+ * `group` (the string verbatim), so the file reloads with the same groups. D85: `links` (the loaded raw scene's
+ * parse-valid link keys, `links.ts::object_links`) likewise: `parent` verbatim and `joint` as three numbers (local
+ * frame, so no conversion at the moved pose; `dumps` writes Python-repr doubles, so the reload gives the same doubles),
+ * also when resolution dropped the link (a reload drops it again).
  * A `mesh` object (§5.2.1) is written so that the Python validator accepts it (`mesh_object_for_file`): `data.faces`,
  * `data.smooth_groups` and an integer `node` as JSON integers, and `path` / `node` left out when null. A scene without
  * mesh objects is `dumps({...scene, objects, camera, output}) + "\n"`, as before.
  */
 export function scene_blob(scene: Scene, cam: TargetCamera | Camera, sceneName: string, hidden_lines?: boolean,
-  hidden_style?: "dashed" | "omit", colours?: ReadonlyMap<string, number>, groups?: ReadonlyMap<string, string>): DownloadFile {
+  hidden_style?: "dashed" | "omit", colours?: ReadonlyMap<string, number>, groups?: ReadonlyMap<string, string>,
+  links?: ReadonlyMap<string, RawLink>): DownloadFile {
   const output = { ...scene.output };
   if (hidden_lines !== undefined) output.hidden_lines = hidden_lines;
   if (hidden_style !== undefined) output.hidden_style = hidden_style;
   const ints = new IntSlots();
   const objects = scene.objects.map((o) => {
-    const colour = colours?.get(o.id), group = groups?.get(o.id);
+    const colour = colours?.get(o.id), group = groups?.get(o.id), link = links?.get(o.id);
     let obj: object = o.type === "mesh" ? mesh_object_for_file(o, ints) : o;
     if (colour !== undefined) obj = { ...obj, [DISPLAY_COLOR_KEY]: display_color_text(colour) };
     if (group !== undefined) obj = { ...obj, [GROUP_KEY]: group };
+    if (link?.parent !== undefined) obj = { ...obj, [PARENT_KEY]: link.parent };
+    if (link?.joint !== undefined) obj = { ...obj, [JOINT_KEY]: [link.joint[0], link.joint[1], link.joint[2]] };
     return obj;
   });
   return { filename: `${sceneName}.scene.json`, type: JSON_MIME, text: ints.fill(dumps({ ...scene, objects, camera: cam, output })) + "\n" };

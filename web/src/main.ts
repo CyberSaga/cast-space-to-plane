@@ -27,6 +27,9 @@ import {
 } from "./groups.js";
 import type { Selection } from "./groups.js";
 import { EXAMPLES } from "./examples.js";
+import { OBJECT_ID_KEY } from "./helpers3d.js";
+import { object_links, object_links_text } from "./links.js";
+import type { RawLink } from "./links.js";
 import { camera_block_text, json_blob, ordered_layers, scene_blob, svg_blob } from "./download.js";
 import { QUICK_EQUATIONS } from "./equation.js";
 import { attach_file_drop } from "./input.js";
@@ -40,7 +43,7 @@ import { ObserverPane } from "./observer3d.js";
 import type { HandleInput } from "./observer3d.js";
 import {
   LIVE_STAGE_A_MS, UnitDrag, clone_pose, clone_transform, euler_zyx_from_matrix, format_angle, object_rings, parse_angle,
-  ring_drag_angle, ring_radius, same_pose, set_group_rotation, set_rotation, single_pose,
+  ring_drag_angle, ring_radius, same_pose, set_group_rotation, single_pose,
   snap_angle, translate_pose, world_centre,
 } from "./object_rotate.js";
 import type { Axis, ObjectRings, UnitPose } from "./object_rotate.js";
@@ -79,6 +82,9 @@ interface State {
   colours: Map<string, number>;
   /** D84: the loaded raw scene's group names by object id (`groups.ts::object_groups`; web-only, like the colours). */
   groups: Map<string, string>;
+  /** D85: the loaded raw scene's parse-valid link keys (`parent`, `joint`) by object id (`links.ts::object_links`;
+   * web-only, like the groups); the session resolves them once at load (`PlaneSession.links`). */
+  links: Map<string, RawLink>;
   A: StageA | null;
   /** The plane-mode session of the loaded scene (M10, §5.7.7): the rig, undo, pivot, readouts. */
   plane: PlaneSession | null;
@@ -118,6 +124,7 @@ const state: State = {
   sceneName: "",
   colours: new Map(),
   groups: new Map(),
+  links: new Map(),
   A: null,
   plane: null,
   layersChecked: new Set(TOGGLES.layers),
@@ -179,9 +186,10 @@ function show_error(message: string | null): void {
 
 // ---------------------------------------------------------------------------- loading
 /** Load a scene: `make` validates it; `colours` are the display colours of the same raw data
- * (`colours.ts::display_colours`), `groups` its group names (D84, `groups.ts::object_groups`), read by the caller
- * because the validated scene does not carry them (§2.0). */
-function load(name: string, make: () => Scene, colours: Map<string, number>, groups: Map<string, string>): boolean {
+ * (`colours.ts::display_colours`), `groups` its group names (D84, `groups.ts::object_groups`), `links` its link keys
+ * (D85, `links.ts::object_links`), read by the caller because the validated scene does not carry them (§2.0). */
+function load(name: string, make: () => Scene, colours: Map<string, number>, groups: Map<string, string>,
+  links: Map<string, RawLink>): boolean {
   let scene: Scene;
   let A: StageA;
   let stage_a_ms: number;
@@ -202,6 +210,7 @@ function load(name: string, make: () => Scene, colours: Map<string, number>, gro
   state.sceneName = name;
   state.colours = colours;
   state.groups = groups;
+  state.links = links;
   state.A = A;
   state.loaded = { scene, A };
   state.load_stage_a_ms = stage_a_ms;
@@ -215,6 +224,7 @@ function load(name: string, make: () => Scene, colours: Map<string, number>, gro
     vertices: A.vertices,
     object_poses: scene.objects.map((o) => ({ id: o.id, transform: o.transform, vertices: records.get(o.id)?.mesh.vertices ?? [] })),
     groups: group_members(groups, scene.objects.map((o) => o.id)),
+    links,
   });
   // D83: a load clears the object selection (none is preselected, also for a single-object scene); D84 also a group
   state.rotate.sel = null;
@@ -243,7 +253,7 @@ function load(name: string, make: () => Scene, colours: Map<string, number>, gro
 }
 
 function load_text(name: string, text: string): boolean {
-  const ok = load(name, () => load_scene_text(text), display_colours_text(text), object_groups_text(text));
+  const ok = load(name, () => load_scene_text(text), display_colours_text(text), object_groups_text(text), object_links_text(text));
   if (ok) examplesSelect.value = "";
   return ok;
 }
@@ -263,7 +273,7 @@ function load_file(file: File): void {
 fill_examples(examplesSelect, EXAMPLES.map((e) => e.name));
 examplesSelect.addEventListener("change", () => {
   const ex = EXAMPLES.find((e) => e.name === examplesSelect.value);
-  if (ex !== undefined) load(ex.name, () => load_scene(ex.data), display_colours(ex.data), object_groups(ex.data));
+  if (ex !== undefined) load(ex.name, () => load_scene(ex.data), display_colours(ex.data), object_groups(ex.data), object_links(ex.data));
 });
 fileInput.addEventListener("change", () => {
   const f = fileInput.files?.[0];
@@ -419,9 +429,10 @@ $<HTMLButtonElement>("dl-json").addEventListener("click", () => {
   if (state.doc !== null) save(json_blob(state.doc, state.sceneName));
 });
 $<HTMLButtonElement>("dl-scene").addEventListener("click", () => {
-  // the loaded scene's display colours go back into the file (the core ignores them, §2.0)
+  // the loaded scene's display colours, groups (D84) and links (D85) go back into the file (the core ignores them, §2.0)
   if (state.scene !== null && state.plane !== null) {
-    save(scene_blob(state.scene, state.plane.block(), state.sceneName, hiddenLines.checked, hidden_style(), state.colours, state.groups));
+    save(scene_blob(state.scene, state.plane.block(), state.sceneName, hiddenLines.checked, hidden_style(), state.colours, state.groups,
+      state.links));
   }
 });
 $<HTMLButtonElement>("copy-camera").addEventListener("click", () => {
@@ -548,14 +559,13 @@ function valid_selection(sel: Selection): boolean {
 
 /**
  * D84: the current pose of a unit: a part's (or ungrouped object's) transform, or every member's transform with the
- * group's frame (`G`, `c`). Null when unknown.
+ * group's frame (`G`, `c`). D85: a part with descendants gives its subtree (the part first, then its descendants in
+ * preorder; `group: null`; `PlaneSession.part_pose`), a part without them its own transform as in D84. Null when
+ * unknown.
  */
 function unit_pose(sel: Selection): UnitPose | null {
   if (sel === null) return null;
-  if (sel.kind === "part") {
-    const t = current_transform(sel.id);
-    return t === null ? null : single_pose(sel.id, t);
-  }
+  if (sel.kind === "part") return state.plane?.part_pose(sel.id, current_transform) ?? null;
   const ids = scene_groups().get(sel.group), frame = state.plane?.group_frame(sel.group) ?? null;
   if (ids === undefined || frame === null) return null;
   const transforms = new Map<string, Transform>();
@@ -567,9 +577,14 @@ function unit_pose(sel: Selection): UnitPose | null {
   return { transforms, group: frame };
 }
 
-/** D84: the load-time pose of a unit (還原此物體): the load transforms and, for a group, `G = I` and `c = c0`. */
+/** D84: the load-time pose of a unit (還原此物體): the load transforms and, for a group, `G = I` and `c = c0`. D85: for a
+ * part, the target of `PlaneSession.part_restore_pose` (G3): its load pose relative to its parent's current pose (a
+ * root part or a lone object: its load transform exactly, as D84), its descendants carried; the current pose itself
+ * when that is no action (the 1e-9 rule of a part with a parent), so 還原此物體 is disabled exactly then. */
 function initial_pose(sel: Selection): UnitPose | null {
-  const pose = unit_pose(sel), pl = state.plane;
+  const pl = state.plane;
+  if (sel?.kind === "part") return pl?.part_restore_pose(sel.id, current_transform) ?? null;
+  const pose = unit_pose(sel);
   if (pose === null || pl === null) return null;
   const transforms = new Map<string, Transform>();
   for (const id of pose.transforms.keys()) {
@@ -689,7 +704,10 @@ const obj_drag = new UnitDrag<Scene, StageA>({
 });
 
 /** Pointer-down of a drag of unit `sel` about world axis `axis` (a ring, or the `rotate_object` / `rotate_group`
- * hooks); false when it cannot start (no scene, unknown unit, a gesture already running). */
+ * hooks); false when it cannot start (no scene, unknown unit, a gesture already running). D85: a part with a joint or
+ * descendants turns its whole subtree about one world point, `PlaneSession.part_pivot` at the pointer-down pose (its
+ * world joint, else its `c_w`); any other part keeps the M11 per-object path (no pivot passed). One object opens an
+ * object step, several (a group, or a part's subtree) an `objects` step (`group: null` for a subtree). */
 function start_unit_drag(sel: Exclude<Selection, null>, axis: Axis, grab: { w: Vec3; r_c: Vec3; u_c: Vec3 }): boolean {
   const pl = state.plane, scene = state.scene, A = state.A, pose0 = unit_pose(sel);
   if (pl === null || scene === null || A === null || pose0 === null || state.dragging || state.handle !== null) return false;
@@ -701,9 +719,13 @@ function start_unit_drag(sel: Exclude<Selection, null>, axis: Axis, grab: { w: V
       c_locals.set(id, c);
     }
   }
+  const t_sel = sel.kind === "part" ? pose0.transforms.get(sel.id) : undefined;
+  const pivot = sel.kind !== "part" || t_sel === undefined ? null : pl.part_pivot(sel.id, t_sel);
   object_seq += 1;
-  obj_drag.begin(pose0, scene, A, object_seq, { live: !slow_scene(), axis, c_locals });
-  if (pose0.group === null) {
+  obj_drag.begin(pose0, scene, A, object_seq, { live: !slow_scene(), axis, c_locals, pivot });
+  // D85: the step's kind follows the number of objects (as `apply_pose`'s record): `end_object` refuses an `objects`
+  // step, so a subtree opened as one object would record nothing
+  if (pose0.group === null && pose0.transforms.size === 1) {
     const [id, t0] = [...pose0.transforms][0]!;
     pl.begin_object(id, t0);
   } else pl.begin_objects(pose0.transforms, pose0.group);
@@ -723,7 +745,7 @@ function finish_object_drag(): void {
   state.handle = null;
   state.dragging = false;
   if (res !== null && res.ok && res.changed) {
-    if (res.pose.group === null) state.plane?.end_object([...res.pose.transforms.values()][0]!);
+    if (res.pose.group === null && res.pose.transforms.size === 1) state.plane?.end_object([...res.pose.transforms.values()][0]!);
     else state.plane?.end_objects(res.pose.transforms, res.pose.group);
   } else state.plane?.cancel_object();
   sync_controls();
@@ -761,11 +783,14 @@ function unit_action(after: UnitPose): boolean {
   return ok;
 }
 
-/** The numeric fields' pose for object `id` (spec-v0.3 §2.3): exact Euler angles `r`, the pivot fixed. */
+/** The numeric fields' pose for object `id` (spec-v0.3 §2.3): exact Euler angles `r`, the pivot fixed. D85
+ * (`PlaneSession.part_numeric_pose`): a part with a joint or descendants gets `r` about its pivot and its subtree the
+ * same rotation (`object_rotate.ts::set_part_rotation`; `r` equal to its angles is no action, G4); any other object
+ * the M11 `set_rotation` about its `c_w`. */
 function apply_object_rotation(id: string, r: readonly number[]): boolean {
-  const t = current_transform(id), c = state.plane?.local_centres.get(id);
-  if (t === null || c === undefined || !r.every((x) => Number.isFinite(x))) return false;
-  return unit_action(single_pose(id, set_rotation(t, c, r)));
+  if (!r.every((x) => Number.isFinite(x))) return false;
+  const after = state.plane?.part_numeric_pose(id, r, current_transform) ?? null;
+  return after !== null && unit_action(after);
 }
 
 /** D84: the numeric fields' pose for group `name`: its rotation relative to the load becomes `euler_zyx_matrix(r)`,
@@ -798,8 +823,11 @@ function apply_object_fields(): boolean {
 
 /** 落地 (spec-v0.3 §3.3; only with an unbounded `receivers[0]`): translate along its normal so that the unit's minimum
  * signed distance to it is 0 (the exact surface of a curved primitive, else the stage-A vertices). D84: a group moves
- * as one, by the minimum over all its members, and its `c` with it. */
+ * as one, by the minimum over all its members, and its `c` with it. D85: a root part with descendants moves its
+ * subtree as one; the button is hidden for a part with a parent (`sync_object_panel`) and the function refuses it too. */
 function ground_unit(sel: Selection): boolean {
+  // D85 review: the function enforces the rule the panel shows, so a script click on the hidden button moves nothing
+  if (sel?.kind === "part" && state.plane?.parent_of(sel.id) !== null) return false;
   const scene = state.scene, A = state.A, pose = unit_pose(sel);
   const r0 = scene?.receivers[0];
   if (pose === null || A === null || r0 === undefined || r0.bounds !== null) return false;
@@ -815,7 +843,8 @@ function ground_unit(sel: Selection): boolean {
   return unit_action(translate_pose(pose, [-dmin * n[0], -dmin * n[1], -dmin * n[2]]));
 }
 
-/** 還原此物體: the unit back to its load pose (D84: a group's every member, `G = I`, `c = c0`; a part only itself). */
+/** 還原此物體: the unit back to its load pose (D84: a group's every member, `G = I`, `c = c0`; a part only itself; D85
+ * a part back to its load pose relative to its parent, its subtree carried, `initial_pose`). */
 function restore_unit(sel: Selection): boolean {
   const init = initial_pose(sel);
   return init !== null && unit_action(init);
@@ -861,7 +890,9 @@ function click_object(id: string | null): void {
 }
 
 /** The selected unit's three rings (null without a selection; D83: drawn whenever something is selected). D84: a
- * group's rings are centred on its `c`, radius from its load-time world bounding box (larger than a part's). */
+ * group's rings are centred on its `c`, radius from its load-time world bounding box (larger than a part's). D85: a
+ * part's rings are centred on its pivot (`PlaneSession.pivot_local`: its world joint, else its `c_w`), radius from
+ * its own local bounding box as before. */
 function object_rings_now(): ObjectRings | null {
   const sel = state.rotate.sel, pl = state.plane;
   if (sel === null || pl === null) return null;
@@ -870,8 +901,8 @@ function object_rings_now(): ObjectRings | null {
     return f === null || l === undefined ? null : object_rings(selection_value(sel), f.c, ring_radius(l.half_diagonal));
   }
   const id = sel.id, t = current_transform(id);
-  const c = pl.local_centres.get(id), hd = pl.local_half_diagonals.get(id);
-  if (t === null || c === undefined || hd === undefined) return null;
+  const c = pl.pivot_local(id), hd = pl.local_half_diagonals.get(id);
+  if (t === null || c === null || hd === undefined) return null;
   return object_rings(id, world_centre(t, c), ring_radius(hd));
 }
 
@@ -895,13 +926,15 @@ function blur_object_field(): void {
  * state until 「套用」 / Enter applies it; `force` rewrites every field from the pose (a successful object action,
  * Escape, a drag start, a selection change, a scene load). Focus alone never protects a field: an unedited focused
  * field follows the pose. D84: for a whole group the fields show its rotation relative to the load and the readout its
- * pivot `c`.
+ * pivot `c`. D85: a part's line counts the parts it carries, the readout names its pivot (「關節 j_w」 for a joint, else
+ * 「中心 c_w」), and 落地 is hidden for a part with a parent.
  */
 function sync_object_panel(force = false): void {
   const scene = state.scene, pl = state.plane, sel = state.rotate.sel, pose = unit_pose(sel), angles = unit_angles(pose);
   const value = selection_value(sel);
   if (ui.objectSelect.value !== value) ui.objectSelect.value = value;
-  ui.objectSelected.textContent = selection_text(sel, state.groups, scene_groups());
+  const carried = sel?.kind === "part" && pl !== null ? pl.subtree(sel.id).length - 1 : 0;
+  ui.objectSelected.textContent = selection_text(sel, state.groups, scene_groups(), carried);
   ui.objectFields.forEach((el, i) => {
     el.disabled = angles === null;
     if (!force && angles !== null && field_edited(el)) return;
@@ -914,15 +947,19 @@ function sync_object_panel(force = false): void {
   ui.objectApply.disabled = pose === null;
   const init = initial_pose(sel);
   ui.objectRestore.disabled = pose === null || init === null || same_pose(pose, init);
-  ui.objectGround.hidden = scene === null || scene.receivers[0]?.bounds !== null;
+  // D85: a translation cannot keep a part's joint on its unmoved parent, so 落地 is offered for a group, a lone object
+  // and a root part only
+  ui.objectGround.hidden = scene === null || scene.receivers[0]?.bounds !== null
+    || (sel?.kind === "part" && pl !== null && pl.parent_of(sel.id) !== null);
   ui.objectGround.disabled = pose === null;
-  let centre: Vec3 | null = null;
+  let centre: Vec3 | null = null, joint = false;
   if (pose?.group != null) centre = pose.group.c;
   else if (sel?.kind === "part") {
-    const t = current_transform(sel.id), c = pl?.local_centres.get(sel.id);
-    centre = t === null || c === undefined ? null : world_centre(t, c);
+    const t = current_transform(sel.id), c = pl?.pivot_local(sel.id) ?? null;
+    centre = t === null || c === null ? null : world_centre(t, c);
+    joint = centre !== null && pl?.joint(sel.id) != null;
   }
-  ui.objectCentre.textContent = object_centre_text(centre);
+  ui.objectCentre.textContent = object_centre_text(centre, joint);
   ui.objectNotice.textContent = scene !== null && slow_scene() ? NOTICE_SLOW_SCENE : "";
 }
 
@@ -1138,7 +1175,7 @@ function frame(): void {
     if (ex === undefined) throw new Error(`unknown example ${name}`);
     examplesSelect.value = name;
     // false: the error panel shows why, the previous scene stays
-    return load(name, () => load_scene(ex.data), display_colours(ex.data), object_groups(ex.data));
+    return load(name, () => load_scene(ex.data), display_colours(ex.data), object_groups(ex.data), object_links(ex.data));
   },
   load_text,
   get frames() { return state.frames.slice(); },
@@ -1267,7 +1304,8 @@ function frame(): void {
     return t === null || c === undefined ? null : world_centre(t, c);
   },
   /** M11: rotate object `id` about world axis `axis` (0 x, 1 y, 2 z) by `deg` as one drag would (begin, one move,
-   * release; no snapping): one undo step when the pose changed. Returns the new transform, or null when it cannot run. */
+   * release; no snapping): one undo step when the pose changed. Returns the new transform, or null when it cannot run.
+   * D85: the ring drag's path, so a part with a joint or descendants turns its subtree about its pivot. */
   rotate_object: (id: string, axis: Axis, deg: number) => {
     if (!start_unit_drag({ kind: "part", id }, axis, { w: [1, 0, 0], r_c: [1, 0, 0], u_c: [0, 0, 1] })) return null;
     obj_drag.move(deg);
@@ -1293,6 +1331,45 @@ function frame(): void {
   /** D84: the loaded scene's groups: `groups` (id → name, every valid key) and `units` (≥ 2 members, ids in order). */
   object_groups: () => ({ groups: Object.fromEntries(state.groups),
     units: Object.fromEntries([...scene_groups()].map(([g, ids]) => [g, [...ids]])) }),
+  /** D85: the loaded scene's links: `links` (id → its parse-valid `parent` / `joint` keys, as read and as Download scene
+   * writes them back), and the forest resolved at load: `parent` (child → parent) and `children` (id → its children
+   * in scene order; only ids with children). */
+  object_links: () => {
+    const f = state.plane?.links;
+    return {
+      links: Object.fromEntries([...state.links].map(([id, l]) => [id, {
+        ...(l.parent !== undefined ? { parent: l.parent } : {}), ...(l.joint !== undefined ? { joint: [...l.joint] } : {}) }])),
+      parent: Object.fromEntries(f?.parent ?? []),
+      children: Object.fromEntries([...(f?.children ?? [])].map(([id, ks]) => [id, [...ks]])),
+    };
+  },
+  /** D85: object `id`'s world joint `j_w` (its local joint through its current transform), or null when it has none
+   * or is unknown. */
+  object_joint: (id: string) => {
+    const t = current_transform(id), j = state.plane?.joint(id) ?? null;
+    return t === null || j === null ? null : world_centre(t, j);
+  },
+  /** D85: the parts a rotation of part `id` carries (its descendants in preorder, siblings in scene order; `[]` for a
+   * leaf), or null for an unknown id. */
+  descendants: (id: string) => {
+    const pl = state.plane;
+    return pl === null || object_in(state.scene, id) === undefined ? null : pl.subtree(id).slice(1);
+  },
+  /** D85: object `id`'s 3D matrices (column-major, 16 numbers) in the drawing pane's and the observer's three.js groups
+   * (`null` for a group not built), or null for an unknown id. */
+  object_matrices: (id: string) => {
+    if (object_in(state.scene, id) === undefined) return null;
+    const of = (g: THREE.Group | null): number[] | null => {
+      const c = g?.children.find((x) => x.userData[OBJECT_ID_KEY] === id);
+      return c === undefined ? null : [...c.matrix.elements];
+    };
+    return { view: of(view.group), observer: of(observer?.stage.group ?? null) };
+  },
+  /** D85: the observer-pane px of world point `X` (`null` behind the observer or without the pane). */
+  world_px: (X: readonly number[]) => {
+    const o = obs_frame();
+    return o === null || observer === null ? null : observer_project(observer.view, o.W, o.H, X);
+  },
   /** D84: a left-pane click on object `id` (null: blank space), the click cycle as a real click runs it. */
   click_object: (id: string | null) => click_object(id),
   /** D84: the selection: a whole group with its members, a part with its group (null when ungrouped), or null. */
@@ -1305,7 +1382,8 @@ function frame(): void {
   },
   /** D84: select group `name` as a whole (the dropdown's group entry). */
   select_group: (name: string) => select({ kind: "group", group: name }),
-  /** M11: the numeric fields' action for object `id` (exact Euler angles, the pivot fixed): one undo step. */
+  /** M11: the numeric fields' action for object `id` (exact Euler angles, the pivot fixed): one undo step. D85: the
+   * 套用 path, so a part with a joint or descendants carries its subtree. */
   set_object_rotation: (id: string, r: [number, number, number]) => apply_object_rotation(id, r),
   /** M11: select the object to rotate (the dropdown / a click in the left pane); null clears it. */
   select_object: (id: string | null) => select_object(id),
@@ -1347,5 +1425,5 @@ layout();
 const first = EXAMPLES.find((e) => e.name === "basic") ?? EXAMPLES[0];
 if (first !== undefined) {
   examplesSelect.value = first.name;
-  load(first.name, () => load_scene(first.data), display_colours(first.data), object_groups(first.data));
+  load(first.name, () => load_scene(first.data), display_colours(first.data), object_groups(first.data), object_links(first.data));
 }

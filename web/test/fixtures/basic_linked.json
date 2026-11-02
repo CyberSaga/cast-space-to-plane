@@ -1,0 +1,186 @@
+{
+ "version": "0.1",
+ "units": "m",
+ "up": "z",
+ "objects": [
+  {
+   "id": "base",
+   "type": "box",
+   "size": [
+    0.8,
+    0.8,
+    0.3
+   ],
+   "transform": {
+    "position": [
+     2.0,
+     4.0,
+     0.0
+    ]
+   },
+   "group": "g",
+   "joint": [
+    0.0,
+    0.0,
+    0.0
+   ]
+  },
+  {
+   "id": "mast",
+   "type": "cylinder",
+   "radius": 0.08,
+   "height": 1.0,
+   "transform": {
+    "position": [
+     2.0,
+     4.0,
+     0.3
+    ]
+   },
+   "group": "g",
+   "parent": "base",
+   "joint": [
+    0.0,
+    0.0,
+    0.0
+   ]
+  },
+  {
+   "id": "arm",
+   "type": "box",
+   "size": [
+    0.6,
+    0.1,
+    0.1
+   ],
+   "transform": {
+    "position": [
+     2.3,
+     4.0,
+     1.3
+    ]
+   },
+   "group": "g",
+   "parent": "mast",
+   "joint": [
+    -0.3,
+    0.0,
+    0.0
+   ]
+  },
+  {
+   "id": "flag",
+   "type": "box",
+   "size": [
+    0.05,
+    0.2,
+    0.15
+   ],
+   "transform": {
+    "position": [
+     2.55,
+     4.0,
+     1.4
+    ]
+   },
+   "group": "g",
+   "parent": "arm",
+   "joint": [
+    0.0,
+    0.0,
+    0.0
+   ]
+  },
+  {
+   "id": "lamp",
+   "type": "sphere",
+   "radius": 0.12,
+   "transform": {
+    "position": [
+     1.7,
+     4.0,
+     1.2
+    ]
+   },
+   "group": "g",
+   "parent": "mast"
+  },
+  {
+   "id": "post",
+   "type": "box",
+   "size": [
+    0.4,
+    0.4,
+    0.7
+   ],
+   "transform": {
+    "position": [
+     0.6,
+     7.5,
+     0.0
+    ]
+   }
+  }
+ ],
+ "lights": [
+  {
+   "id": "lamp",
+   "type": "point",
+   "position": [
+    0.0,
+    3.0,
+    3.5
+   ]
+  }
+ ],
+ "receivers": [
+  {
+   "id": "ground",
+   "type": "plane",
+   "normal": [
+    0,
+    0,
+    1
+   ],
+   "offset": 0.0
+  }
+ ],
+ "camera": {
+  "position": [
+   0.0,
+   0.0,
+   1.5
+  ],
+  "target": [
+   0.0,
+   5.0,
+   1.0
+  ],
+  "roll_deg": 0,
+  "focal_length_mm": 35,
+  "frame_mm": [
+   36,
+   24
+  ],
+  "shift_mm": [
+   0.0,
+   0.0
+  ],
+  "near_m": 0.05
+ },
+ "output": {
+  "canvas_mm": [
+   273,
+   182
+  ],
+  "layers": [
+   "horizon",
+   "objects",
+   "form_shadow",
+   "cast_shadow",
+   "construction",
+   "labels"
+  ],
+  "png_dpi": 300
+ }
+}
