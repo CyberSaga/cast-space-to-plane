@@ -298,8 +298,8 @@ def faceted_deficit(mesh: mk.Mesh, grid, up, height, periodic_v: bool = False):
     Gf = G.reshape(-1, 3)
     Df = np.asarray(up, dtype=np.float64).reshape(-1, 3)
     W, rows, cols, quads = _quad_samples(U, V, periodic_v)
-    pts = W @ Gf
-    dirs = W @ Df
+    pts = np.einsum("sv,vi->si", W, Gf)                 # fixed-order sums (no BLAS kernel in the vertices)
+    dirs = np.einsum("sv,vi->si", W, Df)
     dirs /= np.linalg.norm(dirs, axis=1)[:, None]
     tris, _ = mk.triangulate(mesh.faces)
     h = _surface_heights(mesh.vertices[tris], pts, dirs)
