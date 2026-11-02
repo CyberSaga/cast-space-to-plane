@@ -648,7 +648,6 @@ def _sidelock(rig: Rig, side: int) -> mk.Mesh:
 # ---------------------------------------------------------------------------------------------------------
 # H5 stray strand (§C.4)
 # ---------------------------------------------------------------------------------------------------------
-STRAND_POINTS = 9
 STRAND_SIDES = 4
 
 
@@ -663,7 +662,7 @@ def _strand(rig: Rig, lock_l: mk.Mesh) -> mk.Mesh:
     if y is not None:
         tip = np.array([tip[0], y - 0.5 * rig.strand_thickness - 0.0005, tip[2]])
         pts[-1] = tip
-    path = _catmull_rom(np.array(pts), STRAND_POINTS)
+    path = _catmull_rom(np.array(pts), rig.strand_samples)
     L = float(np.sum(np.linalg.norm(np.diff(path, axis=0), axis=1)))
     taper = rig.strand_taper_length / L
 
