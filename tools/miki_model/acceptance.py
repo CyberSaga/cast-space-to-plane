@@ -36,6 +36,7 @@ single polygons) and, where a builder documents them, its part-local smooth-grou
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass
 
 from . import body, hair, head, limbs
@@ -133,7 +134,13 @@ class Join:
     ``"euclid"`` measures the exact distance to the host mesh (the builder's inset is against its analytic
     surface, so the host's local facet bulge is allowed off it); ``"along"`` measures along ``direction`` below
     the front-most of the host and ``stack`` surfaces (the face decals' own metric, against the faceted mesh).
-    ``also``: further parts a rim vertex may be buried in instead of the host (the deepest one counts)."""
+    ``also``: further parts a rim vertex may be buried in instead of the host (the deepest one counts).
+    ``contact``: ``"expected"`` -- the builder makes the parts meet, so a join whose parts never meet (no
+    intersection, no rim test) is INDETERMINATE (not exercised); ``"optional"`` -- the join only says where an
+    intersection may lie (e.g. every decal against every layer below it), so no contact is a PASS that is reported
+    as not exercised and not counted as a PASS.  ``zone_status``: ``""``; ``"exempt"`` -- the builder states no
+    zone, the curve is not tested (only containment and the rim); ``"approximate"`` -- the zone is fitted by the
+    profile, not stated by the builder, so a leak may be a zone-fitting artefact (it still FAILs)."""
 
     name: str
     buried: str
@@ -148,6 +155,8 @@ class Join:
     direction: tuple | None = None
     stack: tuple = ()
     also: tuple = ()
+    contact: str = "expected"
+    zone_status: str = ""
     kind: str = "join"
 
 
@@ -262,12 +271,26 @@ def _decal_requirements(rig: Rig) -> list:
         for b in below:
             out.append(Join(f"join:{name}~{b}", name, b,
                             Zone(faces=("a", not_front), note="the curve lies on the upper decal's walls / back"),
-                            None, 0.0, const, why + "; the depth is checked in the skin join (stack metric)"))
+                            None, 0.0, const, why + "; the depth is checked in the skin join (stack metric)",
+                            contact="optional"))
             out.append(Clear(f"clear:{name}^{b}", name, b, front, front, rig.decal_layer_clearance, INF,
                              "rig.decal_layer_clearance", "a stacked decal's front stays this far in front of the "
                              "decal below it, where it lies over it (head.DecalStack.clear_layer)",
                              metric="along", direction=TOWARD_VIEWER, need_overlap=False))
     return out
+
+
+def _sidelock_root_depth(rig: Rig) -> float:
+    """The perpendicular depth of the sidelock root row's edges under the dome (hair._sidelock_root_row insets them
+    SIDELOCK_ROOT_INSET along the horizontal section normal): inset x cos(section normal, dome normal), the smaller
+    of the inner and outer edge."""
+    c = rig.dome_center
+    _z0, xi, yi, xo, yo = rig.sidelock_rows[0]
+    cos = []
+    for x, y in ((xi, yi), (xo, yo)):
+        p, n = hair._dome_section_point(rig, hair.SIDELOCK_ROOT_Z, math.atan2(x, y - c[1]))
+        cos.append(float(n @ hair._ellipsoid_normal(rig, p)))
+    return hair.SIDELOCK_ROOT_INSET * min(cos)
 
 
 def _hair_requirements(rig: Rig) -> list:
@@ -295,10 +318,12 @@ def _hair_requirements(rig: Rig) -> list:
     out.append(Join(
         "join:hair.bangs~hair.dome", "hair.bangs", "hair.dome",
         Zone(any_of=(Zone(faces=("a", bangs_hidden)), Zone(near=("hair.headband", rig.band_thickness))),
-             note="the bangs leave the dome through their hidden faces or under the band (within its thickness)"),
+             note="the bangs leave the dome through their hidden faces or under the band (within its thickness; "
+                  "approximate: fitted by the profile, hair._bangs states no zone)"),
         Select(groups=(rig.bangs_strips + 1,), facing=(UP, FACING_COS), note="the bangs' top rim (v0)"), 0.0,
         "rig.bangs_top_extension", "hair._bangs: the top row continues bangs_top_extension up under the band "
-        "into H1; the bangs come out from under the band (hair._dome_bottom_z)", also=("hair.headband",)))
+        "into H1; the bangs come out from under the band (hair._dome_bottom_z)", also=("hair.headband",),
+        zone_status="approximate"))
     out.append(Join(
         "join:hair.bangs~hair.headband", "hair.bangs", "hair.headband",
         band_host_zone, None, 0.0, "hair.BANGS_UNDER_BAND",
@@ -325,6 +350,7 @@ def _hair_requirements(rig: Rig) -> list:
             f"join:{part}~hair.back", part, "hair.back", Zone(y=(rig.band_tuck_y, INF),
                                                               note="behind band_tuck_y"), None, 0.0,
             "rig.band_tuck_y", "rig.band_visible_x: from y ~ band_tuck_y back the band is under H2"))
+    lock_depth = _sidelock_root_depth(rig)
     for _side, s in SIDES:
         lock = f"hair.sidelock_{s}"
         out.append(Join(
@@ -332,9 +358,12 @@ def _hair_requirements(rig: Rig) -> list:
             Zone(z=(hair.DOME_BACK_BOTTOM_Z, hair.SIDELOCK_ROOT_Z),
                  note="the lock comes out through the dome surface over the temple"),
             Select(vz=(hair.SIDELOCK_ROOT_Z, INF), farthest=2, note="the root row's two edges (its vertices "
-                   "farthest from the row's centroid)"), hair.SIDELOCK_ROOT_INSET,
-            "hair.SIDELOCK_ROOT_INSET", "hair._sidelock_root_row: the root row's edges SIDELOCK_ROOT_INSET inside the "
-            "dome surface at SIDELOCK_ROOT_Z (the root cap never shows; round 1, T3)"))
+                   "farthest from the row's centroid)"), lock_depth,
+            "hair.SIDELOCK_ROOT_INSET x cos(dome slope)", "hair._sidelock_root_row: the root row's edges "
+            "SIDELOCK_ROOT_INSET inside the dome surface at SIDELOCK_ROOT_Z (the root cap never shows; round 1, T3), "
+            "along the dome section's horizontal normal (hair._dome_section_point): the perpendicular depth is the "
+            "inset times the cosine between that normal and the dome's normal (hair._ellipsoid_normal), the smaller "
+            "of the two edges"))
         out.append(Join(
             f"join:{lock}~hair.headband", lock, "hair.headband",
             band_host_zone, None, 0.0,
@@ -417,11 +446,12 @@ def _body_requirements(rig: Rig) -> list:
         out.append(Join(
             f"join:{rib}~body.scarf_tip_{s}", rib, f"body.scarf_tip_{s}", Zone(inside="body.ring",
                                                                              note="hidden inside the ring"),
-            None, 0.0, "rig.scarf_path[-1] / rig.scarf_tip_root", "body._ribbon / _tip: both end inside the ring"))
+            None, 0.0, "rig.scarf_path[-1] / rig.scarf_tip_root", "body._ribbon / _tip: both end inside the ring (they "
+            "need not meet)", contact="optional"))
     out.append(Join(
         "join:body.scarf_ribbon_l~body.scarf_ribbon_r", "body.scarf_ribbon_l", "body.scarf_ribbon_r",
         Zone(inside="body.ring", note="hidden inside the ring"), None, 0.0, "rig.scarf_path[-1]",
-        "body._ribbon: both ribbons' S5 stays inside the ring"))
+        "body._ribbon: both ribbons' S5 stays inside the ring (they need not meet)", contact="optional"))
     hem_disc = Select(groups=(3,), note="the blouse's flat hem disc (group 3, body._blouse)")
     for part, top in (("body.skirt", rig.skirt_waist_z), ("body.underskirt", rig.underskirt_z[1])):
         out.append(Join(
@@ -472,17 +502,20 @@ def _body_requirements(rig: Rig) -> list:
             "exact distance; the gated rule is the border chords", level="advisory"))
         sleeve, hand, thumb = f"limbs.sleeve_{s}", f"limbs.hand_{s}", f"limbs.thumb_{s}"
         out.append(Join(
-            f"join:{sleeve}~body.blouse", sleeve, "body.blouse", Zone(note="the armhole: no zone in the builder"),
-            None, 0.0, "limbs.SLEEVE_START", "limbs._sleeve: the round sleeve cap sits inside the blouse's shoulder"))
+            f"join:{sleeve}~body.blouse", sleeve, "body.blouse",
+            Zone(note="exempt: no zone in the builder -- the blouse cuts the sleeve over its round cap and on down the "
+                 "inner arm (the armpit), which no builder constant bounds"),
+            None, 0.0, "limbs.SLEEVE_START", "limbs._sleeve: the round sleeve cap sits inside the blouse's shoulder",
+            zone_status="exempt"))
         out.append(Join(
             f"join:{hand}~{sleeve}", hand, sleeve,
             Zone(faces=("b", Select(groups=(2,))), note="the hand enters the sleeve through the cuff opening only"),
             Select(min_sides=CAP_SIDES, note="the hand's wrist cap"), 0.0, "rig.wrist_in_sleeve / limbs.HAND_WRIST",
             "limbs._hand: the hand starts wrist_in_sleeve inside the cuff (HAND_WRIST: and inside the sleeve)"))
         out.append(Join(
-            f"join:{thumb}~{hand}", thumb, hand, Zone(note="no zone in the builder"),
+            f"join:{thumb}~{hand}", thumb, hand, Zone(note="exempt: no zone in the builder"),
             Select(min_sides=CAP_SIDES, note="the thumb's base cap"), 0.0, "limbs._hand",
-            "limbs._hand: the thumb is a lobe from the index side of the palm base"))
+            "limbs._hand: the thumb is a lobe from the index side of the palm base", zone_status="exempt"))
         for k in range(len(rig.cuff_stripes)):
             out.append(_stripe_clear(rig, f"limbs.cuff_stripe_{s}{k}", sleeve,
                                      "limbs._sleeve: R = rad[-1] + stripe_float"))

@@ -50,9 +50,12 @@ from . import meshkit as mk
 from .rig import Rig
 
 __all__ = ["WELD_TOLERANCE", "policy_eps", "contact_tolerance", "PartGeom", "Checker", "run", "main",
-           "PASS", "FAIL", "INDETERMINATE"]
+           "PASS", "FAIL", "INDETERMINATE", "NOT_EXERCISED"]
 
 PASS, FAIL, INDETERMINATE = "PASS", "FAIL", "INDETERMINATE"
+#: The per-kind count of PASS verdicts that measured nothing (a join whose parts never meet where contact is
+#: optional, a clear with no overlap): they do not block the gate and are not counted as PASS.
+NOT_EXERCISED = "NOT_EXERCISED"
 #: castplane's default mesh weld tolerance (``castplane.scene.MESH_WELD_TOLERANCE_DEFAULT``; the Miki scene sets
 #: none).  Read from castplane when it is importable, so the two cannot drift.
 try:                                                                  # pragma: no cover - depends on the env
@@ -554,18 +557,35 @@ class Checker:
             order = np.argsort(np.nan_to_num(depth - req_d, nan=-np.inf), kind="stable")
             k0 = int(order[0])
             measured.update({"rim_vertices": int(len(rim)), "rim_depth_min": _f(np.nanmin(depth)),
+                             "rim_depth_at_worst": _f(depth[k0]),
                              "rim_margin_min": _f(np.nan_to_num(depth - req_d, nan=-np.inf)[k0])})
             required.update({"rim_depth": _f(j.depth), "rim_depth_metric": j.depth_metric,
-                             "rim_allowance_at_worst": _f(allow[k0])})
+                             "rim_required_at_worst": _f(req_d[k0]), "rim_allowance_at_worst": _f(allow[k0])})
+            # below the nominal depth (beyond the rounding tolerance) somewhere, yet passing: only through the
+            # facet-bulge allowance -- stated, so that the pass is not read as "buried by the declared depth"
+            below = np.nan_to_num(depth, nan=np.inf) < j.depth - 2.0 * self.eps
+            measured["rim_vertices_below_nominal"] = int(np.sum(below))
+            via = bool(np.any(below) and not np.any(fail))
             if np.any(fail):
                 verdict = FAIL
                 for i in [i for i in order if fail[i]][:MAX_FINDINGS]:
                     findings.append({"what": "rim vertex not buried by the required depth", "part": j.buried,
                                      "vertex": int(rim[i]), "xyz": _xyz(A.V[rim[i]]), "depth": _f(depth[i]),
                                      "required": _f(req_d[i]), "allowance": _f(allow[i])})
-        return {"verdict": verdict, "findings": findings, "measured": measured, "required": required, "units": "m",
-                "near_band": int(np.sum(r["near_band"])), "zone": j.zone.note or ("unconstrained" if
-                                                                                    j.zone.unconstrained else "")}
+        if verdict == PASS and not len(P0) and j.rim is None:
+            if j.contact == "expected":
+                return {"verdict": INDETERMINATE, "verdict_reason": "not exercised: the parts never meet (a declared "
+                        "join whose builder makes them meet, with no intersection and no rim test)",
+                        "findings": findings, "measured": measured, "required": required, "units": "m",
+                        "exercised": False}
+        out = {"verdict": verdict, "findings": findings, "measured": measured, "required": required, "units": "m",
+               "near_band": int(np.sum(r["near_band"])), "zone": j.zone.note or ("unconstrained" if
+                                                                                   j.zone.unconstrained else "")}
+        if j.rim is not None and via:
+            out["passes_via_allowance"] = True
+        if not len(P0) and j.rim is None:
+            out["exercised"] = False
+        return out
 
     def _rim_depths(self, j: ac.Join, A: PartGeom, rim, eps: float):
         X = A.V[rim]
@@ -585,10 +605,10 @@ class Checker:
         for name in (j.host,) + tuple(j.also):
             Q = self.parts[name]
             w = mk.winding_numbers(X, Q.V, Q.tris)
-            d, t, _ = mk.point_triangle_distance(X, Q.V, Q.tris)
+            d, t, foot = mk.point_triangle_distance(X, Q.V, Q.tris)
             dq = np.where(np.abs(w) > 0.5, d, -d)
             dq = np.where(d <= self.ctol, 0.0, dq)
-            aq = Q.bulge()[t] + 2.0 * self.eps
+            aq = Q.bulge_at(t, foot) + 2.0 * self.eps
             if depth is None:
                 depth, allow = dq, aq
             else:
@@ -702,11 +722,11 @@ class Checker:
             r0, r1 = p.rows[k], p.rows[k + 1]
             mid = tuple(0.5 * (u + v) if (u is not None and v is not None) else None for u, v in zip(r0, r1))
             checks.append((mid, max(p.tol[k], p.tol[k + 1]), "between rows"))
+        missing = []
         for (z, hw, yf, yb), tol, kind in checks:
             s = section_extents(P, z)
             if s is None:
-                findings.append({"what": f"no section at z {z:.4f}", "part": p.part})
-                worst = float("inf")
+                missing.append(_f(z))
                 continue
             meas = {"half_width_left": s[0], "half_width_right": s[1], "front_y": s[2], "back_y": s[3]}
             want = {"half_width_left": hw, "half_width_right": hw, "front_y": yf, "back_y": yb}
@@ -722,8 +742,14 @@ class Checker:
                     findings.append({"what": f"{key} off the table", "part": p.part, "z": _f(z), "kind": kind,
                                      "measured": _f(m), "required": _f(w), "tolerance": _f(tol + 2.0 * eps)})
             rows_out.append(row)
-        return {"verdict": FAIL if worst > 0 else PASS, "findings": findings[:MAX_FINDINGS], "units": "m",
-                "measured": {"rows": rows_out}, "required": {"table": p.constant}}
+        out = {"verdict": FAIL if worst > 0 else PASS, "findings": findings[:MAX_FINDINGS], "units": "m",
+               "measured": {"rows": rows_out}, "required": {"table": p.constant}}
+        if missing and worst <= 0:
+            out["verdict"] = INDETERMINATE
+            out["verdict_reason"] = "no section of the part at z " + ", ".join(f"{z:.4f}" for z in missing)
+        if missing:
+            out["measured"]["missing_sections_z"] = missing
+        return out
 
     def _pose(self, p: ac.Pose, eps: float) -> dict:
         return {"verdict": INDETERMINATE, "verdict_reason": f"pose not tested: {p.pose} (milestone 2)", "findings": []}
@@ -819,6 +845,9 @@ def _describe(req) -> dict:
         d["relation"] = f"join: {req.buried} buried in {req.host}"
         d["zone"] = _zone_desc(req.zone)
         d["rim"] = req.rim.note if req.rim is not None else None
+        d["contact"] = req.contact
+        if req.zone_status:
+            d["zone_status"] = req.zone_status
     elif req.kind == "clear":
         d["relation"] = f"clear: {req.a} faces ({req.faces_a.note}) vs {req.b} faces ({req.faces_b.note})"
     elif req.kind == "generic":
@@ -944,8 +973,11 @@ def run(parts_list, profile=None, reports=None, eps=None, only=None) -> dict:
                       "verdicts": sorted(set(e["verdict"] for e in results if e["name"] in rel))})
     counts = {}
     for e in results:
-        c = counts.setdefault(e["kind"], {PASS: 0, FAIL: 0, INDETERMINATE: 0})
-        c[e["verdict"]] += 1
+        c = counts.setdefault(e["kind"], {PASS: 0, FAIL: 0, INDETERMINATE: 0, NOT_EXERCISED: 0})
+        if e["verdict"] == PASS and e.get("exercised") is False:
+            c[NOT_EXERCISED] += 1                 # passes the gate, but measured nothing: never counted as a PASS
+        else:
+            c[e["verdict"]] += 1
     required_ok = all(e["verdict"] == PASS for e in results if e["level"] == "required")
     diag = {name: width_table(parts[name], ac.DIAGNOSTIC_STEP) for name in ac.DIAGNOSTIC_WIDTHS if name in parts}
     report = {
@@ -961,6 +993,10 @@ def run(parts_list, profile=None, reports=None, eps=None, only=None) -> dict:
                     "pairs_with_coincident": sum(1 for p in pairs if p["coincident"]),
                     "coincident": sum(p["coincident"] for p in pairs),
                     "tolerance_sensitive": sum(1 for e in results if "tolerance_sensitive" in e),
+                    "not_exercised": [e["name"] for e in results if e.get("exercised") is False],
+                    "passes_via_allowance": [e["name"] for e in results if e.get("passes_via_allowance")],
+                    "zone_exempt": [e["name"] for e in results if e.get("zone_status") == "exempt"],
+                    "zone_approximate": [e["name"] for e in results if e.get("zone_status") == "approximate"],
                     "pairs_with_near_band": sum(1 for p in pairs if p["near_band_triangle_pairs"]),
                     "generic_pairs_disjoint_boxes": disjoint},
         "requirements": results,
@@ -994,8 +1030,19 @@ def format_summary(report: dict) -> str:
     lines = [f"profile {report['profile']['name']} v{report['profile']['version']}, geometry "
              f"{report['geometry']['version']}, eps {report['geometry']['eps']:.3g} m"]
     for kind, c in sorted(report["summary"]["counts"].items()):
-        lines.append(f"  {kind:10s} PASS {c[PASS]:4d}  FAIL {c[FAIL]:4d}  INDETERMINATE {c[INDETERMINATE]:4d}")
+        lines.append(f"  {kind:10s} PASS {c[PASS]:4d}  FAIL {c[FAIL]:4d}  INDETERMINATE {c[INDETERMINATE]:4d}  "
+                     f"not exercised {c[NOT_EXERCISED]:4d}")
     s = report["summary"]
+    by = {e["name"]: e for e in report["requirements"]}
+    for n in s["passes_via_allowance"]:
+        m, q = by[n]["measured"], by[n]["required"]
+        lines.append(f"  passes via the facet-bulge allowance: {n}: nominal depth {q['rim_depth']}, measured "
+                     f"{m['rim_depth_at_worst']} where {q['rim_required_at_worst']} is required (allowance "
+                     f"{q['rim_allowance_at_worst']})")
+    if s["zone_exempt"]:
+        lines.append("  zone exempt (no zone in the builder, not tested): " + ", ".join(s["zone_exempt"]))
+    if s["zone_approximate"]:
+        lines.append("  zone approximate (fitted by the profile): " + ", ".join(s["zone_approximate"]))
     lines.append(f"  intersecting part pairs {s['intersecting_pairs']}, contacts {s['contacts']} in "
                  f"{s['pairs_with_contacts']} pairs, coincident {s['coincident']} in {s['pairs_with_coincident']} "
                  f"pairs, tolerance-sensitive {s['tolerance_sensitive']}")

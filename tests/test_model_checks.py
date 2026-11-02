@@ -427,6 +427,41 @@ def test_literals_shared_with_the_builders():
     assert checks.SMOOTH_ANGLE_DEG == castplane_scene.MESH_SMOOTH_ANGLE_DEFAULT
 
 
+def test_join_whose_parts_never_meet_is_not_exercised():
+    """A declared join with no intersection and no rim: INDETERMINATE when the builder makes the parts meet,
+    a PASS reported as not exercised (and not counted as a PASS) when contact is optional (review finding)."""
+    box = _box((-0.05, -0.05, -0.05), (0.05, 0.05, TOP))
+    rod = _rod(0.0, 0.0, TOP + 0.01, 0.1)                            # 10 mm above the box: they never meet
+    join = _rod_join(ac.Zone(z=(TOP, TOP)))
+    rep = checks.run(_parts(box=box, rod=rod), profile=[join])
+    j = _req(rep, "join:rod~box")
+    assert j["verdict"] == checks.INDETERMINATE and j["verdict_reason"].startswith("not exercised")
+    assert rep["summary"]["required_pass"] is False
+    rep = checks.run(_parts(box=box, rod=rod), profile=[dataclasses.replace(join, contact="optional")])
+    j = _req(rep, "join:rod~box")
+    assert j["verdict"] == checks.PASS and j["exercised"] is False
+    assert rep["summary"]["counts"]["join"][checks.PASS] == 0
+    assert rep["summary"]["counts"]["join"][checks.NOT_EXERCISED] == 1
+    assert rep["summary"]["not_exercised"] == ["join:rod~box"] and rep["summary"]["required_pass"] is True
+
+
+def test_missing_measurements_are_indeterminate():
+    """A proportion row where the part has no section, a clear with no overlap: no measurement, never a PASS
+    that counts (review finding)."""
+    box = _box((-0.01, -0.01, 0.0), (0.01, 0.01, 0.02))
+    prop = ac.Proportion("proportion:box", "box", ((0.01, 0.01, -0.01, 0.01), (0.5, 0.01, -0.01, 0.01)),
+                         (1e-6, 1e-6), "fixture", "a row above the part")
+    e = _req(checks.run(_parts(box=box), profile=[prop]), "proportion:box")
+    assert e["verdict"] == checks.INDETERMINATE and "no section" in e["verdict_reason"]
+    far = _box((0.5, 0.5, 0.0), (0.6, 0.6, 0.02))
+    c = ac.Clear("clear:far^box", "far", "box", ac.ALL, ac.ALL, 0.001, ac.INF, "fixture", "", metric="along",
+                 direction=(0.0, -1.0, 0.0), need_overlap=False)
+    rep = checks.run(_parts(box=box, far=far), profile=[c])
+    e = _req(rep, "clear:far^box")
+    assert e["verdict"] == checks.PASS and e["exercised"] is False
+    assert rep["summary"]["counts"]["clear"][checks.PASS] == 0
+
+
 def test_required_pose_not_tested_is_indeterminate():
     pose = ac.Pose("pose:arms-raised", "arms raised", "fixture", "posed clearance", level="required")
     rep = checks.run(_parts(a=_box((0, 0, 0), (0.01, 0.01, 0.01))), profile=[pose])
@@ -655,6 +690,36 @@ def test_mutation_collar_3mm_into_the_blouse_fails(miki, miki_report):
     assert after["verdict"] == checks.FAIL
     assert after["measured"]["crossings"] > 2 * before["crossings"]
     assert after["measured"]["vertices_inside"] > 2 * before["vertices_inside"]
+
+
+def test_rim_depth_passes_via_the_allowance_are_stated_and_1mm_fails(miki, miki_report):
+    """bib~neck passes only through the facet-bulge allowance (its top row is < BIB_SINK under the faceted neck):
+    the report says so, with the nominal and the effective depth; pushing the top row 1 mm out of the neck turns
+    it to FAIL (the gate's sensitivity there is the measured margin, well under 1 mm)."""
+    name = "join:body.bib~body.neck"
+    e = _req(miki_report, name)
+    assert e["verdict"] == checks.PASS and e.get("passes_via_allowance") is True
+    assert name in miki_report["summary"]["passes_via_allowance"]
+    q, m = e["required"], e["measured"]
+    assert q["rim_depth"] == body.BIB_SINK and m["rim_depth_at_worst"] < q["rim_depth"]
+    assert q["rim_required_at_worst"] == pytest.approx(q["rim_depth"] - q["rim_allowance_at_worst"], abs=1e-9)
+    assert 0 <= m["rim_margin_min"] < 0.001
+    rig = Rig()
+    z_top = body.torso_model(rig).rows[0][0] + rig.bib_lift
+    a, cy, b = body._neck_section(rig, z_top)
+
+    def out(V):
+        V = V.copy()
+        for i in np.nonzero(V[:, 2] >= z_top - 1e-6)[0]:
+            r = V[i] - [0.0, cy, V[i, 2]]
+            r[2] = 0.0
+            V[i] = V[i] + 0.001 * r / np.linalg.norm(r)
+        return V
+
+    rep = checks.run(_mutated(miki.parts, "body.bib", out), reports=miki.reports, only={"body.bib"})
+    j = _req(rep, name)
+    assert j["verdict"] == checks.FAIL
+    assert any(f["what"] == "rim vertex not buried by the required depth" for f in j["findings"])
 
 
 def test_mutation_hair_root_2mm_out_of_the_dome_fails(miki, miki_report):
