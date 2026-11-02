@@ -65,8 +65,12 @@ EPS_SCALES = (0.1, 1.0, 10.0)
 #: re-run); clearances and proportions compare a measurement with the fixed rounding tolerance 2 eps instead.
 STABILITY_KINDS = ("join", "generic")
 #: Facets meeting at more than this angle are a crease, not a tessellated smooth surface (castplane's default
-#: ``smooth_angle_deg``); the facet bulge allowance of a join's rim depth does not reach across one.
-SMOOTH_ANGLE_DEG = 30.0
+#: ``smooth_angle_deg``, read from castplane when it is importable); the facet bulge allowance does not reach across
+#: one.
+try:                                                                  # pragma: no cover - depends on the env
+    from castplane.scene import MESH_SMOOTH_ANGLE_DEFAULT as SMOOTH_ANGLE_DEG
+except Exception:                                                     # pragma: no cover
+    SMOOTH_ANGLE_DEG = 30.0
 #: At most this many findings per requirement in the report (the worst first).
 MAX_FINDINGS = 12
 
@@ -111,6 +115,7 @@ class PartGeom:
         self.lo, self.hi = self.V.min(axis=0), self.V.max(axis=0)
         self.vl, _fl, self.n_shells = mk._shell_labels(len(self.V), mesh.faces)
         self._bulge = None
+        self._edge_bulge = None
 
     def bulge(self) -> np.ndarray:
         """Per triangle, the largest edge-midpoint distance between the facet and the smooth surface through its
@@ -136,11 +141,24 @@ class PartGeom:
                     n = tn[nb].sum(axis=0)
                     N[t, k] = n / max(float(np.linalg.norm(n)), 1e-300)
             P = self.V[self.tris]
-            b = np.zeros(len(self.tris))
-            for i, j in ((0, 1), (1, 2), (2, 0)):
-                b = np.maximum(b, np.abs(np.einsum("ti,ti->t", P[:, j] - P[:, i], N[:, i] - N[:, j])) / 8.0)
-            self._bulge = b
+            self._edge_bulge = np.stack([np.abs(np.einsum("ti,ti->t", P[:, j] - P[:, i], N[:, i] - N[:, j])) / 8.0
+                                         for i, j in ((0, 1), (1, 2), (2, 0))], axis=1)
+            self._bulge = self._edge_bulge.max(axis=1)
         return self._bulge
+
+    def bulge_at(self, tri, foot) -> np.ndarray:
+        """The facet bulge at points ``foot`` ``(n, 3)`` of triangles ``tri`` ``(n,)``: the quadratic patch through
+        the triangle's edge bulges, ``4 (b01 u0 u1 + b12 u1 u2 + b20 u2 u0)`` in barycentric coordinates ``u`` --
+        0 at a vertex, the edge's bulge at its midpoint, 4/3 of the mean edge bulge at the centroid."""
+        self.bulge()
+        tri = np.asarray(tri, dtype=np.int64)
+        X = np.asarray(foot, dtype=np.float64).reshape(-1, 3)
+        if not len(tri):
+            return np.zeros(0)
+        T = self.V[self.tris[tri]]
+        u = _barycentric(X, T[:, 0], T[:, 1], T[:, 2])
+        b = self._edge_bulge[tri]
+        return 4.0 * (b[:, 0] * u[:, 0] * u[:, 1] + b[:, 1] * u[:, 1] * u[:, 2] + b[:, 2] * u[:, 2] * u[:, 0])
 
     def select(self, sel: ac.Select, eps: float) -> np.ndarray:
         """Boolean face mask of :class:`acceptance.Select` ``sel``."""
@@ -198,6 +216,21 @@ class PartGeom:
         """The faces in ``face_mask`` as a mesh over the same vertices (an open patch; for ray casts)."""
         faces = [f for f, keep in zip(self.mesh.faces, face_mask) if keep]
         return mk.Mesh(self.V, faces, 0) if faces else mk.Mesh(self.V, [], 0)
+
+
+def _barycentric(X, A, B, C) -> np.ndarray:
+    """Barycentric coordinates ``(n, 3)`` of points ``X`` (on their triangles), clipped to [0, 1] and renormalised
+    (a degenerate triangle: its first vertex)."""
+    v0, v1, v2 = B - A, C - A, X - A
+    d00, d01, d11 = (np.einsum("ni,ni->n", p, q) for p, q in ((v0, v0), (v0, v1), (v1, v1)))
+    d20, d21 = np.einsum("ni,ni->n", v2, v0), np.einsum("ni,ni->n", v2, v1)
+    den = d00 * d11 - d01 * d01
+    ok = den > 0
+    with np.errstate(divide="ignore", invalid="ignore"):
+        v = np.where(ok, (d11 * d20 - d01 * d21) / np.where(ok, den, 1.0), 0.0)
+        w = np.where(ok, (d00 * d21 - d01 * d20) / np.where(ok, den, 1.0), 0.0)
+    u = np.clip(np.stack([1.0 - v - w, v, w], axis=1), 0.0, 1.0)
+    return u / np.maximum(u.sum(axis=1), 1e-300)[:, None]
 
 
 def _boxes_touch(a: PartGeom, b: PartGeom, pad: float) -> bool:
@@ -572,55 +605,89 @@ class Checker:
         ma, mb = self.sel(c.a, c.faces_a, eps), self.sel(c.b, c.faces_b, eps)
         if not ma.any() or not mb.any():
             return {"verdict": INDETERMINATE, "verdict_reason": "empty face selection", "findings": []}
+        required = {"min": _f(c.min), "max": _f(c.max), "tolerance": _f(2.0 * eps), "metric": c.metric}
+        if c.metric not in ac.CLEAR_METRICS:
+            return {"verdict": INDETERMINATE, "verdict_reason": f"unknown clear metric {c.metric!r}", "findings": [],
+                    "required": required}
+        if c.metric in ("euclid", "along") and math.isfinite(c.max):
+            return {"verdict": INDETERMINATE, "verdict_reason": f"metric {c.metric} measures no maximum (max "
+                    f"{c.max:g} m cannot be tested)", "findings": [], "required": required}
         findings = []
-        ta = A.tris[A.tris_of(ma)]
-        P = A.V[ta]
-        pts = np.concatenate([A.V[np.unique(ta)], 0.5 * (P[:, 0] + P[:, 1]), 0.5 * (P[:, 1] + P[:, 2]),
-                              0.5 * (P[:, 2] + P[:, 0])])
-        if c.metric == "points":
-            d, t, _q = mk.point_triangle_distance(pts, B.V, B.tris[B.tris_of(mb)])
-            k0 = int(np.argmin(d))
-            gmin, gmax, where, n = float(d[k0]), float(d.max()), pts[k0], int(len(pts))
-            findings.append({"what": "smallest gap", "part": c.a, "other_part": c.b,
-                             "other_face": int(B.tri_face[B.tris_of(mb)[t[k0]]]), "xyz": _xyz(where),
-                             "gap": _f(gmin)})
-        elif c.metric == "along":
-            D = np.tile(np.asarray(c.direction, dtype=np.float64), (len(pts), 1))
-            h = mk.surface_clearance(B.submesh(mb), pts, D)
-            ok = ~np.isnan(h)
-            if not ok.any():
-                if c.need_overlap:
-                    return {"verdict": INDETERMINATE, "verdict_reason": "no sample of the selected faces lies over the other "
-                            "part", "findings": []}
-                return {"verdict": PASS, "findings": [], "measured": {"samples_over": 0}, "units": "m",
-                        "required": {"min": _f(c.min), "max": _f(c.max)}, "note": "no overlap"}
-            gmin, gmax = float(h[ok].min()), float(h[ok].max())
-            i_min = int(np.nonzero(ok)[0][np.argmin(h[ok])])
-            where = pts[i_min]
-            n = int(ok.sum())
-            findings.append({"what": "smallest gap", "part": c.a, "xyz": _xyz(where), "gap": _f(gmin)})
-        else:
-            ta_idx, tb_idx = A.tris_of(ma), B.tris_of(mb)
+        ta_idx, tb_idx = A.tris_of(ma), B.tris_of(mb)
+        # whatever the metric: a crossing, contact or coincident patch between the selected faces is a gap of 0
+        ia, ib = mk.triangle_bbox_pairs(A.V, A.tris[ta_idx], B.V, B.tris[tb_idx], pad=eps)
+        touch = mk.triangle_intersections(A.V, A.tris[ta_idx], B.V, B.tris[tb_idx], eps, pairs=(ia, ib))
+        n_touch = int(len(touch["kind"]))
+        allow_at = None
+        if c.metric == "euclid":
             pad = (c.min if math.isfinite(c.min) else 0.0) + max(EPS_SCALES) * eps
             ia, ib = mk.triangle_bbox_pairs(A.V, A.tris[ta_idx], B.V, B.tris[tb_idx], pad=pad)
             if not len(ia):
                 return {"verdict": PASS, "findings": [], "units": "m", "measured": {"min_gap_above": _f(pad)},
-                        "required": {"min": _f(c.min), "max": _f(c.max)}}
-            r = mk.triangle_intersections(A.V, A.tris[ta_idx], B.V, B.tris[tb_idx], eps, pairs=(ia, ib))
+                        "required": required}
             d, pa, _pb = mk.triangle_pair_distance(A.V[A.tris[ta_idx[ia]]], B.V[B.tris[tb_idx[ib]]])
-            hit = np.zeros(len(ia), dtype=bool)
-            for k in np.nonzero(r["kind"] == mk.TT_CROSSING)[0]:
-                hit |= (ia == r["ia"][k]) & (ib == r["ib"][k])
-            d = np.where(hit, 0.0, d)
             k0 = int(np.argmin(d))
             gmin, gmax, where, n = float(d[k0]), float("nan"), pa[k0], int(len(ia))
             findings.append({"what": "closest approach", "part": c.a, "face": int(A.tri_face[ta_idx[ia[k0]]]),
                              "other_part": c.b, "other_face": int(B.tri_face[tb_idx[ib[k0]]]), "xyz": _xyz(where),
                              "gap": _f(gmin)})
-        fail = gmin < c.min - 2.0 * eps or (math.isfinite(c.max) and gmax > c.max + 2.0 * eps)
-        return {"verdict": FAIL if fail else PASS, "findings": findings, "units": "m",
-                "measured": {"min": _f(gmin), "max": _f(gmax), "samples": n},
-                "required": {"min": _f(c.min), "max": _f(c.max), "tolerance": _f(2.0 * eps), "metric": c.metric}}
+        else:
+            if c.metric == "along":
+                ta = A.tris[ta_idx]
+                P = A.V[ta]
+                pts = np.concatenate([A.V[np.unique(ta)], 0.5 * (P[:, 0] + P[:, 1]), 0.5 * (P[:, 1] + P[:, 2]),
+                                      0.5 * (P[:, 2] + P[:, 0])])
+                D = np.tile(np.asarray(c.direction, dtype=np.float64), (len(pts), 1))
+            else:
+                band = ridge_band_rows(A)
+                if band is None:
+                    return {"verdict": INDETERMINATE, "verdict_reason": f"{c.a} is not a meshkit.ridge_band (metric "
+                            f"{c.metric} reads its border rows)", "findings": [], "required": required}
+                pts, D = band_samples(band, c.metric, c.samples)
+            if c.metric == "band_stations":
+                h, t, foot = mk.point_triangle_distance(pts, B.V, B.tris[tb_idx])
+                t = tb_idx[t]
+            else:
+                h = mk.surface_clearance(B.submesh(mb), pts, D)
+            ok = ~np.isnan(h)
+            if not ok.any():
+                if c.need_overlap:
+                    return {"verdict": INDETERMINATE, "verdict_reason": "no sample of the selected faces lies over the "
+                            "other part", "findings": [], "required": required}
+                return {"verdict": PASS, "findings": [], "measured": {"samples_over": 0}, "units": "m",
+                        "required": required, "note": "no overlap", "exercised": False}
+            i_min = int(np.nonzero(ok)[0][np.argmin(h[ok])])
+            gmin, where, n = float(h[i_min]), pts[i_min], int(ok.sum())
+            hmax = np.where(ok, h, -np.inf)
+            if c.max_bulge and c.metric == "band_stations":
+                allow_at = B.bulge_at(t, foot)
+                hmax = hmax - allow_at
+            i_max = int(np.argmax(hmax))
+            gmax = float(h[i_max])
+            findings.append({"what": "smallest gap", "part": c.a, "xyz": _xyz(where), "gap": _f(gmin)})
+            if math.isfinite(c.max):
+                f = {"what": "largest gap", "part": c.a, "xyz": _xyz(pts[i_max]), "gap": _f(gmax)}
+                if allow_at is not None:
+                    f["allowance"] = _f(allow_at[i_max])
+                findings.append(f)
+        if n_touch:
+            k = int(np.argmin(touch["kind"]))
+            findings.insert(0, {"what": "the selected faces touch or cross (" + mk.TT_KINDS[int(touch["kind"][k])] +
+                                "): gap 0", "part": c.a, "face": int(A.tri_face[ta_idx[touch["ia"][k]]]),
+                                "other_part": c.b, "other_face": int(B.tri_face[tb_idx[touch["ib"][k]]]),
+                                "xyz": _xyz(touch["seg"][k].mean(axis=0)), "gap": 0.0})
+            gmin = 0.0
+        fail_min = gmin < c.min - 2.0 * eps
+        fail_max = False
+        measured = {"min": _f(gmin), "max": _f(gmax), "samples": n, "touching_triangle_pairs": n_touch}
+        if math.isfinite(c.max):
+            excess = (gmax - (allow_at[i_max] if allow_at is not None else 0.0)) - c.max
+            fail_max = excess > 2.0 * eps
+            measured["max_excess"] = _f(excess)
+            if allow_at is not None:
+                measured["max_allowance_at_worst"] = _f(allow_at[i_max])
+        return {"verdict": FAIL if (fail_min or fail_max) else PASS, "findings": findings, "units": "m",
+                "measured": measured, "required": required}
 
     def _proportion(self, p: ac.Proportion, eps: float) -> dict:
         miss = self._missing((p.part,))
@@ -679,6 +746,47 @@ def section_extents(P: PartGeom, z: float):
     if not len(X):
         return None
     return float(X[:, 0].max()), float(-X[:, 0].min()), float(X[:, 1].min()), float(X[:, 1].max())
+
+
+def ridge_band_rows(P: PartGeom):
+    """The rows ``(border A (U, 3), ridge (U, 3), border B (U, 3), station normals (U, 3), periodic)`` of a
+    :func:`meshkit.ridge_band` part (vertices ``[A, R, B]``, ``R = (A + B) / 2 + height N``), or ``None`` when the
+    part is not laid out that way."""
+    V = P.V
+    if len(V) % 3 or len(V) < 6:
+        return None
+    U = len(V) // 3
+    A, R, B = V[:U], V[U:2 * U], V[2 * U:]
+    N = R - 0.5 * (A + B)
+    ln = np.linalg.norm(N, axis=1)
+    if np.any(ln <= 0) or float(ln.max() - ln.min()) > 0.5 * float(ln.mean()):
+        return None
+    periodic = P.mesh.n_faces == 3 * U
+    if not periodic and P.mesh.n_faces != 3 * (U - 1) + 2:
+        return None
+    return A, R, B, N / ln[:, None], periodic
+
+
+def band_samples(band, metric: str, samples: int):
+    """Sample points and their "up" directions on a ridge band's two borders: ``band_stations`` -- the stations
+    (the band's border vertices, where the builder placed them); ``band_chords`` -- ``samples`` points on every
+    straight chord between consecutive stations of each border, with the station normals interpolated (exactly
+    :func:`meshkit.lift_band_borders`' samples)."""
+    A, _R, B, N, periodic = band
+    if metric == "band_stations":
+        return np.concatenate([A, B]), np.concatenate([N, N])
+    U = len(A)
+    steps = U if periodic else U - 1
+    pts, dirs = [], []
+    ss = np.linspace(0.0, 1.0, samples)
+    for X in (A, B):
+        for j in range(steps):
+            k = (j + 1) % U
+            for s in ss:
+                pts.append(X[j] + s * (X[k] - X[j]))
+                d = (1.0 - s) * N[j] + s * N[k]
+                dirs.append(d / np.linalg.norm(d))
+    return np.array(pts), np.array(dirs)
 
 
 @dataclass(frozen=True)

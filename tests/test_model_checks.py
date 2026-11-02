@@ -173,6 +173,7 @@ def test_triangle_bbox_pairs_order_and_pad():
 
 from miki_model import acceptance as ac  # noqa: E402
 from miki_model import checks  # noqa: E402
+from miki_model.rig import Rig  # noqa: E402
 
 
 def _box(lo, hi) -> mk.Mesh:
@@ -319,14 +320,111 @@ def test_positive_gap_below_the_minimum_fails():
     for gap, verdict in ((0.0005, checks.FAIL), (0.002, checks.PASS)):
         hi = _box((-0.01, -0.01, gap), (0.01, 0.01, 0.01))
         req = ac.Clear("clear:hi^lo", "hi", "lo", ac.ALL, ac.ALL, 0.001, ac.INF, "fixture", "a 1 mm gap")
-        for metric in ("points", "euclid"):
-            rep = checks.run(_parts(lo=lo, hi=hi), profile=[dataclasses.replace(req, metric=metric)])
+        for metric in ("euclid", "along"):
+            rep = checks.run(_parts(lo=lo, hi=hi), profile=[dataclasses.replace(req, metric=metric,
+                                                                                 direction=(0.0, 0.0, 1.0))])
             c = _req(rep, "clear:hi^lo")
             assert c["verdict"] == verdict, (gap, metric, c)
             if "min" in c["measured"]:
                 assert abs(c["measured"]["min"] - gap) < 1e-9
             else:                                                     # nothing within the screening pad
                 assert metric == "euclid" and c["measured"]["min_gap_above"] < gap
+
+
+def test_clear_contact_is_a_zero_gap_under_every_metric():
+    """A bump's apex touching a plate's underside between the plate's vertices: the samples of the plate are 1 mm
+    above the slab, the true gap is 0.  Every metric FAILs a 0.6 mm minimum (review finding: 'points' and 'along'
+    measured 1.0 mm and passed)."""
+    plate = _box((-0.02, -0.02, 0.001), (0.02, 0.02, 0.003))
+    sq = lambda z, k: np.array([[-k, -k, z], [k, -k, z], [k, k, z], [-k, k, z]])  # noqa: E731
+    bump = mk.loft([sq(-0.01, 0.03), sq(0.0, 0.03), sq(0.0, 0.001) + [0.008, -0.004, 0.0]], "flat",
+                   ("pole", (0.008, -0.004, 0.001)))
+    under = ac.Select(facing=((0, 0, -1), 0.5), note="plate underside")
+    top = ac.Select(facing=((0, 0, 1), 0.5), note="slab top")
+    for metric in ("euclid", "along"):
+        c = ac.Clear("clear:plate^slab", "plate", "slab", under, top, 0.0006, ac.INF, "fixture", "0.6 mm",
+                     metric=metric, direction=(0.0, 0.0, 1.0))
+        rep = checks.run(_parts(plate=plate, slab=bump), profile=[c])
+        e = _req(rep, "clear:plate^slab")
+        assert e["verdict"] == checks.FAIL and e["measured"]["min"] == 0.0, (metric, e["measured"])
+        assert rep["summary"]["required_pass"] is False
+    assert ac.Clear("x", "a", "b", ac.ALL, ac.ALL, 0.0, ac.INF, "", "").metric == "euclid"
+
+
+def _band_over_box(height, n=6, top=0.0):
+    """A straight ridge band (borders 4 mm apart) ``height`` above a box's top face (z = ``top``)."""
+    x = np.linspace(-0.01, 0.01, n)
+    A = np.stack([x, np.full(n, -0.002), np.full(n, top + height)], axis=1)
+    B = A + [0.0, 0.004, 0.0]
+    return mk.ridge_band(A, B, np.tile([0.0, 0.0, 1.0], (n, 1)), 0.0006, periodic=False)
+
+
+def test_stripe_clear_has_both_bounds():
+    """The colour-stripe requirement of the profile on a band over a box: at stripe_float PASS; 10 mm and 50 mm
+    off its host FAIL (review finding: min 0 / max inf could not fail); 0.1 mm FAILs the minimum."""
+    rig = Rig()
+    prof = next(r for r in ac.profile() if r.name == "clear:body.ring_stripe0^body.ring")
+    assert prof.min == rig.stripe_float and prof.max == rig.stripe_float and prof.metric == "band_stations"
+    req = dataclasses.replace(prof, name="clear:stripe^host", a="stripe", b="host")
+    host = _box((-0.02, -0.02, -0.02), (0.02, 0.02, 0.0))
+    for off, verdict in ((rig.stripe_float, checks.PASS), (0.010, checks.FAIL), (0.050, checks.FAIL),
+                         (0.0001, checks.FAIL)):
+        rep = checks.run(_parts(host=host, stripe=_band_over_box(off)), profile=[req])
+        e = _req(rep, "clear:stripe^host")
+        assert e["verdict"] == verdict, (off, e)
+    # every clear of the profile can fail: a minimum above 0 or a finite maximum
+    for r in ac.profile():
+        if r.kind == "clear":
+            assert r.min > 0 or math.isfinite(r.max), r.name
+
+
+def test_band_chords_metric_reproduces_lift_band_borders():
+    """band_chords samples the border chords (7 per chord) along the station normals, as the strap's builder
+    does: a host ridge between two stations under a chord is seen; the stations alone are not enough."""
+    host = _box((-0.02, -0.02, -0.02), (0.02, 0.02, 0.0))
+    req = ac.Clear("clear:band^host", "band", "host", ac.ALL, ac.ALL, 0.0008, ac.INF, "fixture", "0.8 mm",
+                   metric="band_chords")
+    for h, verdict in ((0.001, checks.PASS), (0.0005, checks.FAIL)):
+        e = _req(checks.run(_parts(host=host, band=_band_over_box(h)), profile=[req]), "clear:band^host")
+        assert e["verdict"] == verdict, (h, e)
+    # a not-ridge-band part: INDETERMINATE
+    e = _req(checks.run(_parts(host=host, band=_box((-0.01, -0.01, 0.001), (0.01, 0.01, 0.002))), profile=[req]),
+             "clear:band^host")
+    assert e["verdict"] == checks.INDETERMINATE and "ridge_band" in e["verdict_reason"]
+    # mk.lift_band_borders lifts a sagging band to the clearance, and band_chords then agrees
+    x = np.linspace(-0.015, 0.015, 4)
+    A = np.stack([x, np.full(4, -0.002), np.full(4, 0.0)], axis=1)
+    hump = mk.ellipsoid((0.0, 0.0, -0.05), (0.06, 0.06, 0.0502), nu=24, nv=12)
+    N = np.tile([0.0, 0.0, 1.0], (4, 1))
+    lift = mk.lift_band_borders(hump, A, A + [0, 0.004, 0], N, 0.0008)
+    band = mk.ridge_band(A + lift[:, None] * N, A + [0, 0.004, 0] + lift[:, None] * N, N, 0.0006, periodic=False)
+    e = _req(checks.run(_parts(host=hump, band=band), profile=[req]), "clear:band^host")
+    assert e["verdict"] == checks.PASS and e["measured"]["min"] >= 0.0008 - 1e-7, e["measured"]
+
+
+def test_euclid_with_a_finite_maximum_is_indeterminate():
+    lo = _box((-0.02, -0.02, -0.02), (0.02, 0.02, 0.0))
+    hi = _box((-0.01, -0.01, 0.05), (0.01, 0.01, 0.06))
+    c = ac.Clear("clear:hi^lo", "hi", "lo", ac.ALL, ac.ALL, 0.001, 0.002, "fixture", "a 1 - 2 mm gap")
+    e = _req(checks.run(_parts(lo=lo, hi=hi), profile=[c]), "clear:hi^lo")
+    assert e["verdict"] == checks.INDETERMINATE and "no maximum" in e["verdict_reason"]
+
+
+def test_profile_reads_the_rig_it_is_given():
+    """profile(rig) uses that rig everywhere, the decal joins' depths too (review: _decal_layers built Rig())."""
+    r2 = dataclasses.replace(Rig(), eye_slab_depth=0.0005, stripe_float=0.0004)
+    p1, p2 = ({x.name: x for x in ac.profile(r)} for r in (Rig(), r2))
+    assert p2["join:head.sclera_l~head.skin"].depth == 0.0005 != p1["join:head.sclera_l~head.skin"].depth
+    assert p2["clear:body.ring_stripe0^body.ring"].min == 0.0004
+
+
+def test_literals_shared_with_the_builders():
+    """The bib's thickening centre and the smoothing angle are read, not copied."""
+    from miki_model import body as _body
+    bib = next(r for r in ac.profile() if r.name == "clear:body.collar^body.bib")
+    assert bib.faces_b.outward_from[2] == _body.BIB_AWAY_Z
+    castplane_scene = pytest.importorskip("castplane.scene")
+    assert checks.SMOOTH_ANGLE_DEG == castplane_scene.MESH_SMOOTH_ANGLE_DEFAULT
 
 
 def test_required_pose_not_tested_is_indeterminate():

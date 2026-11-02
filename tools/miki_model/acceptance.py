@@ -24,6 +24,11 @@ reference: where the code departed from it, the code wins (``SPEC.md`` line 5). 
 to the model as it stands only if its reason says "accepted in round N"; none in this version is.  Selector
 parameters (``FACING_COS``, ``CAP_SIDES``) are part of the profile, not of the model.
 
+Maxima: a clearance has a finite maximum only where a builder places a part a stated distance off its host (the
+colour stripes' border stations, ``rig.stripe_float``).  The face decals' fronts have no stated maximum (their
+``relief`` varies per decal and column and is then pushed out by the clearance pass), so no maximum is enforced
+for them yet; the straps and the collar have a minimum only.
+
 Faces are selected geometrically (``Select``), since ``Part`` has no named face groups: outward / inward
 relative to a centre, a facing direction, z / y / x ranges, polygon size (the flat caps of lofts and sweeps are
 single polygons) and, where a builder documents them, its part-local smooth-group ids.
@@ -37,10 +42,11 @@ from . import body, hair, head, limbs
 from .rig import Rig
 
 __all__ = ["PROFILE_VERSION", "PROFILE_NAME", "Select", "Zone", "Join", "Clear", "Proportion", "Pose",
-           "DIAGNOSTIC_WIDTHS", "profile", "FACING_COS", "INNER_FACE_COS", "CAP_SIDES", "DECAL_FRONT_COS"]
+           "DIAGNOSTIC_WIDTHS", "profile", "FACING_COS", "INNER_FACE_COS", "CAP_SIDES", "DECAL_FRONT_COS",
+           "CLEAR_METRICS", "BAND_CHORD_SAMPLES"]
 
 #: Bump when a requirement is added, removed or changed (the report records it).
-PROFILE_VERSION = "1"
+PROFILE_VERSION = "2"
 PROFILE_NAME = "miki"
 
 #: A face "faces" a direction when its unit normal's dot product with it is at least this (60 degrees).
@@ -54,6 +60,10 @@ DECAL_FRONT_COS = 0.7
 #: The flat caps of the lofts and sweeps (legs, socks, hands, thumbs, sidelocks) are single polygons with at least
 #: this many vertices; every other face of those parts is a triangle or a quad.
 CAP_SIDES = 5
+#: The clearance metrics (see :class:`Clear`).
+CLEAR_METRICS = ("euclid", "along", "band_chords", "band_stations")
+#: Samples per border chord in ``band_chords`` (``meshkit.lift_band_borders``' default, which the strap uses).
+BAND_CHORD_SAMPLES = 7
 
 SIDES = ((1, "l"), (-1, "r"))
 UP = (0.0, 0.0, 1.0)
@@ -143,11 +153,22 @@ class Join:
 
 @dataclass(frozen=True)
 class Clear:
-    """Faces ``faces_a`` of ``a`` clear faces ``faces_b`` of ``b`` by ``min`` .. ``max`` (m).  ``metric``
-    ``"points"``: the exact distance from the vertices and edge midpoints of ``faces_a`` (the chord samples the
-    builders clear) to ``faces_b``; ``"euclid"``: the exact triangle-triangle distance (min); ``"along"``: the
-    height along ``direction`` at the same samples.  ``need_overlap``: without any measurement
-    (no sample over ``b``) the requirement is INDETERMINATE; otherwise it passes as "no overlap"."""
+    """Faces ``faces_a`` of ``a`` clear faces ``faces_b`` of ``b`` by ``min`` .. ``max`` (m).  ``metric``:
+
+    * ``"euclid"`` (the default, and the metric of a plain minimum gap): the exact triangle-triangle minimum
+      distance between the selected faces; it measures no maximum (a finite ``max`` is INDETERMINATE);
+    * ``"along"``: the height along ``direction`` above ``faces_b`` of the vertices, edge midpoints and fan
+      diagonal midpoints of ``faces_a`` -- the face decals' own rule (``head._clear``: the front's grid samples, y
+      against the surface under them); no maximum;
+    * ``"band_chords"``: ``a`` is a ``meshkit.ridge_band``; ``samples`` points on every chord of its two borders,
+      height along the interpolated station normals above ``faces_b`` -- exactly ``meshkit.lift_band_borders``;
+    * ``"band_stations"``: ``a`` is a ridge band; the exact distance from its border stations (vertices) to
+      ``faces_b``, min and max.  ``max_bulge``: each station's maximum grows by the host's facet bulge at its foot
+      point (the builder offsets the stations off the analytic surface, which the faceted mesh lies inside).
+
+    Whatever the metric, a crossing, contact or coincident patch between ``faces_a`` and ``faces_b`` is a gap of 0.
+    ``need_overlap``: without any measurement (no sample over ``b``) the requirement is INDETERMINATE; otherwise it
+    passes as "no overlap", reported as not exercised (never counted as a PASS)."""
 
     name: str
     a: str
@@ -159,9 +180,11 @@ class Clear:
     constant: str
     reason: str
     level: str = "required"
-    metric: str = "points"
+    metric: str = "euclid"
     direction: tuple | None = None
     need_overlap: bool = True
+    samples: int = BAND_CHORD_SAMPLES
+    max_bulge: bool = False
     kind: str = "clear"
 
 
@@ -196,10 +219,9 @@ DIAGNOSTIC_WIDTHS = ("hair.dome", "hair.back", "hair.bangs", "hair.sidelock_l", 
 DIAGNOSTIC_STEP = 0.005
 
 
-def _decal_layers():
+def _decal_layers(rig: Rig):
     """Per side, the face decals in stack order (head.build / head._eye_parts): ``(name, back depth, constant,
     the decals placed before it on the same stack)``."""
-    rig = Rig()
     d0, step, st = rig.eye_slab_depth, head.LAYER_DEPTH_STEP, head.STACK_DEPTH
     out = []
     for _side, s in SIDES:
@@ -228,7 +250,7 @@ def _decal_requirements(rig: Rig) -> list:
     why = ("head.py decal stack (_decal / DecalStack): the back face sits its depth behind the front-most "
            "surface under it (the skin or the decal it lies on), measured along y against the faceted mesh; "
            "the front stays clear of them")
-    for name, depth, const, below in _decal_layers():
+    for name, depth, const, below in _decal_layers(rig):
         stack = tuple((b, front) for b in below)
         out.append(Join(f"join:{name}~head.skin", name, "head.skin",
                         Zone(faces=("a", not_front), note="the curve lies on the decal's walls / back, never on "
@@ -364,8 +386,8 @@ def _body_requirements(rig: Rig) -> list:
         "body._bib: the bib's top row lies BIB_SINK inside the neck surface (no fin standing out of the neck)"))
     collar_under = Select(inward_from=body.TORSO_CENTRE, note="the collar's underside (normal toward the chest)")
     lapel_hidden = Select(groups=(2,), note="the lapels' walls and underside (group 2, body._collar)")
-    bib_top = Select(outward_from=(0.0, body._neck_section(rig, z_root)[1], 1.15),
-                     note="the bib's top face (body._bib: thickened inward, away from (0, cy, 1.15))")
+    bib_top = Select(outward_from=(0.0, body._neck_section(rig, z_root)[1], body.BIB_AWAY_Z),
+                     note="the bib's top face (body._bib: thickened inward, away from (0, cy, BIB_AWAY_Z))")
     out.append(Clear(
         "clear:body.collar^body.bib", "body.collar", "body.bib", collar_under, bib_top,
         body.COLLAR_BIB_CLEARANCE, INF, "body.COLLAR_BIB_CLEARANCE",
@@ -438,9 +460,16 @@ def _body_requirements(rig: Rig) -> list:
             "the sock passes through it)"))
         out.append(Clear(
             f"clear:limbs.strap_{s}^{shoe}", f"limbs.strap_{s}", shoe,
+            ALL, Select(note="the whole shoe (as lift_band_borders measures it)"),
+            limbs.STRAP_CLEARANCE, INF, "limbs.STRAP_CLEARANCE",
+            "limbs._shoe: every chord of the strap's borders at least STRAP_CLEARANCE above the shoe, 7 samples per "
+            "chord along the station normals (meshkit.lift_band_borders; review r2, F5)", metric="band_chords"))
+        out.append(Clear(
+            f"clear:limbs.strap_{s}^{shoe}/surface", f"limbs.strap_{s}", shoe,
             Select(note="every strap face"), Select(groups=(2,), note="the upper (group 2)"),
             limbs.STRAP_CLEARANCE, INF, "limbs.STRAP_CLEARANCE",
-            "limbs._shoe: every chord of the strap's borders at least STRAP_CLEARANCE above the upper (review r2, F5)"))
+            "advisory: the whole strap (its bottom face too, which no builder rule covers) against the upper, by the "
+            "exact distance; the gated rule is the border chords", level="advisory"))
         sleeve, hand, thumb = f"limbs.sleeve_{s}", f"limbs.hand_{s}", f"limbs.thumb_{s}"
         out.append(Join(
             f"join:{sleeve}~body.blouse", sleeve, "body.blouse", Zone(note="the armhole: no zone in the builder"),
@@ -455,16 +484,21 @@ def _body_requirements(rig: Rig) -> list:
             Select(min_sides=CAP_SIDES, note="the thumb's base cap"), 0.0, "limbs._hand",
             "limbs._hand: the thumb is a lobe from the index side of the palm base"))
         for k in range(len(rig.cuff_stripes)):
-            out.append(Clear(
-                f"clear:limbs.cuff_stripe_{s}{k}^{sleeve}", f"limbs.cuff_stripe_{s}{k}", sleeve,
-                ALL, ALL, 0.0, INF, "rig.stripe_float",
-                "README rule 5: colour stripes float stripe_float above the surface, so both borders draw"))
-    for part, host in (("body.collar_stripe", "body.collar"), ("body.ring_stripe0", "body.ring"),
-                       ("body.ring_stripe1", "body.ring")):
-        out.append(Clear(
-            f"clear:{part}^{host}", part, host, ALL, ALL, 0.0, INF, "rig.stripe_float",
-            "README rule 5: colour stripes float stripe_float above the surface, so both borders draw"))
+            out.append(_stripe_clear(rig, f"limbs.cuff_stripe_{s}{k}", sleeve,
+                                     "limbs._sleeve: R = rad[-1] + stripe_float"))
+    for part, host, where in (("body.collar_stripe", "body.collar", "body._collar: base = top + stripe_float nrm"),
+                              ("body.ring_stripe0", "body.ring", "body._ring: rounded_rect_ring(w + 2 g, ...)"),
+                              ("body.ring_stripe1", "body.ring", "body._ring: rounded_rect_ring(w + 2 g, ...)")):
+        out.append(_stripe_clear(rig, part, host, where))
     return out
+
+
+def _stripe_clear(rig: Rig, part: str, host: str, where: str) -> Clear:
+    """A colour stripe's border stations stripe_float off its host: no closer, and no farther than stripe_float plus
+    the host's facet bulge there (the builder offsets them off the analytic surface)."""
+    return Clear(f"clear:{part}^{host}", part, host, ALL, ALL, rig.stripe_float, rig.stripe_float, "rig.stripe_float",
+                 "README rule 5: colour stripes float stripe_float above the surface, so both borders draw; the "
+                 f"border stations are placed there ({where})", metric="band_stations", max_bulge=True)
 
 
 def _proportions(rig: Rig) -> list:
