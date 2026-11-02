@@ -401,7 +401,8 @@ class Checker:
             mm = self.zone_margin(zone, a, b, mid, ta[g], tb[g], eps)
             P0, P1 = np.concatenate([P0[g], mid]), np.concatenate([mid, P1[g]])
             m0, m1 = np.concatenate([m0[g], mm]), np.concatenate([mm, m1[g]])
-            own, ta, tb = np.concatenate([own[g], own[g]]), np.concatenate([ta[g], ta[g]]), np.concatenate([tb[g], tb[g]])
+            own = np.concatenate([own[g], own[g]])
+            ta, tb = np.concatenate([ta[g], ta[g]]), np.concatenate([tb[g], tb[g]])
         return inside, witness
 
     def zone_empty_selections(self, zone: ac.Zone, a: str, b: str, eps: float) -> list:
