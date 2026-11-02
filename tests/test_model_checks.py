@@ -252,6 +252,56 @@ def test_join_inside_its_zone_passes_and_a_leak_fails():
     assert any("outside the zone" in f["what"] and f["xyz"][2] < TOP - 1e-3 for f in j["findings"])
 
 
+def _cut_prism():
+    """A decal-like prism (front triangle at y = -1 mm facing -y, back at y = +2 mm) and a host box whose front
+    plane cuts the prism's front face along x = 5 mm, from one front edge to the other."""
+    F = np.array([[-0.01, -0.001, -0.01], [0.01, -0.001, -0.01], [0.0, -0.001, 0.01]])
+    m = mk.loft([F, F + [0.0, 0.003, 0.0]], "flat", "flat")
+    if not mk.validate(m, "p", check_ground=False).ok:
+        m = mk.loft([F[::-1], F[::-1] + [0.0, 0.003, 0.0]], "flat", "flat")
+
+    def yp(x):
+        return -0.4 * (x - 0.005) - 0.001
+
+    xs, zs, yb = (-0.05, 0.05), (-0.05, 0.05), 0.06
+    HV = np.array([[xs[0], yp(xs[0]), zs[0]], [xs[1], yp(xs[1]), zs[0]], [xs[1], yp(xs[1]), zs[1]],
+                   [xs[0], yp(xs[0]), zs[1]], [xs[0], yb, zs[0]], [xs[1], yb, zs[0]], [xs[1], yb, zs[1]],
+                   [xs[0], yb, zs[1]]])
+    hf = [[0, 1, 2], [0, 2, 3], [4, 7, 6], [4, 6, 5], [0, 4, 5, 1], [1, 5, 6, 2], [2, 6, 7, 3], [3, 7, 4, 0]]
+    if mk.face_normals(mk.Mesh(HV, hf, 1))[0][0][1] > 0:
+        hf = [f[::-1] for f in hf]
+    return m, mk.Mesh(HV, hf, 1)
+
+
+def test_join_zone_tests_the_whole_segment_not_its_ends():
+    """The host cuts across the decal's FRONT face from one front edge to the other; the zone allows only the
+    non-front faces.  Both end points lie on edges shared with the walls (inside the zone), the 10 mm between
+    them do not: FAIL (review finding: the zone test used the end points only)."""
+    decal, host = _cut_prism()
+    assert mk.validate(decal, "decal", check_ground=False).ok and mk.validate(host, "host", check_ground=False).ok
+    not_front = ac.Select(facing=((0.0, -1.0, 0.0), 0.7), invert=True, note="not the front face")
+    join = ac.Join("join:decal~skin", "decal", "skin", ac.Zone(faces=("a", not_front)), None, 0.0, "fixture", "d")
+    j = _req(checks.run(_parts(decal=decal, skin=host), profile=[join]), "join:decal~skin")
+    assert j["verdict"] == checks.FAIL and j["measured"]["outside_zone"] >= 1, j["measured"]
+    leak = [f for f in j["findings"] if "outside the zone" in f["what"]]
+    assert leak and abs(leak[0]["xyz"][0] - 0.005) < 1e-6 and -0.0099 < leak[0]["xyz"][2] < -1e-4
+    # the same cut through a union zone (any_of) that also leaves the front out
+    union = dataclasses.replace(join, zone=ac.Zone(any_of=(ac.Zone(faces=("a", not_front)), ac.Zone(z=(0.5, 0.6)))))
+    assert _req(checks.run(_parts(decal=decal, skin=host), profile=[union]), "join:decal~skin")["verdict"] == \
+        checks.FAIL
+    # allowing the front face too: PASS
+    every = dataclasses.replace(join, zone=ac.Zone(faces=("a", ac.ALL)))
+    assert _req(checks.run(_parts(decal=decal, skin=host), profile=[every]), "join:decal~skin")["verdict"] == \
+        checks.PASS
+
+
+def test_join_zone_selecting_no_faces_is_indeterminate():
+    box = _box((-0.05, -0.05, -0.05), (0.05, 0.05, TOP))
+    zone = ac.Zone(faces=("b", ac.Select(groups=(99,), note="no such group")))
+    j = _req(checks.run(_parts(box=box, rod=_rod(0.0, 0.0, 0.0, 0.1)), profile=[_rod_join(zone)]), "join:rod~box")
+    assert j["verdict"] == checks.INDETERMINATE and "selects no faces" in j["verdict_reason"]
+
+
 def test_join_whose_buried_rim_surfaces_fails():
     box = _box((-0.05, -0.05, -0.05), (0.05, 0.05, TOP))
     zone = ac.Zone(z=(TOP, TOP))
@@ -397,7 +447,7 @@ def test_crossing_hidden_from_the_classifier_is_caught_by_containment_and_depth(
     rep = checks.run(_parts(box=box, rod=_rod(0.0, 0.0, TOP - 0.005, 0.1)),
                      profile=[_rod_join(ac.Zone(z=(TOP, TOP)), rim, 0.02)])
     j = _req(rep, "join:rod~box")
-    assert j["measured"]["intersection_points"] == 0 and j["verdict"] == checks.FAIL
+    assert j["measured"]["intersection_segments"] == 0 and j["verdict"] == checks.FAIL
 
 
 def test_report_is_deterministic_json():

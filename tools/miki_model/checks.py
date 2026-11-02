@@ -6,8 +6,9 @@ Builds the model with :func:`assemble.assemble` and checks the rounded, exported
 (``Assembly.parts``, ``assemble.DECIMALS``; never the builders' float output) against the acceptance profile
 (:mod:`acceptance`).  Every part pair (across objects and inside one object) falls under one relation:
 
-* **join** (a profile requirement): every segment of the two parts' intersection curve, and every coincident
-  patch, lies inside the declared zone dilated by eps; the buried rim stays under the host's surface by the
+* **join** (a profile requirement): every segment of the two parts' intersection curve, and every edge of every
+  coincident patch, lies wholly inside the declared zone dilated by eps (the whole segment, not its end points:
+  :meth:`Checker.segments_in_zone`); the buried rim stays under the host's surface by the
   declared depth; and no shell of either part is wholly inside the other;
 * **generic** (every other pair): any triangle-triangle crossing, coincident patch or containment (a vertex of
   one part inside the other, winding test, both directions) is a FAIL.  Contacts within eps are not
@@ -284,42 +285,101 @@ class Checker:
         return mk.point_triangle_distance(points, P.V, tris)[0]
 
     # -- zones -----------------------------------------------------------------------------------------------
-    def zone_contains(self, zone: ac.Zone, a: str, b: str, points, eps: float, owner: str | None):
-        """Boolean mask of ``points`` inside ``zone`` (dilated by eps) for the join ``(a, b)``, or ``None`` when
-        the zone cannot judge them (a faces zone on the other part for vertices of ``owner``)."""
-        X = np.asarray(points, dtype=np.float64).reshape(-1, 3)
+    def zone_margin(self, zone: ac.Zone, a: str, b: str, X, tri_a, tri_b, eps: float) -> np.ndarray:
+        """Per point of ``X`` (lying on triangle ``tri_a`` of the buried part ``a`` and ``tri_b`` of the host
+        ``b``), a margin that is ``>= 0`` exactly when the point is inside ``zone`` dilated by eps.  Every margin
+        is 1-Lipschitz along a segment (a z / y range, eps minus a distance, a signed distance plus eps; ``min``
+        for the tests of one zone, ``max`` for ``any_of``) or ``+inf`` for the whole segment (a ``faces`` test on
+        a point whose own triangle on that side is a selected face: the segment lies in that face), so that
+        :meth:`segments_in_zone` can certify a whole segment from its end points."""
+        X = np.asarray(X, dtype=np.float64).reshape(-1, 3)
+        n = len(X)
         if zone.unconstrained:
-            return np.ones(len(X), dtype=bool)
+            return np.full(n, np.inf)
         if zone.any_of is not None:
-            res = [self.zone_contains(z, a, b, X, eps, owner) for z in zone.any_of]
-            res = [r for r in res if r is not None]
-            if not res:
-                return None
-            out = np.zeros(len(X), dtype=bool)
-            for r in res:
-                out |= r
+            out = np.full(n, -np.inf)
+            for z in zone.any_of:
+                out = np.maximum(out, self.zone_margin(z, a, b, X, tri_a, tri_b, eps))
             return out
-        m = np.ones(len(X), dtype=bool)
+        m = np.full(n, np.inf)
         for axis, rng in ((2, zone.z), (1, zone.y)):
             if rng is not None:
-                m &= (X[:, axis] >= rng[0] - eps) & (X[:, axis] <= rng[1] + eps)
-        if zone.faces is not None:
+                with np.errstate(invalid="ignore"):
+                    m = np.minimum(m, np.minimum(X[:, axis] - rng[0], rng[1] - X[:, axis]) + eps)
+        if zone.faces is not None and n:
             side, sel = zone.faces
-            if owner is not None and owner != side:
-                return None
             name = a if side == "a" else b
+            P = self.parts[name]
             mask = self.sel(name, sel, eps)
-            if len(X):
-                m &= self._dist_to(name, mask, X) <= eps
-        if zone.near is not None and len(X):
+            own = np.asarray(tri_a if side == "a" else tri_b, dtype=np.int64)
+            fast = mask[P.tri_face[own]]
+            mf = np.full(n, np.inf)
+            if np.any(~fast):
+                mf[~fast] = eps - self._dist_to(name, mask, X[~fast])
+            m = np.minimum(m, mf)
+        if zone.near is not None and n:
             P = self.parts[zone.near[0]]
-            m &= mk.point_triangle_distance(X, P.V, P.tris)[0] <= zone.near[1] + eps
-        if zone.inside is not None and len(X):
+            m = np.minimum(m, zone.near[1] + eps - mk.point_triangle_distance(X, P.V, P.tris)[0])
+        if zone.inside is not None and n:
             P = self.parts[zone.inside]
             w = mk.winding_numbers(X, P.V, P.tris)
             d = mk.point_triangle_distance(X, P.V, P.tris)[0]
-            m &= (np.abs(w) > 0.5) | (d <= eps)
+            m = np.minimum(m, np.where(np.abs(w) > 0.5, d, -d) + eps)
         return m
+
+    def segments_in_zone(self, zone: ac.Zone, a: str, b: str, P0, P1, tri_a, tri_b, eps: float):
+        """Which segments ``P0[i]``-``P1[i]`` lie wholly inside ``zone`` dilated by eps -- the whole segment, not
+        its end points (a faces / near / inside zone and any union is not convex: a segment can leave it and come
+        back between its ends).  A segment is certified inside when both end margins are ``>= length / 2`` (the
+        margins are 1-Lipschitz), rejected when a margin is negative, else split at its midpoint; pieces shorter
+        than the policy eps are accepted on their end points (resolution: an excursion between them stays within
+        eps / 2 of the dilated zone).  Returns ``(inside (n,) bool, witness (n, 3): the first point found
+        outside)``."""
+        P0 = np.asarray(P0, dtype=np.float64).reshape(-1, 3)
+        P1 = np.asarray(P1, dtype=np.float64).reshape(-1, 3)
+        n = len(P0)
+        inside = np.ones(n, dtype=bool)
+        witness = np.full((n, 3), np.nan)
+        if not n or zone.unconstrained:
+            return inside, witness
+        own = np.arange(n)
+        ta, tb = np.asarray(tri_a, dtype=np.int64), np.asarray(tri_b, dtype=np.int64)
+        m0 = self.zone_margin(zone, a, b, P0, ta, tb, eps)
+        m1 = self.zone_margin(zone, a, b, P1, ta, tb, eps)
+        floor = self.eps
+        for _depth in range(64):
+            if not len(own):
+                break
+            bad0, bad1 = m0 < 0, m1 < 0
+            for q in np.nonzero(bad0 | bad1)[0]:
+                i = int(own[q])
+                if inside[i]:
+                    inside[i] = False
+                    witness[i] = P0[q] if bad0[q] else P1[q]
+            L = np.linalg.norm(P1 - P0, axis=1)
+            go = ~(bad0 | bad1) & (np.minimum(m0, m1) < 0.5 * L) & (L > floor) & inside[own]
+            if not go.any():
+                break
+            g = np.nonzero(go)[0]
+            mid = 0.5 * (P0[g] + P1[g])
+            mm = self.zone_margin(zone, a, b, mid, ta[g], tb[g], eps)
+            P0, P1 = np.concatenate([P0[g], mid]), np.concatenate([mid, P1[g]])
+            m0, m1 = np.concatenate([m0[g], mm]), np.concatenate([mm, m1[g]])
+            own, ta, tb = np.concatenate([own[g], own[g]]), np.concatenate([ta[g], ta[g]]), np.concatenate([tb[g], tb[g]])
+        return inside, witness
+
+    def zone_empty_selections(self, zone: ac.Zone, a: str, b: str, eps: float) -> list:
+        """Notes of the ``faces`` tests of ``zone`` (and its ``any_of`` members) that select no face."""
+        out = []
+        if zone.any_of is not None:
+            for z in zone.any_of:
+                out += self.zone_empty_selections(z, a, b, eps)
+        if zone.faces is not None:
+            side, sel = zone.faces
+            name = a if side == "a" else b
+            if not self.sel(name, sel, eps).any():
+                out.append(f"{name}: {sel.note or 'faces'}")
+        return out
 
     # -- evaluators ------------------------------------------------------------------------------------------
     def eval_requirement(self, req, eps: float) -> dict:
@@ -337,20 +397,23 @@ class Checker:
         return None
 
     def _curve(self, pd: PairData, eps: float):
-        """Points of the intersection curve and coincident patches with their triangle pairs and kinds."""
+        """The intersection curve as pieces: every crossing segment and every edge of every coincident patch, with
+        the triangle pair (classification index) it belongs to.  Returns ``(r, P0, P1, owners)``."""
         r = self.classify(pd, eps)
-        pts, owners = [], []
+        p0, p1, owners = [], [], []
         for k in range(len(r["kind"])):
             kind = int(r["kind"][k])
             if kind == mk.TT_CROSSING:
-                for p in r["seg"][k]:
-                    pts.append(p)
-                    owners.append(k)
+                p0.append(r["seg"][k][0])
+                p1.append(r["seg"][k][1])
+                owners.append(k)
             elif kind == mk.TT_COINCIDENT:
-                for p in r["polys"][k]:
-                    pts.append(p)
+                poly = r["polys"][k]
+                for i in range(len(poly)):
+                    p0.append(poly[i])
+                    p1.append(poly[(i + 1) % len(poly)])
                     owners.append(k)
-        return r, np.array(pts).reshape(-1, 3), np.array(owners, dtype=np.int64)
+        return r, np.array(p0).reshape(-1, 3), np.array(p1).reshape(-1, 3), np.array(owners, dtype=np.int64)
 
     def _tri_finding(self, pd: PairData, r: dict, k: int, what: str, p=None) -> dict:
         ia, ib = int(r["ia"][k]), int(r["ib"][k])
@@ -407,22 +470,27 @@ class Checker:
         miss = self._missing((j.buried, j.host) + tuple(n for n, _ in j.stack) + tuple(j.also))
         if miss:
             return miss
+        empty = self.zone_empty_selections(j.zone, j.buried, j.host, eps)
+        if empty:
+            return {"verdict": INDETERMINATE, "verdict_reason": "the zone selects no faces: " + "; ".join(empty),
+                    "findings": []}
         pd = self.pair(j.buried, j.host)
-        r, pts, owners = self._curve(pd, eps)
+        r, P0, P1, owners = self._curve(pd, eps)
         findings = []
         verdict = PASS
-        inside = self.zone_contains(j.zone, j.buried, j.host, pts, eps, None) if len(pts) else np.ones(0, bool)
-        leaks = np.nonzero(~inside)[0] if inside is not None else np.zeros(0, dtype=np.int64)
+        inside, witness = self.segments_in_zone(j.zone, j.buried, j.host, P0, P1, r["ia"][owners], r["ib"][owners],
+                                                eps)
         seen = set()
-        for i in leaks:
+        for i in np.nonzero(~inside)[0]:
             kk = int(owners[i])
             if kk in seen:
                 continue
             seen.add(kk)
             if len(seen) <= MAX_FINDINGS:
                 findings.append(self._tri_finding(pd, r, kk, "intersection outside the zone (" +
-                                                  mk.TT_KINDS[int(r["kind"][kk])] + ")", pts[i]))
+                                                  mk.TT_KINDS[int(r["kind"][kk])] + ")", witness[i]))
         n_leak = len(seen)
+        n_pairs = int(len(set(owners.tolist())))
         if n_leak:
             verdict = FAIL
         # volume cross-check (independent of the segment classifier): no shell of either part wholly inside the
@@ -435,7 +503,8 @@ class Checker:
                     n_wholly += 1
                     verdict = FAIL
                     findings.append({"what": "shell wholly inside the other part", "part": P.name, "shell": sh})
-        measured = {"intersection_points": int(len(pts)), "outside_zone": int(n_leak), "shells_wholly_inside": n_wholly}
+        measured = {"intersection_segments": int(len(P0)), "intersection_triangle_pairs": n_pairs,
+                    "outside_zone": int(n_leak), "shells_wholly_inside": n_wholly}
         required = {"outside_zone": 0, "shells_wholly_inside": 0}
         # buried rim
         if j.rim is not None:
