@@ -405,18 +405,29 @@ class Rig:
     #: Scarf ribbon path S0..S5 (§D.3), centre of the thickness, her left; S0 hidden under the collar.
     #: r3 F7: S0 / S1 inside the collar outline (were (0.120, -0.052, 1.176), (0.110, -0.064, 1.150): the
     #: 45 mm start stuck 17 mm out past the collar onto the sleeve cap); see scarf_start_width.
+    #: S4 / S5 (SPEC.md §D.3: (0.012, -0.104, 1.080), (0.006, -0.110, 1.070)): the ribbon gathers into the ring at its
+    #: top back edge (S4 8 mm higher, 2 mm in; S5 7 mm higher), so the whole section enters through the top cap and
+    #: the back face above the upper pink stripe (which wraps the ring's back too; acceptance
+    #: generic:body.scarf_ribbon_*|body.ring_stripe1), and the two ribbons stay > 1 mm apart until they are inside it.
     scarf_path: tuple = (
         (0.092, -0.064, 1.172), (0.098, -0.070, 1.150), (0.080, -0.085, 1.120),
-        (0.044, -0.098, 1.098), (0.012, -0.104, 1.080), (0.006, -0.110, 1.070),
+        (0.044, -0.098, 1.098), (0.010, -0.104, 1.088), (0.006, -0.111, 1.077),
     )
     scarf_width: tuple = (0.045, 0.018)         # lens section width at S0, at S4 (in the chest surface); the
     #                                             interpolation runs from these, then S0 is scarf_start_width
     scarf_start_width: float = 0.030            # r3 F7: the S0 ring only (stays under the lapel at the shoulder)
+    #: The ribbon's width at S4 and S5, gathered into the ring (SPEC.md §D.3: 0.018 at S4, the scarf_width[1] the
+    #: taper from S0 runs to): the whole section enters inside the ring's outline (|x| <= 0.014 of its 0.017 half
+    #: width; at 0.018 its outer edge cut the ring's side wall and the upper stripe at x 0.016).
+    scarf_ring_width: float = 0.012
     scarf_thickness: tuple = (0.010, 0.006)     # at S0, at S4 (the S0 ring itself: scarf_start_thickness)
     scarf_start_thickness: float = 0.007        # spec 0.010 at S0: the ribbon start must stay under the lapel
     scarf_tuck_z: tuple = (-0.006, -0.003)      # S0, S1 lowered this much (their ribbon edge poked through the lapel)
-    ring_center: tuple = (0.0, -0.112, 1.070)   # rounded box (material collar), top at z 1.086 (r2 F11: taller)
-    ring_size: tuple = (0.034, 0.016, 0.032)    # x, y (from -0.104 to -0.120), z (r2 F11: was 0.036 x 0.024)
+    #: Rounded box (material collar), top at z 1.086 (r2 F11: taller).  y -0.1125 (SPEC.md §D.3: -0.112): its back
+    #: face 0.3 mm in front of the faceted blouse front at its bottom (-0.1042 at z 1.0588; at -0.104 the bottom back
+    #: edge sat 0.15 mm inside the blouse, the clearance checks' generic:body.blouse|body.ring).
+    ring_center: tuple = (0.0, -0.1125, 1.070)
+    ring_size: tuple = (0.034, 0.016, 0.032)    # x, y (from -0.1045 to -0.1205), z (r2 F11: was 0.036 x 0.024)
     ring_corner_radius: float = 0.005
     ring_stripe_z: tuple = (1.064, 1.074)       # two pink stripes (material uniform), centre z (r2 F11)
     ring_stripe_height: float = 0.004           # r2 F11: was 0.003
