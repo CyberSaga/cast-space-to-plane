@@ -14,6 +14,9 @@ Three layers:
 
 from __future__ import annotations
 
+import dataclasses
+import json
+import math
 import pathlib
 import sys
 
@@ -141,3 +144,331 @@ def test_triangle_bbox_pairs_order_and_pad():
     assert len(ia) == 0
     ia, ib = mk.triangle_bbox_pairs(V, [[0, 1, 2], [0, 1, 2]], V, [[3, 4, 5]], pad=0.1)
     assert ia.tolist() == [0, 1] and ib.tolist() == [0, 0]
+
+
+# ---------------------------------------------------------------------------------------------------------------
+# detector fixtures (synthetic parts, synthetic profiles)
+# ---------------------------------------------------------------------------------------------------------------
+
+from miki_model import acceptance as ac  # noqa: E402
+from miki_model import checks  # noqa: E402
+
+
+def _box(lo, hi) -> mk.Mesh:
+    (x0, y0, z0), (x1, y1, z1) = lo, hi
+    ring = lambda z: np.array([[x0, y0, z], [x1, y0, z], [x1, y1, z], [x0, y1, z]])  # noqa: E731
+    return mk.loft([ring(z0), ring(z1)], "flat", "flat")
+
+
+def _rod(x, y, z0, z1, r=0.005, n=12) -> mk.Mesh:
+    return mk.loft([mk.ellipse_ring(r, r, n, (x, y, z)) for z in (z0, z1)], "flat", "flat")
+
+
+def _parts(**meshes):
+    return [mk.Part(name, "skin", m, obj="x") for name, m in meshes.items()]
+
+
+def _req(report, name):
+    return next(e for e in report["requirements"] if e["name"] == name)
+
+
+def _generic(report, a, b):
+    return _req(report, f"generic:{a}|{b}")
+
+
+def test_crossing_that_vertex_samples_miss_fails():
+    """Two thin slabs crossing like a '+': no vertex of either lies inside the other, the curve is found."""
+    parts = _parts(a=_box((-0.1, -0.002, -0.002), (0.1, 0.002, 0.002)),
+                   b=_box((-0.002, -0.1, -0.001), (0.002, 0.1, 0.001)))
+    rep = checks.run(parts, profile=[])
+    g = _generic(rep, "a", "b")
+    assert g["verdict"] == checks.FAIL
+    assert g["measured"]["vertices_inside"] == 0 and g["measured"]["crossings"] > 0
+    assert rep["summary"]["required_pass"] is False
+
+
+def test_shell_wholly_inside_another_fails():
+    parts = _parts(big=_box((-0.05, -0.05, -0.05), (0.05, 0.05, 0.05)),
+                   small=_box((-0.01, -0.01, -0.01), (0.01, 0.01, 0.01)))
+    rep = checks.run(parts, profile=[])
+    g = _generic(rep, "big", "small")
+    assert g["verdict"] == checks.FAIL and g["measured"]["crossings"] == 0
+    assert any(f["what"] == "shell wholly inside the other part" and f["part"] == "small" for f in g["findings"])
+
+
+def test_near_contact_inside_the_tolerance_passes():
+    """A sphere's pole touching a box top: 0.5 um into it (below the contact tolerance) and 0.5 eps above it."""
+    for dz in (-0.5e-6, 0.5 * EPS):
+        sphere = mk.ellipsoid((0.0, 0.0, 0.05 + dz), (0.05, 0.05, 0.05), nu=12, nv=12)
+        parts = _parts(box=_box((-0.1, -0.1, -0.02), (0.1, 0.1, 0.0)), ball=sphere)
+        rep = checks.run(parts, profile=[])
+        g = _generic(rep, "box", "ball")
+        assert g["verdict"] == checks.PASS, (dz, g)
+        assert g["measured"]["crossings"] == 0 and g["measured"]["vertices_inside"] == 0
+        if dz < 0:
+            assert g["measured"]["contacts"] > 0                      # recorded with its location, not hidden
+            assert any(f["what"] == "contact" for f in g["findings"])
+
+
+def _rod_join(zone, rim=None, depth=0.0, name="join:rod~box"):
+    return ac.Join(name, "rod", "box", zone, rim, depth, "fixture", "a rod sunk into a box through its top")
+
+
+TOP = 0.05
+
+
+def test_join_inside_its_zone_passes_and_a_leak_fails():
+    box = _box((-0.05, -0.05, -0.05), (0.05, 0.05, TOP))
+    zone = ac.Zone(z=(TOP, TOP), note="the box's top face")
+    rim = ac.Select(min_sides=ac.CAP_SIDES, vz=(-1.0, 0.0), note="the rod's bottom cap")
+    ok = checks.run(_parts(box=box, rod=_rod(0.0, 0.0, 0.0, 0.1)), profile=[_rod_join(zone, rim, 0.02)])
+    assert _req(ok, "join:rod~box")["verdict"] == checks.PASS
+    assert not any(e["kind"] == "generic" and set(e["parts"]) == {"rod", "box"} for e in ok["requirements"])
+    # the same rod near the box's side: its curve also runs down the side wall, outside the zone
+    leak = checks.run(_parts(box=box, rod=_rod(0.048, 0.0, 0.0, 0.1)), profile=[_rod_join(zone)])
+    j = _req(leak, "join:rod~box")
+    assert j["verdict"] == checks.FAIL and j["measured"]["outside_zone"] > 0
+    assert any("outside the zone" in f["what"] and f["xyz"][2] < TOP - 1e-3 for f in j["findings"])
+
+
+def test_join_whose_buried_rim_surfaces_fails():
+    box = _box((-0.05, -0.05, -0.05), (0.05, 0.05, TOP))
+    zone = ac.Zone(z=(TOP, TOP))
+    rim = ac.Select(min_sides=ac.CAP_SIDES, vz=(-1.0, TOP + 0.01), note="the rod's bottom cap")
+    for z0, verdict in ((0.0, checks.PASS), (TOP - 0.005, checks.FAIL), (TOP + 0.002, checks.FAIL)):
+        rep = checks.run(_parts(box=box, rod=_rod(0.0, 0.0, z0, 0.1)), profile=[_rod_join(zone, rim, 0.02)])
+        j = _req(rep, "join:rod~box")
+        assert j["verdict"] == verdict, (z0, j)
+        if verdict == checks.FAIL:
+            assert any(f["what"] == "rim vertex not buried by the required depth" for f in j["findings"])
+
+
+def test_positive_gap_below_the_minimum_fails():
+    lo = _box((-0.02, -0.02, -0.02), (0.02, 0.02, 0.0))
+    for gap, verdict in ((0.0005, checks.FAIL), (0.002, checks.PASS)):
+        hi = _box((-0.01, -0.01, gap), (0.01, 0.01, 0.01))
+        req = ac.Clear("clear:hi^lo", "hi", "lo", ac.ALL, ac.ALL, 0.001, ac.INF, "fixture", "a 1 mm gap")
+        for metric in ("points", "euclid"):
+            rep = checks.run(_parts(lo=lo, hi=hi), profile=[dataclasses.replace(req, metric=metric)])
+            c = _req(rep, "clear:hi^lo")
+            assert c["verdict"] == verdict, (gap, metric, c)
+            if "min" in c["measured"]:
+                assert abs(c["measured"]["min"] - gap) < 1e-9
+            else:                                                     # nothing within the screening pad
+                assert metric == "euclid" and c["measured"]["min_gap_above"] < gap
+
+
+def test_required_pose_not_tested_is_indeterminate():
+    pose = ac.Pose("pose:arms-raised", "arms raised", "fixture", "posed clearance", level="required")
+    rep = checks.run(_parts(a=_box((0, 0, 0), (0.01, 0.01, 0.01))), profile=[pose])
+    p = _req(rep, "pose:arms-raised")
+    assert p["verdict"] == checks.INDETERMINATE and "not tested" in p["reason"]
+    assert rep["summary"]["required_pass"] is False                 # INDETERMINATE never passes
+    advisory = dataclasses.replace(pose, level="advisory")
+    assert checks.run(_parts(a=_box((0, 0, 0), (0.01, 0.01, 0.01))), profile=[advisory])["summary"]["required_pass"]
+
+
+# -- degenerate-intersection policy ----------------------------------------------------------------------------
+
+def test_coplanar_overlap_is_coincident():
+    """Two boxes sharing a face plane, overlapping in it: 'coincident' -- FAIL under everything else, PASS under a
+    join only when the overlap polygon lies inside the zone."""
+    a = _box((-0.02, -0.02, -0.02), (0.02, 0.02, 0.0))
+    b = _box((0.0, -0.01, 0.0), (0.04, 0.01, 0.02))
+    rep = checks.run(_parts(a=a, b=b), profile=[])
+    g = _generic(rep, "a", "b")
+    assert g["verdict"] == checks.FAIL and g["measured"]["coincident"] > 0 and g["measured"]["crossings"] == 0
+    assert rep["summary"]["coincident"] > 0
+    inside = ac.Join("join:b~a", "b", "a", ac.Zone(z=(0.0, 0.0)), None, 0.0, "fixture", "b stands on a")
+    assert _req(checks.run(_parts(a=a, b=b), profile=[inside]), "join:b~a")["verdict"] == checks.PASS
+    outside = dataclasses.replace(inside, zone=ac.Zone(z=(0.001, 0.002)))
+    j = _req(checks.run(_parts(a=a, b=b), profile=[outside]), "join:b~a")
+    assert j["verdict"] == checks.FAIL and any("coincident" in f["what"] for f in j["findings"])
+
+
+def test_edge_and_vertex_on_face_within_eps_is_contact_not_penetration():
+    """A box standing on its edge and an octahedron standing on its vertex, each 0.5 um into a slab."""
+    slab = _box((-0.1, -0.1, -0.01), (0.1, 0.1, 0.0))
+    s = 0.01 / math.sqrt(2.0)
+    edge = mk.Mesh(_box((-0.02, -s, -s), (0.02, s, s)).rotate("x", 45.0).vertices + [0, 0, 0.01 - 0.5e-6],
+                   _box((-0.02, -s, -s), (0.02, s, s)).faces, 1)
+    octa = mk.ellipsoid((0.0, 0.0, 0.0), (0.01, 0.01, 0.01), nu=4, nv=3)
+    vertex = octa.translate((0.05, 0.05, 0.01 - 0.5e-6))
+    rep = checks.run(_parts(slab=slab, edge=edge, vertex=vertex), profile=[])
+    for other in ("edge", "vertex"):
+        g = _generic(rep, "slab", other)
+        assert g["verdict"] == checks.PASS, (other, g)
+        assert g["measured"]["contacts"] > 0 and g["measured"]["crossings"] == 0
+
+
+def test_mesh_crossing_shorter_than_eps_is_a_crossing():
+    """A needle poking 20 eps through a face: its cut is far shorter than eps, and it still counts."""
+    h = 20.0 * EPS
+    w = 1e-4
+    sq = lambda z, k: np.array([[-k, -k, z], [k, -k, z], [k, k, z], [-k, k, z]])  # noqa: E731
+    needle = mk.loft([sq(0.05, w), sq(0.01, w * 0.8)], "flat", ("pole", (0.0, 0.0, -h)))
+    rep = checks.run(_parts(slab=_box((-0.1, -0.1, -0.01), (0.1, 0.1, 0.0)), needle=needle), profile=[])
+    g = _generic(rep, "slab", "needle")
+    assert g["verdict"] == checks.FAIL and g["measured"]["crossings"] > 0
+    chk = checks.Checker({p.name: checks.PartGeom(p.name, p.obj, p.mesh) for p in _parts(
+        slab=_box((-0.1, -0.1, -0.01), (0.1, 0.1, 0.0)), needle=needle)})
+    r = chk.classify(chk.pair("slab", "needle"), chk.eps)
+    seg = r["seg"][r["kind"] == mk.TT_CROSSING]
+    assert np.max(np.linalg.norm(seg[:, 1] - seg[:, 0], axis=1)) < EPS
+
+
+def test_verdict_that_flips_with_eps_is_tolerance_sensitive():
+    """A sphere pole 3 eps into a box: a crossing at eps / 10 and eps, a contact at 10 eps -> INDETERMINATE."""
+    sphere = mk.ellipsoid((0.0, 0.0, 0.05 - 3.0 * EPS), (0.05, 0.05, 0.05), nu=12, nv=12)
+    rep = checks.run(_parts(box=_box((-0.1, -0.1, -0.02), (0.1, 0.1, 0.0)), ball=sphere), profile=[])
+    g = _generic(rep, "box", "ball")
+    assert g["verdict"] == checks.INDETERMINATE and g["reason"].startswith("tolerance-sensitive")
+    assert g["tolerance_sensitive"] and all("xyz" in f and "face" in f for f in g["tolerance_sensitive"])
+    assert rep["summary"]["tolerance_sensitive"] == 1 and rep["summary"]["required_pass"] is False
+
+
+def test_crossing_hidden_from_the_classifier_is_caught_by_containment_and_depth(monkeypatch):
+    """With the segment classifier blinded, a penetrating box still FAILs (containment) and a surfacing rim
+    still FAILs (depth): the volume cross-check is independent."""
+    def blind(VA, ta, VB, tb, eps, pairs=None):
+        z = np.zeros(0, dtype=np.int64)
+        return {"ia": z, "ib": z, "kind": z, "seg": np.zeros((0, 2, 3)), "polys": [],
+                "near_band": np.zeros(0, dtype=bool), "n_candidates": 0, "n_near_band": 0}
+
+    monkeypatch.setattr(checks.mk, "triangle_intersections", blind)
+    parts = _parts(a=_box((-0.02, -0.02, -0.02), (0.02, 0.02, 0.0)), b=_box((0.01, 0.01, -0.005), (0.04, 0.04, 0.02)))
+    g = _generic(checks.run(parts, profile=[]), "a", "b")
+    assert g["measured"]["crossings"] == 0 and g["measured"]["vertices_inside"] > 0 and g["verdict"] == checks.FAIL
+    box = _box((-0.05, -0.05, -0.05), (0.05, 0.05, TOP))
+    rim = ac.Select(min_sides=ac.CAP_SIDES, vz=(-1.0, TOP))
+    rep = checks.run(_parts(box=box, rod=_rod(0.0, 0.0, TOP - 0.005, 0.1)),
+                     profile=[_rod_join(ac.Zone(z=(TOP, TOP)), rim, 0.02)])
+    j = _req(rep, "join:rod~box")
+    assert j["measured"]["intersection_points"] == 0 and j["verdict"] == checks.FAIL
+
+
+def test_report_is_deterministic_json():
+    parts = _parts(a=_box((-0.1, -0.002, -0.002), (0.1, 0.002, 0.002)),
+                   b=_box((-0.002, -0.1, -0.001), (0.002, 0.1, 0.001)))
+    t1, t2 = checks.dumps(checks.run(parts, profile=[])), checks.dumps(checks.run(parts, profile=[]))
+    assert t1 == t2
+    assert json.loads(t1)["geometry"]["eps"] == pytest.approx(EPS)
+
+
+# ---------------------------------------------------------------------------------------------------------------
+# the checks on Miki (built once per module) and the two mutations
+# ---------------------------------------------------------------------------------------------------------------
+
+from miki_model import assemble as asm  # noqa: E402
+from miki_model import body, hair  # noqa: E402
+from miki_model.rig import Rig  # noqa: E402
+
+
+@pytest.fixture(scope="module")
+def miki():
+    return asm.assemble(Rig())
+
+
+@pytest.fixture(scope="module")
+def miki_report(miki):
+    return checks.run(miki.parts, reports=miki.reports)
+
+
+def _mutated(parts, name, fn):
+    out = []
+    for p in parts:
+        if p.name == name:
+            V = fn(p.mesh.vertices.copy())
+            p = dataclasses.replace(p, mesh=mk.Mesh(np.round(V, asm.DECIMALS) + 0.0, p.mesh.faces, p.mesh.groups))
+        out.append(p)
+    return out
+
+
+def test_miki_every_requirement_has_a_verdict(miki_report):
+    rep = miki_report
+    assert rep["profile"] == {"name": ac.PROFILE_NAME, "version": ac.PROFILE_VERSION,
+                              "requirements": len(ac.profile())}
+    verdicts = {e["verdict"] for e in rep["requirements"]}
+    assert verdicts <= {checks.PASS, checks.FAIL, checks.INDETERMINATE}
+    for e in rep["requirements"]:
+        assert e["kind"] in ("join", "clear", "generic", "proportion", "pose")
+        if e["verdict"] == checks.INDETERMINATE:
+            assert e.get("reason"), e["name"]                       # it says what is missing
+    names = {e["name"] for e in rep["requirements"]}
+    assert {r.name for r in ac.profile()} <= names                  # every profile requirement was evaluated
+    assert rep["summary"]["required_pass"] == all(e["verdict"] == checks.PASS for e in rep["requirements"]
+                                                  if e["level"] == "required")
+
+
+def test_miki_every_intersecting_pair_is_accounted_for(miki_report):
+    """The pair table: every pair with an intersection or a contained vertex is under a declared join or a
+    generic requirement (which then FAILs)."""
+    for p in miki_report["pairs"]:
+        assert p["requirements"], p
+        if p["crossings"] or p["coincident"] or p["a_vertices_inside_b"] or p["b_vertices_inside_a"]:
+            kinds = {n.split(":")[0] for n in p["requirements"]}
+            assert "join" in kinds or "FAIL" in p["verdicts"] or "INDETERMINATE" in p["verdicts"], p
+    assert miki_report["summary"]["intersecting_pairs"] >= 80
+
+
+def test_miki_named_pairs_are_tested_even_without_a_contact(miki_report):
+    """A pair the profile names is always evaluated (the bbox screen only orders the generic work)."""
+    clear = [e for e in miki_report["requirements"] if e["kind"] == "clear"]
+    assert any(e["name"] == "clear:limbs.strap_l^limbs.shoe_l" for e in clear)
+    assert all(e["verdict"] in (checks.PASS, checks.FAIL, checks.INDETERMINATE) for e in clear)
+
+
+def test_miki_proportions_match_the_lofting_tables(miki_report):
+    for name in ("proportion:head.skin", "proportion:body.blouse"):
+        e = _req(miki_report, name)
+        assert e["verdict"] == checks.PASS, e["findings"]
+        rows = e["measured"]["rows"]
+        assert all({"half_width_left", "half_width_right", "front_y", "back_y"} <= set(r) for r in rows)
+
+
+def test_miki_report_is_deterministic(miki):
+    only = {"hair.sidelock_l"}
+    a = checks.dumps(checks.run(miki.parts, reports=miki.reports, only=only))
+    b = checks.dumps(checks.run(miki.parts, reports=miki.reports, only=only))
+    assert a == b
+
+
+def test_mutation_collar_3mm_into_the_blouse_fails(miki, miki_report):
+    """Shifting the collar 3 mm toward the chest turns its lapel-tuck requirements from PASS to FAIL and deepens
+    the collar's poke-through into the blouse."""
+    names = ("join:body.dickey~body.collar", "join:body.scarf_ribbon_l~body.collar",
+             "join:body.scarf_ribbon_r~body.collar")
+    for n in names:
+        assert _req(miki_report, n)["verdict"] == checks.PASS, n
+    c = np.asarray(body.TORSO_CENTRE)
+
+    def inward(V):
+        d = V - c
+        return V - 0.003 * d / np.linalg.norm(d, axis=1)[:, None]
+
+    rep = checks.run(_mutated(miki.parts, "body.collar", inward), reports=miki.reports, only={"body.collar"})
+    for n in names:
+        assert _req(rep, n)["verdict"] == checks.FAIL, n
+    before = _generic(miki_report, "body.blouse", "body.collar")["measured"]
+    after = _generic(rep, "body.blouse", "body.collar")
+    assert after["verdict"] == checks.FAIL
+    assert after["measured"]["crossings"] > 2 * before["crossings"]
+    assert after["measured"]["vertices_inside"] > 2 * before["vertices_inside"]
+
+
+def test_mutation_hair_root_2mm_out_of_the_dome_fails(miki, miki_report):
+    """Pushing the sidelock's buried root row 2 mm out along the dome normal fails the dome-hair join."""
+    name = "join:hair.sidelock_l~hair.dome"
+    assert _req(miki_report, name)["verdict"] == checks.PASS
+    rig = Rig()
+
+    def out(V):
+        V = V.copy()
+        for i in np.nonzero(V[:, 2] >= hair.SIDELOCK_ROOT_Z - 1e-9)[0]:
+            V[i] = V[i] + 0.002 * hair._ellipsoid_normal(rig, V[i])
+        return V
+
+    rep = checks.run(_mutated(miki.parts, "hair.sidelock_l", out), reports=miki.reports, only={"hair.sidelock_l"})
+    j = _req(rep, name)
+    assert j["verdict"] == checks.FAIL
+    assert any(f["what"] == "rim vertex not buried by the required depth" for f in j["findings"])
