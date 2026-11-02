@@ -76,6 +76,27 @@ def test_point_triangle_distance_regions():
     np.testing.assert_allclose(q[4], [0.5, 0.5, 0.0])
 
 
+def _segment_distance(p, a, b):
+    d = b - a
+    t = 0.0 if not d @ d else float(np.clip((p - a) @ d / (d @ d), 0.0, 1.0))
+    return float(np.linalg.norm(a + t * d - p))
+
+
+def test_point_triangle_distance_degenerate_triangles():
+    """A repeated vertex or collinear vertices: the distance is the nearest edge's, never vertex A's (review)."""
+    cases = [([[-1.2, -1.0, 1.6], [-1.2, -1.0, 1.6], [-1.06, -2.19, 1.53]], [-1.7, -1.7, 2.2]),
+             ([[1.0, 1.6, 0.0], [1.0, 1.6, 0.0], [1.34, 3.47, -2.04]], [1.3, 1.7, -0.6]),
+             ([[-0.1, 0.7, -0.1], [0.56, 0.15, 0.56], [-1.24, 1.65, -1.24]], [0.0, 1.1, -1.4]),
+             ([[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [3.0, 0.0, 0.0]], [2.0, 1.0, 0.0]),
+             ([[0.5, 0.5, 0.5], [0.5, 0.5, 0.5], [0.5, 0.5, 0.5]], [1.5, 0.5, 0.5])]
+    for T, p in cases:
+        T, p = np.asarray(T, float), np.asarray(p, float)
+        true = min(_segment_distance(p, T[i], T[(i + 1) % 3]) for i in range(3))
+        d, _, q = mk.point_triangle_distance(p, T, [[0, 1, 2]])
+        assert abs(d[0] - true) < 1e-12, (T, p, d[0], true)
+        assert abs(np.linalg.norm(q[0] - p) - true) < 1e-12
+
+
 def test_triangle_pair_distance_matches_sampling():
     rng = np.random.default_rng(3)
     for _ in range(20):

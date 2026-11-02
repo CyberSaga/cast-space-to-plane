@@ -1410,8 +1410,38 @@ def _dot(a, b):
 def closest_point_on_triangle(P, A, B, C) -> np.ndarray:
     """Closest point of triangle ``(A, B, C)`` to ``P``, elementwise over broadcastable ``(..., 3)`` arrays
     (Ericson, *Real-Time Collision Detection* 5.1.5: Voronoi regions of the vertices, edges and face).  A
-    degenerate triangle falls back to its nearest edge point through the same region tests."""
+    degenerate triangle (a repeated vertex, collinear vertices: ``|ab x ac|^2 <= 1e-24 |ab|^2 |ac|^2``, where the
+    region tests are not valid) returns the nearest of the closest points of its three edges instead."""
     P, A, B, C = np.broadcast_arrays(*(np.asarray(x, dtype=np.float64) for x in (P, A, B, C)))
+    out = _closest_point_on_triangle_regions(P, A, B, C)
+    ab, ac = B - A, C - A
+    cr = np.cross(ab, ac)
+    degen = _dot(cr, cr) <= 1e-24 * _dot(ab, ab) * _dot(ac, ac)
+    if np.any(degen):
+        best, bd = None, None
+        for X, Y in ((A, B), (B, C), (C, A)):
+            q = _closest_point_on_segment(P, X, Y)
+            d = _dot(q - P, q - P)
+            if best is None:
+                best, bd = q, d
+            else:
+                better = d < bd
+                best, bd = np.where(better[..., None], q, best), np.where(better, d, bd)
+        out = np.where(degen[..., None], best, out)
+    return out
+
+
+def _closest_point_on_segment(P, X, Y) -> np.ndarray:
+    """Closest point of segment ``X``-``Y`` to ``P`` (elementwise; a zero-length segment is its point)."""
+    d = Y - X
+    dd = _dot(d, d)
+    with np.errstate(divide="ignore", invalid="ignore"):
+        t = np.where(dd > 0, _dot(P - X, d) / np.where(dd > 0, dd, 1.0), 0.0)
+    return X + np.clip(t, 0.0, 1.0)[..., None] * d
+
+
+def _closest_point_on_triangle_regions(P, A, B, C) -> np.ndarray:
+    """The Voronoi-region evaluation of :func:`closest_point_on_triangle` (valid for non-degenerate triangles)."""
     ab, ac, ap = B - A, C - A, P - A
     d1, d2 = _dot(ab, ap), _dot(ac, ap)
     bp = P - B
