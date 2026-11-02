@@ -273,6 +273,7 @@ builders' float output. It writes no model file, so `make_miki_model.py --check`
 python -m tools.miki_model.checks                        # the gate: exit 0 only if every required check passes
 python -m tools.miki_model.checks --report-only          # print everything, always exit 0 (use while modelling)
 python -m tools.miki_model.checks --out report.json      # also write the JSON report
+python -m tools.miki_model.checks --poses                # also check the named poses (advisory; "Poses" below)
 ```
 
 The review round runs the gate. While modelling, use `--report-only`. The report goes only where `--out` says (the
@@ -356,7 +357,8 @@ they are, not fixed:
 - The advisory `clear:limbs.strap_{l,r}^limbs.shoe_{l,r}/surface` stays FAIL: its exact-distance metric covers every
   strap face, including the strap's end faces, which physically meet the shoe. The gated rule is the builder's
   border-chord clearance (`clear:limbs.strap_{l,r}^limbs.shoe_{l,r}`), which passes.
-- `pose:rest-only` stays INDETERMINATE (advisory) until the named poses are tested (milestone 2).
+- The seven `pose:*` requirements are advisory: INDETERMINATE "not tested" in the default run, PASS or FAIL with
+  `--poses` (see "Poses (milestone 2)").
 - Known minor, not a check result: at the bangs' ends (|x| 0.062-0.072, z 1.456-1.4585) the dome's front rim shows
   1-2 mm in front of the outermost strips just under the band in the shaded close-ups (a sub-pixel patch at 400 x 600;
   nothing in the line renders). `_dome_bottom_z` follows the rig's band line, which lies ~3 mm below the band mesh's
@@ -364,6 +366,70 @@ they are, not fixed:
   row cannot come further forward without crossing the band's face. The clean fix seats the dome's front boundary on
   the projected band with a ring vertex at the span edge, then re-seats the sidelock roots and the back blend rings: a
   coordinated dome / band / root change for a later round.
+
+### Poses (milestone 2)
+
+A pose is an ordered list of steps `(object, world axis, degrees)`. Each step is the web UI's D85 part rotation: the
+object and its descendants under `assemble.PARENTS` turn rigidly about the object's CURRENT world joint (the `joint`
+of `assemble.part_links`, carried by the earlier steps), exactly `web/src/object_rotate.ts::rotate_unit` with that
+pivot (`rotate_about_point` on every member: exact about z, decomposed about x / y). `poses.py` holds the table
+(`POSES`) and that maths, mirrored from the TypeScript expression by expression; `posed_parts(parts, rig, steps)`
+returns the moved parts' meshes. Nothing is written into the scene, so `--check` is unaffected.
+
+Rotations are right-handed about the world axes (the figure faces -Y, her left is +X): `+x` tilts what is above the
+joint forward and swings a hanging limb back; `+y` swings `arm_l` inward and `arm_r` outward; `+z` turns the face
+toward her left. The angles tested, with the step degrees they give:
+
+| pose | steps | angles tested |
+| --- | --- | --- |
+| `head-turn` | `head` about z by +angle (+: toward her left) | +10, -10, +20, -20, +30, -30 |
+| `head-nod` | `head` about x by +angle | +15 (down), -10 (up) |
+| `arms-raised` | `arm_l` about y by -angle, `arm_r` about y by +angle (sideways) | 30, 60, 90 |
+| `arms-forward` | `arm_l`, `arm_r` about x by +angle | -30, -60 (forward) |
+| `step` | `legs` about x by +angle (both legs are one object; socks and shoes follow) | +15, -15, +25, -25 (-: forward) |
+| `bow` | `blouse` about x at the waist (carries neck, head, arms, collar, scarf, ring) | +10, +20 (forward) |
+| `bow-head-turn` | `blouse` about x by +10, then `head` about z by +angle | +20 |
+
+What is re-checked: only the pairs a pose moves relative to each other (cross pairs: the two parts' objects lie in
+different motion groups, `poses.motion_groups`: for a one-step pose, one part in the turned subtree and the other not;
+`arm_l` against `arm_r` in `arms-raised`; the head's subtree against the bowed body in `bow-head-turn`). Every other
+pair keeps its rest verdict (a rigid motion).
+
+The frames rule: every selector and zone of the profile is written in the WORLD frame of the rest pose (`Zone(z=...)`,
+`Select(vz=...)`, `inward_from`, `direction=BACKWARD`, ...), so the posed run never evaluates a selector on posed
+coordinates. Every face mask and rim vertex set is computed once at rest and carried over by index (the topology is
+the same). A cross-pair join is tested for containment (every shell, both directions), its rim depth (euclid, with
+the rest rim) and that its parts still meet (when the builder makes them meet); its zone is reported as `not tested in
+poses`. A cross-pair clear is re-measured with the rest face masks (euclid; an `along` or band metric is reported
+INDETERMINATE, none is cross-pair in Miki). Every other cross pair goes through the generic rule (crossing, coincident,
+containment), with the posed boxes deciding which pairs touch. Joins and generic pairs run at the three eps, as at rest.
+
+`--poses` adds `report["poses"][pose][angle]` (the steps, their world pivots, the moved objects and motion groups, the
+per-kind counts, and `changed`: every requirement whose verdict differs from rest, with its findings in the posed frame
+and its `rest_verdict`) and `report["pose_tables"][pose]` (the tested angles and, for each cross pair that fails, the
+first failing angle in each direction of the sweep). The `pose:*` requirements then get their verdict (FAIL when a
+cross pair fails at a tested angle) and stay advisory: a contact a pose creates is information about the drawing
+reference's range, not a defect of the model, until the user sets which poses must stay clean (those then move to
+`required` with their tested angles cited). Without `--poses` the report is the default run's, byte for byte. The
+result is **tested clearance at the listed angles, never a safe range**: nothing between or beyond them is certified.
+
+As they stand (profile v4, pinned in `tests/test_miki_poses.py` as `MIKI_FIRST_FAILING`): turning the head 10 deg
+already pushes the back sheet into the blouse, collar and skirt and a sidelock into the collar and scarf ribbon; the
+nod crosses the sidelocks with the collar going down (+15) and the back sheet with the blouse going up (-10); the
+sleeve caps cross the collar at 90 deg raised; the step lifts the legs' top rims out of the under-skirt block at -15
+(forward) and +25 (back); arms forward and the bow are clean at the angles tested.
+
+The pose maths is verified against the built web code: `tools/miki_model/pose_fixtures.mjs` applies every pose through
+`links.ts` (`resolve_links`, `subtree`) and `object_rotate.ts` (`rotate_unit` about `world_centre(T, joint)`) and writes
+every object's final transform to `tests/fixtures/miki_poses.json` (committed); `tests/test_miki_poses.py` checks the
+Python rigid map of every object against it on the joint, joint + e_x and joint + e_z (within 1e-9 m; the measured
+deviation is 2.2e-16 m). After a change to `POSES` or the web's rotation code, regenerate it from the repository root:
+
+```sh
+npm ci && npm run build -w ts
+(cd web && npx tsc -p tsconfig.test.json)
+node tools/miki_model/pose_fixtures.mjs                  # writes tests/fixtures/miki_poses.json
+```
 
 ### Adding a requirement
 
@@ -388,6 +454,7 @@ surfaces, a positive gap below the minimum, a pose that was not tested) and pins
 ```sh
 python3 tools/make_miki_model.py --check                      # rewrites examples/ and checks the rules above
 python -m pytest -q -o addopts="" tests/test_miki_model.py    # about half a minute; builds the model once per run
+python -m pytest -q -o addopts="" tests/test_miki_poses.py    # the poses: fixture parity and the pinned table
 ```
 
 `tests/test_miki_model.py` pins what the shipped files promise:

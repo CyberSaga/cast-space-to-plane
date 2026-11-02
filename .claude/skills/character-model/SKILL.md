@@ -93,6 +93,7 @@ Each round has two critics in parallel, both read-only:
 - a **line-art and technical critic** (`sonnet`):
   - `--check`;
   - `python -m tools.miki_model.checks` (clearance and proportion checks; a new character has its own `checks` module), reading the report: every FAIL and INDETERMINATE becomes a finding with its part, face indices and XYZ;
+  - `python -m tools.miki_model.checks --poses` (the named poses' tested clearance, advisory): report the first failing angle of each cross pair as information about the pose range, never as a safe range;
   - 16 line renders (12 azimuths, high, low, 2 head close-ups), each with `warnings: []`;
   - stray or missing lines, decals eaten by hidden-line removal, poke-through and gaps;
   - `node tools/web_frame_bench.mjs`;
