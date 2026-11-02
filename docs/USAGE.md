@@ -891,7 +891,7 @@ python3 tools/make_miki_model.py --only hair headband --preview DIR --context
 
 **確定性。** 輸出是確定的：連跑兩次得到逐位元組相同的檔案，而且與 numpy / BLAS 的建置無關。在平面四邊形上，`n·(d−a)` 的符號只是 BLAS 核心的捨入雜訊，`inscribed_fan` 與 `fan_fold` 原本用它決定要不要轉動四邊形的頂點順序，不同的核心（原生、`OPENBLAS_CORETYPE=Haswell`、Python 3.10 的 numpy 2.2.6）會轉動不同的面，寫出不同的檔案。現在 `meshkit._below_fan` 把 `|n·(d−a)| <= 1e-9·|n|·|d−a|` 的四邊形視為平面、不轉動（31 個頭髮與側髮的平面四邊形保持原順序；頂點、群組與數量不變，場景相機的 SVG 逐位元組不變）。`tests/test_miki_model.py` 逐位元組比對 `miki.json` 與 OBJ / MTL / GLB。
 
-**預算。** 全部物件加起來 ≤ 6000 個多邊形與 ≤ 10000 個三角形（現在 4513 與 8242；castplane 的消隱成本隨三角形數上升，目前網頁上的靜止影格約 1.4 秒），每個物件的特徵輪廓頂點 ≤ 64（`MESH_MAX_RAYS`，超過會發 `MESH_RAYS_CAPPED`）。目前每個物件最多 39 個。每個殼都必須是封閉、方向一致的 2-流形，沒有低於地面的頂點。
+**預算。** 全部物件加起來 ≤ 6000 個多邊形與 ≤ 10000 個三角形（現在 4514 與 8242；castplane 的消隱成本隨三角形數上升，目前網頁上的靜止影格約 1.4 秒），每個物件的特徵輪廓頂點 ≤ 64（`MESH_MAX_RAYS`，超過會發 `MESH_RAYS_CAPPED`）。目前每個物件最多 39 個。每個殼都必須是封閉、方向一致的 2-流形，沒有低於地面的頂點。
 
 **時間（參考值）。** 建模約 18 秒；`--check` 約 26 秒；命令列渲染 `miki.json` 約 4–5 秒；TypeScript 移植（`ts/scripts/render.mjs`）約 1.8 秒；A 段約 0.13 秒；匯入 GLB 約 0.1 秒、OBJ 約 0.06 秒。檔案大小：`miki.json` 192 377 B、`miki.obj` 202 660 B、`miki.mtl` 1 272 B、`miki.glb` 182 568 B。
 

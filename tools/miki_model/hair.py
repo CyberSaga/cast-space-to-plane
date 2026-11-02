@@ -728,19 +728,29 @@ SIDELOCK_FULLNESS = 0.8
 SIDELOCK_ROOT_THICKNESS = 0.5       # the root row is this fraction of the lock thickness (it hides in the dome)
 
 
-def _sidelock_root_row(rig: Rig):
-    """``(z, x_in, y_in, x_out, y_out)`` of the root row: the first table row's edges carried up to
-    :data:`SIDELOCK_ROOT_Z` along their dome azimuths (the inner one turned :data:`SIDELOCK_ROOT_INNER_TURN`
-    toward the side), :data:`SIDELOCK_ROOT_INSET` inside the dome."""
+def _sidelock_root_edges(rig: Rig):
+    """``((p_in, n_in), (p_out, n_out))``: the dome-section points at :data:`SIDELOCK_ROOT_Z` above the root
+    row's inner and outer edges and the section's horizontal outward normals there (the inner one turned
+    :data:`SIDELOCK_ROOT_INNER_TURN` toward the side).  Shared with acceptance._sidelock_root_depth."""
     c = np.array(rig.dome_center)
     z0, xi, yi, xo, yo = rig.sidelock_rows[0]
-    out = [SIDELOCK_ROOT_Z]
+    out = []
     for x, y, turn in ((xi, yi, SIDELOCK_ROOT_INNER_TURN), (xo, yo, 0.0)):
         psi = math.atan2(x, y - c[1])
         p, n = _dome_section_point(rig, SIDELOCK_ROOT_Z, psi)
         if turn:
             psi -= turn / math.hypot(p[0], p[1] - c[1])
             p, n = _dome_section_point(rig, SIDELOCK_ROOT_Z, psi)
+        out.append((p, n))
+    return tuple(out)
+
+
+def _sidelock_root_row(rig: Rig):
+    """``(z, x_in, y_in, x_out, y_out)`` of the root row: the first table row's edges carried up to
+    :data:`SIDELOCK_ROOT_Z` along their dome azimuths (the inner one turned :data:`SIDELOCK_ROOT_INNER_TURN`
+    toward the side), :data:`SIDELOCK_ROOT_INSET` inside the dome (:func:`_sidelock_root_edges`)."""
+    out = [SIDELOCK_ROOT_Z]
+    for p, n in _sidelock_root_edges(rig):
         q = p - SIDELOCK_ROOT_INSET * n
         out += [float(q[0]), float(q[1])]
     return tuple(out)

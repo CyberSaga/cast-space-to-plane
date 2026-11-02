@@ -36,7 +36,6 @@ single polygons) and, where a builder documents them, its part-local smooth-grou
 
 from __future__ import annotations
 
-import math
 from dataclasses import dataclass
 
 from . import body, hair, head, limbs
@@ -46,8 +45,10 @@ __all__ = ["PROFILE_VERSION", "PROFILE_NAME", "Select", "Zone", "Join", "Clear",
            "DIAGNOSTIC_WIDTHS", "profile", "FACING_COS", "INNER_FACE_COS", "CAP_SIDES", "DECAL_FRONT_COS",
            "CLEAR_METRICS", "BAND_CHORD_SAMPLES"]
 
-#: Bump when a requirement is added, removed or changed (the report records it).
-PROFILE_VERSION = "2"
+#: Bump when a requirement is added, removed or changed (the report records it).  3: the close round (joins
+#: bangs~sidelock_{l,r} and sidelock_{l,r}~back, the scarf tips' root rim, the sidelock root depth with the
+#: turned inner edge).
+PROFILE_VERSION = "3"
 PROFILE_NAME = "miki"
 
 #: A face "faces" a direction when its unit normal's dot product with it is at least this (60 degrees).
@@ -283,13 +284,9 @@ def _decal_requirements(rig: Rig) -> list:
 def _sidelock_root_depth(rig: Rig) -> float:
     """The perpendicular depth of the sidelock root row's edges under the dome (hair._sidelock_root_row insets them
     SIDELOCK_ROOT_INSET along the horizontal section normal): inset x cos(section normal, dome normal), the smaller
-    of the inner and outer edge."""
-    c = rig.dome_center
-    _z0, xi, yi, xo, yo = rig.sidelock_rows[0]
-    cos = []
-    for x, y in ((xi, yi), (xo, yo)):
-        p, n = hair._dome_section_point(rig, hair.SIDELOCK_ROOT_Z, math.atan2(x, y - c[1]))
-        cos.append(float(n @ hair._ellipsoid_normal(rig, p)))
+    of the inner and outer edge, at the builder's own section points (hair._sidelock_root_edges: the inner edge
+    turned SIDELOCK_ROOT_INNER_TURN)."""
+    cos = [float(n @ hair._ellipsoid_normal(rig, p)) for p, n in hair._sidelock_root_edges(rig)]
     return hair.SIDELOCK_ROOT_INSET * min(cos)
 
 
@@ -467,7 +464,7 @@ def _body_requirements(rig: Rig) -> list:
     out.append(Clear(
         "clear:body.collar^body.bib", "body.collar", "body.bib", collar_under, bib_top,
         body.COLLAR_BIB_CLEARANCE, INF, "body.COLLAR_BIB_CLEARANCE",
-        "body._inner_edge_raise: the collar's inner edge underside clears the bib's top (review r3, F4)"))
+        "body._inner_edge_raise: the collar's whole underside over the bib clears the bib's top (review r3, F4)"))
     out.append(Join(
         "join:body.dickey~body.collar", "body.dickey", "body.collar",
         Zone(faces=("b", lapel_hidden), note="the dickey meets only the lapels' walls / underside"), None, 0.0,

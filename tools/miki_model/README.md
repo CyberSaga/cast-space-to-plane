@@ -101,7 +101,7 @@ Authoring rules, which the web UI enforces by ignoring a bad link silently:
 | 16 | `ring` | scarf ring, its 2 pink stripes |
 | 17 | `neck` | neck and décolleté bib |
 
-Currently 58 parts (58 closed shells), 4225 vertices, 4513 polygons and 8242 triangles. To add, split or reorder
+Currently 58 parts (58 closed shells), 4225 vertices, 4514 polygons and 8242 triangles. To add, split or reorder
 objects, change `OBJECTS` and keep `DISPLAY_MATERIALS` and `PARENTS` in the same order (asserts check it), give a
 new object its joint in `part_links`, then update the object lists that `export.DESCRIPTION`, `examples/README.md`
 and the §5.4 note quote.
@@ -241,7 +241,7 @@ These are castplane's mesh rules (contract §5.2) and what the generator adds on
    object instead of deleting designed lines. Prefer `thicken(groups="single")` slabs, whose borders draw only as
    silhouettes and cost no rays, and give a rim its own group only where the line must show.
 8. **Budget.** At most 6000 polygons and 10000 triangles in total (`assemble.BUDGET`, polygons = faces as written,
-   triangles = castplane's fan triangulation; now 4513 and 8242) and a scene file of at most 700 KiB (190 KiB now).
+   triangles = castplane's fan triangulation; now 4514 and 8242) and a scene file of at most 700 KiB (190 KiB now).
    Hidden-line time grows with the number of drawn edge samples times the number of triangles, and shrinks when
    objects are compact. `node tools/web_frame_bench.mjs examples/miki.json 5` times the web path (the figures
    depend on the machine, so compare against a baseline measured on the same machine).
@@ -294,8 +294,11 @@ is printed and never changes the exit status. `--report-only` always exits 0.
 ### The three pair relations
 
 Burial is this model's construction idiom (the neck ends inside the torso and the head, the bib inside the neck,
-the leg inside the sock, the sidelock roots inside the dome, every decal's back under the skin), so a generic
-"no part may intersect another" gate would fail on day one. Every pair of parts, across objects and inside one
+the leg inside the sock, the sidelock roots inside the dome, every decal's back under the skin, the scarf tips' root
+rim inside the ring, and the hair tucks: each sidelock over the bangs' outermost strip and end
+(`join:hair.bangs~hair.sidelock_{l,r}`, a leak onto the next strip fails) and into the side curtain's front edge
+(`join:hair.sidelock_{l,r}~hair.back`, from `hair.CURTAIN_FRONT_Y` back by `hair.CURTAIN_END_THICKNESS`)), so a
+generic "no part may intersect another" gate would fail on day one. Every pair of parts, across objects and inside one
 object (`collar` merges the collar, the dickey and the stripe), therefore falls under exactly one relation:
 
 - **join**: part A is buried in part B on purpose. The requirement names the buried part, the host, the zone where
@@ -335,6 +338,25 @@ relation that applied, a table of every intersecting part pair, and a width tabl
 parts (hair, skirt), which is diagnostic only: it becomes a gate once a written rule exists. The printed summary
 gives the counts per kind, the passes that rely on the facet-bulge allowance, the zones that are exempt or
 approximate, and every requirement that is not PASS.
+
+### Accepted as they stand
+
+The close round (profile v3) left every required requirement PASS. These results were reviewed and signed off as
+they are, not fixed:
+- Five joins pass only through the facet-bulge allowance (the summary lists them with the nominal and the effective
+  depth): `body.bib~body.neck`, `body.blouse~body.neck`, `hair.headband~hair.dome` and `hair.sidelock_{l,r}~hair.dome`.
+  The rim is the stated depth under the analytic host; the faceted host bulges less far out between its vertices.
+- The sidelock root depth is `hair.SIDELOCK_ROOT_INSET` x cos(section normal, dome normal): the builder insets the
+  root row's edges along the horizontal section normal, so the perpendicular depth is the smaller cosine of the two
+  edges at their own section points (`hair._sidelock_root_edges`, the inner edge turned
+  `hair.SIDELOCK_ROOT_INNER_TURN`).
+- `limbs.sleeve_{l,r}~body.blouse` and `limbs.thumb_{l,r}~limbs.hand_{l,r}` are zone-exempt: the builders state no
+  zone for those burials (the blouse cuts the sleeve over its round cap and down the armpit; the thumb is a lobe
+  off the palm base), so the intersection curve is not tested, only containment and the rim (the thumb's base cap).
+- The advisory `clear:limbs.strap_{l,r}^limbs.shoe_{l,r}/surface` stays FAIL: its exact-distance metric covers every
+  strap face, including the strap's end faces, which physically meet the shoe. The gated rule is the builder's
+  border-chord clearance (`clear:limbs.strap_{l,r}^limbs.shoe_{l,r}`), which passes.
+- `pose:rest-only` stays INDETERMINATE (advisory) until the named poses are tested (milestone 2).
 
 ### Adding a requirement
 
