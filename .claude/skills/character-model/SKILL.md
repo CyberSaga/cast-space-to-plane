@@ -92,11 +92,17 @@ Each round has two critics in parallel, both read-only:
   angle, shaded and line versions; the spec's checklist item by item with measured numbers; anime appeal;
 - a **line-art and technical critic** (`sonnet`):
   - `--check`;
+  - `python -m tools.miki_model.checks` (clearance and proportion checks; a new character has its own `checks` module), reading the report: every FAIL and INDETERMINATE becomes a finding with its part, face indices and XYZ;
   - 16 line renders (12 azimuths, high, low, 2 head close-ups), each with `warnings: []`;
   - stray or missing lines, decals eaten by hidden-line removal, poke-through and gaps;
   - `node tools/web_frame_bench.mjs`;
   - determinism and the Python 3.10 bytes;
   - `castplane import` of the GLB and OBJ.
+
+A new character writes its join table while building its parts, the way it writes `PARENTS`: for each part that is
+buried in another (neck in torso, roots in the dome, a decal's back in the skin), declare the join with its zone and
+the builder constant for the depth, starting from the generic checks (any crossing between two parts is a FAIL).
+Never widen a requirement to make a round pass; calibrate only to a cited accepted round.
 
 The round then runs the fixers (one per owner, in worktrees) and a merger. Findings are structured. Each has severity,
 owner, part, view, observed, expected, and a fix concrete enough to implement ("raise the bang cut from 1.425 to
