@@ -1161,8 +1161,11 @@ class PosedChecker(Checker):
             gap, where = _closest(pd)
             findings.append({"what": "the parts no longer meet (the builder makes them meet)", "part": j.buried,
                              "other_part": j.host, "gap": _f(gap), "xyz": _xyz(where)})
-        return {"verdict": verdict, "findings": findings, "measured": measured, "required": required, "units": "m",
-                "near_band": int(np.sum(r["near_band"])), "zone": "not tested in poses"}
+        out = {"verdict": verdict, "findings": findings, "measured": measured, "required": required, "units": "m",
+               "near_band": int(np.sum(r["near_band"])), "zone": "not tested in poses"}
+        if not (n_cr or n_co) and j.rim is None:
+            out["exercised"] = False          # as at rest: an optional join whose parts do not meet measured nothing
+        return out
 
 
 def _closest(pd: PairData):
