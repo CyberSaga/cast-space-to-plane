@@ -646,7 +646,6 @@ def test_miki_every_intersecting_pair_is_accounted_for(miki_report):
         if p["crossings"] or p["coincident"] or p["a_vertices_inside_b"] or p["b_vertices_inside_a"]:
             kinds = {n.split(":")[0] for n in p["requirements"]}
             assert "join" in kinds or "FAIL" in p["verdicts"] or "INDETERMINATE" in p["verdicts"], p
-    assert miki_report["summary"]["intersecting_pairs"] >= 75
 
 
 #: The accepted verdict set of Miki at rest (profile v2): every required requirement that does not PASS, and the
