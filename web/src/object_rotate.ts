@@ -514,6 +514,8 @@ interface UnitGesture<S, A> {
   c_locals: Map<string, Vec3>;
   /** D85: the world pivot of a part's subtree drag, fixed at pointer-down (null: the M11 per-object pivots). */
   pivot: Vec3 | null;
+  /** D86: the joint-limit clamp of the (snapped) drag angle, fixed at pointer-down (null: no limit, the D85 path). */
+  clamp: ((theta_deg: number) => number) | null;
   /** The candidate of the last move not yet applied by stage A (null when none). */
   pending: UnitPose | null;
   /** The pose stage A last ran on in this gesture (`pose0` at first). */
@@ -552,22 +554,30 @@ export class UnitDrag<S, A> {
   /** Pointer-down: a new gesture (any running one is forgotten without a restore). `c_locals`: the local pivots of a
    * single object (unused for a group, which turns about its frame's `c`). D85 `pivot`: the world point a part's
    * subtree turns about (the part's world joint or `c_w` at `pose0`, copied here and never re-read; null or absent:
-   * the M11 per-object path). */
+   * the M11 per-object path). D86 `clamp`: the joint-limit clamp of the drag angle (`limits.ts::drag_clamp`; null or
+   * absent: no clamp, the D85 path bit for bit). */
   begin(pose0: UnitPose, scene0: S, A0: A, seq: number,
-    opts: { live?: boolean; axis?: Axis; c_locals?: ReadonlyMap<string, readonly number[]>; pivot?: readonly number[] | null } = {}): void {
+    opts: { live?: boolean; axis?: Axis; c_locals?: ReadonlyMap<string, readonly number[]>; pivot?: readonly number[] | null;
+      clamp?: ((theta_deg: number) => number) | null } = {}): void {
     const c_locals = new Map<string, Vec3>([...(opts.c_locals ?? new Map<string, readonly number[]>())].map(([id, c]) => [id, [c[0]!, c[1]!, c[2]!]]));
     const pv = opts.pivot ?? null;
     const pivot: Vec3 | null = pv === null ? null : [pv[0]!, pv[1]!, pv[2]!];
-    this.g = { pose0: clone_pose(pose0), scene0, A0, seq, live: opts.live ?? true, axis: opts.axis ?? 2, c_locals, pivot, pending: null,
-      applied: clone_pose(pose0) };
+    this.g = { pose0: clone_pose(pose0), scene0, A0, seq, live: opts.live ?? true, axis: opts.axis ?? 2, c_locals, pivot,
+      clamp: opts.clamp ?? null, pending: null, applied: clone_pose(pose0) };
   }
 
   /** A move: the candidate `pose0` rotated about the gesture's axis by `theta_deg` (total angle, already snapped). No
-   * stage A. Returns the candidate (null outside a gesture). */
+   * stage A. Returns the candidate (null outside a gesture). D86: with a clamp the angle is clamped first, and a clamped
+   * angle of 0 gives `pose0` itself (a copy, bit for bit: `rotate_unit` by 0 re-decomposes the matrix and can move the
+   * pose by an ulp; review R2), so a blocked drag records no step. */
   move(theta_deg: number): UnitPose | null {
     const g = this.g;
     if (g === null) return null;
-    g.pending = rotate_unit(g.pose0, g.axis, theta_deg, g.c_locals, g.pivot);
+    if (g.clamp === null) g.pending = rotate_unit(g.pose0, g.axis, theta_deg, g.c_locals, g.pivot);
+    else {
+      const t = g.clamp(theta_deg);
+      g.pending = t === 0 ? clone_pose(g.pose0) : rotate_unit(g.pose0, g.axis, t, g.c_locals, g.pivot);
+    }
     return clone_pose(g.pending);
   }
 

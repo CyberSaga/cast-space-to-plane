@@ -6181,3 +6181,109 @@ interleaved with board, part and group steps, the download round trip, malformed
 text; `web/scripts/smoke.mjs` drives real clicks, a ring drag, `#obj-restore`, `#obj-apply`, `#obj-ground`, `#undo` and
 `#dl-scene` on the fixture. Core, TS port, conformance set and warning codes are unchanged, and a scene without the keys
 behaves exactly as D84 (docs/DECISIONS.md D85, spec-v0.3 §9).
+
+**[decision, implementation] (D86) Joint limits: a part's rotation relative to its parent is bounded about one axis; a
+ring drag is clamped at the bound, a numeric 套用 beyond it is refused.** Amends, by reference and with the existing text
+unchanged, items (3) part rotation, (4) numeric fields, (7) panel and rings, (10) hooks and (11) tests of the D85 note,
+the `begin(…, {live, axis, c_local})` of the first M11 note above (D85 (3) added `pivot`; `begin` now also takes
+`clamp`), and the panel bullet of §5.8.4. (1) **Web-only key.** An object may carry `objects[i].joint_limit = {axis,
+min_deg?, max_deg?}`, parse-valid iff it is a non-null, non-array object, `axis` is an array of exactly three finite
+numbers with `0 < hypot < ∞`, each present bound (not `undefined`) is a finite number in `[-180, 180]`, at least one
+bound is present and `min_deg ≤ max_deg` when both are (`links.ts::parse_joint_limit`; stored with `+ 0`, other
+properties dropped). `axis` is a direction in the **parent's local** frame (its mesh or primitive coordinates before
+`transform`). Like `parent` / `joint` the validators ignore it (§2.0), `object_links` reads it at the same load sites
+(an entry exists iff one of the three keys is parse-valid), a malformed value is absent (no SceneError, no warning) and
+`scene_blob` writes `{axis, min_deg?, max_deg?}` back as parsed (`limit_for_file`), also when the resolution dropped it.
+(2) **Resolution.** `LinkForest.limits: Map<id, Limit {axis, a (unit), min, max, min_written, max_written}>` holds an
+entry iff the key is parse-valid **and** `parent.has(id)` after the D85 steps (a root part, a lone object or a dropped
+link has no limit: its "relative rotation" would be to the world and a group turn would trip it); an absent bound is
+±180, and a whole-circle range (`min −180` and `max 180`) is no limit; `a` is `axis` scaled by its largest `|component|`
+and then normalised (second review: dividing by `hypot` alone gave `|a| ≠ 1` for a subnormal axis).
+`PlaneSession.limit(id)` exposes a copy; `update_scene` never changes it. **[decision] (3) Measure, reload-stable.** For
+P with parent Q, `D = R_Q(now)ᵀ · R_P(now)` (`limits.ts::relative_rotation`, Q's local frame; `I` when P's local frame
+is aligned with Q's; unchanged when both P and Q are moved by one rotation, so group and ancestor actions never change
+it) and `φ = wrap(2·atan2(a·v, w))` with `(w, v)` the Shepperd quaternion of `D`, `w ≥ 0` (`twist_deg`: the twist of the
+swing-twist split; `φ = θ` for `Rot(a, θ)`, 0 for a rotation about an axis ⟂ `a`, order-independent; the one singular
+rotation, 180° about an axis ⟂ `a`, reads 0 (any `D` with `hypot(a·v, w) ≤ KAPPA_EPS`, so the reading never depends on
+roundoff; second review) and is reached by a `κ = 0` drag, with `φ` the same on both sides; leaving it is ruled in (4);
+the matrix form `2·atan2(a·s, tr D + 1)` is the same angle but ill-conditioned at every 180° rotation and is not used).
+No load transform enters `D` and nothing is stored, so *Download scene* + reload keeps `φ` and the limit cannot be
+stacked by saving and reloading (D86 review R3); a scene whose parts load with different rotations shows a non-zero `φ`
+at load. `canonical_angle(φ, lim)` applies the identification `+180 ≡ −180` at the bound on the seam: when `min = −180`,
+`φ ≥ 180 − ε` reads `−180` (review R1); when `max = 180`, `φ ≤ −180 + ε` reads `180` (the mirror, second review: without
+it a clamped drag to the +180 wall could store `−179.999…`, read `at_max` and be blocked both ways); at most one
+applies, since a whole-circle range is no limit; in every decision and the readout. `limit_state` is `at_max` / `at_min`
+(`|wrap(φ − bound)| ≤ ε`), `inside` (`min ≤ φ ≤ max`), else `above` / `below`, with `LIMIT_EPS_DEG = 1e-9`; `inside(φ)`
+is any of the first three. The tolerance gates decisions only. (4) **Ring drag: clamp.** With Q fixed during a part drag
+(it is never in `subtree(P)`), `D(t) = Rot(e′, t)·D₀`, `e′ = R_Q(now)ᵀ·e` (the ring's world axis in Q's frame), `D₀` at
+pointer-down (`R_Qᵀ·e` is row `axis` of `R_Q`, `[RQ[axis][0], RQ[axis][1], RQ[axis][2]]`; the column, `R_Q·e`, was used
+before the second review and stopped drags under a rotated parent at the wrong angle); in half angles `num(t) = a·v(t) =
+α₁cos(t/2) + β₁sin(t/2)`, `den(t) = w(t) = α₂cos(t/2) + β₂sin(t/2)` with `α₁ = a·v₀`, `β₁ = w₀(a·e′) + a·(e′×v₀)`, `α₂ =
+w₀`, `β₂ = −e′·v₀`, and `dφ/dt = κ/(num² + den²)`, `κ = α₂β₁ − α₁β₂` constant (an origin-centred ellipse: `φ` is
+monotone on the circle along one drag and `num² + den² > 0` when `κ ≠ 0`; at `D₀ = I`, `κ = a·e′`). `clamp_drag_angle(θ,
+g, lim)`: `θ = 0` → 0; **[decision]** a singular `D₀` (`hypot(α₁, α₂) ≤ KAPPA_EPS = 1e-9`, `φ₀` undefined; second
+review) → 0 when also `hypot(β₁, β₂) ≤ KAPPA_EPS` (the whole gesture stays singular, e.g. a drag about `a` from `Rot(x,
+180)`), else `φ⁺ = canonical_angle(wrap(2·atan2(β₁, β₂)))` is `φ` at every `t ≢ 0` (mod 360) in both directions → `θ` if
+`inside(φ⁺)`, else 0 (without this rule x 180, y −90, x −180 took an arm 79° past its bound); arriving at the singular
+pose is not stopped (a 200° drag from rest passes it, and there is no "just short" stop), so a part on it leaves only by
+a drag whose `φ⁺` is inside or by 還原 / 復原 / group actions; `|κ| ≤ KAPPA_EPS·hypot(α₁, α₂)` (the part of `(β₁, β₂)`
+across `(α₁, α₂)` is ≤ ε) → `θ`, scaled so a `D₀` near the singular pose (套用 179.999° about an axis ⟂ `a`) is clamped
+rather than free; `σ = sign(θ)·sign(κ)`, `B = max` if `σ > 0` else `min`; `φ₀ = canonical_angle(φ(0))`; `|wrap(φ₀ − B)|
+≤ ε` or `σ(φ₀ − B) > 0` → 0 (at or beyond the wall ahead: nothing moves); else `τ = 2·atan2(−A, B_c)` with `A =
+α₁cos(B/2) − α₂sin(B/2)`, `B_c = β₁cos(B/2) − β₂sin(B/2)`, reduced with the JS remainder spelled out (review R6): `t_B =
+((τ % 360) + 360) % 360` (0 → 360) for `θ > 0` and `−((((−τ) % 360) + 360) % 360)` (0 → −360) for `θ < 0` (the first
+solution in the drag's direction is the wall ahead), `θ* = sign(θ)·min(|θ|, |t_B|)`. `UnitDrag.begin` takes `clamp?:
+((theta) => number) | null` (`PlaneSession.part_drag_clamp(id, axis, t0, current)` → `limits.ts::drag_clamp`, null
+without a limit, so the D85 path is bit-identical) and `move` applies it to the snapped θ; the candidate is
+`rotate_unit(pose0, axis, θ*, c_locals, pivot)` as before, so the subtree stays rigid and the joint on the parent, and
+`θ*` is not re-snapped. **[decision]** On the clamp path a clamped `θ* = 0` sets the candidate to `clone_pose(pose0)`
+(review R2): `rotate_unit` by 0 re-decomposes the matrix and moves a non-trivial pose by an ulp, so without the copy a
+blocked drag would run stage A and record a step; with it `frame()` skips stage A and `end()` reports `changed: false`.
+(5) **套用: refuse.** `apply_object_rotation` computes `φ` of the proposed P transform against Q's current pose
+(`PlaneSession.part_limit_check`) and, when `!inside` and the pose changes, returns false with no stage A and no step;
+`state.limit_refusal = {id, text}` holds the reason (`refusal_text`) and, for the selected part, `#obj-limit` and the
+three fields get `bad` / `aria-invalid`. **[decision]** The refusal lives in the page state, not in the DOM (review R5):
+`sync_object_panel` clears it only when forced (a successful action, Escape, a drag start, a selection change, a load),
+`apply_object_fields` clears it at every 套用 (a refused one sets it again), and a non-forced sync (undo, `apply_pose`, a
+drag's restore) re-renders it, so red fields never stand without their reason. A target inside, a bound included, is
+applied verbatim (D85 (4) unchanged); a 套用 that changes nothing is no action and is not checked. (6) **Never checked:**
+還原此物體 (its target is D85's, the load pose relative to the parent, whose `φ` is the loaded one), 復原, 落地, every
+whole-group action, ancestor drags, descendants (carried rigidly), parts without a limit. A part can be outside its
+range: its loaded `transform` is already turned, the range excludes the aligned pose, or 還原 / 復原 lead there. It is then
+reported (`above` / `below`), cannot be dragged further out (no step), can be dragged back (crossing the bound into the
+range) and refuses 套用 until inside; it is never corrected silently. (7) **Panel.** `#obj-limit` (`ui.objectLimit`, after
+`#obj-centre`, `role="status"`) reads 「關節限制：繞 <parent> 的 (x, y, z) 軸 <range>，目前 <φ>°」 with range 「-30.0°～11.0°」 / 「≤
+11.0°」 / 「≥ -30.0°」 by the written bounds, the suffix 「（已達上限）」 / 「（已達下限）」 / 「（超出上限，只能往回轉）」 / 「（超出下限，只能往回轉）」 by state,
+and the refusal 「套用被拒：繞 <parent> 的 (x, y, z) 軸會轉到 <φ>°，超出上限 <max>°」 (or 「…，低於下限 <min>°」), in red. Angles `toFixed(1)`
+with the hyphen-minus `toFixed` writes and without wrap (`-180.0` stays), `-0.0` → `0.0`; in the refusal, when the angle
+and the bound print alike with one decimal, both are printed with 3 decimals (then 9; review R7), so it never reads 「會轉到
+11.0°，超出上限 11.0°」; axis components `toFixed(3)` with trailing zeros stripped, `-0` → `0` (`limits.ts::limit_text`,
+`refusal_text`, `range_text`, `format_deg`, `format_axis`). Empty for anything but a part with a resolved limit. On a
+slow scene (`live: false`) the drag's `proxy` effect re-renders the line from the pending candidate (review R8), since
+no stage A and no panel sync run until release. `#obj-notice` keeps the slow-scene hint. (8) **Hooks.**
+`joint_limit(id)` → `{axis, min_deg, max_deg, min_written, max_written, angle_deg, state, inside, parent}` (resolved
+bounds, `angle_deg` after `canonical_angle`) or null, `object_limits()` (id → parsed limit, also the ignored ones);
+`rotate` gains `limit` and `limit_bad`; `rotate_object` and `set_object_rotation` run the UI path and are clamped /
+refused like a drag / 套用. **[decision] (9) What the limit means (review R4).** The limit bounds the twist about one axis
+of the part's rotation relative to its parent. It is exact for a swing about that axis; it is neither sufficient nor
+necessary for clearance in combined poses (a part first swung about another axis, or turned about two axes at once, can
+collide inside the range or be clear outside it) or when the parent moves against parts outside the subtree (an arm at
+its bound relative to a bent torso can meet a skirt that is the torso's parent). A model that cites its bound from a
+posed clearance check states which poses certify it. (10) **Tests.** `web/test/limits.test.ts` (18 tests; 184 web tests
+in all) on `web/test/fixtures/basic_limited.json` (`basic_linked.json` plus limits on `arm` (≤ 11 about y), `lamp`
+(−30…30 about z), an ungrouped `post`, a malformed one on `flag`, and a group `h` whose parent `pole` and child `tip`
+both load at `rz = 50°`; `basic_linked.json` untouched) pins the parse and resolve tables, the twist (random, 180°, the
+singular point, the quaternion round trip), the invariance of `D` under group and ancestor turns and the parent-local
+axis, the closed-form clamp against dense sampling (random `D₀`, `e′`, `a`, bounds; inside kept, monotone, the wall
+within 1e-9 and never early), the ±180 wall (drag −200 then −30 → no step; then +30 free), the `UnitDrag` path with and
+without a clamp (bit-identical without; a clamped 0 gives `pose0` on non-trivial poses where `rotate_unit` by 0 drifts),
+the page-level drags (clamp to 11, no step at the wall, back free, snap then clamp), 套用 accepted at the bound and
+refused beyond it, a part loaded outside its range, the reload that keeps the angle, the strings and the download round
+trip, and from the second review the tip's drag about world x after a pre-drag (stops at 20), the +180 seam with `max`
+absent from a non-trivial pre-pose, the singular pose (left only when `φ⁺` is inside; 套用 179.9…179.99999° then a drag
+about `a` clamped), a seeded page-level fuzz of drags (a third at multiples of 90°) and accepted 套用 that asserts every
+limited part stays inside, and a subnormal axis; `web/scripts/smoke.mjs` drives a clamped `rotate_object`, a refused
+`set_object_rotation` and a refused typed entry (surviving an undo, cleared by Escape), an accepted typed entry, group
+and parent turns that leave the angle, the tip's parent-frame axis and *Download scene* + reload on the fixture. Core,
+TS port, conformance set and warning codes unchanged; a scene without the key behaves exactly as D85 (docs/DECISIONS.md
+D86, spec-v0.3 §10).
