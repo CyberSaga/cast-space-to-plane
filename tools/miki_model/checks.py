@@ -15,7 +15,8 @@ Builds the model with :func:`assemble.assemble` and checks the rounded, exported
   penetrations: they are counted and located, and pass.
 
 ``clear`` requirements measure gaps on selected faces, ``proportion`` requirements compare lofted parts with
-their profile tables.  ``pose`` requirements (advisory) are INDETERMINATE "not tested" unless ``--poses`` is given:
+their profile tables.  ``pose`` requirements (advisory, or required at their tested angles) are INDETERMINATE "not
+tested" unless ``--poses`` is given (a required pose not tested does not gate the rest run; under ``--poses`` it does):
 then :func:`add_poses` re-checks, at every swept angle of every pose (:mod:`poses`), the cross pairs (exactly one part
 moved), with every face mask and rim taken from the rest pose (the profile's selectors and zones are written in the
 rest pose's world frame): a join is tested for containment, its euclid rim depth and that its parts still meet (its
@@ -64,6 +65,16 @@ PASS, FAIL, INDETERMINATE = "PASS", "FAIL", "INDETERMINATE"
 #: The per-kind count of PASS verdicts that measured nothing (a join whose parts never meet where contact is
 #: optional, a clear with no overlap): they do not block the gate and are not counted as PASS.
 NOT_EXERCISED = "NOT_EXERCISED"
+#: The verdict-reason prefix of a pose requirement the run did not test (no ``--poses``).
+POSE_NOT_TESTED = "pose not tested: "
+
+
+def _pose_not_tested(e: dict) -> bool:
+    """A pose requirement left untested by a run without ``--poses``: INDETERMINATE, but it does not gate the rest
+    run even when required (a required pose gates only the run that tests it, :func:`add_poses`).  Any other
+    INDETERMINATE still fails the gate."""
+    return (e["kind"] == "pose" and e["verdict"] == INDETERMINATE
+            and e.get("verdict_reason", "").startswith(POSE_NOT_TESTED))
 #: castplane's default mesh weld tolerance (``castplane.scene.MESH_WELD_TOLERANCE_DEFAULT``; the Miki scene sets
 #: none).  Read from castplane when it is importable, so the two cannot drift.
 try:                                                                  # pragma: no cover - depends on the env
@@ -761,7 +772,7 @@ class Checker:
         return out
 
     def _pose(self, p: ac.Pose, eps: float) -> dict:
-        return {"verdict": INDETERMINATE, "verdict_reason": f"pose not tested: {p.pose} (run with --poses)",
+        return {"verdict": INDETERMINATE, "verdict_reason": f"{POSE_NOT_TESTED}{p.pose} (run with --poses)",
                 "findings": []}
 
 
@@ -990,7 +1001,7 @@ def run(parts_list, profile=None, reports=None, eps=None, only=None) -> dict:
             c[NOT_EXERCISED] += 1                 # passes the gate, but measured nothing: never counted as a PASS
         else:
             c[e["verdict"]] += 1
-    required_ok = all(e["verdict"] == PASS for e in results if e["level"] == "required")
+    required_ok = all(e["verdict"] == PASS for e in results if e["level"] == "required" and not _pose_not_tested(e))
     diag = {name: width_table(parts[name], ac.DIAGNOSTIC_STEP) for name in ac.DIAGNOSTIC_WIDTHS if name in parts}
     report = {
         "profile": {"name": ac.PROFILE_NAME, "version": ac.PROFILE_VERSION, "requirements": len(profile)},

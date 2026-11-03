@@ -469,9 +469,15 @@ def test_required_pose_not_tested_is_indeterminate():
     rep = checks.run(_parts(a=_box((0, 0, 0), (0.01, 0.01, 0.01))), profile=[pose])
     p = _req(rep, "pose:arms-raised")
     assert p["verdict"] == checks.INDETERMINATE and "not tested" in p["verdict_reason"]
-    assert rep["summary"]["required_pass"] is False                 # INDETERMINATE never passes
+    # profile v5: a required pose not tested (no --poses) does not gate the rest run; it gates the posed run
+    # (tests/test_miki_poses.py::test_required_pose_gates_the_posed_run).  Any other INDETERMINATE still fails.
+    assert rep["summary"]["required_pass"] is True
     advisory = dataclasses.replace(pose, level="advisory")
     assert checks.run(_parts(a=_box((0, 0, 0), (0.01, 0.01, 0.01))), profile=[advisory])["summary"]["required_pass"]
+    prop = ac.Proportion("proportion:box", "box", ((0.5, 0.01, -0.01, 0.01),), (1e-6, 1e-6), "fixture", "no section")
+    rep = checks.run(_parts(box=_box((-0.01, -0.01, 0.0), (0.01, 0.01, 0.02))), profile=[pose, prop])
+    assert _req(rep, "proportion:box")["verdict"] == checks.INDETERMINATE
+    assert rep["summary"]["required_pass"] is False                 # a measured INDETERMINATE never passes
 
 
 # -- degenerate-intersection policy ----------------------------------------------------------------------------
@@ -635,7 +641,7 @@ def test_miki_every_requirement_has_a_verdict(miki_report):
     names = {e["name"] for e in rep["requirements"]}
     assert {r.name for r in ac.profile()} <= names                  # every profile requirement was evaluated
     assert rep["summary"]["required_pass"] == all(e["verdict"] == checks.PASS for e in rep["requirements"]
-                                                  if e["level"] == "required")
+                                                  if e["level"] == "required" and not checks._pose_not_tested(e))
 
 
 def test_miki_every_intersecting_pair_is_accounted_for(miki_report):
@@ -649,7 +655,9 @@ def test_miki_every_intersecting_pair_is_accounted_for(miki_report):
 
 
 #: The accepted verdict set of Miki at rest (profile v3; v4 replaced the ``pose:rest-only`` stub with the seven
-#: advisory poses of ``poses.POSES``, INDETERMINATE "not tested" without ``--poses``): every required requirement that
+#: advisory poses of ``poses.POSES``, INDETERMINATE "not tested" without ``--poses``; v5 added the required
+#: ``arms-inward``, not tested at rest so it does not gate this run, and ``arms-inward-far``): every required
+#: requirement that
 #: does not PASS, and the per-kind counts.  A change to either is deliberate: update these with the reason in the
 #: commit message.  The posed results are pinned in tests/test_miki_poses.py.
 MIKI_NON_PASS_REQUIRED = ()
@@ -657,7 +665,7 @@ MIKI_COUNTS = {
     "clear": {"PASS": 44, "FAIL": 2, "INDETERMINATE": 0, "NOT_EXERCISED": 12},
     "generic": {"PASS": 98, "FAIL": 0, "INDETERMINATE": 0, "NOT_EXERCISED": 0},
     "join": {"PASS": 77, "FAIL": 0, "INDETERMINATE": 0, "NOT_EXERCISED": 19},
-    "pose": {"PASS": 0, "FAIL": 0, "INDETERMINATE": 7, "NOT_EXERCISED": 0},
+    "pose": {"PASS": 0, "FAIL": 0, "INDETERMINATE": 9, "NOT_EXERCISED": 0},
     "proportion": {"PASS": 2, "FAIL": 0, "INDETERMINATE": 0, "NOT_EXERCISED": 0},
 }
 MIKI_INTERSECTING_PAIRS = 70
@@ -666,8 +674,12 @@ MIKI_INTERSECTING_PAIRS = 70
 def test_miki_verdict_set_is_pinned(miki_report):
     """The headline accounting is regression-tested (review finding: nothing pinned it)."""
     got = tuple(sorted((e["name"], e["verdict"]) for e in miki_report["requirements"]
-                       if e["level"] == "required" and e["verdict"] != checks.PASS))
+                       if e["level"] == "required" and e["verdict"] != checks.PASS and not checks._pose_not_tested(e)))
     assert got == MIKI_NON_PASS_REQUIRED
+    untested = [e["name"] for e in miki_report["requirements"]
+                if e["level"] == "required" and checks._pose_not_tested(e)]
+    assert untested == ["pose:arms-inward"]                         # gates only the --poses run
+    assert miki_report["summary"]["required_pass"] is True
     assert miki_report["summary"]["counts"] == MIKI_COUNTS
     assert miki_report["summary"]["intersecting_pairs"] == MIKI_INTERSECTING_PAIRS
 

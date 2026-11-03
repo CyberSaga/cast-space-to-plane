@@ -9,13 +9,15 @@ Three layers:
   pose and angle, including the two-step pose; the motions go the way the table says (a sign test on centroids);
 * the posed evaluation on synthetic parts: a join whose parts separate FAILs ("no longer meet"), a pair disjoint at
   rest that a pose makes cross FAILs under the generic rule, and the face masks come from the rest pose;
-* the posed run on Miki (built once per module): the rest report is unchanged by ``--poses``, the pose requirements are
-  advisory and INDETERMINATE "not tested" without it, and the first failing angle of every cross pair is pinned.
+* the posed run on Miki (built once per module): the rest report is unchanged by ``--poses``, the pose requirements
+  carry their table level (advisory, ``arms-inward`` required since profile v5) and are INDETERMINATE "not tested"
+  without it, and the first failing angle of every cross pair is pinned.
 """
 
 from __future__ import annotations
 
 import copy
+import dataclasses
 import json
 import math
 import pathlib
@@ -136,6 +138,8 @@ DIRECTIONS = (
     ("arms-raised", 30.0, "limbs.hand_l", 0, +1),        # sideways: her left hand out to +X ...
     ("arms-raised", 30.0, "limbs.hand_r", 0, -1),        # ... her right hand out to -X
     ("arms-raised", 30.0, "limbs.hand_l", 2, +1),        # and up
+    ("arms-inward", 10.0, "limbs.sleeve_l", 0, -1),      # inward: her left sleeve toward the body (-X) ...
+    ("arms-inward", 10.0, "limbs.sleeve_r", 0, +1),      # ... her right sleeve toward the body (+X)
     ("arms-forward", -30.0, "limbs.hand_l", 1, -1),      # forward (-Y)
     ("arms-forward", -30.0, "limbs.hand_r", 1, -1),
     ("step", -15.0, "limbs.shoe_l", 1, -1),              # the legs swing forward
@@ -224,6 +228,25 @@ def test_posed_join_that_separates_and_a_new_crossing_fail():
     assert rep["summary"]["required_pass"] is True                       # advisory: never gates
 
 
+def test_required_pose_gates_the_posed_run():
+    """Profile v5: a required pose not tested (no --poses) leaves the rest gate green; tested, a failing angle
+    fails it, and a clean sweep passes it."""
+    parts, profile, links = _swing_fixture()
+    required = [profile[0], dataclasses.replace(profile[1], level="required")]
+    rest = checks.run(parts, profile=required)
+    p = next(e for e in rest["requirements"] if e["name"] == "pose:swing")
+    assert p["verdict"] == checks.INDETERMINATE and p["level"] == "required"
+    assert rest["summary"]["required_pass"] is True
+    rep = checks.add_poses(copy.deepcopy(rest), parts, profile=required, links=links)
+    assert next(e for e in rep["requirements"] if e["name"] == "pose:swing")["verdict"] == checks.FAIL
+    assert rep["summary"]["required_pass"] is False                      # +90 crosses the wall
+    clean = [profile[0], dataclasses.replace(profile[1], level="required", sweeps=(5.0,))]
+    rest = checks.run(parts, profile=clean)
+    rep = checks.add_poses(copy.deepcopy(rest), parts, profile=clean, links=links)
+    assert next(e for e in rep["requirements"] if e["name"] == "pose:swing")["verdict"] == checks.PASS
+    assert rep["summary"]["required_pass"] is True
+
+
 def test_posed_masks_come_from_the_rest_pose():
     """A selector written in the rest frame (z range) keeps its rest faces on the posed part; the posed part itself
     refuses to select."""
@@ -267,7 +290,10 @@ def test_default_run_does_not_test_poses(miki_runs):
     pose = [e for e in rest["requirements"] if e["kind"] == "pose"]
     assert [e["name"] for e in pose] == sorted(f"pose:{n}" for n in poses.POSES)
     for e in pose:
-        assert e["level"] == "advisory" and e["verdict"] == checks.INDETERMINATE and "not tested" in e["verdict_reason"]
+        level = poses.POSES[e["name"].split(":", 1)[1]].level
+        assert e["level"] == level and e["verdict"] == checks.INDETERMINATE and "not tested" in e["verdict_reason"]
+    assert [e["name"] for e in pose if e["level"] == "required"] == ["pose:arms-inward"]
+    assert rest["summary"]["required_pass"] is True                       # a required pose not tested does not gate
     assert rest["summary"]["counts"]["pose"] == {"PASS": 0, "FAIL": 0, "INDETERMINATE": len(poses.POSES),
                                                  "NOT_EXERCISED": 0}
 
@@ -297,12 +323,43 @@ def test_posed_report_shape(miki_runs):
     json.loads(checks.dumps(posed))                                       # finite, serialisable
 
 
-#: The first tested angle at which each cross pair of Miki FAILs (profile v4, poses.POSES), per pose and per sweep
+#: The first tested angle at which each cross pair of Miki FAILs (profile v5, poses.POSES), per pose and per sweep
 #: direction ("+" first).  Information about the drawing reference's range, not a model defect: the pose
-#: requirements are advisory until the user sets which poses must stay clean.  A change is deliberate: update this
-#: with the reason in the commit message.
+#: requirements are advisory until the user sets which poses must stay clean.  ``arms-inward`` is required (v5): it
+#: must stay empty.  ``arms-inward-far`` starts past the tested-clean range (clean through +11, first contact +12,
+#: sleeve against the skirt's flare): from +15 the sleeves and cuffs meet the skirt and underskirt, from +20 the
+#: hands and the thighs.  A change is deliberate: update this with the reason in the commit message.
 MIKI_FIRST_FAILING = {
     "arms-forward": {},
+    "arms-inward": {},
+    "arms-inward-far": {
+        "body.skirt|limbs.cuff_stripe_l0": ("+15",),
+        "body.skirt|limbs.cuff_stripe_l1": ("+15",),
+        "body.skirt|limbs.cuff_stripe_r0": ("+15",),
+        "body.skirt|limbs.cuff_stripe_r1": ("+15",),
+        "body.skirt|limbs.hand_l": ("+20",),
+        "body.skirt|limbs.hand_r": ("+20",),
+        "body.skirt|limbs.sleeve_l": ("+15",),
+        "body.skirt|limbs.sleeve_r": ("+15",),
+        "body.skirt|limbs.thumb_l": ("+25",),
+        "body.skirt|limbs.thumb_r": ("+25",),
+        "body.underskirt|limbs.cuff_stripe_l0": ("+20",),
+        "body.underskirt|limbs.cuff_stripe_l1": ("+20",),
+        "body.underskirt|limbs.cuff_stripe_r0": ("+20",),
+        "body.underskirt|limbs.cuff_stripe_r1": ("+20",),
+        "body.underskirt|limbs.hand_l": ("+25",),
+        "body.underskirt|limbs.hand_r": ("+25",),
+        "body.underskirt|limbs.sleeve_l": ("+15",),
+        "body.underskirt|limbs.sleeve_r": ("+15",),
+        "limbs.cuff_stripe_l0|limbs.leg_l": ("+20",),
+        "limbs.cuff_stripe_l1|limbs.leg_l": ("+20",),
+        "limbs.cuff_stripe_r0|limbs.leg_r": ("+20",),
+        "limbs.cuff_stripe_r1|limbs.leg_r": ("+20",),
+        "limbs.hand_l|limbs.leg_l": ("+25",),
+        "limbs.hand_r|limbs.leg_r": ("+25",),
+        "limbs.leg_l|limbs.sleeve_l": ("+20",),
+        "limbs.leg_r|limbs.sleeve_r": ("+20",),
+    },
     "arms-raised": {
         "body.collar|limbs.sleeve_l": ("+90",),
         "body.collar|limbs.sleeve_r": ("+90",),
@@ -365,8 +422,13 @@ def test_miki_first_failing_angles_are_pinned(miki_runs):
     assert all(not t["indeterminate"] for t in posed["pose_tables"].values())
     for e in posed["requirements"]:
         if e["kind"] == "pose":
-            want = checks.FAIL if MIKI_FIRST_FAILING[e["name"].split(":", 1)[1]] else checks.PASS
-            assert e["verdict"] == want and e["level"] == "advisory", e["name"]
+            name = e["name"].split(":", 1)[1]
+            want = checks.FAIL if MIKI_FIRST_FAILING[name] else checks.PASS
+            assert e["verdict"] == want and e["level"] == poses.POSES[name].level, e["name"]
+    req = next(e for e in posed["requirements"] if e["name"] == "pose:arms-inward")
+    assert req["level"] == "required" and req["verdict"] == checks.PASS
+    assert all(posed["poses"]["arms-inward"][a]["failing"] == [] for a in ("+5", "+10"))
+    assert posed["summary"]["required_pass"] is True
 
 
 def test_posed_run_time(miki_runs):
