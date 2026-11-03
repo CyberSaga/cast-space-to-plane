@@ -327,7 +327,9 @@ def test_posed_report_shape(miki_runs):
 #: direction ("+" first).  Information about the drawing reference's range, not a model defect: the pose
 #: requirements are advisory until the user sets which poses must stay clean.  ``arms-inward`` is required (v5; v6:
 #: at 5 / 10 / 11): it must stay empty.  ``arms-inward-far`` starts past the tested-clean range (v6: clean through
-#: +13, the sleeve 2.8 mm off the blouse below the shoulder join there; at +15 it sinks into the blouse waist,
+#: +13, the sleeve 2.8 mm off the blouse below z 1.00 there, the clip plane of the /waist clear; the band above it,
+#: up to the zone-exempt shoulder join, is not measured and the sleeve sinks into the blouse there by up to ~10 mm
+#: at +13, tools/miki_model/README.md; at +15 it sinks into the blouse below z 1.00,
 #: clear:limbs.sleeve_*^body.blouse/waist; from +20 the sleeves and cuffs meet the A-line skirt, from +25 the hands,
 #: the under-skirt and the thighs).  v6: ``step`` keeps the legs in the bloomers block through +-15 (was -15 out),
 #: ``knee-bend`` is clean (the split over-knee sock), and the back sheet no longer meets the narrower skirt in

@@ -103,7 +103,11 @@ Body column = body surface, or the clothing surface where she is clothed. y valu
   - 0.990: 0.128 / −0.106 / 0.080 (v6: replaced by 1.000: 0.110 / −0.104 / 0.081)
 - The blouse is **loose**: from the bust down it drapes straight, so it does not follow the waist. **v6 decision:**
   the 2026-11-03 frames show a narrow bodice (about 0.112 H wide at the waist), and an arm turned inward 11° sank
-  into the loose waist; below the bust the blouse now narrows to hw 0.110 at z 1.00 and 0.107 at the waist.
+  into the loose waist; below the bust the blouse now narrows to hw 0.110 at z 1.00 and 0.107 at the waist. Below
+  z 1.00 the sleeve then clears the blouse through +13 (2.8 mm there). Above it, up to the shoulder join (whose rest
+  crossing ends at z 1.034), the sleeve still sinks into the blouse when the arm turns in (up to 5 / 6.5 / 10 mm at
+  +10 / +11 / +13); no requirement measures that band. The parts built on the blouse follow it: the collar's back
+  flap and its stripe move up to 2.9 mm, the scarf tips 2.6 mm and the back hair 0.7 mm.
 
 ---
 

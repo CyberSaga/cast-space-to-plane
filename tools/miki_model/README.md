@@ -367,10 +367,14 @@ they are, not fixed:
 - `limbs.sleeve_{l,r}~body.blouse` and `limbs.thumb_{l,r}~limbs.hand_{l,r}` are zone-exempt: the builders state no
   zone for those burials (the blouse cuts the sleeve over its round cap and down the armpit; the thumb is a lobe
   off the palm base), so the intersection curve is not tested, only containment and the rim (the thumb's base cap).
-  Profile v6 closes the sleeve's blind spot below the armpit: the required
+  Profile v6 closes the sleeve's blind spot below z 1.00: the required
   `clear:limbs.sleeve_{l,r}^body.blouse/waist` (clipped below z 1.00, at least `body.SLEEVE_BLOUSE_CLEARANCE` 2 mm)
   failed on the v5 model at arms-inward +10 and +11 (the sleeve crossed the blouse waist, ~5.5 / 8 mm deep) and
-  passes since the blouse was narrowed below the bust.
+  passes since the blouse was narrowed below the bust. The band between z 1.00 and the rest join's floor
+  (z 1.034-1.035) stays unmeasured: turned inward the crossing slides down into it (see the posed-run paragraph).
+  Narrowing the blouse also moved the parts built on it: the collar's back flap and its stripe by up to 2.9 mm, the
+  scarf tips by 2.6 mm and the back hair by 0.7 mm (two new generic rows, `body.collar|body.scarf_tip_r` and
+  `body.collar_stripe|body.scarf_tip_r`, both PASS).
 - The advisory `clear:limbs.strap_{l,r}^limbs.shoe_{l,r}/surface` stays FAIL: its exact-distance metric covers every
   strap face, including the strap's end faces, which physically meet the shoe. The gated rule is the builder's
   border-chord clearance (`clear:limbs.strap_{l,r}^limbs.shoe_{l,r}`), which passes.
@@ -412,13 +416,18 @@ toward her left. The angles tested, with the step degrees they give:
 | `bow-head-turn` | `blouse` about x by +10, then `head` about z by +angle | +20 |
 
 The arm stops at +11 deg inward. Profile v6 (the narrowed blouse and the A-line skirt), swept at every degree over
-every cross pair: the sleeve clears the blouse below the shoulder join by 7.6 mm at +11, 5.2 mm at +12, 2.8 mm at
-+13 and 0.4 mm at +14 (the first FAIL of the 2 mm `.../waist` clear), meets it at +15 (0.4 mm deep, 2.9 mm at +16);
-the sleeves and cuff stripes reach the skirt's flare at +19 and the hands, the under-skirt and the thighs at +25.
-Above z 1.00 the sleeve is buried in the blouse at the armpit at every angle (the zone-exempt join: the shoulder
-joint lies inside the torso). On the v5 model the sleeve crossed the blouse waist from +10 (5.5 mm) and +11 (8 mm),
-hidden behind the zone-exempt join. This is a tested clearance, not a limit the UI enforces: the web UI still turns
-an arm further.
+every cross pair: below z 1.00 (the clip plane of the `.../waist` clear) the sleeve clears the blouse by 7.6 mm at
++11, 5.2 mm at +12, 2.8 mm at +13 and 0.4 mm at +14 (the first FAIL of the 2 mm clear), and meets it there at +15
+(0.4 mm deep, 2.9 mm at +16); the sleeves and cuff stripes reach the skirt's flare at +19 and the hands, the
+under-skirt and the thighs at +25. These margins hold below z 1.00 only: the +13 figure is largely the distance of
+the sleeve~blouse crossing from that plane. At rest the crossing (the round cap and the armpit, zone-exempt: the
+shoulder joint lies inside the torso) ends at z 1.034-1.035. Turned inward it slides down the arm into the band
+z 1.00-1.034, which no requirement measures: its lowest point is at z 1.025 at +5, 1.013-1.015 at +10, 1.010 at +11
+and 1.004-1.006 at +13, and there the sleeve sinks into the blouse by up to 3.4-5.0 mm at +10, 5.3-6.5 mm at +11 and
+8.2-10.4 mm at +13 (right-left, surface samples with z < 1.02). On the v5 model the crossing slid 5.7 cm by +11
+(from z 1.030 to 0.973), below z 1.00 from +10 (5.5 mm deep there) and +11 (8 mm); on v6 it slides 2.5 cm by +11
+and stays above z 1.00 through +14.
+This is a tested clearance, not a limit the UI enforces: the web UI still turns an arm further.
 
 What is re-checked: only the pairs a pose moves relative to each other (cross pairs: the two parts' objects lie in
 different motion groups, `poses.motion_groups`: for a one-step pose, one part in the turned subtree and the other not;

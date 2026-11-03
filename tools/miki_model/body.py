@@ -98,8 +98,9 @@ FACETED_CLEARANCE = 0.0002
 #: A point inside the chest (the collar slab's and its stripe's normals point away from it).
 TORSO_CENTRE = (0.0, 0.012, 1.12)
 #: v6: the blouse below the bust (rig.blouse_rows from the bust down) is narrowed so that the sleeve, turned inward
-#: to the required arms-inward angles (poses.POSES), clears it by at least this below the shoulder join
-#: (acceptance clear:limbs.sleeve_*^body.blouse/waist, clipped at acceptance.SLEEVE_JOIN_FLOOR_Z).
+#: to the required arms-inward angles (poses.POSES), clears it by at least this below z
+#: acceptance.SLEEVE_JOIN_FLOOR_Z (acceptance clear:limbs.sleeve_*^body.blouse/waist, both clipped there; the band
+#: above it, up to the zone-exempt shoulder join, is not measured).
 SLEEVE_BLOUSE_CLEARANCE = 0.002
 
 #: Review r4 (F1): narrow, sloping shoulders (the close-up and 3/4 profile frames, the user's drawing and notes): the

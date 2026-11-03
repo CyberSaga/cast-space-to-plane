@@ -54,7 +54,7 @@ __all__ = ["PROFILE_VERSION", "PROFILE_NAME", "Select", "Zone", "Join", "Clear",
 #: turned inner edge).  4: milestone 2, one advisory ``Pose`` per pose of :data:`poses.POSES` (replacing the
 #: ``pose:rest-only`` stub).  5: the arms-inward poses (``arms-inward`` required at 5 / 10 deg; ``arms-inward-far``
 #: advisory at 15 / 20 / 25).  6: the v6 lower body and the arms-inward fix: ``clear:limbs.sleeve_{l,r}^body.blouse/waist``
-#: (required; the sleeve below the shoulder join clears the blouse, clipped at SLEEVE_JOIN_FLOOR_Z), ``arms-inward``
+#: (required; the sleeve below SLEEVE_JOIN_FLOOR_Z clears the blouse, both clipped there), ``arms-inward``
 #: required at 5 / 10 / 11 deg, ``arms-inward-far`` at 13 / 15 / 20 / 25.
 PROFILE_VERSION = "6"
 PROFILE_NAME = "miki"
@@ -78,8 +78,12 @@ BAND_CHORD_SAMPLES = 7
 #: data (v6, d67f079): at rest the sleeve's intersection curve with the blouse (the round cap and the armpit) reaches
 #: down to z 1.029, and the sleeve's inner side then leaves the blouse side by 16 mm at z 1.00; turned inward the
 #: curve slides down the arm (+5: 1.008, +10: 0.978, +11: 0.970, +13: 0.952).  z 1.00 is the plane below which the
-#: v6 review measured the sink (5.5 mm at +10, 8 mm at +11, rev/crossing_depth.py); the bust row (1.040) and the
-#: armpit above it are the join.
+#: v6 review measured the sink (5.5 mm at +10, 8 mm at +11, rev/crossing_depth.py).  It is NOT the join's floor: on
+#: the v6 model the rest crossing ends at z 1.034-1.035, 3.4 cm above this plane, and turned inward it slides into
+#: the band between (its lowest point +5: z 1.025, +10: 1.013-1.015, +11: 1.010, +13: 1.004-1.006), where the
+#: sleeve sinks into the blouse by up to 3.4-5.0 mm at +10, 5.3-6.5 mm at +11 and 8.2-10.4 mm at +13 (right-left,
+#: surface samples with z < 1.02).  No requirement measures that band (the join above is zone-exempt); this clear
+#: certifies the sleeve below z 1.00 only.
 SLEEVE_JOIN_FLOOR_Z = 1.00
 
 SIDES = ((1, "l"), (-1, "r"))
@@ -610,7 +614,8 @@ def _body_requirements(rig: Rig) -> list:
             "the exempt join above leaves the sleeve's inner side against the blouse below the armpit untested (review "
             "R1, v6): below SLEEVE_JOIN_FLOOR_Z (both parts clipped there, rest frame) the sleeve clears the blouse by "
             "SLEEVE_BLOUSE_CLEARANCE, at rest and in every pose that moves the arm (arms-inward: the arm turned in "
-            "must not go into the body)", clip_z=(-INF, SLEEVE_JOIN_FLOOR_Z)))
+            "must not go into the body); the band between SLEEVE_JOIN_FLOOR_Z and the join's rest floor (z ~1.035), "
+            "into which the crossing slides when the arm turns in, stays untested", clip_z=(-INF, SLEEVE_JOIN_FLOOR_Z)))
         out.append(Join(
             f"join:{hand}~{sleeve}", hand, sleeve,
             Zone(faces=("b", Select(groups=(2,))), note="the hand enters the sleeve through the cuff opening only"),

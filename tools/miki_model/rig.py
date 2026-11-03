@@ -553,9 +553,9 @@ class Rig:
     arm_flexion_deg: float = 4.0                # upper arm flexed forward
     elbow_bend_deg: float = 15.0                # forearm (0.210 long) bent forward
     wrist_extension_deg: float = 10.0           # hand extended back relative to the forearm
-    hip_joint_pos: tuple = (0.058, 0.005, 0.780)        # v6: 23 mm in (was 0.078; knee and ankle kept): the
-    #                                                     thighs splay 3.5 deg and stay inside the narrowed block
-    #                                                     (at 0.058 a thigh grazed its side wall just above its bottom)
+    hip_joint_pos: tuple = (0.058, 0.005, 0.780)        # v6: 20 mm in (was 0.078; knee and ankle kept): the
+    #                                                     thighs splay 3 deg and their top rims stay 5.5 mm deep
+    #                                                     in the narrowed block (join:limbs.leg_*~body.underskirt)
     knee_pos: tuple = (0.077, 0.000, 0.420)
     ankle_pos: tuple = (0.077, 0.010, 0.065)
 
