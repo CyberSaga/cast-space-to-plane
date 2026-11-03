@@ -6,7 +6,8 @@
  * `D = R_Qᵀ·R_P` and its invariance, the parent-local axis, the closed-form clamp against dense sampling, the ±180 wall
  * (review R1), a blocked drag leaving `pose0` bit for bit (R2), the page-level drags, 套用 accepted at the bound and
  * refused beyond it, a part loaded outside its range and the reload that keeps the angle (R3), the strings (R7) and the
- * download round trip. */
+ * download round trip; from the second review: the ring axis `e′ = R_Qᵀ·e` under a rotated parent, the +180 seam with
+ * `max` absent, the singular pose and the scaled `κ` threshold near it, a seeded page-level fuzz, a subnormal axis. */
 
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
@@ -742,4 +743,137 @@ test("download round trip: joint_limit written back as parsed (also a dropped on
   const R = euler_zyx_matrix(page.t("arm").rotation_deg);
   const R2 = transform_frame(l2.scene.objects.find((o) => o.id === "arm")!.transform)[0];
   for (let i = 0; i < 3; i++) for (let j = 0; j < 3; j++) close(R[i]![j]!, R2[i]![j]!, 0, "same doubles");
+});
+
+// ------------------------------------------------------------------------------------------------ D86 review, round 2
+
+test("the ring axis in the parent's frame is R_Qᵀ·e (a row of R_Q): tip under the rz = 50 pole stops at 20 after a pre-drag", () => {
+  for (const [ax, pre] of [[0, 10], [1, 25], [2, 30]] as [Axis, number][]) {
+    const page = new Page(load(fixture()));
+    page.drag("tip", ax, pre);
+    assert.equal(page.state("tip"), "inside", `pre-drag ${ax} by ${pre}`);
+    const r = page.drag("tip", 0, 300);
+    assert.ok(r.changed);
+    close(page.phi("tip"), 20, 1e-9, `pre-drag ${ax} by ${pre}, then world x +300`);
+    assert.equal(page.state("tip"), "at_max");
+    const RQ = transform_frame(page.t("pole"))[0];
+    const g = drag_gesture(relative_rotation(page.t("tip"), page.t("pole")), [RQ[0][0], RQ[0][1], RQ[0][2]], page.s.limit("tip")!.a);
+    assert.equal(r.pose.transforms.size, 1);
+    assert.ok(Math.abs(g.kappa) > KAPPA_EPS, "a drag that does turn φ");
+  }
+});
+
+test("the +180 seam with max absent (mirror of R1): the wall reads +180 at_max, back is free, further out is blocked", () => {
+  const L = lim([0, 1, 0], -30, null);
+  assert.equal(canonical_angle(-180 + 1e-10, L), 180);
+  assert.equal(canonical_angle(-180 + 1e-10, lim([0, 1, 0], -30, 179)), -180 + 1e-10, "only when max = 180");
+  assert.equal(limit_state(-180 + 1e-10, L), "at_max");
+  assert.equal(limit_text(L, -180 + 1e-10, "mast"), "關節限制：繞 mast 的 (0, 1, 0) 軸 ≥ -30.0°，目前 180.0°（已達上限）");
+  const D = rodrigues([0, 1, 0], -180 + 1e-10);
+  assert.equal(drag_clamp(D, [0, 1, 0], L)(30), 0);
+  assert.equal(drag_clamp(D, [0, 1, 0], L)(-30), -30);
+  // on the page from a non-trivial pre-pose (from rest φ lands on exactly +180 and the bug does not show)
+  let seen = 0;
+  for (let k = 0; k < 40 && seen < 2; k++) {
+    const page = new Page(load(patched((o) => { o("arm")["joint_limit"] = { axis: [0, 1, 0], min_deg: -30 }; })));
+    page.drag("arm", 0, 1.3 * k + 3.1);
+    page.drag("arm", 2, -0.7 * k - 2.2);
+    page.drag("arm", 1, 400);
+    if (page.phi("arm") > 0) continue;
+    seen += 1;
+    assert.equal(page.state("arm"), "at_max", `k = ${k}: φ = ${page.phi("arm")}`);
+    assert.match(limit_text(page.s.limit("arm")!, page.phi("arm"), "mast"), /目前 180\.0°（已達上限）$/);
+    const snap = page.snapshot(), u = page.s.undo.size;
+    const g = drag_gesture(relative_rotation(page.t("arm"), page.t("mast")), [0, 1, 0], [0, 1, 0]);
+    const out = g.kappa > 0 ? 30 : -30;
+    assert.ok(!page.drag("arm", 1, out).changed && page.s.undo.size === u, "further out: nothing");
+    assert.deepEqual(page.snapshot(), snap, "bit for bit");
+    assert.ok(page.drag("arm", 1, -out).changed, "back is free");
+    close(page.phi("arm"), 150, 1e-6, "180 − 30");
+  }
+  assert.equal(seen, 2, "the case occurs");
+});
+
+test("the singular pose (180° about an axis ⟂ a): reached freely, left only by a drag whose φ⁺ is inside; near it the clamp holds", () => {
+  const arm = lim([0, 1, 0], null, 11), lamp = lim([0, 1, 0], -30, 30);
+  const S = rodrigues([1, 0, 0], 180);
+  assert.equal(twist_deg(S, [0, 1, 0]), 0, "reads 0");
+  assert.equal(drag_clamp(S, [0, 1, 0], arm)(-90), 0, "about a: (β₁, β₂) ≈ 0, φ undefined all along → 0");
+  assert.equal(drag_clamp(S, [0, 1, 0], arm)(90), 0);
+  assert.equal(drag_clamp(S, [1, 0, 0], arm)(-180), -180, "back along the arrival axis: φ⁺ = 0, free");
+  assert.equal(drag_clamp(S, [0, 0, 1], arm)(40), 40, "about z: φ⁺ = 180 ≡ −180 = min, inside");
+  assert.equal(drag_clamp(S, [0, 0, 1], lamp)(40), 0, "about z: φ⁺ = 180 outside ±30");
+  assert.equal(drag_clamp(S, [0, 0, 1], lamp)(-40), 0, "the same φ⁺ in both directions");
+  // the review's sequence on the page: x 180 (snapped), y −90, x −180 used to end at φ = 90 past max 11
+  const page = new Page(load(fixture()));
+  assert.ok(page.drag("arm", 0, snap_angle(181, true)).changed, "arriving is not stopped");
+  close(page.phi("arm"), 0, 1e-12, "the singular pose reads 0");
+  const snap = page.snapshot();
+  assert.ok(!page.drag("arm", 1, -90).changed, "about a from the singular pose: nothing");
+  assert.deepEqual(page.snapshot(), snap);
+  assert.ok(page.drag("arm", 0, snap_angle(-181, true)).changed);
+  assert.ok(inside(page.phi("arm"), page.s.limit("arm")!), `ends inside (φ = ${page.phi("arm")})`);
+  // the numeric route: 套用 rx = 180 is accepted (φ 0), the y drag after it moves nothing
+  const p2 = new Page(load(fixture()));
+  assert.ok(p2.set_rotation("arm", [180, 0, 0]).ok);
+  assert.ok(!p2.drag("arm", 1, -90).changed);
+  // near the singular pose the threshold scales with |(α₁, α₂)|: 套用 179.999 then y −90 stops at the bound
+  for (const rx of [179.9, 179.999, 179.99999]) {
+    const p3 = new Page(load(fixture()));
+    assert.ok(p3.set_rotation("arm", [rx, 0, 0]).ok);
+    p3.drag("arm", 1, -90);
+    p3.drag("arm", 1, 90);
+    p3.drag("arm", 0, -rx);
+    assert.ok(inside(p3.phi("arm"), p3.s.limit("arm")!), `rx ${rx}: φ = ${p3.phi("arm")}`);
+  }
+  // a drag through the singular pose from rest is not stopped there
+  for (const d of [200, -200]) {
+    const p4 = new Page(load(fixture()));
+    const r = p4.drag("arm", 0, d);
+    assert.ok(r.changed);
+    close(p4.t("arm").rotation_deg[0]!, wrap_angle(d), 1e-9, `the full ${d}°`);
+  }
+});
+
+test("fuzz: seeded sequences of ring drags (snapped and free) and 套用 never leave a limited part outside its range", () => {
+  const r = rng(8686);
+  const variants: [string, Record<string, unknown> | null][] = [["fixture", null], ["arm min -30, max absent", { axis: [0, 1, 0], min_deg: -30 }],
+    ["arm tilted axis", { axis: [0.3, 1, -0.2], min_deg: -25, max_deg: 15 }]];
+  for (const [name, arm_limit] of variants) {
+    for (let seq = 0; seq < 16; seq++) {
+      const page = new Page(load(arm_limit === null ? fixture() : patched((o) => { o("arm")["joint_limit"] = arm_limit; })));
+      const limited = ["arm", "lamp", "tip"];
+      const parts = [...limited, ...limited, ...limited, "mast", "pole"];
+      const steps: string[] = [];
+      for (let k = 0; k < 9; k++) {
+        const id = parts[Math.floor(r() * parts.length)]!;
+        if (r() < 0.2) {
+          const rot = [0, 1, 2].map(() => snap_angle(360 * r() - 180, r() < 0.7));
+          const res = page.set_rotation(id, rot);
+          steps.push(`套用 ${id} [${rot.join(", ")}] ${res.ok ? "ok" : "refused"}`);
+        } else {
+          // a third of the drags are multiples of 90° (they reach the singular pose: 180° about an axis ⟂ a)
+          const ax = Math.floor(r() * 3) as Axis, u = r();
+          const d = u < 0.33 ? 90 * (Math.floor(r() * 7) - 3) : snap_angle(800 * r() - 400, u < 0.7);
+          page.drag(id, ax, d);
+          steps.push(`drag ${id} ${ax} ${d}`);
+        }
+        for (const p of limited) {
+          const st = page.s.part_limit_angle(p, page.current)!;
+          assert.ok(st.inside, `${name} #${seq}: ${p} left its range (φ = ${st.phi}, ${st.state}) after ${steps.join("; ")}`);
+        }
+      }
+    }
+  }
+});
+
+test("a subnormal limit axis still resolves to a unit a (scaled by the largest component first)", () => {
+  for (const axis of [[5e-324, 5e-324, 5e-324], [0, 5e-324, 0], [1e300, 1e300, 0], [0.3, 1, -0.2]]) {
+    const page = new Page(load(patched((o) => { o("arm")["joint_limit"] = { axis, max_deg: 11 }; })));
+    const a = page.s.limit("arm")!.a;
+    close(Math.hypot(a[0], a[1], a[2]), 1, 1e-15, `|a| for ${JSON.stringify(axis)}`);
+  }
+  const page = new Page(load(patched((o) => { o("arm")["joint_limit"] = { axis: [5e-324, 5e-324, 5e-324], max_deg: 11 }; })));
+  const a = page.s.limit("arm")!.a;
+  for (const c of a) close(c, 1 / Math.sqrt(3), 1e-15, "the direction");
 });

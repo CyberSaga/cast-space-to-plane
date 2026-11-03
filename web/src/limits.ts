@@ -19,7 +19,9 @@ import { wrap_angle } from "./object_rotate.js";
 
 /** Decisions only (never a written value): an angle within this of a bound is at the bound (degrees). */
 export const LIMIT_EPS_DEG = 1e-9;
-/** A drag whose gesture constant `|κ|` is at most this does not change `φ` (no clamp). */
+/** The degeneracy threshold of the twist measure (unit-quaternion scale): a rotation whose `(a·v, w)` has length at most
+ * this is the singular pose (it reads 0, {@link twist_deg}); a drag whose `|κ|` is at most this times `|(α₁, α₂)|` (the
+ * part of `(β₁, β₂)` across `(α₁, α₂)`) does not change `φ` (no clamp; {@link clamp_drag_angle}). */
 export const KAPPA_EPS = 1e-9;
 
 const DEG = Math.PI / 180;
@@ -90,11 +92,14 @@ export function quat_from_matrix(R: Mat3): [number, number, number, number] {
  * The twist of the rotation `D` about the unit axis `a` (degrees, `(−180, 180]`, no `-0`): `wrap(2·atan2(a·v, w))` with
  * `(w, v)` the quaternion of `D` ({@link quat_from_matrix}). `φ = θ` for `D = Rot(a, θ)`, 0 for a rotation about an axis
  * ⟂ `a`, and the same for `Rot(a, θ)·S` and `S·Rot(a, θ)` with `S` a swing about an axis ⟂ `a`. The one singular rotation
- * (180° about an axis exactly ⟂ `a`, `atan2(0, 0)`) reads 0.
+ * (180° about an axis ⟂ `a`, `atan2(0, 0)`) reads 0: any `D` with `hypot(a·v, w) ≤ KAPPA_EPS` (D86 review, so the
+ * reading there never depends on roundoff).
  */
 export function twist_deg(D: Mat3, a: readonly number[]): number {
   const [w, x, y, z] = quat_from_matrix(D);
-  return wrap_angle((2 * Math.atan2(a[0]! * x + a[1]! * y + a[2]! * z, w)) / DEG);
+  const n = a[0]! * x + a[1]! * y + a[2]! * z;
+  if (Math.hypot(n, w) <= KAPPA_EPS) return 0;
+  return wrap_angle((2 * Math.atan2(n, w)) / DEG);
 }
 
 /** The rotation of P relative to its parent Q, `D = R_Qᵀ·R_P` (both from `transform_frame`; written in Q's local frame). */
@@ -110,10 +115,15 @@ export function limit_angle(lim: Limit, tP: Transform, tQ: Transform): number {
   return twist_deg(relative_rotation(tP, tQ), lim.a);
 }
 
-/** `φ` with the one identification `+180 ≡ −180` applied (D86 review R1): when `min = −180` an angle within ε of +180
- * is the pose at the lower bound, so it reads `−180`. Every decision and the readout use this value. */
+/** `φ` with the identification `+180 ≡ −180` applied at the bound that sits on the seam (D86 review R1 and its mirror):
+ * when `min = −180` an angle within ε of +180 is the pose at the lower bound, so it reads `−180`; when `max = 180` an
+ * angle within ε of −180 is the pose at the upper bound, so it reads `+180`. At most one rule applies, since a limit with
+ * both `min = −180` and `max = 180` is no limit (`links.ts::resolve_links` drops it). Every decision and the readout use
+ * this value. */
 export function canonical_angle(phi: number, lim: Limit): number {
-  return lim.min === -180 && phi >= 180 - LIMIT_EPS_DEG ? -180 : phi;
+  if (lim.min === -180 && phi >= 180 - LIMIT_EPS_DEG) return -180;
+  if (lim.max === 180 && phi <= -180 + LIMIT_EPS_DEG) return 180;
+  return phi;
 }
 
 /** The state of `φ` against `lim` (after {@link canonical_angle}): `at_max` / `at_min` within ε of a bound (the
@@ -164,7 +174,13 @@ export function gesture_angle(g: DragGesture, t_deg: number): number {
 /**
  * The clamped drag angle (D86, closed form): `θ` (degrees, already snapped) of a drag of `D₀` about `e_parent` becomes
  * `θ*`, the largest part of `θ` in its direction that keeps `φ` from crossing the bound ahead:
- * 1. `θ = 0` or `|κ| ≤ KAPPA_EPS` → `θ` (the drag does not change `φ`).
+ * 0. `θ = 0` → 0. `D₀` on the singular pose (`hypot(α₁, α₂) ≤ KAPPA_EPS`, where `φ₀` is undefined; D86 review): if also
+ *    `hypot(β₁, β₂) ≤ KAPPA_EPS` the whole gesture stays singular → 0; else `φ` is the same `φ⁺ =
+ *    canonical(wrap(2·atan2(β₁, β₂)))` at every `t ≠ 0` (mod 360°) in both directions → `θ` when `φ⁺` is inside, else 0.
+ *    A part on the singular pose therefore leaves it only by a drag whose `φ⁺` is inside (or by 還原 / 復原 / group
+ *    actions); arriving there is not stopped (a `κ = 0` drag, `φ` unchanged on both sides of it).
+ * 1. `|κ| ≤ KAPPA_EPS·hypot(α₁, α₂)` → `θ` (the drag does not change `φ`). The threshold scales with `|(α₁, α₂)|`, so a
+ *    `D₀` near the singular pose (a 套用 of 179.999° about an axis ⟂ `a`) is clamped, not free.
  * 2. `σ = sign(θ)·sign(κ)` (the direction `φ` moves); the bound ahead `B` is `max` for `σ > 0`, else `min`.
  * 3. `φ₀ = canonical_angle(φ(0))`. At the bound ahead (`|wrap(φ₀ − B)| ≤ ε`) or beyond it (`σ·(φ₀ − B) > 0`): 0 (nothing
  *    moves). A pose at `max` can always be dragged back (the test looks at the moving direction only).
@@ -175,7 +191,13 @@ export function gesture_angle(g: DragGesture, t_deg: number): number {
  * 5. `θ* = sign(θ)·min(|θ|, |t_B|)`.
  */
 export function clamp_drag_angle(theta: number, g: DragGesture, lim: Limit): number {
-  if (theta === 0 || Math.abs(g.kappa) <= KAPPA_EPS) return theta;
+  if (theta === 0) return theta;
+  const na = Math.hypot(g.alpha1, g.alpha2);
+  if (na <= KAPPA_EPS) {
+    if (Math.hypot(g.beta1, g.beta2) <= KAPPA_EPS) return 0;
+    return inside(canonical_angle(wrap_angle((2 * Math.atan2(g.beta1, g.beta2)) / DEG), lim), lim) ? theta : 0;
+  }
+  if (Math.abs(g.kappa) <= KAPPA_EPS * na) return theta;
   const s = theta > 0 ? 1 : -1, sigma = s * (g.kappa > 0 ? 1 : -1);
   const B = sigma > 0 ? lim.max : lim.min;
   const phi0 = canonical_angle(wrap_angle((2 * Math.atan2(g.alpha1, g.alpha2)) / DEG), lim);

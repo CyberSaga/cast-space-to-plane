@@ -195,8 +195,10 @@ export function resolve_links(raw: ReadonlyMap<string, RawLink>, ids: readonly s
     if (l === undefined || !parent.has(id)) continue;
     const min = l.min_deg ?? -180, max = l.max_deg ?? 180;
     if (min <= -180 && max >= 180) continue;
-    const n = Math.hypot(l.axis[0], l.axis[1], l.axis[2]);
-    limits.set(id, { axis: [l.axis[0], l.axis[1], l.axis[2]], a: [l.axis[0] / n + 0, l.axis[1] / n + 0, l.axis[2] / n + 0], min, max,
+    // scaled by the largest |component| first, so a subnormal axis still gives |a| = 1 (D86 review)
+    const m = Math.max(Math.abs(l.axis[0]), Math.abs(l.axis[1]), Math.abs(l.axis[2]));
+    const s0 = l.axis[0] / m, s1 = l.axis[1] / m, s2 = l.axis[2] / m, n = Math.hypot(s0, s1, s2);
+    limits.set(id, { axis: [l.axis[0], l.axis[1], l.axis[2]], a: [s0 / n + 0, s1 / n + 0, s2 / n + 0], min, max,
       min_written: l.min_deg !== undefined, max_written: l.max_deg !== undefined });
   }
   return { parent, children, joints, limits };

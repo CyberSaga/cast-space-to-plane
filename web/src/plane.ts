@@ -301,7 +301,7 @@ export class PlaneSession {
     const tQ = par === null ? null : current(par);
     if (l === undefined || tQ === null) return null;
     const [RQ] = transform_frame(tQ);
-    const e_parent: Vec3 = [RQ[0][axis], RQ[1][axis], RQ[2][axis]];
+    const e_parent: Vec3 = [RQ[axis][0], RQ[axis][1], RQ[axis][2]];
     return drag_clamp(relative_rotation(t0, tQ), e_parent, l);
   }
 
