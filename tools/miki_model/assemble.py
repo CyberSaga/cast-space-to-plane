@@ -26,8 +26,8 @@ from . import meshkit as mk
 from .rig import SUN_TOWARDS, Rig
 
 __all__ = ["OBJECTS", "OBJECT_IDS", "MATERIALS", "DISPLAY_MATERIALS", "display_color", "PARENTS", "part_links",
-           "ARM_INWARD_MAX_DEG", "JOINT_LIMITS", "joint_limit", "REGION_OBJECTS", "MODULES", "ALL_REGIONS", "BUDGET", "DECIMALS", "SUN_TOWARDS", "Assembly", "AssemblyError",
-           "build_parts", "assemble", "format_stats"]
+           "ARM_INWARD_MAX_DEG", "JOINT_LIMITS", "joint_limit", "REGION_OBJECTS", "MODULES", "ALL_REGIONS", "BUDGET",
+           "DECIMALS", "SUN_TOWARDS", "Assembly", "AssemblyError", "build_parts", "assemble", "format_stats"]
 
 #: The castplane objects in their fixed order with what each holds.  ``headband`` comes first: the web UI's
 #: observer pane draws its sight rays (視線) for every vertex of ``objects[0]``, and the headband's 120
@@ -135,7 +135,8 @@ def part_links(rig: Rig) -> dict:
 #: frame is aligned with its parent's: every transform loads as the identity, so both arms read 0 at load and the
 #: parent frame is the world frame at rest.  Both arms read "inward at most ARM_INWARD_MAX_DEG": ``arm_l`` swings
 #: inward about +y, ``arm_r`` about -y (poses.py sign convention), so ``arm_r``'s axis is -y and both maxima are the
-#: same number; outward (raised sideways) is not limited.  ARM_INWARD_MAX_DEG is the largest angle of the required
+#: same number; no outward bound is written, so by D86's absent-bound rule (-180) a sideways raise stops straight up,
+#: at -180 deg (the panel's "at the lower bound").  ARM_INWARD_MAX_DEG is the largest angle of the required
 #: ``arms-inward`` pose (tested clean) and below every ``arms-inward-far`` angle (tests/test_miki_poses.py pins both).
 #: The limit is exact only for the pure inward swing: the advisory combined poses of poses.py show a bowed or leaning
 #: blouse, or a forward arm, meeting other parts inside it, or clean beyond it.

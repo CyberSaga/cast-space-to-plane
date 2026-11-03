@@ -434,8 +434,9 @@ and stays above z 1.00 through +14.
 
 **The arm limit (D86, profile v7).** `examples/miki.json` carries `joint_limit` on both arms:
 `{"axis": [0.0, 1.0, 0.0], "max_deg": 11.0}` on `arm_l` and `{"axis": [0.0, -1.0, 0.0], "max_deg": 11.0}` on
-`arm_r` (`assemble.JOINT_LIMITS`, one constant `assemble.ARM_INWARD_MAX_DEG = 11.0`; `min_deg` is absent, so outward,
-raised sideways, is not limited). The web UI measures the twist about that axis of the arm's rotation relative to the
+`arm_r` (`assemble.JOINT_LIMITS`, one constant `assemble.ARM_INWARD_MAX_DEG = 11.0`; `min_deg` is absent, so no outward
+bound is written and D86 reads the absent bound as -180: a sideways raise stops straight up, at -180 deg, where the
+panel reads 「（已達下限）」). The web UI measures the twist about that axis of the arm's rotation relative to the
 blouse, `D = R_Q^T R_P` of the current transforms; every transform loads as the identity, so both arms read 0 at load
 and the axis is the blouse's (the world's, at rest) y. The mirrored `arm_r` axis makes inward positive on both arms
 (the `poses.py` signs: `arm_l` inward about +y, `arm_r` about -y), so the panel reads 「≤ 11.0°」 on both. A ring drag

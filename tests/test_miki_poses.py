@@ -152,7 +152,8 @@ ARM_ANGLES = {
 def test_fixture_limit_angles_match_python(fixture, links):
     """The web's limit_angle of both arms after every pose equals the Python mirror within 1e-9, and reads as
     :data:`ARM_ANGLES` says: +angle for arms-inward (both arms: the mirrored arm_r axis), beyond the limit for every
-    arms-inward-far angle, -angle (outward, unlimited) for arms-raised, 0 when the blouse carries the arms."""
+    arms-inward-far angle, -angle (outward: no written bound, D86's -180) for arms-raised, 0 when the blouse carries
+    the arms."""
     assert set(ARM_ANGLES) == set(poses.POSES)
     lim = asm.ARM_INWARD_MAX_DEG
     for name, spec in poses.POSES.items():

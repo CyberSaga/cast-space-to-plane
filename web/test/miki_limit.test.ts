@@ -1,8 +1,9 @@
 /** The Miki model's D86 arm limit on the real web code (model branch only): `examples/miki.json` writes `joint_limit`
  * on `arm_l` (axis +y) and `arm_r` (axis −y), `max_deg` 11 (tools/miki_model/assemble.py `ARM_INWARD_MAX_DEG`); both
  * arms hang from the blouse and every transform loads as the identity, so both read φ = 0 at load. A ring drag about
- * world y inward (`arm_l` +, `arm_r` −: tools/miki_model/poses.py) stops at exactly 11°, outward is free, 套用 is
- * refused beyond 11°, and after a bow the limit still reads the arm against the bowed blouse. The page helper is the
+ * world y inward (`arm_l` +, `arm_r` −: tools/miki_model/poses.py) stops at exactly 11°, outward has no written
+ * bound (D86's -180: a sideways raise stops straight up, 「（已達下限）」), 套用 is refused beyond 11°, and after a bow
+ * the limit still reads the arm against the bowed blouse. The page helper is the
  * load / drag / 套用 path of `limits.test.ts` (`main.ts::load`, `start_unit_drag` with the clamp, `UnitDrag`,
  * `apply_object_rotation`), cut down to what these tests use. */
 
@@ -16,6 +17,7 @@ import { load_scene, shadow_geometry } from "castplane";
 import type { Scene, StageA, Transform, Vec3 } from "castplane";
 
 import { group_members, object_groups } from "../src/groups.js";
+import { canonical_angle } from "../src/limits.js";
 import { object_links } from "../src/links.js";
 import { scene_centre } from "../src/observer.js";
 import { UnitDrag, clone_transform, same_pose } from "../src/object_rotate.js";
@@ -142,7 +144,7 @@ test("miki: both arms carry the inward limit (axis ±y in the blouse's frame, ma
   assert.deepEqual(limited, ["arm_l", "arm_r"]);
 });
 
-test("miki: a ring drag inward about world y stops at exactly 11° (arm_l +y, arm_r −y); outward is free", () => {
+test("miki: a ring drag inward about world y stops at exactly 11° (arm_l +y, arm_r −y); outward only at -180°", () => {
   for (const [id, inward] of [["arm_l", 1], ["arm_r", -1]] as const) {
     const p = new Page(raw());
     const r = p.drag(id, 1, inward * 15);
@@ -157,7 +159,14 @@ test("miki: a ring drag inward about world y stops at exactly 11° (arm_l +y, ar
     close(p.phi(id), -19, 1e-9, `${id}: back out by 30 is free`);
     assert.equal(p.state(id), "inside", id);
     p.drag(id, 1, -inward * 60);
-    close(p.phi(id), -79, 1e-9, `${id}: further outward (raised sideways) is not limited`);
+    close(p.phi(id), -79, 1e-9, `${id}: further outward (raised sideways) is free up to -180`);
+    p.drag(id, 1, -inward * 120);
+    // the raw twist reads ±180 there; the panel and every decision read canonical_angle, −180 (min absent)
+    close(canonical_angle(p.phi(id), p.s.limit(id)!), -180, 1e-9, `${id}: no written outward bound, D86's -180`);
+    assert.equal(p.state(id), "at_min", id);
+    const s2 = p.snapshot();
+    assert.ok(!p.drag(id, 1, -inward * 30).changed, `${id}: at -180 a further outward drag moves nothing`);
+    assert.deepEqual(p.snapshot(), s2, `${id}: bit for bit at -180`);
   }
 });
 
