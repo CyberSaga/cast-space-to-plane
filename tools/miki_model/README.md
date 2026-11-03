@@ -416,20 +416,21 @@ containment), with the posed boxes deciding which pairs touch. Joins and generic
 `--poses` adds `report["poses"][pose][angle]` (the steps, their world pivots, the moved objects and motion groups, the
 per-kind counts, and `changed`: every requirement whose verdict differs from rest, with its findings in the posed frame
 and its `rest_verdict`) and `report["pose_tables"][pose]` (the tested angles and, for each cross pair that fails, the
-first failing angle in each direction of the sweep). The `pose:*` requirements then get their verdict (FAIL when a
-cross pair fails at a tested angle); all but `arms-inward` (required since profile v5) stay advisory: a contact a pose creates is information about the drawing
-reference's range, not a defect of the model, until the user sets which poses must stay clean (those then move to
-`required` with their tested angles cited, as `arms-inward` did). Without `--poses` the report is the default run's, byte for byte. The
-result is **tested clearance at the listed angles, never a safe range**: nothing between or beyond them is certified.
+first failing angle in each direction of the sweep). The `pose:*` requirements then get their verdict (FAIL when a cross
+pair fails at a tested angle); all but `arms-inward` (required since profile v5) stay advisory: a contact a pose creates
+is information about the drawing reference's range, not a defect of the model, until the user sets which poses must stay
+clean (those then move to `required` with their tested angles cited, as `arms-inward` did). Without `--poses` the report
+is the default run's, byte for byte. The result is **tested clearance at the listed angles, never a safe range**:
+nothing between or beyond them is certified.
 
-As they stand (profiles v4 and v5, pinned in `tests/test_miki_poses.py` as `MIKI_FIRST_FAILING`): turning the head 10 deg
-already pushes the back sheet into the blouse, collar and skirt and a sidelock into the collar and scarf ribbon; the
-nod crosses the sidelocks with the collar going down (+15) and the back sheet with the blouse going up (-10); the
-sleeve caps cross the collar at 90 deg raised; the step lifts the legs' top rims out of the under-skirt block at -15
-(forward) and +25 (back); arms forward and the bow are clean at the angles tested. Profile v5: `arms-inward` is clean
-at +5 and +10 (required); `arms-inward-far` first fails at +15 (sleeves and cuff stripes against the skirt, sleeves
-against the under-skirt), +20 (hands against the skirt, cuffs against the under-skirt, sleeves and cuffs against the
-legs) and +25 (thumbs against the skirt, hands against the under-skirt and the legs).
+As they stand (profiles v4 and v5, pinned in `tests/test_miki_poses.py` as `MIKI_FIRST_FAILING`): turning the head 10
+deg already pushes the back sheet into the blouse, collar and skirt and a sidelock into the collar and scarf ribbon; the
+nod crosses the sidelocks with the collar going down (+15) and the back sheet with the blouse going up (-10); the sleeve
+caps cross the collar at 90 deg raised; the step lifts the legs' top rims out of the under-skirt block at -15 (forward)
+and +25 (back); arms forward and the bow are clean at the angles tested. Profile v5: `arms-inward` is clean at +5 and
++10 (required); `arms-inward-far` first fails at +15 (sleeves and cuff stripes against the skirt, sleeves against the
+under-skirt), +20 (hands against the skirt, cuffs against the under-skirt, sleeves and cuffs against the legs) and +25
+(thumbs against the skirt, hands against the under-skirt and the legs).
 
 The pose maths is verified against the built web code: `tools/miki_model/pose_fixtures.mjs` applies every pose through
 `links.ts` (`resolve_links`, `subtree`) and `object_rotate.ts` (`rotate_unit` about `world_centre(T, joint)`) and writes
