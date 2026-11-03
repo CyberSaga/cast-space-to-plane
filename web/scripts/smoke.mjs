@@ -63,7 +63,13 @@
 // with the flag's pose relative to the arm kept and nothing else moved, one undo step each, undo byte-identical; a turned
 // mast carries its subtree; the carried-only lamp has no 落地 and nothing to restore; 還原此物體 puts the arm back
 // relative to the turned mast with the flag carried; an unedited 套用 records no step; 落地 on the tilted root lifts its
-// whole subtree; Download scene keeps parent / joint and reloads to the same links and world joints. Prints one JSON record.
+// whole subtree; Download scene keeps parent / joint and reloads to the same links and world joints. D86 (joint limits,
+// the fixture web/test/fixtures/basic_limited.json): object_limits() and joint_limit(id) give the parsed and resolved
+// limits; rotate_object beyond the arm's bound stops at it (「（已達上限）」, one undo step) and a further outward one records
+// nothing; set_object_rotation and a typed entry beyond it are refused (the three fields and #obj-limit red, 「套用被拒」,
+// no step), the refusal survives an undo's panel sync and Escape clears it; a typed entry inside is applied; group and
+// parent turns leave the angle; the tip's axis is read in its parent's frame; Download scene keeps joint_limit and the
+// reload keeps the angles. Prints one JSON record.
 // Exit 1 on a page error or a failed check.
 import { execSync } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
@@ -1866,6 +1872,112 @@ const objrot = {};
     await frames2();
     check(JSON.stringify(await api("object_links")) === JSON.stringify({ links: {}, parent: {}, children: {} })
       && JSON.stringify(await api("descendants", "crate")) === "[]" && (await sel()) === null, "D85: loading basic clears the links");
+  }
+  {
+    // D86: joint limits. The fixture (web/test/fixtures/basic_limited.json) is basic_linked.json plus limits on the arm
+    // (about the mast's y, ≤ 11°), the lamp (about z, -30°～30°), the ungrouped post (ignored), a malformed one on the flag,
+    // and a group h (pole → tip, both loaded at rz = 50°, the tip limited to -20°～20° about the pole's x). A rotate_object
+    // beyond the bound is clamped at it (one step), a further outward one records nothing, a 套用 beyond it is refused
+    // (the three fields and the limit line red, no step) and the refusal survives a non-forced panel sync (an undo) until
+    // Escape; a typed entry inside is accepted; a group turn leaves the angle; Download scene keeps the key and the reload
+    // keeps the angle; loading basic clears the limits.
+    const text = readFileSync(join(ROOT, "web", "test", "fixtures", "basic_limited.json"), "utf-8");
+    const loaded = await page.evaluate((t) => window.castplane_web.load_text("basic_limited", t), text);
+    await frames2();
+    await frames2();
+    const d86 = (objrot.d86 = {});
+    const ALL = ["base", "mast", "arm", "flag", "lamp", "post", "pole", "tip"];
+    const limits = await api("object_limits");
+    const expected_limits = { arm: { axis: [0, 1, 0], max_deg: 11 }, lamp: { axis: [0, 0, 1], min_deg: -30, max_deg: 30 },
+      post: { axis: [1, 0, 0], max_deg: 20 }, tip: { axis: [1, 0, 0], min_deg: -20, max_deg: 20 } };
+    const resolved = await Promise.all(["arm", "lamp", "post", "flag", "tip", "mast"].map((id) => api("joint_limit", id)));
+    d86.load = { loaded, limits, resolved };
+    check(loaded && JSON.stringify(limits) === JSON.stringify(expected_limits)
+      && resolved[0]?.angle_deg === 0 && resolved[0]?.state === "inside" && resolved[0]?.parent === "mast" && resolved[0]?.max_deg === 11
+      && resolved[0]?.min_deg === -180 && resolved[1]?.min_deg === -30 && resolved[2] === null && resolved[3] === null
+      && resolved[4]?.angle_deg === 0 && resolved[5] === null,
+    `D86: the limited fixture loads with the parsed limits; post (ungrouped) and flag (malformed) have none (${JSON.stringify(d86.load)})`);
+    await api("select_object", "arm");
+    await frames2();
+    const r0 = await get("rotate");
+    check(r0.limit === "關節限制：繞 mast 的 (0, 1, 0) 軸 ≤ 11.0°，目前 0.0°" && !r0.limit_bad,
+      `D86: the panel line of the arm at load (${JSON.stringify(r0.limit)})`);
+    const v0 = await verts(ALL), svg0 = await get("svg"), u0 = await undo_size();
+    await api("rotate_object", "arm", 1, 15);
+    await frames2();
+    const j1 = await api("joint_limit", "arm"), r1 = await get("rotate"), v1 = await verts(ALL);
+    d86.clamp = { j1, limit: r1.limit, undo: await undo_size() - u0 };
+    check(j1 !== null && near(j1.angle_deg, 11, 1e-9) && j1.state === "at_max" && d86.clamp.undo === 1 && v1.arm !== v0.arm && v1.flag !== v0.flag
+      && r1.limit === "關節限制：繞 mast 的 (0, 1, 0) 軸 ≤ 11.0°，目前 11.0°（已達上限）" && !r1.limit_bad,
+    `D86: rotate_object on the arm by 15° stops at 11° (one undo step, the flag carried) (${JSON.stringify(d86.clamp)})`);
+    await api("rotate_object", "arm", 1, 5);
+    await frames2();
+    check(await undo_size() === u0 + 1 && JSON.stringify(await verts(ALL)) === JSON.stringify(v1),
+      "D86: a further outward rotate_object at the bound moves nothing and records no undo step");
+    // 套用 beyond the bound: refused, the fields and the line red; a non-forced sync (undo) keeps the refusal; Escape clears it
+    const refused = await api("set_object_rotation", "arm", [0, 20, 0]);
+    await frames2();
+    const r2 = await get("rotate");
+    d86.refuse = { refused, limit: r2.limit, bad: r2.limit_bad, fields: r2.fields };
+    check(refused === false && r2.limit_bad && r2.limit === "套用被拒：繞 mast 的 (0, 1, 0) 軸會轉到 20.0°，超出上限 11.0°"
+      && r2.fields.every((f) => f.bad) && await undo_size() === u0 + 1 && JSON.stringify(await verts(ALL)) === JSON.stringify(v1),
+    `D86: set_object_rotation beyond the bound is refused: fields and line red, nothing moves, no step (${JSON.stringify(d86.refuse)})`);
+    await page.click("#undo");
+    await frames2();
+    const r3 = await get("rotate");
+    d86.after_undo = { limit: r3.limit, bad: r3.limit_bad };
+    check(r3.limit_bad && r3.limit === r2.limit && await get("svg") === svg0 && await undo_size() === u0,
+      `D86 review R5: the refusal survives the undo's panel sync (the drawing back byte for byte) (${JSON.stringify(d86.after_undo)})`);
+    await page.focus("#obj-rx");
+    await page.press("#obj-rx", "Escape");
+    await frames2();
+    const r4 = await get("rotate");
+    check(!r4.limit_bad && r4.limit === "關節限制：繞 mast 的 (0, 1, 0) 軸 ≤ 11.0°，目前 0.0°" && r4.fields.every((f) => !f.bad),
+      `D86: Escape clears the refusal (${JSON.stringify(r4.limit)})`);
+    // typed entries: beyond refused with the angle named, inside accepted
+    await page.fill("#obj-ry", "12.5");
+    await page.press("#obj-ry", "Enter");
+    await frames2();
+    const r5 = await get("rotate");
+    await page.fill("#obj-ry", "10");
+    await page.press("#obj-ry", "Enter");
+    await frames2();
+    const r6 = await get("rotate"), j6 = await api("joint_limit", "arm");
+    d86.typed = { refused: r5.limit, accepted: r6.limit, j6 };
+    check(r5.limit_bad && r5.limit === "套用被拒：繞 mast 的 (0, 1, 0) 軸會轉到 12.5°，超出上限 11.0°" && r5.fields[1].value === "12.5"
+      && !r6.limit_bad && r6.limit === "關節限制：繞 mast 的 (0, 1, 0) 軸 ≤ 11.0°，目前 10.0°" && near(j6.angle_deg, 10, 1e-9)
+      && await undo_size() === u0 + 1,
+    `D86: a typed 12.5 is refused (text kept), a typed 10 is applied (one step) (${JSON.stringify(d86.typed)})`);
+    // a group turn and a parent turn never change the angle
+    await api("rotate_group", "g", 2, 40);
+    await frames2();
+    await api("rotate_object", "mast", 0, 20);
+    await frames2();
+    const j7 = await api("joint_limit", "arm");
+    check(near(j7.angle_deg, 10, 1e-9) && j7.state === "inside", `D86: a group and a parent turn leave the arm's angle (${JSON.stringify(j7)})`);
+    // the tip: a world-x drag counts only the twist about the pole's own x (it loads at rz = 50°)
+    await api("rotate_object", "tip", 0, 12);
+    await frames2();
+    const jt = await api("joint_limit", "tip");
+    check(jt !== null && jt.angle_deg > 7 && jt.angle_deg < 12 - 1, `D86: the tip's axis is read in the pole's frame (${JSON.stringify(jt)})`);
+    // Download scene keeps the key; the reload keeps the angle
+    const [dl] = await Promise.all([page.waitForEvent("download"), page.click("#dl-scene")]);
+    const path = join(outdir, "d86_basic_limited.scene.json");
+    await dl.saveAs(path);
+    const saved_text = readFileSync(path, "utf-8"), saved = JSON.parse(saved_text);
+    const saved_limits = Object.fromEntries(saved.objects.filter((o) => o.joint_limit !== undefined).map((o) => [o.id, o.joint_limit]));
+    const reloaded = await page.evaluate((t) => window.castplane_web.load_text("basic_limited_dl", t), saved_text);
+    await frames2();
+    const jr = await api("joint_limit", "arm"), jtr = await api("joint_limit", "tip");
+    d86.download = { saved_limits, reloaded, jr, jtr };
+    const sorted = (x) => Array.isArray(x) ? x.map(sorted) : x !== null && typeof x === "object"
+      ? Object.fromEntries(Object.keys(x).sort().map((k) => [k, sorted(x[k])])) : x;
+    check(JSON.stringify(sorted(saved_limits)) === JSON.stringify(sorted(expected_limits)) && reloaded && near(jr.angle_deg, 10, 1e-9)
+      && near(jtr.angle_deg, jt.angle_deg, 1e-9),
+    `D86: Download scene writes joint_limit back and the reload keeps the angles (${JSON.stringify(d86.download)})`);
+    await page.evaluate(() => window.castplane_web.load_example("basic"));
+    await frames2();
+    check(JSON.stringify(await api("object_limits")) === "{}" && (await get("rotate")).limit === "", "D86: loading basic clears the limits");
   }
   {
     // the panel: a bad field turns red and changes nothing; numeric entry; 還原此物體
