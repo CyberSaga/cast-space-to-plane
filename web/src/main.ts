@@ -701,8 +701,7 @@ const obj_drag = new UnitDrag<Scene, StageA>({
   // D86 review R8: a slow scene runs no stage A during a drag, so the joint-limit line follows the candidate here
   proxy: (pose) => {
     set_pose_3d(pose);
-    const id = selected_part(), t = id === null ? undefined : pose.transforms.get(id);
-    if (t !== undefined) render_object_limit(t);
+    if (selected_part() !== null) render_object_limit(pose);
   },
   restore: (pose0, scene0, A0) => {
     state.scene = scene0;
@@ -997,11 +996,16 @@ function sync_object_panel(force = false): void {
 /**
  * D86: the panel's joint-limit line for the selected part: while a refusal of a 套用 on it stands
  * (`state.limit_refusal`), its text in red with the three fields red too; else 「關節限制：繞 <parent> 的 (x, y, z) 軸
- * <range>，目前 <φ>°」 (`limits.ts::limit_text`) of the part at `tP` (its current transform; on a slow scene during a drag,
- * the pending candidate, review R8). Empty for anything but a part with a resolved limit.
+ * <range>，目前 <φ>°」 (`limits.ts::limit_text`) of the part against its parent at their current transforms, or, on a slow
+ * scene during a drag, with the transforms of the pending candidate `pending` taken first (review R8: the part, or its
+ * parent when the part is carried in the dragged subtree). Empty for anything but a part with a resolved limit.
  */
-function render_object_limit(tP: Transform | null = null): void {
+function render_object_limit(pending: UnitPose | null = null): void {
   const pl = state.plane, id = selected_part();
+  const cur = (k: string): Transform | null => {
+    const t = pending?.transforms.get(k);
+    return t !== undefined ? clone_transform(t) : current_transform(k);
+  };
   const lim = id === null || pl === null ? null : pl.limit(id), par = id === null || pl === null ? null : pl.parent_of(id);
   let text = "", bad = false;
   if (pl !== null && id !== null && lim !== null && par !== null) {
@@ -1010,7 +1014,7 @@ function render_object_limit(tP: Transform | null = null): void {
       text = ref.text;
       bad = true;
     } else {
-      const t = tP ?? current_transform(id), a = t === null ? null : pl.part_limit_at(id, t, current_transform);
+      const t = cur(id), a = t === null ? null : pl.part_limit_at(id, t, cur);
       if (a !== null) text = limit_text(lim, a.phi, par);
     }
   }
