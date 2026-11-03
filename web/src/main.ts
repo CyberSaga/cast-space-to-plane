@@ -28,7 +28,8 @@ import {
 import type { Selection } from "./groups.js";
 import { EXAMPLES } from "./examples.js";
 import { OBJECT_ID_KEY } from "./helpers3d.js";
-import { object_links, object_links_text } from "./links.js";
+import { limit_for_file, object_links, object_links_text } from "./links.js";
+import { canonical_angle, limit_text, refusal_text } from "./limits.js";
 import type { RawLink } from "./links.js";
 import { camera_block_text, json_blob, ordered_layers, scene_blob, svg_blob } from "./download.js";
 import { QUICK_EQUATIONS } from "./equation.js";
@@ -117,6 +118,10 @@ interface State {
   object_error: boolean;
   /** D83: the left pane's 「板子」 checkbox (page-level, not an undo step, not stored in the scene). */
   board_visible: boolean;
+  /** D86: the refusal of the last 套用 beyond a joint limit (the part and the panel line's text), shown in red until a
+   * forced panel sync (a successful action, Escape, a drag start, a selection change, a load) or the next 套用; a
+   * non-forced sync keeps it, as it keeps the typed field text (review R5). */
+  limit_refusal: { id: string; text: string } | null;
 }
 
 const state: State = {
@@ -144,6 +149,7 @@ const state: State = {
   rotate: { sel: null },
   object_error: false,
   board_visible: true,
+  limit_refusal: null,
 };
 
 const ui = controls();
@@ -692,7 +698,12 @@ function apply_pose(pose: UnitPose, record: { kind: "none" | "step" } = { kind: 
 const obj_drag = new UnitDrag<Scene, StageA>({
   // from `frame()` (no extra frame request) and from `end()` (the caller requests the resting frame)
   apply: (pose) => apply_pose(pose, { kind: "none" }, true, false),
-  proxy: (pose) => set_pose_3d(pose),
+  // D86 review R8: a slow scene runs no stage A during a drag, so the joint-limit line follows the candidate here
+  proxy: (pose) => {
+    set_pose_3d(pose);
+    const id = selected_part(), t = id === null ? undefined : pose.transforms.get(id);
+    if (t !== undefined) render_object_limit(t);
+  },
   restore: (pose0, scene0, A0) => {
     state.scene = scene0;
     state.A = A0;
@@ -721,8 +732,10 @@ function start_unit_drag(sel: Exclude<Selection, null>, axis: Axis, grab: { w: V
   }
   const t_sel = sel.kind === "part" ? pose0.transforms.get(sel.id) : undefined;
   const pivot = sel.kind !== "part" || t_sel === undefined ? null : pl.part_pivot(sel.id, t_sel);
+  // D86: a part with a joint limit gets the closed-form clamp of the drag angle (null: the D85 path bit for bit)
+  const clamp = sel.kind !== "part" || t_sel === undefined ? null : pl.part_drag_clamp(sel.id, axis, t_sel, current_transform);
   object_seq += 1;
-  obj_drag.begin(pose0, scene, A, object_seq, { live: !slow_scene(), axis, c_locals, pivot });
+  obj_drag.begin(pose0, scene, A, object_seq, { live: !slow_scene(), axis, c_locals, pivot, clamp });
   // D85: the step's kind follows the number of objects (as `apply_pose`'s record): `end_object` refuses an `objects`
   // step, so a subtree opened as one object would record nothing
   if (pose0.group === null && pose0.transforms.size === 1) {
@@ -786,11 +799,22 @@ function unit_action(after: UnitPose): boolean {
 /** The numeric fields' pose for object `id` (spec-v0.3 §2.3): exact Euler angles `r`, the pivot fixed. D85
  * (`PlaneSession.part_numeric_pose`): a part with a joint or descendants gets `r` about its pivot and its subtree the
  * same rotation (`object_rotate.ts::set_part_rotation`; `r` equal to its angles is no action, G4); any other object
- * the M11 `set_rotation` about its `c_w`. */
+ * the M11 `set_rotation` about its `c_w`. D86: a target whose joint-limit angle is outside the range is refused, never
+ * clamped (no stage A, no step; `state.limit_refusal` names the angle and the bound, and for the selected part the
+ * limit line and the three fields turn red); a target inside, a bound included, is applied verbatim. A 套用 that
+ * changes nothing is no action and is not checked. */
 function apply_object_rotation(id: string, r: readonly number[]): boolean {
   if (!r.every((x) => Number.isFinite(x))) return false;
-  const after = state.plane?.part_numeric_pose(id, r, current_transform) ?? null;
-  return after !== null && unit_action(after);
+  const pl = state.plane;
+  const after = pl?.part_numeric_pose(id, r, current_transform) ?? null;
+  if (pl === null || after === null || state.dragging || state.handle !== null) return false;
+  const chk = pl.part_limit_check(id, after, current_transform), now = pl.part_pose(id, current_transform);
+  if (chk !== null && !chk.inside && (now === null || !same_pose(now, after))) {
+    state.limit_refusal = { id, text: refusal_text(pl.limit(id)!, chk.phi, pl.parent_of(id)!) };
+    render_object_limit();
+    return false;
+  }
+  return unit_action(after);
 }
 
 /** D84: the numeric fields' pose for group `name`: its rotation relative to the load becomes `euler_zyx_matrix(r)`,
@@ -806,6 +830,11 @@ function apply_group_rotation(name: string, r: readonly number[]): boolean {
 function apply_object_fields(): boolean {
   const sel = state.rotate.sel, cur = unit_angles(unit_pose(sel));
   if (sel === null || cur === null) return false;
+  // D86: every 套用 re-decides; the previous refusal goes (a refused entry sets it again)
+  if (state.limit_refusal !== null) {
+    state.limit_refusal = null;
+    render_object_limit();
+  }
   const vals = ui.objectFields.map((el, i) => el.value === el.dataset["shown"] ? cur[i]! : parse_angle(el.value));
   let ok = true;
   ui.objectFields.forEach((el, i) => {
@@ -931,6 +960,7 @@ function blur_object_field(): void {
  */
 function sync_object_panel(force = false): void {
   const scene = state.scene, pl = state.plane, sel = state.rotate.sel, pose = unit_pose(sel), angles = unit_angles(pose);
+  if (force) state.limit_refusal = null;
   const value = selection_value(sel);
   if (ui.objectSelect.value !== value) ui.objectSelect.value = value;
   const carried = sel?.kind === "part" && pl !== null ? pl.subtree(sel.id).length - 1 : 0;
@@ -960,7 +990,38 @@ function sync_object_panel(force = false): void {
     joint = centre !== null && pl?.joint(sel.id) != null;
   }
   ui.objectCentre.textContent = object_centre_text(centre, joint);
+  render_object_limit();
   ui.objectNotice.textContent = scene !== null && slow_scene() ? NOTICE_SLOW_SCENE : "";
+}
+
+/**
+ * D86: the panel's joint-limit line for the selected part: while a refusal of a 套用 on it stands
+ * (`state.limit_refusal`), its text in red with the three fields red too; else 「關節限制：繞 <parent> 的 (x, y, z) 軸
+ * <range>，目前 <φ>°」 (`limits.ts::limit_text`) of the part at `tP` (its current transform; on a slow scene during a drag,
+ * the pending candidate, review R8). Empty for anything but a part with a resolved limit.
+ */
+function render_object_limit(tP: Transform | null = null): void {
+  const pl = state.plane, id = selected_part();
+  const lim = id === null || pl === null ? null : pl.limit(id), par = id === null || pl === null ? null : pl.parent_of(id);
+  let text = "", bad = false;
+  if (pl !== null && id !== null && lim !== null && par !== null) {
+    const ref = state.limit_refusal;
+    if (ref !== null && ref.id === id) {
+      text = ref.text;
+      bad = true;
+    } else {
+      const t = tP ?? current_transform(id), a = t === null ? null : pl.part_limit_at(id, t, current_transform);
+      if (a !== null) text = limit_text(lim, a.phi, par);
+    }
+  }
+  ui.objectLimit.textContent = text;
+  ui.objectLimit.classList.toggle("bad", bad);
+  if (bad) {
+    for (const el of ui.objectFields) {
+      el.classList.add("bad");
+      el.setAttribute("aria-invalid", "true");
+    }
+  }
 }
 
 ui.objectSelect.addEventListener("change", () => select(selection_of_value(ui.objectSelect.value)));
@@ -1401,8 +1462,22 @@ function frame(): void {
   get rotate() {
     return { id: selected_part(), selection: selection_value(state.rotate.sel), selected_text: ui.objectSelected.textContent, slow: slow_scene(),
       fields: ui.objectFields.map((el) => ({ value: el.value, bad: el.classList.contains("bad") })),
-      ground_shown: !ui.objectGround.hidden, centre: ui.objectCentre.textContent, notice: ui.objectNotice.textContent };
+      ground_shown: !ui.objectGround.hidden, centre: ui.objectCentre.textContent, notice: ui.objectNotice.textContent,
+      limit: ui.objectLimit.textContent, limit_bad: ui.objectLimit.classList.contains("bad") };
   },
+  /** D86: part `id`'s resolved joint limit and its current angle (`angle_deg` with the `+180 ≡ −180` identification of
+   * `limits.ts::canonical_angle`, `state`, whether it is `inside`, the parent's id); null without a resolved limit or for
+   * an unknown id. `min_deg` / `max_deg` are the resolved bounds (±180 for an absent one). */
+  joint_limit: (id: string) => {
+    const pl = state.plane, lim = pl?.limit(id) ?? null, a = pl?.part_limit_angle(id, current_transform) ?? null;
+    if (pl == null || lim === null || a === null) return null;
+    return { axis: [...lim.axis], min_deg: lim.min, max_deg: lim.max, min_written: lim.min_written, max_written: lim.max_written,
+      angle_deg: canonical_angle(a.phi, lim), state: a.state, inside: a.inside, parent: pl.parent_of(id) };
+  },
+  /** D86: the loaded scene's parse-valid `joint_limit` keys by object id, as read and as Download scene writes them back
+   * (also the ones the resolution ignores). */
+  object_limits: () => Object.fromEntries([...state.links].filter(([, l]) => l.joint_limit !== undefined)
+    .map(([id, l]) => [id, limit_for_file(l.joint_limit!)])),
   /** M11: the observer-pane px of the selected object's rings (per axis; `null` entries behind the observer), or null. */
   get object_rings_px() {
     const o = obs_frame(), r = observer?.last_object_rings ?? null;

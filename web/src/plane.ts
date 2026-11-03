@@ -6,6 +6,7 @@
  * no gesture there reaches the session. `main.ts` wires the DOM to it.
  */
 
+import { transform_frame } from "castplane";
 import type { Transform, Vec2, Vec3 } from "castplane";
 
 import {
@@ -17,11 +18,13 @@ import { EquationError, applyEquation } from "./equation.js";
 import { GROUP_VALUE_PREFIX } from "./groups.js";
 import { resolve_links, subtree } from "./links.js";
 import type { LinkForest, RawLink } from "./links.js";
+import { clone_limit, drag_clamp, inside, limit_angle, limit_state, relative_rotation } from "./limits.js";
+import type { Limit, LimitState } from "./limits.js";
 import {
   clone_group_frame, clone_transform, identity3, local_bbox, restore_part_pose, set_part_rotation, set_rotation, single_pose,
   world_bbox, world_centre,
 } from "./object_rotate.js";
-import type { GroupFrame, UnitPose } from "./object_rotate.js";
+import type { Axis, GroupFrame, UnitPose } from "./object_rotate.js";
 
 /** The pivot selection (§5.7.7): not part of an undo snapshot. D84: `object_id` is an object id or a group's key
  * `group.<name>` (`groups.ts::selection_value`; object ids cannot contain `.`). */
@@ -256,6 +259,50 @@ export class PlaneSession {
     const now = current(par), load = this.initial_transform(par);
     if (now === null || load === null) return null;
     return restore_part_pose(pose, id, t_load, { now: clone_transform(now), load });
+  }
+
+  // ---------------------------------------------------------------------------------------------- D86 joint limits
+
+  /** D86: part `id`'s resolved joint limit (a copy; null without one: no parse-valid key, no resolved parent, or a
+   * whole-circle range). */
+  limit(id: string): Limit | null {
+    const l = this.links.limits.get(id);
+    return l === undefined ? null : clone_limit(l);
+  }
+
+  /** D86: the angle `φ` of part `id` at transform `tP` against its parent's current transform (`current`), with its
+   * state; null without a limit or when a transform is unknown. */
+  part_limit_at(id: string, tP: Transform, current: (id: string) => Transform | null): { phi: number; state: LimitState; inside: boolean } | null {
+    const l = this.links.limits.get(id), par = this.parent_of(id);
+    const tQ = par === null ? null : current(par);
+    if (l === undefined || tQ === null) return null;
+    const phi = limit_angle(l, tP, tQ);
+    return { phi, state: limit_state(phi, l), inside: inside(phi, l) };
+  }
+
+  /** D86: {@link part_limit_at} of part `id` at its current transform. */
+  part_limit_angle(id: string, current: (id: string) => Transform | null): { phi: number; state: LimitState; inside: boolean } | null {
+    const t = current(id);
+    return t === null ? null : this.part_limit_at(id, t, current);
+  }
+
+  /** D86: the check of a 套用: `φ` of part `id` in the proposed pose `pose` (its subtree; the parent is never in it, so
+   * its current transform is used); null without a limit. */
+  part_limit_check(id: string, pose: UnitPose, current: (id: string) => Transform | null): { phi: number; state: LimitState; inside: boolean } | null {
+    const t = pose.transforms.get(id);
+    return t === undefined ? null : this.part_limit_at(id, t, current);
+  }
+
+  /** D86: the clamp of a ring drag of part `id` about world axis `axis` from its pointer-down transform `t0`
+   * (`limits.ts::drag_clamp` with `D₀ = R_Qᵀ·R_P(t0)` and `e′ = R_Qᵀ·e`, Q's current transform: Q is never in P's
+   * subtree, so it does not move during the drag); null without a limit (the D85 path). */
+  part_drag_clamp(id: string, axis: Axis, t0: Transform, current: (id: string) => Transform | null): ((theta: number) => number) | null {
+    const l = this.links.limits.get(id), par = this.parent_of(id);
+    const tQ = par === null ? null : current(par);
+    if (l === undefined || tQ === null) return null;
+    const [RQ] = transform_frame(tQ);
+    const e_parent: Vec3 = [RQ[0][axis], RQ[1][axis], RQ[2][axis]];
+    return drag_clamp(relative_rotation(t0, tQ), e_parent, l);
   }
 
   /** D84: group `name`'s current frame (a copy; null for an unknown group). */
