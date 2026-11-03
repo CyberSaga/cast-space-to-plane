@@ -3,7 +3,7 @@
 > **Copyright notice:** Hanabishi Miki (*Hayate the Combat Butler*) belongs to her rights holders. This model is an unofficial fan-made drawing reference, and the character and her model are **not included in this project's authorized distribution and dissemination** (the GPL-3.0 licence covers the castplane software only). See [`COPYRIGHT_NOTICE.md`](../../COPYRIGHT_NOTICE.md).
 
 This package generates the 花菱美希 (Hanabishi Miki) drawing-reference model: `examples/miki.json` (the castplane
-scene, 18 inline `mesh` objects) and `examples/meshes/miki.{obj,mtl,glb}` (the same model for other 3D software). It is
+scene, 19 inline `mesh` objects) and `examples/meshes/miki.{obj,mtl,glb}` (the same model for other 3D software). It is
 a development tool outside the castplane core. The geometry modules import numpy and the standard library only;
 the previews also use Pillow and cairosvg (both in the `dev` extra). The four generated files are never edited by
 hand: change the generator and regenerate. `tests/test_miki_model.py` compares them byte for byte.
@@ -42,7 +42,7 @@ A **part** is one named piece: `Part(name, material, mesh, region="", *, obj="")
   and by the shaded previews.
 - `obj` is the castplane **object** the part is merged into, one of `assemble.OBJECT_IDS`. Left empty it is
   `assemble.REGION_OBJECTS[region]`; set it where that default is wrong or missing (sidelocks, back hair, the ring,
-  both arms).
+  both arms, the sock tops).
 - `region` is one of the module's `REGIONS`; `--only` filters by it. A part without a region must set `obj`.
 
 An **object** is what castplane sees: a spatially compact group of parts. The groups are small on purpose, because
@@ -68,8 +68,12 @@ Authoring rules, which the web UI enforces by ignoring a bad link silently:
 - put a joint inside its parent's bounding box, where the two pieces meet (shoulder, neck, hip, knee, ankle); a
   piece that only sits on its parent (hair, headband, eyes, face decals) turns about the parent's centre (the
   skull); the tests allow a joint up to 0.12 m outside the part's own box;
-- left and right limbs that share one object (`legs`, `socks`, `shoes`) take a midline joint and move together;
-  give each side its own object to bend one leg.
+- left and right limbs that share one object (`legs`, `sock_tops`, `socks`, `shoes`) take a midline joint and move
+  together; give each side its own object to bend one leg;
+- a piece that turns about a joint ends, where it meets the piece above, in a dome centred on that joint (a rotation
+  about the joint maps it onto itself): the over-knee sock is split at the knee into `sock_tops` (the thigh part,
+  child of `legs`) and `socks` (the shank, its top a sphere about the knee centre that holds the leg's and the sock
+  top's knee domes), so bending the knee opens no skin and nothing pokes out (`knee-bend` pose).
 
 | object | parent | joint | | object | parent | joint |
 | --- | --- | --- | --- | --- | --- | --- |
@@ -77,6 +81,7 @@ Authoring rules, which the web UI enforces by ignoring a bad link silently:
 | `blouse` | `skirt` | `(0, 0, waist_z)` | | `collar` | `blouse` | neck root |
 | `legs` | `skirt` | hip centre | | `scarf` | `blouse` | `collar_outer[-1]` (the V tip) |
 | `socks` | `legs` | knee centre | | `ring` | `scarf` | `ring_center` |
+| `sock_tops` | `legs` | knee centre | | | | |
 | `shoes` | `socks` | ankle centre | | `arm_l`, `arm_r` | `blouse` | `shoulder_joint(+1)`, `(-1)` |
 | `neck` | `blouse` | neck root `(0, mean(neck_y), neck_z[0])` | | `head` | `neck` | `(0, mean(neck_y), neck_z[1])` |
 
@@ -94,14 +99,15 @@ Authoring rules, which the web UI enforces by ignoring a bad link silently:
 | 9 | `arm_l` | her left sleeve, its 2 cuff white stripes, hand and thumb |
 | 10 | `face_marks` | brows, upper-lid bands, lower-lid marks, mouth, nose mark |
 | 11 | `arm_r` | the same for her right arm |
-| 12 | `legs` | the two legs |
-| 13 | `socks` | the two socks |
+| 12 | `legs` | the two legs (down to the knee, inside the sock tops) |
+| 13 | `socks` | the two shank socks (shoe to knee, a sphere about the knee centre on top) |
 | 14 | `skirt` | skirt, under-skirt block |
 | 15 | `shoes` | the two shoes with their straps |
 | 16 | `ring` | scarf ring, its 2 pink stripes |
 | 17 | `neck` | neck and décolleté bib |
+| 18 | `sock_tops` | the two over-knee sock tops (the thigh part, knee to 5.5 cm under the hem) |
 
-Currently 58 parts (58 closed shells), 4225 vertices, 4514 polygons and 8242 triangles. To add, split or reorder
+Currently 60 parts (60 closed shells), 4525 vertices, 4850 polygons and 8834 triangles. To add, split or reorder
 objects, change `OBJECTS` and keep `DISPLAY_MATERIALS` and `PARENTS` in the same order (asserts check it), give a
 new object its joint in `part_links`, then update the object lists that `export.DESCRIPTION`, `examples/README.md`
 and the §5.4 note quote.
@@ -241,14 +247,15 @@ These are castplane's mesh rules (contract §5.2) and what the generator adds on
    object instead of deleting designed lines. Prefer `thicken(groups="single")` slabs, whose borders draw only as
    silhouettes and cost no rays, and give a rim its own group only where the line must show.
 8. **Budget.** At most 6000 polygons and 10000 triangles in total (`assemble.BUDGET`, polygons = faces as written,
-   triangles = castplane's fan triangulation; now 4514 and 8242) and a scene file of at most 700 KiB (190 KiB now).
+   triangles = castplane's fan triangulation; now 4850 and 8834) and a scene file of at most 700 KiB (204 KiB now).
    Hidden-line time grows with the number of drawn edge samples times the number of triangles, and shrinks when
    objects are compact. `node tools/web_frame_bench.mjs examples/miki.json 5` times the web path (the figures
    depend on the machine, so compare against a baseline measured on the same machine).
-   The web port's resting frame (with hidden lines) takes about 1.4 s against a 1.5 s target,
-   and the Python CLI renders the scene in about 4 s, so spend polygons where the silhouette needs them and not on
-   flat areas. Every mesh vertex also gets a label in the `labels` layer, which is why the web UI asks users to
-   untick it.
+   The web port's resting frame (with hidden lines) took about 1.4 s against a 1.5 s target in the container
+   the model was built in; in the container of the v6 change it measured 3.3-3.7 s before the change (d67f079) and
+   3.3-3.9 s after it, interleaved runs, so compare on one machine. The Python CLI renders the scene in about 4 s,
+   so spend polygons where the silhouette needs them and not on flat areas. Every mesh vertex also gets a label in
+   the `labels` layer, which is why the web UI asks users to untick it.
 9. **Deterministic.** Running the generator twice must give byte-identical files: no randomness, no set iteration
    order, no wall-clock values, coordinates rounded to `DECIMALS`. Do not let the last bit of a floating-point
    reduction decide a branch: a Haswell and an AVX-512 BLAS kernel round differently, so `meshkit._below_fan`
@@ -266,7 +273,7 @@ imports as one object), so it renders with `MESH_*` warnings; only `examples/mik
 `checks.py` turns the questions a review round used to answer by eye (does a part poke through another, is a gap too
 small, do the proportions match the tables they were lofted from) into requirements that end PASS, FAIL or
 INDETERMINATE. It only reads the model: it builds it with `assemble.assemble` and checks the rounded, exported
-geometry of the pre-merge parts (`Assembly.parts`, `assemble.DECIMALS`), never the 18 merged objects and never the
+geometry of the pre-merge parts (`Assembly.parts`, `assemble.DECIMALS`), never the 19 merged objects and never the
 builders' float output. It writes no model file, so `make_miki_model.py --check` stays byte-identical.
 
 ```sh
@@ -297,7 +304,7 @@ not change the exit status; with `--poses` it must PASS at every tested angle.
 ### The three pair relations
 
 Burial is this model's construction idiom (the neck ends inside the torso and the head, the bib inside the neck,
-the leg inside the sock, the sidelock roots inside the dome, every decal's back under the skin, the scarf tips' root
+the leg inside the sock top, the knee domes inside the shank sock, the sidelock roots inside the dome, every decal's back under the skin, the scarf tips' root
 rim inside the ring, and the hair tucks: each sidelock over the bangs' outermost strip and end
 (`join:hair.bangs~hair.sidelock_{l,r}`, a leak onto the next strip fails) and into the side curtain's front edge
 (`join:hair.sidelock_{l,r}~hair.back`, from `hair.CURTAIN_FRONT_Y` back by `hair.CURTAIN_END_THICKNESS`)), so a
@@ -312,7 +319,11 @@ object (`collar` merges the collar, the dickey and the stripe), therefore falls 
   a rim that surfaces, is a FAIL.
 - **clear**: faces of A must clear faces of B by `[min, max]` (collar underside against the bib, straps, decal
   fronts against the skin, the colour stripes). A contact or a coincident patch is a gap of 0, below the minimum.
-  A finite maximum is enforced only where a builder places a part a stated distance off its host.
+  A finite maximum is enforced only where a builder places a part a stated distance off its host.  `clip_z = (lo, hi)`
+  (euclid only) clips both parts' selected triangles to that rest-frame z slab first, for a region that cuts through
+  faces: `clear:limbs.sleeve_{l,r}^body.blouse/waist` (profile v6) measures the sleeve against the blouse below the
+  shoulder join, `acceptance.SLEEVE_JOIN_FLOOR_Z` (z 1.00), where the sleeve's long upper-arm faces also carry the
+  armpit burial.  In a pose the clipped pieces are the rest pieces carried by the rigid motion.
 - **everything else** (the generic relation, one requirement per remaining pair): any triangle-triangle crossing,
   coincident patch or containment is a FAIL. A contact within eps is not a penetration; it is counted and located.
 
@@ -356,12 +367,16 @@ they are, not fixed:
 - `limbs.sleeve_{l,r}~body.blouse` and `limbs.thumb_{l,r}~limbs.hand_{l,r}` are zone-exempt: the builders state no
   zone for those burials (the blouse cuts the sleeve over its round cap and down the armpit; the thumb is a lobe
   off the palm base), so the intersection curve is not tested, only containment and the rim (the thumb's base cap).
+  Profile v6 closes the sleeve's blind spot below the armpit: the required
+  `clear:limbs.sleeve_{l,r}^body.blouse/waist` (clipped below z 1.00, at least `body.SLEEVE_BLOUSE_CLEARANCE` 2 mm)
+  failed on the v5 model at arms-inward +10 and +11 (the sleeve crossed the blouse waist, ~5.5 / 8 mm deep) and
+  passes since the blouse was narrowed below the bust.
 - The advisory `clear:limbs.strap_{l,r}^limbs.shoe_{l,r}/surface` stays FAIL: its exact-distance metric covers every
   strap face, including the strap's end faces, which physically meet the shoe. The gated rule is the builder's
   border-chord clearance (`clear:limbs.strap_{l,r}^limbs.shoe_{l,r}`), which passes.
 - The `pose:*` requirements are INDETERMINATE "not tested" in the default run, PASS or FAIL with `--poses` (see
-  "Poses (milestone 2)"). Eight are advisory; `pose:arms-inward` is required (profile v5) and PASSes at +5 and +10
-  under `--poses`.
+  "Poses (milestone 2)"). Nine are advisory; `pose:arms-inward` is required (profile v5; v6: at +5, +10 and +11) and
+  PASSes under `--poses`.
 - Known minor, not a check result: at the bangs' ends (|x| 0.062-0.072, z 1.456-1.4585) the dome's front rim shows
   1-2 mm in front of the outermost strips just under the band in the shaded close-ups (a sub-pixel patch at 400 x 600;
   nothing in the line renders). `_dome_bottom_z` follows the rig's band line, which lies ~3 mm below the band mesh's
@@ -388,16 +403,22 @@ toward her left. The angles tested, with the step degrees they give:
 | `head-turn` | `head` about z by +angle (+: toward her left) | +10, -10, +20, -20, +30, -30 |
 | `head-nod` | `head` about x by +angle | +15 (down), -10 (up) |
 | `arms-raised` | `arm_l` about y by -angle, `arm_r` about y by +angle (sideways) | 30, 60, 90 |
-| `arms-inward` (required) | `arm_l` about y by +angle, `arm_r` about y by -angle (toward the body) | 5, 10 |
-| `arms-inward-far` | the same steps as `arms-inward`, beyond the tested-clean range | 15, 20, 25 |
+| `arms-inward` (required) | `arm_l` about y by +angle, `arm_r` about y by -angle (toward the body) | 5, 10, 11 |
+| `arms-inward-far` | the same steps as `arms-inward`, beyond the tested-clean range | 13, 15, 20, 25 |
 | `arms-forward` | `arm_l`, `arm_r` about x by +angle | -30, -60 (forward) |
 | `step` | `legs` about x by +angle (both legs are one object; socks and shoes follow) | +15, -15, +25, -25 (-: forward) |
+| `knee-bend` | `socks` about x by +angle at the knees (both shanks; the shoes follow, the sock tops stay) | +-5, +-10, +-15 (+: heels back) |
 | `bow` | `blouse` about x at the waist (carries neck, head, arms, collar, scarf, ring) | +10, +20 (forward) |
 | `bow-head-turn` | `blouse` about x by +10, then `head` about z by +angle | +20 |
 
-The arm stops at +11 deg inward: tested clean through +11, first contact at +12 (the sleeve meets the skirt's
-flare); from +15 the sleeves and cuffs cross the skirt and the bloomers block (`body.underskirt`), and from +20 the
-hands and the thighs. This is a tested clearance, not a limit the UI enforces: the web UI still turns an arm further.
+The arm stops at +11 deg inward. Profile v6 (the narrowed blouse and the A-line skirt), swept at every degree over
+every cross pair: the sleeve clears the blouse below the shoulder join by 7.6 mm at +11, 5.2 mm at +12, 2.8 mm at
++13 and 0.4 mm at +14 (the first FAIL of the 2 mm `.../waist` clear), meets it at +15 (0.4 mm deep, 2.9 mm at +16);
+the sleeves and cuff stripes reach the skirt's flare at +19 and the hands, the under-skirt and the thighs at +25.
+Above z 1.00 the sleeve is buried in the blouse at the armpit at every angle (the zone-exempt join: the shoulder
+joint lies inside the torso). On the v5 model the sleeve crossed the blouse waist from +10 (5.5 mm) and +11 (8 mm),
+hidden behind the zone-exempt join. This is a tested clearance, not a limit the UI enforces: the web UI still turns
+an arm further.
 
 What is re-checked: only the pairs a pose moves relative to each other (cross pairs: the two parts' objects lie in
 different motion groups, `poses.motion_groups`: for a one-step pose, one part in the turned subtree and the other not;
@@ -423,14 +444,15 @@ clean (those then move to `required` with their tested angles cited, as `arms-in
 is the default run's, byte for byte. The result is **tested clearance at the listed angles, never a safe range**:
 nothing between or beyond them is certified.
 
-As they stand (profiles v4 and v5, pinned in `tests/test_miki_poses.py` as `MIKI_FIRST_FAILING`): turning the head 10
-deg already pushes the back sheet into the blouse, collar and skirt and a sidelock into the collar and scarf ribbon; the
-nod crosses the sidelocks with the collar going down (+15) and the back sheet with the blouse going up (-10); the sleeve
-caps cross the collar at 90 deg raised; the step lifts the legs' top rims out of the under-skirt block at -15 (forward)
-and +25 (back); arms forward and the bow are clean at the angles tested. Profile v5: `arms-inward` is clean at +5 and
-+10 (required); `arms-inward-far` first fails at +15 (sleeves and cuff stripes against the skirt, sleeves against the
-under-skirt), +20 (hands against the skirt, cuffs against the under-skirt, sleeves and cuffs against the legs) and +25
-(thumbs against the skirt, hands against the under-skirt and the legs).
+As they stand (profile v6, pinned in `tests/test_miki_poses.py` as `MIKI_FIRST_FAILING`): turning the head 10 deg
+already pushes the back sheet into the blouse and collar and a sidelock into the collar and scarf ribbon (the narrower
+skirt is clear of the back sheet now); the nod crosses the sidelocks with the collar going down (+15) and the back
+sheet with the blouse, skirt and under-skirt going up (-10); the sleeve caps cross the collar at 90 deg raised; the
+step lifts the legs' top rims out of the under-skirt block at +25 and -25 (clean at +-15; v5: out at -15); the knee
+bend, arms forward and the bow are clean at the angles tested. `arms-inward` is clean at +5, +10 and +11 (required);
+`arms-inward-far` is clean at +13 and first fails at +15 (the sleeves against the blouse waist), +20 (sleeves and
+cuff stripes against the skirt) and +25 (hands against the skirt, sleeves and cuffs against the under-skirt, sleeves
+and the upper cuff stripes against the thighs).
 
 The pose maths is verified against the built web code: `tools/miki_model/pose_fixtures.mjs` applies every pose through
 `links.ts` (`resolve_links`, `subtree`) and `object_rotate.ts` (`rotate_unit` about `world_centre(T, joint)`) and writes

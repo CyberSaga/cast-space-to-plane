@@ -36,10 +36,11 @@ const POSES = [
   ["head-turn", [["head", "z", "+"]], [10, -10, 20, -20, 30, -30]],
   ["head-nod", [["head", "x", "+"]], [15, -10]],
   ["arms-raised", [["arm_l", "y", "-"], ["arm_r", "y", "+"]], [30, 60, 90]],
-  ["arms-inward", [["arm_l", "y", "+"], ["arm_r", "y", "-"]], [5, 10]],
-  ["arms-inward-far", [["arm_l", "y", "+"], ["arm_r", "y", "-"]], [15, 20, 25]],
+  ["arms-inward", [["arm_l", "y", "+"], ["arm_r", "y", "-"]], [5, 10, 11]],
+  ["arms-inward-far", [["arm_l", "y", "+"], ["arm_r", "y", "-"]], [13, 15, 20, 25]],
   ["arms-forward", [["arm_l", "x", "+"], ["arm_r", "x", "+"]], [-30, -60]],
   ["step", [["legs", "x", "+"]], [15, -15, 25, -25]],
+  ["knee-bend", [["socks", "x", "+"]], [5, -5, 10, -10, 15, -15]],
   ["bow", [["blouse", "x", "+"]], [10, 20]],
   ["bow-head-turn", [["blouse", "x", 10], ["head", "z", "+"]], [20]],
 ];

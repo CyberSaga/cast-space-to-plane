@@ -867,7 +867,7 @@ vite + three.js（版本釘選：three 0.186.1、vite 8.3.3）。`vite build` �
 
 ## 5. 開發工具：`tools/make_miki_model.py`（花菱美希參考模型）
 
-`tools/make_miki_model.py` 產生角色範例：`examples/miki.json`（18 個內嵌網格物件）與同一個模型的 `examples/meshes/miki.{obj,mtl,glb}`（說明見 [`examples/README.md`](../examples/README.md)）。生成器本體在 `tools/miki_model/`（`rig.py` 放全部比例、`head.py` / `hair.py` / `body.py` / `limbs.py` 是各部位，`assemble.py` 把零件組成 18 個物件並配材質與 `display_color`，`export.py` 寫出場景 JSON、OBJ + MTL、GLB，`preview.py` 做著色預覽與線稿預覽）。幾何部分只用 numpy 與標準函式庫；只有 `--preview` 與 `--lines` 的圖片需要 Pillow 與 cairosvg。核心與 TypeScript 移植不讀取、也不依賴它。
+`tools/make_miki_model.py` 產生角色範例：`examples/miki.json`（19 個內嵌網格物件）與同一個模型的 `examples/meshes/miki.{obj,mtl,glb}`（說明見 [`examples/README.md`](../examples/README.md)）。生成器本體在 `tools/miki_model/`（`rig.py` 放全部比例、`head.py` / `hair.py` / `body.py` / `limbs.py` 是各部位，`assemble.py` 把零件組成 19 個物件並配材質與 `display_color`，`export.py` 寫出場景 JSON、OBJ + MTL、GLB，`preview.py` 做著色預覽與線稿預覽）。幾何部分只用 numpy 與標準函式庫；只有 `--preview` 與 `--lines` 的圖片需要 Pillow 與 cairosvg。核心與 TypeScript 移植不讀取、也不依賴它。
 
 ```sh
 python3 tools/make_miki_model.py                      # 建模、驗證、寫出 examples/miki.json 與 examples/meshes/miki.{obj,mtl,glb}
@@ -891,7 +891,7 @@ python3 tools/make_miki_model.py --only hair headband --preview DIR --context
 
 **確定性。** 輸出是確定的：連跑兩次得到逐位元組相同的檔案，而且與 numpy / BLAS 的建置無關。在平面四邊形上，`n·(d−a)` 的符號只是 BLAS 核心的捨入雜訊，`inscribed_fan` 與 `fan_fold` 原本用它決定要不要轉動四邊形的頂點順序，不同的核心（原生、`OPENBLAS_CORETYPE=Haswell`、Python 3.10 的 numpy 2.2.6）會轉動不同的面，寫出不同的檔案。現在 `meshkit._below_fan` 把 `|n·(d−a)| <= 1e-9·|n|·|d−a|` 的四邊形視為平面、不轉動（31 個頭髮與側髮的平面四邊形保持原順序；頂點、群組與數量不變，場景相機的 SVG 逐位元組不變）。`tests/test_miki_model.py` 逐位元組比對 `miki.json` 與 OBJ / MTL / GLB。
 
-**預算。** 全部物件加起來 ≤ 6000 個多邊形與 ≤ 10000 個三角形（現在 4514 與 8242；castplane 的消隱成本隨三角形數上升，目前網頁上的靜止影格約 1.4 秒），每個物件的特徵輪廓頂點 ≤ 64（`MESH_MAX_RAYS`，超過會發 `MESH_RAYS_CAPPED`）。目前每個物件最多 39 個。每個殼都必須是封閉、方向一致的 2-流形，沒有低於地面的頂點。
+**預算。** 全部物件加起來 ≤ 6000 個多邊形與 ≤ 10000 個三角形（現在 4850 與 8834；castplane 的消隱成本隨三角形數上升，網頁上的靜止影格與機器有關，要和同一台機器上量的基準比，`node tools/web_frame_bench.mjs examples/miki.json 5`），每個物件的特徵輪廓頂點 ≤ 64（`MESH_MAX_RAYS`，超過會發 `MESH_RAYS_CAPPED`）。目前每個物件最多 43 個（`skirt`）。每個殼都必須是封閉、方向一致的 2-流形，沒有低於地面的頂點。
 
-**時間（參考值）。** 建模約 18 秒；`--check` 約 26 秒；命令列渲染 `miki.json` 約 4–5 秒；TypeScript 移植（`ts/scripts/render.mjs`）約 1.8 秒；A 段約 0.13 秒；匯入 GLB 約 0.1 秒、OBJ 約 0.06 秒。檔案大小：`miki.json` 192 377 B、`miki.obj` 202 660 B、`miki.mtl` 1 272 B、`miki.glb` 182 568 B。
+**時間（參考值）。** 建模約 18 秒；`--check` 約 26 秒；命令列渲染 `miki.json` 約 4–5 秒；TypeScript 移植（`ts/scripts/render.mjs`）約 1.8 秒；A 段約 0.13 秒；匯入 GLB 約 0.1 秒、OBJ 約 0.06 秒。檔案大小：`miki.json` 208 549 B、`miki.obj` 219 837 B、`miki.mtl` 1 273 B、`miki.glb` 195 576 B。
 

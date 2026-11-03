@@ -713,19 +713,21 @@ def test_miki_every_intersecting_pair_is_accounted_for(miki_report):
 
 #: The accepted verdict set of Miki at rest (profile v3; v4 replaced the ``pose:rest-only`` stub with the seven
 #: advisory poses of ``poses.POSES``, INDETERMINATE "not tested" without ``--poses``; v5 added the required
-#: ``arms-inward``, not tested at rest so it does not gate this run, and ``arms-inward-far``): every required
+#: ``arms-inward``, not tested at rest so it does not gate this run, and ``arms-inward-far``; v6: the two
+#: clear:limbs.sleeve_*^body.blouse/waist, the over-knee sock tops' three joins per side, the knee-bend pose and two
+#: generic scarf-tip pairs whose boxes now touch): every required
 #: requirement that
 #: does not PASS, and the per-kind counts.  A change to either is deliberate: update these with the reason in the
 #: commit message.  The posed results are pinned in tests/test_miki_poses.py.
 MIKI_NON_PASS_REQUIRED = ()
 MIKI_COUNTS = {
     "clear": {"PASS": 46, "FAIL": 2, "INDETERMINATE": 0, "NOT_EXERCISED": 12},
-    "generic": {"PASS": 98, "FAIL": 0, "INDETERMINATE": 0, "NOT_EXERCISED": 0},
-    "join": {"PASS": 77, "FAIL": 0, "INDETERMINATE": 0, "NOT_EXERCISED": 19},
-    "pose": {"PASS": 0, "FAIL": 0, "INDETERMINATE": 9, "NOT_EXERCISED": 0},
+    "generic": {"PASS": 100, "FAIL": 0, "INDETERMINATE": 0, "NOT_EXERCISED": 0},
+    "join": {"PASS": 81, "FAIL": 0, "INDETERMINATE": 0, "NOT_EXERCISED": 19},
+    "pose": {"PASS": 0, "FAIL": 0, "INDETERMINATE": 10, "NOT_EXERCISED": 0},
     "proportion": {"PASS": 2, "FAIL": 0, "INDETERMINATE": 0, "NOT_EXERCISED": 0},
 }
-MIKI_INTERSECTING_PAIRS = 70
+MIKI_INTERSECTING_PAIRS = 74
 
 
 def test_miki_verdict_set_is_pinned(miki_report):

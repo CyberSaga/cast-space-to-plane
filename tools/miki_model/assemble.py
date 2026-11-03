@@ -1,4 +1,4 @@
-"""Parts -> the 18 castplane mesh objects of the Miki model (fixed order), with validation and statistics.
+"""Parts -> the 19 castplane mesh objects of the Miki model (fixed order), with validation and statistics.
 
 Flow: :func:`build_parts` asks each part module (``head``, ``hair``, ``body``, ``limbs``) for its parts;
 a module whose ``build(rig)`` returns ``None`` is replaced by the mannequin parts of its ``REGIONS``.
@@ -52,6 +52,7 @@ OBJECTS = (
     ("shoes", "shoes x2"),
     ("ring", "scarf ring, its two pink stripes"),
     ("neck", "neck + decollete bib"),
+    ("sock_tops", "over-knee sock tops x2 (the thigh part of the socks)"),
 )
 OBJECT_IDS = tuple(oid for oid, _ in OBJECTS)
 
@@ -64,7 +65,7 @@ MATERIALS = {
     "pupil": "#2f5c57",
     "headband": "#f4dce8",
     "scarf": "#f6c453",
-    "socks": "#f2f0f4",
+    "socks": "#958a91",            # v6: dark grey-violet over-knee socks (median of the 2026-11-03 frames A / B / D)
     "uniform": "#e8667a",          # also every pink stripe
     "skirt": "#f5b9c6",
     "collar": "#fafafa",           # also the white cuff stripes, the ring, the dickey
@@ -79,7 +80,7 @@ DISPLAY_MATERIALS = {
     "headband": "headband", "hair": "hair", "head": "skin", "eyes": "iris", "scarf": "scarf",
     "sidelocks": "hair", "blouse": "uniform", "collar": "collar", "back_hair": "hair", "arm_l": "uniform",
     "face_marks": "face_marks", "arm_r": "uniform", "legs": "skin", "socks": "socks", "skirt": "skirt",
-    "shoes": "shoes", "ring": "collar", "neck": "skin",
+    "shoes": "shoes", "ring": "collar", "neck": "skin", "sock_tops": "socks",
 }
 
 
@@ -94,12 +95,14 @@ def display_color(oid: str) -> str:
 #: carries the socks and shoes; castplane's core ignores both keys (contract §2.0).  The root is the skirt (its
 #: under-skirt block holds the hips): legs, socks and shoes hang from it, and blouse -> neck -> head carries the
 #: head's six pieces; the collar, scarf (-> ring) and both arms hang from the blouse.  ``legs`` / ``socks`` /
-#: ``shoes`` are both-legs objects, so one leg cannot bend alone.
+#: ``shoes`` are both-legs objects, so one leg cannot bend alone.  v6: the over-knee socks are split at the knee:
+#: ``sock_tops`` (the thigh part) hangs from ``legs`` and stays with the thigh when ``socks`` (the shank) turns about
+#: the knee (its joint is the knee centre too).
 PARENTS = {
     "headband": "head", "hair": "head", "head": "neck", "eyes": "head", "scarf": "blouse",
     "sidelocks": "head", "blouse": "skirt", "collar": "blouse", "back_hair": "head", "arm_l": "blouse",
     "face_marks": "head", "arm_r": "blouse", "legs": "skirt", "socks": "legs", "skirt": None,
-    "shoes": "socks", "ring": "scarf", "neck": "blouse",
+    "shoes": "socks", "ring": "scarf", "neck": "blouse", "sock_tops": "legs",
 }
 
 
@@ -121,7 +124,7 @@ def part_links(rig: Rig) -> dict:
         "sidelocks": skull, "blouse": (0.0, 0.0, rig.waist_z), "collar": neck_root, "back_hair": skull,
         "arm_l": rig.shoulder_joint(+1), "face_marks": skull, "arm_r": rig.shoulder_joint(-1),
         "legs": hips, "socks": mid(rig.knee), "skirt": hips, "shoes": mid(rig.ankle),
-        "ring": rig.ring_center, "neck": neck_root,
+        "ring": rig.ring_center, "neck": neck_root, "sock_tops": mid(rig.knee),
     }
     return {oid: (PARENTS[oid], tuple(round(float(v), DECIMALS) + 0.0 for v in joints[oid])) for oid in OBJECT_IDS}
 

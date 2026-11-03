@@ -553,12 +553,31 @@ def _body_requirements(rig: Rig) -> list:
             f"join:{leg}~body.skirt", leg, "body.skirt",
             Zone(faces=("b", ceiling), note="through the skirt's ceiling"), None, 0.0, "rig.skirt_ceiling_z",
             "body._skirt: from below the legs and the under-skirt still show through the ceiling"))
+        top = f"limbs.sock_top_{s}"
+        knee_z = rig.knee_pos[2]
+        knee_rim = Select(vz=(-INF, knee_z + 0.5 * limbs.KNEE_BLEND), note="its knee ring and the dome under it (the "
+                          "vertices below the knee centre + KNEE_BLEND / 2)")
+        out.append(Join(
+            f"join:{leg}~{top}", leg, top,
+            Zone(faces=("b", Select(groups=(3,))), note="the leg enters the sock top through its top cap only"),
+            Select(vz=(-INF, limbs.SOCK_TOP_Z[0] - 0.010), note="the leg's rings 1 cm and more under the sock top, "
+                   "and its knee dome"),
+            rig.sock_ease, "limbs.LEG_END_INSET / limbs.LEG_KNEE_RADIUS / rig.sock_ease",
+            "limbs.py (v6): the leg runs on inside the over-knee sock top down to the knee; sock top = leg + "
+            "sock_ease, every buried leg ring LEG_END_INSET thinner, the ends concentric knee domes"))
         out.append(Join(
             f"join:{leg}~{sock}", leg, sock,
-            Zone(faces=("b", Select(groups=(3,))), note="the leg enters the sock through its top cap only"),
-            Select(min_sides=CAP_SIDES, vz=(-INF, limbs.LEG_Z[-2]), note="the leg's bottom cap"),
-            rig.sock_ease, "limbs.LEG_Z[-1] / rig.sock_ease",
-            "limbs.py: the leg ends inside the sock; sock = leg + sock_ease"))
+            Zone(inside=top, note="the leg meets the shank sock's knee sphere only inside the sock top"),
+            knee_rim, rig.sock_ease, "limbs.LEG_KNEE_RADIUS / limbs.SOCK_KNEE_RADIUS / rig.sock_ease",
+            "limbs.py (v6): the leg's knee dome (LEG_KNEE_RADIUS, centred on the knee) lies inside the shank sock's "
+            "knee sphere (SOCK_KNEE_RADIUS), so it stays inside when the shank turns about the knee"))
+        out.append(Join(
+            f"join:{top}~{sock}", top, sock,
+            Zone(z=(knee_z, knee_z + limbs.SOCK_KNEE_RADIUS), note="the sock top leaves the shank sock's knee sphere "
+                 "above the knee centre (the seam)"),
+            knee_rim, rig.sock_ease, "limbs.SOCK_TOP_KNEE_RADIUS / limbs.SOCK_KNEE_RADIUS / rig.sock_ease",
+            "limbs.py (v6): the over-knee sock is split at the knee; the sock top's knee dome (SOCK_TOP_KNEE_RADIUS, "
+            "centred on the knee) lies inside the shank sock's knee sphere, so no skin opens when the shank turns"))
         out.append(Join(
             f"join:{sock}~{shoe}", sock, shoe,
             Zone(faces=("b", Select(groups=(3,))), note="the sock enters the shoe through its opening only"),

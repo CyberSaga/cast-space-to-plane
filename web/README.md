@@ -34,7 +34,7 @@ drag):
 
 ## What it does
 
-- **Loading**: the *Example* menu (every `examples/*.json`, nine files, embedded by `import.meta.glob`; `miki` is the 18-mesh character reference model
+- **Loading**: the *Example* menu (every `examples/*.json`, nine files, embedded by `import.meta.glob`; `miki` is the 19-mesh character reference model
   made by `tools/make_miki_model.py`), the file picker,
   or a file dropped anywhere on the page. A dropped file that is not JSON shows "not a JSON file". A scene
   that fails validation shows the `SceneError` field path and message in the error panel, and the previous

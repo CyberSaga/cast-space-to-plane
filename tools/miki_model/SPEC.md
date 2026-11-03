@@ -29,6 +29,10 @@ All lengths are in **metres**, in castplane's world frame:
   42 kg, age 16, blue hair, green eyes.
 - No source describes the Hakuō Academy uniform's skirt, socks or shoes. The choices for those are marked
   **Decision** below.
+- **v6 (2026-11-03 frames).** Full-figure frames the user supplied later (front, 3/4, side, back, kneeling) show the
+  lower body: a short narrow A-line skirt, dark grey-violet over-knee socks with a thin skin band under the hem,
+  thin legs, and a narrow bodice. The rows and decisions marked "v6" below follow them and replace the earlier
+  no-source choices (the knee-length skirt, the white knee socks, the loose blouse waist).
 
 ---
 
@@ -79,14 +83,14 @@ Body column = body surface, or the clothing surface where she is clothed. y valu
 | shoulder line | 1.180 | 0.160 (sleeve cap) | −0.055 | 0.079 (collar flap) | acromion ≈ (±0.150, 0.005, 1.180); shoulder joint (±0.140, 0.005, 1.155) |
 | armpit | 1.065 | 0.130 | −0.104 | 0.089 | the sleeve leaves the torso side here |
 | bust | 1.040 | 0.132 | −0.110 (apex at x ±0.050) | 0.089 | blouse; modest bust |
-| waist | 0.940 | 0.122 (blouse) | −0.098 | 0.076 | body under it: 0.105 / −0.065 / 0.060 |
-| blouse hem | 0.900 | 0.130 | −0.100 | 0.080 | loose hem, slight flare |
-| hip widest | 0.780 | 0.165 (skirt) | −0.102 | 0.112 | body: 0.150 / −0.075 / 0.090; pleats open below here |
-| crotch | 0.690 | 0.180 (skirt) | −0.120 | 0.130 | legs: hip joints (±0.078, 0.005, 0.780) |
-| skirt hem | 0.450 | 0.215 (pleat crests) | −0.158 | 0.168 | A-line pleated skirt |
-| knee | 0.420 | 0.123 | −0.048 | 0.048 | leg centre x ±0.077, r 0.046 |
-| sock top | 0.385 | 0.1245 | −0.049 | 0.049 | sock = leg + 1.5 mm |
-| ankle | 0.065 | 0.106 | −0.019 | 0.039 | ankle centre (±0.077, 0.010), r 0.029 |
+| waist | 0.940 | 0.107 (blouse) | −0.098 | 0.076 | body under it: 0.095 / −0.065 / 0.060 (v6: blouse was 0.122) |
+| blouse hem | 0.900 | 0.113 | −0.100 | 0.080 | slight flare (v6: was 0.130) |
+| hip widest | 0.780 | 0.119 (skirt) | −0.084 | 0.090 | body (the bloomers block): 0.111 / −0.074 / 0.080; pleats open below here (v6: 0.165 / −0.102 / 0.112) |
+| crotch | 0.700 | 0.142 (skirt) | −0.100 | 0.107 | the lofted skirt there; legs: hip joints (±0.058, 0.005, 0.780) (v6: was 0.690, hip joints ±0.078) |
+| skirt hem | 0.640 | 0.160 (pleat crests) | −0.112 | 0.120 | short A-line pleated skirt, 0.419 H above the sole (v6: was 0.450 / 0.215) |
+| knee | 0.420 | 0.1185 | −0.0415 | 0.0415 | leg centre x ±0.077, r 0.039; the shank sock's knee sphere r 0.0415 (v6: leg r was 0.046) |
+| sock top | 0.585 | 0.119 | −0.049 | 0.053 | over-knee sock = leg + 1.5 mm, 5.5 cm under the hem (v6: was the knee sock, 0.385) |
+| ankle | 0.065 | 0.1045 | −0.0175 | 0.0375 | ankle centre (±0.077, 0.010), leg r 0.026 (v6: was 0.029) |
 | sole | 0.000 | 0.130 (shoe outer) | −0.175 (toe) | 0.050 (heel) | feet turned out 8° each |
 
 **Body cross-section model (guide for the lofts).**
@@ -96,8 +100,10 @@ Body column = body surface, or the clothing surface where she is clothed. y valu
 - Intermediate torso rows for the blouse (z: hw, yf, yb):
   - 1.215: 0.031 / −0.026 / 0.050 (neck root)
   - 1.130: 0.150 / −0.085 / 0.086
-  - 0.990: 0.128 / −0.106 / 0.080
-- The blouse is **loose**: from the bust down it drapes straight, so it does not follow the waist.
+  - 0.990: 0.128 / −0.106 / 0.080 (v6: replaced by 1.000: 0.110 / −0.104 / 0.081)
+- The blouse is **loose**: from the bust down it drapes straight, so it does not follow the waist. **v6 decision:**
+  the 2026-11-03 frames show a narrow bodice (about 0.112 H wide at the waist), and an arm turned inward 11° sank
+  into the loose waist; below the bust the blouse now narrows to hw 0.110 at z 1.00 and 0.107 at the waist.
 
 ---
 
@@ -422,8 +428,8 @@ For z ≤ 1.18 H2 becomes the **back sheet**: a curved plate hanging behind the 
 - The top is one closed solid from the neck root to the hem: the pink-red sailor blouse. It is loose; the bust is
   modest (apex y −0.110 at x ±0.050).
 - Use the landmark table and the cross-section model in §A.
-- **Hem:** at z 0.900, hw 0.130, front −0.100, back 0.080. The hem bottom is a flat ring/disc. The rim edge is a
-  feature line.
+- **Hem:** at z 0.900, hw 0.130 (v6: 0.113), front −0.100, back 0.080. The hem bottom is a flat ring/disc. The rim
+  edge is a feature line.
 - No visible seams or darts.
 
 ### D.2 Sailor collar (object `collar`, white)
@@ -548,9 +554,11 @@ the frames show motion blowing them aside.
 ### D.5 Skirt and under-skirt (object `uniform`)
 
 - **Skirt:** light pink, pleated, A-line, knee length. It is a **thick tube** with fabric thickness 3 mm, closed by a
-  hem rim and a waist rim. The **bottom is open**, so the legs are visible from a low angle.
+  hem rim and a waist rim. The **bottom is open**, so the legs are visible from a low angle. **v6 decision (the
+  2026-11-03 frames):** a short A-line, hem at 0.419 H above the sole, 0.209 H wide, hip 0.156 H.
   - Waist rim at z 0.950 (hidden under the blouse).
-  - Hem at **z 0.450**: 3 cm above the knee centre, covering the top of the kneecap.
+  - Hem at **z 0.450**: 3 cm above the knee centre, covering the top of the kneecap. v6: **z 0.640**, 22 cm above the
+    knee centre and 5.5 cm over the sock tops.
   - Outer surface rows (z: hw, yf, yb) at the pleat crests:
     - 0.950: 0.108 / −0.068 / 0.062
     - 0.900: 0.122 / −0.088 / 0.075
@@ -559,27 +567,38 @@ the frames show motion blowing them aside.
     - 0.690: 0.180 / −0.120 / 0.130
     - 0.550: 0.200 / −0.142 / 0.152
     - 0.450: 0.215 / −0.158 / 0.168
+  - v6 rows: 0.950: 0.100 / −0.064 / 0.060; 0.780: 0.119 / −0.084 / 0.090; 0.640: 0.160 / −0.112 / 0.120 (the loft
+    reads only these three; `rig.skirt_rows` keeps rows at 0.900, 0.860 and 0.700 on its lines, spec-only).
   - Cross-section: superellipse with exponent 2.2.
-  - At z 0.90 the skirt (hw 0.122) is inside the blouse hem (0.130).
+  - At z 0.90 the skirt (hw 0.122) is inside the blouse hem (0.130). v6: 0.106 inside 0.113.
 - **Pleats:** **16 knife pleats**, all facing the same way (clockwise seen from above). Each spans 22.5°.
   - The outer cross-section is a sawtooth with 32 vertices per ring: crest and valley alternate. The valley is radially
-    0.010 inside the crest at the hem.
+    0.010 (v6: 0.008) inside the crest at the hem.
   - The depth tapers to **0 at z 0.780**. Above that line the pleats are stitched flat and the skirt is smooth.
   - The inner surface is a plain 16-gon at 3 mm inside the valleys.
   - **Decision:** 16 pleats rather than the real 24 keeps the polygon budget and still reads as pleated.
 - **Under-skirt block** (a "bloomers" solid, `uniform`): from z 0.950 to 0.700 it has the body hip shape (hw 0.150 at
-  0.78, y −0.075/0.090). The legs start inside it at z 0.720. Its bottom shows only from a low angle.
+  0.78, y −0.075/0.090). The legs start inside it at z 0.720. Its bottom shows only from a low angle. v6: hw 0.096 /
+  0.111 / 0.120 at 0.950 / 0.780 / 0.700 (`body.UNDERSKIRT`).
 
 ### D.6 Legs, socks, shoes
 
 - **Legs** (`skin`): from z 0.720 (inside the under-skirt block) to the ankle.
-  - Axis: hip joint (±0.078, 0.005, 0.780) → knee (±0.077, 0.000, 0.420) → ankle (±0.077, 0.010, 0.065).
+  - Axis: hip joint (±0.078, 0.005, 0.780) → knee (±0.077, 0.000, 0.420) → ankle (±0.077, 0.010, 0.065). v6: hip
+    joint (±0.058, 0.005, 0.780), knee and ankle kept: the thighs splay a few degrees.
   - Circular radius by z: 0.700: 0.072, 0.600: 0.064, 0.500: 0.054, 0.420: 0.046 (knee), 0.320: 0.050 (calf),
-    0.200: 0.040, 0.100: 0.030, 0.065: 0.029.
+    0.200: 0.040, 0.100: 0.030, 0.065: 0.029. v6 (frame A of 2026-11-03): 0.720: 0.050, 0.700: 0.052, 0.600: 0.050,
+    0.500: 0.046, 0.420: 0.039, 0.320: 0.043, 0.200: 0.035, 0.100: 0.027, 0.065: 0.026.
   - The inner gap between the thighs is 12 mm at z 0.70.
 - **Socks** (object `socks`): **Decision: white knee socks.**
   - The sock is the leg surface + 1.5 mm from inside the shoe up to the **sock top at z 0.385**, just below the knee.
   - The top rim is a 1.5 mm step, which draws as a line. The visible skin band runs from 0.385 to the skirt hem 0.450.
+  - **v6 decision (replaces the white knee socks; every 2026-11-03 full-figure frame shows it): dark grey-violet
+    over-knee socks** `#958a91`, leg + 1.5 mm up to the sock top at **z 0.585**, a 5.5 cm skin band under the hem. The
+    sock is split at the knee: `sock_tops` (the thigh part, it moves with the legs) and `socks` (the shank, it turns
+    about the knee). The leg and the sock top end in domes centred on the knee centre inside the shank sock's top, a
+    sphere of r 0.0415 about it, so a knee bend opens no skin; the shank sphere's edge shows as a seam about 1 cm
+    above the knee.
 - **Shoes** (object `shoes`): **Decision: dark brown penny loafers.**
   - Sole outline length 0.225: heel at y +0.050, toe at y −0.175. Width 0.084 at the ball and 0.062 at the heel.
     Each shoe is turned out 8°.
@@ -707,7 +726,7 @@ bangs, sidelocks, headband or collar.
 | eyes | `#7fb3a8` | Optional per-face sub-materials if the exporter supports `usemtl` / GLB primitives: sclera `#ffffff`, pupil `#2f5c57`, highlight `#ffffff`. Otherwise all teal. |
 | headband | `#f4dce8` | white with a pink cast; the pink line shell is in `uniform` |
 | scarf | `#f6c453` | |
-| socks | `#f2f2f2` | white (decision) |
+| socks | `#f2f2f2` | white (decision); v6: `#958a91`, dark grey-violet over-knee socks (median of the 2026-11-03 frames) |
 | uniform | `#e8667a` | pink-red. Optional sub-material for the skirt and under-skirt: `#f5b9c6` (light pink, upper-body frame) |
 | collar | `#fafafa` | |
 | face_marks | `#4b3434` | dark brown |
@@ -754,12 +773,13 @@ Each check is something a reviewer can verify on a render from the named view.
     bands sits at the V tip, and two pointed tips hang below it to about z 0.975.
 17. **Sleeve cuffs with two stripes** (front, 3/4 front): long loose sleeves end at the wrist with two raised bands near
     the cuff edge.
-18. **Light pink pleated skirt** (3/4 front, low angle): knee length (hem z 0.45), with 16 crease pairs starting at the
-    hip line (0.78), a smooth yoke above, an A-line flare, and the legs visible from below.
+18. **Light pink pleated skirt** (3/4 front, low angle): knee length (hem z 0.45; v6: a short A-line, hem z 0.64), with
+    16 crease pairs starting at the hip line (0.78), a smooth yoke above, an A-line flare, and the legs visible from
+    below.
 19. **Cast shadow and silhouette in the scene camera** (scene camera): a clean silhouette with no wireframe noise. Lines
     appear only where §F lists them.
-20. **Shoes and socks** (side, low angle): white knee socks ending at z 0.385 and brown loafers flat on the ground,
-    turned out 8°.
+20. **Shoes and socks** (side, low angle): white knee socks ending at z 0.385 (v6: dark over-knee socks ending at
+    z 0.585, a thin skin band under the hem) and brown loafers flat on the ground, turned out 8°.
 
 ---
 
@@ -795,6 +815,8 @@ Each check is something a reviewer can verify on a render from the named view.
 1. Height 151 cm, from the official profile as listed on MyAnimeList.
    Head 0.255 m, 5.92 heads.
 2. Socks: white knee socks, top at z 0.385. Shoes: dark brown loafers. Skirt: knee length (hem 0.45), 16 knife pleats.
+   v6: the 2026-11-03 frames show the socks and the skirt: dark over-knee socks (top z 0.585) and a short A-line skirt
+   (hem z 0.64); the shoes and the 16 pleats are unchanged (the frames show a plain skirt with two or three folds).
 3. Skirt colour: light pink `#f5b9c6`. It stays in object `uniform` (optional sub-material).
 4. No ears.
 5. Mouth: a small ω, not the close-up frame's flat frown.

@@ -46,7 +46,8 @@ SIDES = (1, -1)
 #: ``(z, hw)``: through the collar's I3 (x 0.042 at z 1.213) and O5 (x 0.118 at z 1.191) (SPEC.md §D.2);
 #: yf / yb are interpolated linearly between the rig's 1.215 and 1.180 rows.
 TORSO_RING_POINTS = 18                 # points per blouse section
-TORSO_SKIP_ROWS = (0.990,)             # rig rows the loft leaves out (linear between their neighbours)
+TORSO_SKIP_ROWS = ()                   # rig rows the loft leaves out (linear between their neighbours; v6: none,
+#                                        the old 0.990 row is now the lofted 1.000 row under the bust)
 TORSO_NECK_INSET = 0.004               # the blouse's top ring sits this far inside the neck
 COLLAR_END_WIDTH = 0.004               # each lapel ends at the V tip with this width (the halves don't touch)
 COLLAR_LAPEL_Y = -0.03                 # collar columns in front of this are the lapels (feature-line edges)
@@ -70,7 +71,11 @@ SKIRT_FACING_INSET = 0.007             # the facing's top ring inside the pleate
 SKIRT_TWIST_SPLIT_DEG = 1.0            # pleat quads twisted more than this become two triangles (r4 F5)
 BIB_TWIST_SPLIT_DEG = 10.0             # ... and bib quads (r4 merge, shared F6: dashes missing along the collar
 #                                        top in the low head views; +42 polygons, no extra triangles)
-UNDERSKIRT = ((0.950, 0.100, -0.060, 0.055), (0.780, 0.150, -0.075, 0.090), (0.700, 0.157, -0.081, 0.092))
+#: The bloomers block (object skirt, the hips): ``(z, hw, yf, yb)`` rows, exponent rig.torso_exponent, 16 points.
+#: v6: narrowed with the A-line skirt (was ((0.950, 0.100, -0.060, 0.055), (0.780, 0.150, -0.075, 0.090),
+#: (0.700, 0.157, -0.081, 0.092))): its top ring 4 mm inside the skirt's waist rim (equal half-widths put two
+#: vertices within 1e-5 m), the legs' top caps (rig.leg_top_z) inside it, its bottom inside the skirt's ceiling.
+UNDERSKIRT = ((0.950, 0.096, -0.060, 0.055), (0.780, 0.111, -0.074, 0.080), (0.700, 0.120, -0.080, 0.088))
 #: The neck (review r1, F6 / T6): ``rig.neck_half_width`` is its half-width at the head end; toward the base it
 #: widens by this extra half-width ``(z, extra)`` (a 12 % taper with most of it in the last 15 mm: the flare
 #: into the trapezius, continued under the blouse).  The depth semi-axis scales with the half-width.

@@ -21,7 +21,8 @@ Sign convention (right-handed rotations about the world axes, as the web's ``rot
 
 So the table's motions are: head nod down ``+15`` / up ``-10``; arms raised sideways ``arm_l`` about ``y`` by
 ``-angle`` and ``arm_r`` by ``+angle``; arms inward (toward the body) the mirror, ``arm_l`` by ``+angle`` and ``arm_r``
-by ``-angle``; arms forward ``-angle`` about ``x``; bow ``+angle`` about ``x``.
+by ``-angle``; arms forward ``-angle`` about ``x``; bow ``+angle`` about ``x``; knee bend ``+angle`` about ``x``
+(the shanks swing back at the knees).
 
 Only the rotation matrix / pivot maths is mirrored: nothing here writes a transform into the scene, and
 :func:`posed_parts` returns new meshes (the rest meshes are never modified).
@@ -74,6 +75,9 @@ POSES = {
                              (("arm_l", "x", "+"), ("arm_r", "x", "+")), (-30.0, -60.0)),
     "step": PoseSpec("step (legs about x at the hips: both legs, one object; socks and shoes follow; - forward)",
                      (("legs", "x", "+"),), (15.0, -15.0, 25.0, -25.0)),
+    "knee-bend": PoseSpec("knee bend (socks about x at the knees: both shanks, one object; the shoes follow, the sock "
+                          "tops stay on the thighs; + swings the heels back)", (("socks", "x", "+"),),
+                          (5.0, -5.0, 10.0, -10.0, 15.0, -15.0)),
     "bow": PoseSpec("bow (blouse about x at the waist; carries neck, head, arms, collar, scarf, ring)",
                     (("blouse", "x", "+"),), (10.0, 20.0)),
     "bow-head-turn": PoseSpec("bow 10 deg, then head turn (two steps: the head turns about its joint as carried by "

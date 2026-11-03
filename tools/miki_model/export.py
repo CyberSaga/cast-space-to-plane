@@ -39,7 +39,7 @@ from .rig import SUN_TOWARDS
 __all__ = ["SCENE_SETTINGS", "DESCRIPTION", "GROUP", "scene_dict", "scene_text", "write_scene", "check_scene",
            "obj_text", "mtl_text", "write_obj", "glb_bytes", "write_glb", "srgb_to_linear"]
 
-GROUP = "miki"   # web-only `objects[i].group` (D84): all 18 objects are parts of one figure; the core ignores it
+GROUP = "miki"   # web-only `objects[i].group` (D84): all 19 objects are parts of one figure; the core ignores it
 
 DESCRIPTION = (
     "Hanabishi Miki (Hayate the Combat Butler) as a drawing reference: a 1.51 m anime schoolgirl (5.9 heads) in "

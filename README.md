@@ -41,7 +41,7 @@ castplane render examples/wall_and_ground.json -o out --hidden-lines   # M4：�
 castplane render examples/mesh_demo.json -o out     # 場景裡的 mesh 物件以 path 引用 OBJ 檔（M5）
 castplane import tests/fixtures/meshes/box_split.obj -o box.json   # 網格檔 → 場景檔（OBJ、glTF / GLB、STL、PLY）
 castplane render examples/two_lights.json -o out    # M6：兩盞點光源，每個光源一個子群組，本影疊在最上面
-castplane render examples/miki.json -o out          # 角色參考模型：18 個內嵌網格物件、隱藏線開啟（約 4 秒），見 examples/README.md
+castplane render examples/miki.json -o out          # 角色參考模型：19 個內嵌網格物件、隱藏線開啟（約 4 秒），見 examples/README.md
 castplane import tests/fixtures/step/cylinder.step -o pillar.json  # STEP 檔 → 場景檔（M8：圓柱、球、圓錐、方塊）
 ```
 
@@ -89,7 +89,7 @@ B = castplane.project_scene(scene, A, camera=camera, umbra=False)   # umbra[].po
 - 作圖線稿每個影格由移植的核心重新寫出 SVG，疊在 3D 畫面上；
 - 可下載 SVG、JSON，以及帶目前相機的場景檔（Python 命令列可重現同一張圖；含網格物件的場景也可以，面的索引寫成整數）。
 - 物件的選用鍵 `display_color`（`"#rrggbb"`，D81）：3D 畫面與旁觀視角用它替物件上色，沒有就用調色盤；只影響網頁顯示，核心與輸出忽略它。
-- 角色範例：範例選單的 `miki` 是花菱美希（《ハヤテのごとく!》）的參考模型，18 個內嵌網格物件，供畫畫練習時繞著她轉、看透視與影子；由 `python3 tools/make_miki_model.py` 產生（細節見 [`examples/README.md`](examples/README.md)）。
+- 角色範例：範例選單的 `miki` 是花菱美希（《ハヤテのごとく!》）的參考模型，19 個內嵌網格物件，供畫畫練習時繞著她轉、看透視與影子；由 `python3 tools/make_miki_model.py` 產生（細節見 [`examples/README.md`](examples/README.md)）。
 
 > **著作權聲明：** 花菱美希（《ハヤテのごとく!》）的著作權屬於原作的權利人。`miki` 範例與相關檔案是非官方的同人畫畫參考模型，**該角色及其模型不在本專案的授權散布與傳播範圍內**（GPL-3.0 只涵蓋 castplane 軟體）。完整聲明見 [`COPYRIGHT_NOTICE.md`](COPYRIGHT_NOTICE.md)。
 - 旁觀視角（M9，唯讀）：頁面預設就顯示旁觀視角（D80），左窗從外面看作圖相機的眼睛 E、投影平面與畫框（畫框上就是右窗的線稿）、視錐、主點、D 與 g、旋轉中心、平面方程式，以及第一個物體頂點的視線與光線；右窗的作圖與下載完全不變；作圖畫面右上角的「預覽」按鈕可暫時收起旁觀視角、讓作圖畫面佔滿全寬（按鈕變「返回編輯」，再按或按 Esc 回來），下載的檔案在兩種畫面之間逐位元組相同。

@@ -3,7 +3,9 @@
 Part contract (see ``assemble.py`` and ``README.md`` in this directory): :func:`build` takes the
 :class:`~miki_model.rig.Rig` and returns a list of :class:`~miki_model.meshkit.Part` covering **all** of
 :data:`REGIONS`.  Objects / materials: each side's sleeve (uniform), its two cuff white stripes (collar), hand
-and thumb (skin) -> ``obj="arm_l"`` / ``obj="arm_r"``; legs -> legs (skin); socks -> socks (socks); shoes -> shoes (shoes).
+and thumb (skin) -> ``obj="arm_l"`` / ``obj="arm_r"``; legs -> legs (skin); the over-knee socks (socks) split at the
+knee: the thigh part -> ``sock_tops`` (it moves with the legs), the shank part -> socks (it turns about the knee);
+shoes -> shoes (shoes).
 
 Lines (SPEC.md §F): the sleeve is one smooth group and its cuff (5 mm rim turning in to the opening + the
 recessed disc) another, so the cuff rim always draws; the cuff stripes are single-group bands floating
@@ -11,6 +13,12 @@ recessed disc) another, so the cuff rim always draws; the cuff stripes are singl
 silhouettes and cost no construction rays; hands, thumbs and legs are single groups (outlines only); the
 sock top is a flat cap with its own group (the 1.5 mm step draws); each shoe has three groups: the sole
 slab, the upper and the opening (the sole line and the topline always draw).
+
+The knee (v6): the shank sock (``socks``) turns about the knee centre (assemble.part_links, D85), while the leg and
+the sock top stay with the thigh.  So everything that ends at the knee ends in a dome centred on the knee centre,
+which a rotation about that point maps onto itself: the leg's buried end (LEG_KNEE_RADIUS) inside the sock top's
+(SOCK_TOP_KNEE_RADIUS), both inside the shank sock's top, a sphere of SOCK_KNEE_RADIUS.  The sock top's tube leaves
+that sphere ~1 cm above the knee (the seam); no skin opens and nothing pokes out when the knee bends.
 """
 
 from __future__ import annotations
@@ -42,11 +50,29 @@ SLEEVE_CAP_RINGS = 2               # review r4 (F1): rings of the round sleeve c
 #                                    with square corners: the "coat-hanger" shoulder in the front views)
 LEG_POINTS = 10
 SOCK_POINTS = 12
-LEG_Z = (0.720, 0.700, 0.500, 0.420, 0.390, 0.370)   # the leg ends inside the sock (0.390: just above its top)
-SOCK_Z = (0.025, 0.065, 0.200, 0.320, 0.385)          # from inside the shoe to the sock top
-#: The leg's buried end ring (LEG_Z[-1]) is this much thinner: the sock's 12-gon chords cut further in than
-#: rig.sock_ease, and the leg's 10-gon corners poked through the sock wall (checks: join leg~sock).
+#: The last full-size leg / sock-top ring above the knee centre is this far above it; below it both taper into
+#: their knee domes (v6).
+KNEE_BLEND = 0.012
+#: The leg's rings, top to the knee centre (v6: the leg runs on inside the over-knee sock past the knee; was
+#: (0.720, 0.700, 0.500, 0.420, 0.390, 0.370), ending inside the old knee sock).  The last ring is the knee
+#: centre's (rig.knee_pos z); the dome closing it is centred there.
+LEG_Z = (0.720, 0.700, 0.600, 0.570, 0.500, 0.420 + KNEE_BLEND, 0.420)
+#: The sock top (object sock_tops, v6): from its top rim (rig.sock_top_z, the 1.5 mm step) down to the knee centre.
+SOCK_TOP_Z = (0.585, 0.500, 0.420 + KNEE_BLEND, 0.420)
+#: The shank sock (object socks): from inside the shoe up to the knee centre (v6: was (0.025, 0.065, 0.200,
+#: 0.320, 0.385), the white knee sock).
+SOCK_Z = (0.025, 0.065, 0.200, 0.320, 0.420)
+#: Every leg ring buried in the sock top (z below SOCK_TOP_Z[0]) is this much thinner: the sock's 12-gon chords
+#: cut further in than rig.sock_ease, and the leg's 10-gon corners poked through the sock wall (checks: join
+#: leg~sock).
 LEG_END_INSET = 0.002
+#: The knee domes (v6), all centred on the knee centre: the leg's end, the sock top's end (inside the shank sock's
+#: sphere with ~3 mm to spare after the facets) and the shank sock's top, a sphere of SOCK_KNEE_RADIUS (2 mm wider
+#: than the sock on the leg's 0.039 knee: the knee reads a little round) with KNEE_DOME_RINGS rings.
+LEG_KNEE_RADIUS = 0.030
+SOCK_TOP_KNEE_RADIUS = 0.036
+SOCK_KNEE_RADIUS = 0.0415
+KNEE_DOME_RINGS = 3
 #: The sock's bottom ring (SOCK_Z[0], inside the shoe) is this much thinner: at the back-lateral side the
 #: straight sock wall grazed the shoe's upper just under the topline instead of entering through the opening.
 SOCK_BOTTOM_INSET = 0.002
@@ -201,26 +227,48 @@ def _hand(rig: Rig, side: int):
 # legs, socks
 # ---------------------------------------------------------------------------------------------------
 
-def _leg_tube(rig: Rig, side: int, zs, ease: float, n: int, end_inset: float = 0.0):
+def _leg_rings(rig: Rig, side: int, zs, rad, n: int) -> list:
+    """Rings of radius ``rad`` on the leg axis (hip -> knee -> ankle) at heights ``zs``: :func:`meshkit.sweep`'s own
+    rings (its frames, ``up`` -Y), so a :func:`meshkit.loft` of them with flat caps is that sweep."""
     path = np.array([rig.leg_point(side, z) for z in zs])
-    rad = np.array([rig.leg_radius(z) for z in zs]) + ease
-    rad[-1] -= end_inset
-    return mk.sweep(path, width=2 * rad, profile=mk.profile_ellipse(n), up=(0.0, -1.0, 0.0), start="flat",
-                    end="flat", cap_groups=(1, 1 if ease == 0 else None))
+    rad = np.asarray(rad, dtype=np.float64)
+    prof = mk.profile_ellipse(n)
+    _m, (P, _T, N, B) = mk.sweep(path, width=2 * rad, profile=prof, up=(0.0, -1.0, 0.0), return_frames=True)
+    return [P[i] + prof[:, :1] * rad[i] * B[i] + prof[:, 1:2] * rad[i] * N[i] for i in range(len(P))]
 
 
 def _leg(rig: Rig, side: int):
-    return _leg_tube(rig, side, LEG_Z, 0.0, LEG_POINTS, LEG_END_INSET)
+    """The leg (skin) from inside the bloomers block down to the knee centre: every ring buried in the sock top is
+    LEG_END_INSET thinner (review R6: by the sock's own top, SOCK_TOP_Z[0]), the knee ring LEG_KNEE_RADIUS, closed by
+    a dome centred on the knee."""
+    zs = np.asarray(LEG_Z, dtype=np.float64)
+    rad = np.array([rig.leg_radius(z) for z in zs])
+    rad[zs < SOCK_TOP_Z[0]] -= LEG_END_INSET
+    rad[-1] = LEG_KNEE_RADIUS
+    return mk.loft(_leg_rings(rig, side, zs, rad, LEG_POINTS), "flat", ("dome", LEG_KNEE_RADIUS, 2),
+                   cap_groups=(1, None))
+
+
+def _sock_top(rig: Rig, side: int):
+    """The over-knee sock's thigh part (object sock_tops): from its top rim (a flat cap with its own group 3, the
+    1.5 mm step draws) down to the knee, sock_ease over the leg, its end a dome of SOCK_TOP_KNEE_RADIUS centred on the
+    knee (inside the shank sock's sphere)."""
+    zs = SOCK_TOP_Z
+    rad = np.array([rig.leg_radius(z) for z in zs]) + rig.sock_ease
+    rad[-1] = SOCK_TOP_KNEE_RADIUS
+    return mk.loft(_leg_rings(rig, side, zs, rad, SOCK_POINTS), "flat", ("dome", SOCK_TOP_KNEE_RADIUS, 2),
+                   cap_groups=(3, None))
 
 
 def _sock(rig: Rig, side: int):
-    # path from the bottom (inside the shoe) up to the sock top; the top cap gets its own group
+    """The shank sock (object socks): from inside the shoe (its bottom ring SOCK_BOTTOM_INSET thinner) up to the
+    knee, sock_ease over the leg, its top a sphere of SOCK_KNEE_RADIUS about the knee centre (one smooth group)."""
     zs = SOCK_Z
-    path = np.array([rig.leg_point(side, z) for z in zs])
     rad = np.array([rig.leg_radius(z) for z in zs]) + rig.sock_ease
     rad[0] -= SOCK_BOTTOM_INSET
-    return mk.sweep(path, width=2 * rad, profile=mk.profile_ellipse(SOCK_POINTS), up=(0.0, -1.0, 0.0),
-                    start="flat", end="flat", cap_groups=(1, None))
+    rad[-1] = SOCK_KNEE_RADIUS
+    return mk.loft(_leg_rings(rig, side, zs, rad, SOCK_POINTS), "flat", ("dome", SOCK_KNEE_RADIUS, KNEE_DOME_RINGS),
+                   cap_groups=(1, None))
 
 
 # ---------------------------------------------------------------------------------------------------
@@ -343,6 +391,9 @@ def build(rig: Rig):
         parts.append(Part(f"limbs.leg_{_side_name(side)}", "skin", _leg(rig, side), "legs"))
     for side in SIDES:
         parts.append(Part(f"limbs.sock_{_side_name(side)}", "socks", _sock(rig, side), "socks"))
+    for side in SIDES:
+        parts.append(Part(f"limbs.sock_top_{_side_name(side)}", "socks", _sock_top(rig, side), "socks",
+                          obj="sock_tops"))
     for side in SIDES:
         shoe, strap = _shoe(rig, side)
         parts.append(Part(f"limbs.shoe_{_side_name(side)}", "shoes", shoe, "shoes"))
