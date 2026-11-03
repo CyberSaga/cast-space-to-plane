@@ -40,8 +40,8 @@ import numpy as np
 from . import assemble as asm
 from . import meshkit as mk
 
-__all__ = ["PoseSpec", "ARM_INWARD", "POSES", "AXES", "pose_steps", "angle_key", "subtree", "pose_transforms", "transform_matrix",
-           "apply_transform", "posed_parts", "moved_objects", "motion_groups"]
+__all__ = ["PoseSpec", "ARM_INWARD", "POSES", "AXES", "pose_steps", "angle_key", "subtree", "pose_transforms",
+           "transform_matrix", "apply_transform", "posed_parts", "moved_objects", "motion_groups"]
 
 AXES = {"x": 0, "y": 1, "z": 2}
 #: ``euler_zyx_from_matrix``'s gimbal-lock threshold (``object_rotate.ts::GIMBAL_EPS``).
