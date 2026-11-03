@@ -17,11 +17,13 @@ Sign convention (right-handed rotations about the world axes, as the web's ``rot
 
 * ``+x``: what is above the joint tilts forward (toward -Y: a nod down, a bow); a hanging limb swings backward;
 * ``+y``: a hanging limb at +X (``arm_l``) swings inward, one at -X (``arm_r``) outward;
-* ``+z``: the face turns to her left (+X).
+* ``+z``: the face turns to her left (+X); an arm held forward (toward -Y) swings toward +X: inward for ``arm_r``,
+  outward for ``arm_l``.
 
 So the table's motions are: head nod down ``+15`` / up ``-10``; arms raised sideways ``arm_l`` about ``y`` by
 ``-angle`` and ``arm_r`` by ``+angle``; arms inward (toward the body) the mirror, ``arm_l`` by ``+angle`` and ``arm_r``
-by ``-angle``; arms forward ``-angle`` about ``x``; bow ``+angle`` about ``x``; knee bend ``+angle`` about ``x``
+by ``-angle``; arms forward ``-angle`` about ``x`` (then inward about ``z``: ``arm_l`` by ``-angle``, ``arm_r`` by
+``+angle``); bow ``+angle`` about ``x``; knee bend ``+angle`` about ``x``
 (the shanks swing back at the knees).
 
 Only the rotation matrix / pivot maths is mirrored: nothing here writes a transform into the scene, and
@@ -38,7 +40,7 @@ import numpy as np
 from . import assemble as asm
 from . import meshkit as mk
 
-__all__ = ["PoseSpec", "POSES", "AXES", "pose_steps", "angle_key", "subtree", "pose_transforms", "transform_matrix",
+__all__ = ["PoseSpec", "ARM_INWARD", "POSES", "AXES", "pose_steps", "angle_key", "subtree", "pose_transforms", "transform_matrix",
            "apply_transform", "posed_parts", "moved_objects", "motion_groups"]
 
 AXES = {"x": 0, "y": 1, "z": 2}
@@ -59,6 +61,9 @@ class PoseSpec:
     sweeps: tuple
     level: str = "advisory"
 
+
+#: The arms' D86 inward limit (degrees), the fixed arm step of the combined poses.
+ARM_INWARD = float(asm.ARM_INWARD_MAX_DEG)
 
 #: The poses tested (milestone 2).  See the module docstring for the signs.
 POSES = {
@@ -82,6 +87,25 @@ POSES = {
                     (("blouse", "x", "+"),), (10.0, 20.0)),
     "bow-head-turn": PoseSpec("bow 10 deg, then head turn (two steps: the head turns about its joint as carried by "
                               "the bow)", (("blouse", "x", 10.0), ("head", "z", "+")), (20.0,)),
+    # The combined poses (profile v7, advisory): the D86 limit (assemble.ARM_INWARD_MAX_DEG, the twist of the arm
+    # relative to the blouse about the blouse's +y / -y) is exact only for the pure inward swing; these show it
+    # neither certifies a motion combined with another one nor is the edge of the clean set there.
+    "bow-arms-inward": PoseSpec("bow, then both arms inward by the limit angle about world y (the arms' twist "
+                                "relative to the bowed blouse stays below the limit)",
+                                (("blouse", "x", "+"), ("arm_l", "y", ARM_INWARD), ("arm_r", "y", -ARM_INWARD)),
+                                (10.0,)),
+    "lean-arms-inward": PoseSpec("sideways lean (blouse about y; + toward her left), then both arms inward by the "
+                                 "limit angle (exactly at the limit: the same world axis)",
+                                 (("blouse", "y", "+"), ("arm_l", "y", ARM_INWARD), ("arm_r", "y", -ARM_INWARD)),
+                                 (2.0, -2.0)),
+    "arms-forward45-inward": PoseSpec("both arms forward 45 deg (about x), then inward about world z by the angle "
+                                      "(arm_l -angle, arm_r +angle)",
+                                      (("arm_l", "x", -45.0), ("arm_l", "z", "-"), ("arm_r", "x", -45.0),
+                                       ("arm_r", "z", "+")), (30.0,)),
+    "arms-forward60-inward": PoseSpec("both arms forward 60 deg (about x), then inward about world z by the angle "
+                                      "(arm_l -angle, arm_r +angle)",
+                                      (("arm_l", "x", -60.0), ("arm_l", "z", "-"), ("arm_r", "x", -60.0),
+                                       ("arm_r", "z", "+")), (15.0,)),
 }
 
 

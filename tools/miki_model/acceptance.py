@@ -55,8 +55,11 @@ __all__ = ["PROFILE_VERSION", "PROFILE_NAME", "Select", "Zone", "Join", "Clear",
 #: ``pose:rest-only`` stub).  5: the arms-inward poses (``arms-inward`` required at 5 / 10 deg; ``arms-inward-far``
 #: advisory at 15 / 20 / 25).  6: the v6 lower body and the arms-inward fix: ``clear:limbs.sleeve_{l,r}^body.blouse/waist``
 #: (required; the sleeve below SLEEVE_JOIN_FLOOR_Z clears the blouse, both clipped there), ``arms-inward``
-#: required at 5 / 10 / 11 deg, ``arms-inward-far`` at 13 / 15 / 20 / 25.
-PROFILE_VERSION = "6"
+#: required at 5 / 10 / 11 deg, ``arms-inward-far`` at 13 / 15 / 20 / 25.  7: the D86 arm limit
+#: (``joint_limit`` inward at most 11 deg, the largest required ``arms-inward`` angle) and four advisory combined
+#: poses: ``bow-arms-inward`` (bow 10, arms inward 11), ``lean-arms-inward`` (blouse about y +-2, arms inward 11),
+#: ``arms-forward45-inward`` / ``arms-forward60-inward`` (arms forward 45 / 60, then inward 30 / 15 about z).
+PROFILE_VERSION = "7"
 PROFILE_NAME = "miki"
 
 #: A face "faces" a direction when its unit normal's dot product with it is at least this (60 degrees).

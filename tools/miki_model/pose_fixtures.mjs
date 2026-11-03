@@ -6,8 +6,11 @@
 // from links.ts::subtree, its pivot the object's CURRENT world joint world_centre(T, joint) (as
 // PlaneSession.part_pivot at pointer-down), and web/src/object_rotate.ts::rotate_unit(pose, axis, deg, c_locals,
 // pivot) over the subtree.  Writes every object's final transform (position, rotation_deg and the matrix of
-// castplane's transform_frame) to tests/fixtures/miki_poses.json.  The Euler-entry path (set_part_rotation) is a
-// second semantic and is not covered.
+// castplane's transform_frame) to tests/fixtures/miki_poses.json, with the D86 joint limits as the web resolves
+// them (links.ts resolve_links -> forest.limits, written back as the file's {axis, min_deg?, max_deg?}) and, per
+// case, every limited object's angle phi (limits.ts limit_angle: the twist of D = R_Q^T R_P about the limit axis,
+// P's and its parent's final transforms).  The poses apply rotate_unit directly, so no limit clamps them: phi says
+// where the UI would stop a drag.  The Euler-entry path (set_part_rotation) is a second semantic and is not covered.
 //
 // Run from the repository root (node >= 20.19), after building the TypeScript port and the web test tree:
 //
@@ -16,7 +19,7 @@
 //   (cd web && npx tsc -p tsconfig.test.json)
 //   node tools/miki_model/pose_fixtures.mjs
 //
-// The script imports the COMPILED modules web/build/src/{links,groups,object_rotate}.js and
+// The script imports the COMPILED modules web/build/src/{links,groups,object_rotate,limits}.js and
 // ts/build/src/index.js by file URL (web/src/*.ts cannot be imported by node); the web modules resolve their bare
 // `castplane` import through the workspace's node_modules.
 
@@ -29,6 +32,7 @@ const load = (p) => import(pathToFileURL(resolve(ROOT, p)).href);
 const { object_links, resolve_links, subtree } = await load("web/build/src/links.js");
 const { object_groups, group_members, group_of } = await load("web/build/src/groups.js");
 const { rotate_unit, world_centre } = await load("web/build/src/object_rotate.js");
+const { limit_angle } = await load("web/build/src/limits.js");
 const { transform_frame } = await load("ts/build/src/index.js");
 
 // tools/miki_model/poses.py::POSES: [name, steps [object, axis, "+" | "-" | fixed degrees], sweeps]
@@ -43,6 +47,10 @@ const POSES = [
   ["knee-bend", [["socks", "x", "+"]], [5, -5, 10, -10, 15, -15]],
   ["bow", [["blouse", "x", "+"]], [10, 20]],
   ["bow-head-turn", [["blouse", "x", 10], ["head", "z", "+"]], [20]],
+  ["bow-arms-inward", [["blouse", "x", "+"], ["arm_l", "y", 11], ["arm_r", "y", -11]], [10]],
+  ["lean-arms-inward", [["blouse", "y", "+"], ["arm_l", "y", 11], ["arm_r", "y", -11]], [2, -2]],
+  ["arms-forward45-inward", [["arm_l", "x", -45], ["arm_l", "z", "-"], ["arm_r", "x", -45], ["arm_r", "z", "+"]], [30]],
+  ["arms-forward60-inward", [["arm_l", "x", -60], ["arm_l", "z", "-"], ["arm_r", "x", -60], ["arm_r", "z", "+"]], [15]],
 ];
 const AXES = { x: 0, y: 1, z: 2 };
 const angle_key = (a) => (a >= 0 ? "+" : "-") + String(Math.abs(a));
@@ -79,17 +87,28 @@ for (const [name, steps, sweeps] of POSES) {
       const [R, p] = transform_frame(t);
       objects[id] = { position: p, rotation_deg: t.rotation_deg, matrix: R };
     }
-    cases[name][angle_key(angle)] = { steps: done, objects };
+    const limit_angles = {};
+    for (const [id, lim] of forest.limits) limit_angles[id] = limit_angle(lim, T.get(id), T.get(forest.parent.get(id)));
+    cases[name][angle_key(angle)] = { steps: done, objects, limit_angles };
   }
 }
 
 const out = {
   about: "Miki pose fixtures: every object's final transform after each pose of tools/miki_model/poses.py, from the "
-    + "built web code (links.ts resolve_links / subtree, object_rotate.ts rotate_unit about world_centre(T, joint)); "
-    + "written by tools/miki_model/pose_fixtures.mjs",
+    + "built web code (links.ts resolve_links / subtree, object_rotate.ts rotate_unit about world_centre(T, joint)), "
+    + "and every limited object's D86 angle (limits.ts limit_angle, not clamped); written by "
+    + "tools/miki_model/pose_fixtures.mjs",
   scene: "examples/miki.json",
   joints: Object.fromEntries(ids.map((id) => [id, forest.joints.get(id) ?? null])),
   parents: Object.fromEntries(ids.map((id) => [id, forest.parent.get(id) ?? null])),
+  limits: Object.fromEntries(ids.map((id) => {
+    const l = forest.limits.get(id);
+    if (l === undefined) return [id, null];
+    const w = { axis: l.axis };
+    if (l.min_written) w.min_deg = l.min;
+    if (l.max_written) w.max_deg = l.max;
+    return [id, w];
+  })),
   poses: cases,
 };
 const target = resolve(ROOT, "tests", "fixtures", "miki_poses.json");
