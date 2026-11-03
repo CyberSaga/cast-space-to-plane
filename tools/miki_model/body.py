@@ -92,6 +92,10 @@ NECK_FIT = 0.85                        # ... and its ring within this ellipse me
 FACETED_CLEARANCE = 0.0002
 #: A point inside the chest (the collar slab's and its stripe's normals point away from it).
 TORSO_CENTRE = (0.0, 0.012, 1.12)
+#: v6: the blouse below the bust (rig.blouse_rows from the bust down) is narrowed so that the sleeve, turned inward
+#: to the required arms-inward angles (poses.POSES), clears it by at least this below the shoulder join
+#: (acceptance clear:limbs.sleeve_*^body.blouse/waist, clipped at acceptance.SLEEVE_JOIN_FLOOR_Z).
+SLEEVE_BLOUSE_CLEARANCE = 0.002
 
 #: Review r4 (F1): narrow, sloping shoulders (the close-up and 3/4 profile frames, the user's drawing and notes): the
 #: rig's blouse_rows[1:3], blouse_shoulder_hw, shoulder_joint_pos, sleeve_radii and collar_outer O4 - O6 hold

@@ -255,6 +255,54 @@ def _barycentric(X, A, B, C) -> np.ndarray:
     return u / np.maximum(u.sum(axis=1), 1e-300)[:, None]
 
 
+#: A clipped piece (:func:`clip_triangles_z`) with less area than this (m^2) is dropped: a sliver left where a
+#: vertex lies on the clip plane.
+CLIP_MIN_AREA = 1e-14
+
+
+def clip_triangles_z(V, tris, lo: float, hi: float):
+    """The triangles ``tris`` over ``V`` clipped to the slab ``lo <= z <= hi`` (Sutherland-Hodgman, one plane after
+    the other, each clipped polygon fanned from its first vertex): ``(index (k,), weights (k, 3, 3))`` -- piece
+    ``i`` is ``weights[i] @ V[tris[index[i]]]`` (barycentric rows), so the same weights place it on any rigid image
+    of ``V``.  A triangle wholly inside is kept with identity weights; pieces of less than :data:`CLIP_MIN_AREA` are
+    dropped.  Fixed loop order (deterministic)."""
+    V = np.asarray(V, dtype=np.float64)
+    eye = np.eye(3)
+    idx, out = [], []
+    for t, tri in enumerate(np.asarray(tris, dtype=np.int64).reshape(-1, 3)):
+        P = V[tri]
+        z = P[:, 2]
+        if z.min() >= lo and z.max() <= hi:
+            idx.append(t)
+            out.append(eye)
+            continue
+        if z.max() < lo or z.min() > hi:
+            continue
+        poly = [eye[0], eye[1], eye[2]]
+        for bound, sign in ((lo, 1.0), (hi, -1.0)):          # keep sign * (z - bound) >= 0
+            if not poly:
+                break
+            nxt = []
+            for k in range(len(poly)):
+                w0, w1 = poly[k], poly[(k + 1) % len(poly)]
+                z0 = w0[0] * z[0] + w0[1] * z[1] + w0[2] * z[2]
+                z1 = w1[0] * z[0] + w1[1] * z[1] + w1[2] * z[2]
+                d0, d1 = sign * (float(z0) - bound), sign * (float(z1) - bound)
+                if d0 >= 0.0:
+                    nxt.append(w0)
+                if (d0 >= 0.0) != (d1 >= 0.0):
+                    s = d0 / (d0 - d1)
+                    nxt.append((1.0 - s) * w0 + s * w1)
+            poly = nxt
+        for k in range(1, len(poly) - 1):
+            W = np.array([poly[0], poly[k], poly[k + 1]])
+            Q = np.einsum("ij,jc->ic", W, P)
+            if 0.5 * float(np.linalg.norm(np.cross(Q[1] - Q[0], Q[2] - Q[0]))) > CLIP_MIN_AREA:
+                idx.append(t)
+                out.append(W)
+    return np.array(idx, dtype=np.int64), (np.array(out) if out else np.zeros((0, 3, 3)))
+
+
 def _boxes_touch(a: PartGeom, b: PartGeom, pad: float) -> bool:
     return bool(np.all(a.lo - pad <= b.hi) and np.all(b.lo - pad <= a.hi))
 
@@ -338,6 +386,19 @@ class Checker:
             tris = P.tris[P.tris_of(face_mask)]
             self._sub[key] = tris
         return mk.point_triangle_distance(points, P.V, tris)[0]
+
+    def clip_pieces(self, name: str, face_mask, clip) -> tuple:
+        """``(triangle indices into the part's tris, barycentric weights)``: the fan triangles of the faces in
+        ``face_mask`` clipped to ``clip = (lo, hi)`` in z (:func:`clip_triangles_z`) on this checker's geometry."""
+        key = ("clip", name, np.asarray(face_mask).tobytes(), tuple(float(v) for v in clip))
+        got = self._sub.get(key)
+        if got is None:
+            P = self.parts[name]
+            ti = P.tris_of(face_mask)
+            k, W = clip_triangles_z(P.V, P.tris[ti], float(clip[0]), float(clip[1]))
+            got = (ti[k], W)
+            self._sub[key] = got
+        return got
 
     # -- zones -----------------------------------------------------------------------------------------------
     def zone_margin(self, zone: ac.Zone, a: str, b: str, X, tri_a, tri_b, eps: float) -> np.ndarray:
@@ -654,22 +715,40 @@ class Checker:
                     f"{c.max:g} m cannot be tested)", "findings": [], "required": required}
         findings = []
         ta_idx, tb_idx = A.tris_of(ma), B.tris_of(mb)
+        # the triangles measured: the selected faces' fan triangles, or their pieces inside the clip slab
+        VA, tA, fA = A.V, A.tris[ta_idx], A.tri_face[ta_idx]
+        VB, tB, fB = B.V, B.tris[tb_idx], B.tri_face[tb_idx]
+        if c.clip_z is not None:
+            if c.metric != "euclid":
+                return {"verdict": INDETERMINATE, "verdict_reason": f"clip_z needs the euclid metric (not "
+                        f"{c.metric!r})", "findings": [], "required": required}
+            required["clip_z"] = [_f(v) for v in c.clip_z]
+            pieces = []
+            for P_, m_ in ((A, ma), (B, mb)):
+                k, W = self.clip_pieces(P_.name, m_, c.clip_z)
+                T = np.einsum("kij,kjc->kic", W, P_.V[P_.tris[k]]) + 0.0
+                pieces.append((T.reshape(-1, 3), np.arange(3 * len(T), dtype=np.int64).reshape(-1, 3),
+                               P_.tri_face[k]))
+            (VA, tA, fA), (VB, tB, fB) = pieces
+            if not len(tA) or not len(tB):
+                return {"verdict": INDETERMINATE, "verdict_reason": "empty face selection inside clip_z",
+                        "findings": [], "required": required}
         # whatever the metric: a crossing, contact or coincident patch between the selected faces is a gap of 0
-        ia, ib = mk.triangle_bbox_pairs(A.V, A.tris[ta_idx], B.V, B.tris[tb_idx], pad=eps)
-        touch = mk.triangle_intersections(A.V, A.tris[ta_idx], B.V, B.tris[tb_idx], eps, pairs=(ia, ib))
+        ia, ib = mk.triangle_bbox_pairs(VA, tA, VB, tB, pad=eps)
+        touch = mk.triangle_intersections(VA, tA, VB, tB, eps, pairs=(ia, ib))
         n_touch = int(len(touch["kind"]))
         allow_at = None
         if c.metric == "euclid":
             pad = (c.min if math.isfinite(c.min) else 0.0) + max(EPS_SCALES) * eps
-            ia, ib = mk.triangle_bbox_pairs(A.V, A.tris[ta_idx], B.V, B.tris[tb_idx], pad=pad)
+            ia, ib = mk.triangle_bbox_pairs(VA, tA, VB, tB, pad=pad)
             if not len(ia):
                 return {"verdict": PASS, "findings": [], "units": "m", "measured": {"min_gap_above": _f(pad)},
                         "required": required}
-            d, pa, _pb = mk.triangle_pair_distance(A.V[A.tris[ta_idx[ia]]], B.V[B.tris[tb_idx[ib]]])
+            d, pa, _pb = mk.triangle_pair_distance(VA[tA[ia]], VB[tB[ib]])
             k0 = int(np.argmin(d))
             gmin, gmax, where, n = float(d[k0]), float("nan"), pa[k0], int(len(ia))
-            findings.append({"what": "closest approach", "part": c.a, "face": int(A.tri_face[ta_idx[ia[k0]]]),
-                             "other_part": c.b, "other_face": int(B.tri_face[tb_idx[ib[k0]]]), "xyz": _xyz(where),
+            findings.append({"what": "closest approach", "part": c.a, "face": int(fA[ia[k0]]),
+                             "other_part": c.b, "other_face": int(fB[ib[k0]]), "xyz": _xyz(where),
                              "gap": _f(gmin)})
         else:
             if c.metric == "along":
@@ -713,8 +792,8 @@ class Checker:
         if n_touch:
             k = int(np.argmin(touch["kind"]))
             findings.insert(0, {"what": "the selected faces touch or cross (" + mk.TT_KINDS[int(touch["kind"][k])] +
-                                "): gap 0", "part": c.a, "face": int(A.tri_face[ta_idx[touch["ia"][k]]]),
-                                "other_part": c.b, "other_face": int(B.tri_face[tb_idx[touch["ib"][k]]]),
+                                "): gap 0", "part": c.a, "face": int(fA[touch["ia"][k]]),
+                                "other_part": c.b, "other_face": int(fB[touch["ib"][k]]),
                                 "xyz": _xyz(touch["seg"][k].mean(axis=0)), "gap": 0.0})
             gmin = 0.0
         fail_min = gmin < c.min - 2.0 * eps
@@ -871,6 +950,8 @@ def _describe(req) -> dict:
             d["zone_status"] = req.zone_status
     elif req.kind == "clear":
         d["relation"] = f"clear: {req.a} faces ({req.faces_a.note}) vs {req.b} faces ({req.faces_b.note})"
+        if req.clip_z is not None:
+            d["relation"] += f", both clipped to {req.clip_z[0]:g} <= z <= {req.clip_z[1]:g} (rest frame)"
     elif req.kind == "generic":
         d["relation"] = "everything else: no intersection, no containment"
     elif req.kind == "proportion":
@@ -1096,6 +1177,16 @@ class PosedChecker(Checker):
             m = self.rest.sel(name, sel, eps)
             self.masks[key] = m
         return m
+
+    def clip_pieces(self, name: str, face_mask, clip) -> tuple:
+        """The clipped pieces of the REST part (the slab is a rest-frame selector), carried over by index and
+        weights: the caller places them on the posed vertices."""
+        key = ("clip", name, np.asarray(face_mask).tobytes(), tuple(float(v) for v in clip))
+        got = self.masks.get(key)
+        if got is None:
+            got = self.rest.clip_pieces(name, face_mask, clip)
+            self.masks[key] = got
+        return got
 
     def rest_rim(self, name: str, sel: ac.Select, eps: float) -> np.ndarray:
         key = ("rim", name, sel, eps)

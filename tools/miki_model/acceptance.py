@@ -47,14 +47,16 @@ from .rig import Rig
 
 __all__ = ["PROFILE_VERSION", "PROFILE_NAME", "Select", "Zone", "Join", "Clear", "Proportion", "Pose",
            "DIAGNOSTIC_WIDTHS", "profile", "FACING_COS", "INNER_FACE_COS", "CAP_SIDES", "DECAL_FRONT_COS",
-           "CLEAR_METRICS", "BAND_CHORD_SAMPLES"]
+           "CLEAR_METRICS", "BAND_CHORD_SAMPLES", "SLEEVE_JOIN_FLOOR_Z"]
 
 #: Bump when a requirement is added, removed or changed (the report records it).  3: the close round (joins
 #: bangs~sidelock_{l,r} and sidelock_{l,r}~back, the scarf tips' root rim, the sidelock root depth with the
 #: turned inner edge).  4: milestone 2, one advisory ``Pose`` per pose of :data:`poses.POSES` (replacing the
 #: ``pose:rest-only`` stub).  5: the arms-inward poses (``arms-inward`` required at 5 / 10 deg; ``arms-inward-far``
-#: advisory at 15 / 20 / 25).
-PROFILE_VERSION = "5"
+#: advisory at 15 / 20 / 25).  6: the v6 lower body and the arms-inward fix: ``clear:limbs.sleeve_{l,r}^body.blouse/waist``
+#: (required; the sleeve below the shoulder join clears the blouse, clipped at SLEEVE_JOIN_FLOOR_Z), ``arms-inward``
+#: required at 5 / 10 / 11 deg, ``arms-inward-far`` at 13 / 15 / 20 / 25.
+PROFILE_VERSION = "6"
 PROFILE_NAME = "miki"
 
 #: A face "faces" a direction when its unit normal's dot product with it is at least this (60 degrees).
@@ -72,6 +74,13 @@ CAP_SIDES = 5
 CLEAR_METRICS = ("euclid", "along", "band_chords", "band_stations")
 #: Samples per border chord in ``band_chords`` (``meshkit.lift_band_borders``' default, which the strap uses).
 BAND_CHORD_SAMPLES = 7
+#: The floor of the sleeve~blouse shoulder join (``clear:limbs.sleeve_*^body.blouse/waist`` measures below it).  From
+#: data (v6, d67f079): at rest the sleeve's intersection curve with the blouse (the round cap and the armpit) reaches
+#: down to z 1.029, and the sleeve's inner side then leaves the blouse side by 16 mm at z 1.00; turned inward the
+#: curve slides down the arm (+5: 1.008, +10: 0.978, +11: 0.970, +13: 0.952).  z 1.00 is the plane below which the
+#: v6 review measured the sink (5.5 mm at +10, 8 mm at +11, rev/crossing_depth.py); the bust row (1.040) and the
+#: armpit above it are the join.
+SLEEVE_JOIN_FLOOR_Z = 1.00
 
 SIDES = ((1, "l"), (-1, "r"))
 UP = (0.0, 0.0, 1.0)
@@ -184,7 +193,13 @@ class Clear:
 
     Whatever the metric, a crossing, contact or coincident patch between ``faces_a`` and ``faces_b`` is a gap of 0.
     ``need_overlap``: without any measurement (no sample over ``b``) the requirement is INDETERMINATE; otherwise it
-    passes as "no overlap", reported as not exercised (never counted as a PASS)."""
+    passes as "no overlap", reported as not exercised (never counted as a PASS).
+
+    ``clip_z``: ``(lo, hi)`` (euclid only): both parts' selected triangles are clipped to ``lo <= z <= hi`` in the
+    rest pose's world frame before anything is measured, so the gap is the gap inside that slab -- a region that
+    cuts through faces (the sleeve's upper-arm band runs from the shoulder join down past the waist).  The clipped
+    pieces are barycentric sub-triangles of the rest triangles, carried into a pose by the part's rigid motion (the
+    frames rule)."""
 
     name: str
     a: str
@@ -201,6 +216,7 @@ class Clear:
     need_overlap: bool = True
     samples: int = BAND_CHORD_SAMPLES
     max_bulge: bool = False
+    clip_z: tuple | None = None
     kind: str = "clear"
 
 
@@ -568,6 +584,14 @@ def _body_requirements(rig: Rig) -> list:
                  "inner arm (the armpit), which no builder constant bounds"),
             None, 0.0, "limbs.SLEEVE_START", "limbs._sleeve: the round sleeve cap sits inside the blouse's shoulder",
             zone_status="exempt"))
+        out.append(Clear(
+            f"clear:{sleeve}^body.blouse/waist", sleeve, "body.blouse",
+            Select(note="every sleeve face"), Select(note="every blouse face"),
+            body.SLEEVE_BLOUSE_CLEARANCE, INF, "body.SLEEVE_BLOUSE_CLEARANCE / acceptance.SLEEVE_JOIN_FLOOR_Z",
+            "the exempt join above leaves the sleeve's inner side against the blouse below the armpit untested (review "
+            "R1, v6): below SLEEVE_JOIN_FLOOR_Z (both parts clipped there, rest frame) the sleeve clears the blouse by "
+            "SLEEVE_BLOUSE_CLEARANCE, at rest and in every pose that moves the arm (arms-inward: the arm turned in "
+            "must not go into the body)", clip_z=(-INF, SLEEVE_JOIN_FLOOR_Z)))
         out.append(Join(
             f"join:{hand}~{sleeve}", hand, sleeve,
             Zone(faces=("b", Select(groups=(2,))), note="the hand enters the sleeve through the cuff opening only"),
