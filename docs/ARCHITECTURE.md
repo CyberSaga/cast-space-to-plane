@@ -4301,6 +4301,14 @@ and the hidden-run SVG groups (§5.1.8). Nothing an M4–M6 case needs lies beyo
   object's `faces` / `smooth_groups` text to `json.dumps(indent=1)` at depth 4, and the sixth pins the placeholder guard). No Python change, no conformance
   case change. The core's TypeScript `dumps` still writes mesh indices as floats; no other `web/src` path serialises a
   validated mesh scene.
+- **[decision, implementation] (model branch, Miki v6) `miki.json` has 19 inline `mesh` objects.** This amends the
+  object count and list of the `miki` paragraph above (its shell, vertex, polygon and triangle numbers are those of an
+  earlier round). The v6 lower body splits the over-knee sock at the knee into `sock_tops` (the thigh part, both sides,
+  `parent` `legs`) and `socks` (the shank, turning about the knee joint, D85), and `sock_tops` is appended as the 19th
+  object, after `neck`, so the order of the other 18 is unchanged and `objects[0]` is still the headband. The model is
+  60 closed shells, 4597 vertices, 4922 polygons, 8978 triangles, with at most 43 feature silhouette vertices per object
+  (the skirt) and warnings `[]`. The example count stays nine; no conformance case, warning code or set version
+  changes.
 
 ### 5.5 M8 — STEP import (spec §9 row "STEP", spec §10 M8) — a loader, outside the core
 

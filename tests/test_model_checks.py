@@ -410,6 +410,63 @@ def test_euclid_with_a_finite_maximum_is_indeterminate():
     assert e["verdict"] == checks.INDETERMINATE and "no maximum" in e["verdict_reason"]
 
 
+def _slanted_rod(r=0.005, n=12):
+    """A rod from (-0.01, 0, 0.1) down to (0.03, 0, 0): it crosses the host box's side x = 0 at z ~0.06-0.09 and
+    leaves it below (the sleeve leaving the blouse's side under the armpit)."""
+    return mk.tube(np.array([[-0.01, 0.0, 0.1], [0.03, 0.0, 0.0]]), r, n)
+
+
+def test_clip_z_measures_only_inside_the_slab():
+    """clip_z (v6, the sleeve~blouse waist clearance): a crossing above the cut is not seen, one below is; the
+    gap is the gap inside the slab, both parts clipped (the clip cuts through faces: the rod is one band)."""
+    host, rod = _box((-0.05, -0.05, 0.0), (0.0, 0.05, 0.1)), _slanted_rod()
+    base = ac.Clear("clear:rod^host", "rod", "host", ac.ALL, ac.ALL, 0.002, ac.INF, "fixture", "2 mm below z 0.05",
+                    clip_z=(-ac.INF, 0.05))
+    for clip, verdict in (((-ac.INF, 0.05), checks.PASS), ((-ac.INF, 0.08), checks.FAIL), (None, checks.FAIL)):
+        e = _req(checks.run(_parts(host=host, rod=rod), profile=[dataclasses.replace(base, clip_z=clip)]),
+                 "clear:rod^host")
+        assert e["verdict"] == verdict, (clip, e)
+    e = _req(checks.run(_parts(host=host, rod=rod), profile=[dataclasses.replace(base, min=0.006)]), "clear:rod^host")
+    # the rod's surface at z 0.05: axis x 0.01, radius 5 mm, the axis slanted ~22 deg off vertical
+    assert e["verdict"] == checks.FAIL and e["required"]["clip_z"] == [None, 0.05], e
+    assert 0.003 < e["measured"]["min"] < 0.005 and e["measured"]["touching_triangle_pairs"] == 0, e
+    assert e["findings"][0]["xyz"][2] <= 0.05 + 1e-9
+    # clip_triangles_z: pieces inside the slab, identity weights for a triangle wholly inside, slivers dropped
+    V = np.array([[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 0.0, 1.0]])
+    k, W = checks.clip_triangles_z(V, np.array([[0, 1, 2]]), -1.0, 0.5)
+    pieces = np.einsum("kij,jc->kic", W, V)
+    assert set(k.tolist()) == {0} and np.all(pieces[..., 2] <= 0.5 + 1e-12)
+    assert abs(sum(0.5 * np.linalg.norm(np.cross(p[1] - p[0], p[2] - p[0])) for p in pieces) - 0.375) < 1e-12
+    k, W = checks.clip_triangles_z(V, np.array([[0, 1, 2]]), -1.0, 2.0)
+    assert k.tolist() == [0] and np.array_equal(W[0], np.eye(3))
+    assert len(checks.clip_triangles_z(V, np.array([[0, 1, 2]]), 0.0, 0.0)[0]) == 0
+
+
+def test_clip_z_in_a_pose_takes_the_slab_from_the_rest_pose():
+    """Posed: the clipped pieces are the rest pieces carried by the rigid motion (the frames rule).  Moved 3 mm
+    toward the host the rod's part below the cut comes within 2 mm (FAIL); lifted 40 mm, the rest-frame slab still
+    holds only the rod's lower part (now at z 0.04-0.09, outside the box): it does not cross."""
+    host, rod = _box((-0.05, -0.05, 0.0), (0.0, 0.05, 0.1)), _slanted_rod()
+    req = ac.Clear("clear:rod^host", "rod", "host", ac.ALL, ac.ALL, 0.002, ac.INF, "fixture", "2 mm below z 0.05",
+                   clip_z=(-ac.INF, 0.05))
+    parts = {p.name: checks.PartGeom(p.name, p.obj, p.mesh) for p in _parts(host=host, rod=rod)}
+    rest = checks.Checker(parts)
+    eps = rest.eps
+    assert rest._clear(req, eps)["verdict"] == checks.PASS
+    masks = {}
+    every = np.ones(parts["rod"].mesh.n_faces, dtype=bool)
+    for t, verdict in ((([-0.003, 0.0, 0.0], [0.0, 0.0, 0.0]), checks.FAIL),
+                       (([0.0, 0.0, 0.04], [0.0, 0.0, 0.0]), checks.PASS),
+                       (([0.0, 0.0, 0.0], [0.0, 0.0, 0.0]), checks.PASS)):
+        posed = dict(parts, rod=checks.PosedPartGeom(parts["rod"], t))
+        chk = checks.PosedChecker(posed, rest, masks)
+        e = chk._clear(req, eps)
+        assert e["verdict"] == verdict, (t, e)
+        k, W = chk.clip_pieces("rod", every, req.clip_z)
+        k0, W0 = rest.clip_pieces("rod", every, req.clip_z)
+        assert np.array_equal(k, k0) and np.array_equal(W, W0)
+
+
 def test_profile_reads_the_rig_it_is_given():
     """profile(rig) uses that rig everywhere, the decal joins' depths too (review: _decal_layers built Rig())."""
     r2 = dataclasses.replace(Rig(), eye_slab_depth=0.0005, stripe_float=0.0004)
@@ -656,19 +713,21 @@ def test_miki_every_intersecting_pair_is_accounted_for(miki_report):
 
 #: The accepted verdict set of Miki at rest (profile v3; v4 replaced the ``pose:rest-only`` stub with the seven
 #: advisory poses of ``poses.POSES``, INDETERMINATE "not tested" without ``--poses``; v5 added the required
-#: ``arms-inward``, not tested at rest so it does not gate this run, and ``arms-inward-far``): every required
+#: ``arms-inward``, not tested at rest so it does not gate this run, and ``arms-inward-far``; v6: the two
+#: clear:limbs.sleeve_*^body.blouse/waist, the over-knee sock tops' three joins per side, the knee-bend pose and two
+#: generic scarf-tip pairs whose boxes now touch): every required
 #: requirement that
 #: does not PASS, and the per-kind counts.  A change to either is deliberate: update these with the reason in the
 #: commit message.  The posed results are pinned in tests/test_miki_poses.py.
 MIKI_NON_PASS_REQUIRED = ()
 MIKI_COUNTS = {
-    "clear": {"PASS": 44, "FAIL": 2, "INDETERMINATE": 0, "NOT_EXERCISED": 12},
-    "generic": {"PASS": 98, "FAIL": 0, "INDETERMINATE": 0, "NOT_EXERCISED": 0},
-    "join": {"PASS": 77, "FAIL": 0, "INDETERMINATE": 0, "NOT_EXERCISED": 19},
-    "pose": {"PASS": 0, "FAIL": 0, "INDETERMINATE": 9, "NOT_EXERCISED": 0},
+    "clear": {"PASS": 46, "FAIL": 2, "INDETERMINATE": 0, "NOT_EXERCISED": 12},
+    "generic": {"PASS": 100, "FAIL": 0, "INDETERMINATE": 0, "NOT_EXERCISED": 0},
+    "join": {"PASS": 81, "FAIL": 0, "INDETERMINATE": 0, "NOT_EXERCISED": 19},
+    "pose": {"PASS": 0, "FAIL": 0, "INDETERMINATE": 10, "NOT_EXERCISED": 0},
     "proportion": {"PASS": 2, "FAIL": 0, "INDETERMINATE": 0, "NOT_EXERCISED": 0},
 }
-MIKI_INTERSECTING_PAIRS = 70
+MIKI_INTERSECTING_PAIRS = 74
 
 
 def test_miki_verdict_set_is_pinned(miki_report):

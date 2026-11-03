@@ -12,13 +12,13 @@
 | `wall_and_ground.json` | M4：無界地面加一面有界牆（y = 6、x ∈ [−3, 3]、高 2.5 m，法線朝 −y 也就是朝光源與相機），點光源下的 1 m 木箱（合約 §5.1.11 的手算驗收場景，`output.hidden_lines` 開啟）。木箱影子在地面上往牆延伸，到牆根 (±3/4, 6, 0) **轉折**爬上牆面，成為牆上高 1/3 m 的四邊形；牆本身也在地面上投出一大片影子（在牆後，畫面上是牆底邊以上的灰帶，填色不消隱，輪廓在牆後的部分畫成虛線）。木箱的五條背面邊、被木箱擋住的牆底邊中段（x ∈ (−0.7, 0.7)）與牆上的影子四邊形都畫成虛線，在 `*.hidden` 子群組；`--hidden-style omit` 讓它們消失、`--no-hidden-lines` 回到全部實線。作圖線另有牆面的陰影消失點 `F′wall`（畫面上方），木箱頂點的 F′Q′ 線從它出發。 |
 | `mesh_demo.json` | M5 網格匯入：房子從 `meshes/house.obj` 讀入（方塊屋身加山牆屋頂，7 個面，兩面山牆是五邊形），旁邊一個圓柱，點光源在左前上方。`mesh` 物件只寫 `path`，路徑相對於場景檔所在目錄，`render` / `validate` / `info` / `stages` 會先展開成內嵌的 `data` 再驗證（`castplane.io.load_expanded_scene`）；共面合併後的面與參數化多面體一樣有作圖線與自我驗證。 |
 | `two_lights.json` | M6 多光源：木箱、圓柱、球在兩盞點光源 `left` (−2, 9.5, 3.6) / `right` (2.8, 10, 3.2) 下，兩盞光都在物件後上方、在畫面內，所以畫面上有兩個 L′（`L.left`、`L.right`）與兩個 F′，紅色 L′P′ 線從兩點各自放射。每個物件投出兩個影子：各光源的影子在 `cast_shadow.left` / `cast_shadow.right` 以 `fill-opacity="0.15"` 畫（一半的色調，只被一盞光遮住的半影因此較淡），兩者重疊的**本影**以 `cast_shadow.umbra` 的一個深色路徑疊在最上面（118 塊凸片）：木箱底下兩個影子交疊的楔形、球底下兩個橢圓影子的交集，還有不同物件之間的交疊（右燈下圓柱的影子壓到左燈下木箱的影子）。木箱被兩盞光都背光的三個面在 `form_shadow.core`（原本的 0.18 色調），只被左燈背光的那一面在 `form_shadow.left`（0.09）；圓柱與球每盞光各有一條明暗交界線。作圖點名稱帶光源 id（`ball.sil.0.left`、`pillar.g0.base.right`）。無警告。 |
-| `miki.json` | 花菱美希（《ハヤテのごとく!》）的角色參考模型，給畫畫練習用：1.51 m 的動漫女學生（5.9 頭身），放鬆的 A 字站姿，站在原點的地面上、面向 −Y。**這是唯一的直式範例**：片幅 24×36 mm、畫布 182×273 mm（2:3），是本檔開頭那句話的例外；相機在 (1.7, −3.4, 1.25)、焦距 65 mm，場景給的是一盞太陽（平行光，方向 (−0.335, −0.409, 0.849)）。共 18 個 `mesh` 物件，每個都是內嵌 `data` 的一組空間上緊湊的封閉殼（共 58 個零件殼）：`headband`、`hair`、`head`、`eyes`、`scarf`、`sidelocks`、`blouse`、`collar`、`back_hair`、`arm_l`、`face_marks`、`arm_r`、`legs`、`socks`、`skirt`、`shoes`、`ring`、`neck`（分成 18 個是為了讓消隱快；4225 個頂點、4514 個多邊形、8242 個三角形）。預設圖層是 `objects` 與 `cast_shadow`，`output.hidden_lines` 開啟且 `hidden_style` 為 `omit`，所以被擋住的線不畫（線稿而不是虛線的透視圖）。無警告（`warnings` 為空）。每個物件另有選用的 `display_color`（`"#rrggbb"`，取該物件的主要材質色，如頭髮 `#b9c3e6`、上衣 `#e8667a`），只給網頁的 3D 畫面上色，核心與 SVG / JSON 完全忽略它（D81）。 |
+| `miki.json` | 花菱美希（《ハヤテのごとく!》）的角色參考模型，給畫畫練習用：1.51 m 的動漫女學生（5.9 頭身），放鬆的 A 字站姿，站在原點的地面上、面向 −Y。**這是唯一的直式範例**：片幅 24×36 mm、畫布 182×273 mm（2:3），是本檔開頭那句話的例外；相機在 (1.7, −3.4, 1.25)、焦距 65 mm，場景給的是一盞太陽（平行光，方向 (−0.335, −0.409, 0.849)）。共 19 個 `mesh` 物件，每個都是內嵌 `data` 的一組空間上緊湊的封閉殼（共 60 個零件殼）：`headband`、`hair`、`head`、`eyes`、`scarf`、`sidelocks`、`blouse`、`collar`、`back_hair`、`arm_l`、`face_marks`、`arm_r`、`legs`、`socks`、`skirt`、`shoes`、`ring`、`neck`、`sock_tops`（分成 19 個是為了讓消隱快；4597 個頂點、4922 個多邊形、8978 個三角形）。預設圖層是 `objects` 與 `cast_shadow`，`output.hidden_lines` 開啟且 `hidden_style` 為 `omit`，所以被擋住的線不畫（線稿而不是虛線的透視圖）。無警告（`warnings` 為空）。每個物件另有選用的 `display_color`（`"#rrggbb"`，取該物件的主要材質色，如頭髮 `#b9c3e6`、上衣 `#e8667a`），只給網頁的 3D 畫面上色，核心與 SVG / JSON 完全忽略它（D81）。 |
 
 ## `miki.json` 的用法
 
 > **著作權聲明：** 花菱美希（《ハヤテのごとく!》）的著作權屬於原作的權利人。`miki` 範例與相關檔案是非官方的同人畫畫參考模型，**該角色及其模型不在本專案的授權散布與傳播範圍內**（GPL-3.0 只涵蓋 castplane 軟體）。完整聲明見 [`COPYRIGHT_NOTICE.md`](../COPYRIGHT_NOTICE.md)。
 
-**網頁。** 在 Example 選單選 `miki`，3D 畫面與旁觀視角窗格會用各物件的 `display_color` 上色（頭髮薰衣草藍、上衣紅、圍巾黃、領子白、裙子粉、鞋子棕）。18 個物件都帶 `"group": "miki"`（D84），所以在旁觀視角窗格點她一下會選取整個人、一起轉動；再點一下才聚焦到點到的部件（頭、手臂、裙子…）轉動，第三下又回到整個人；點空白處取消選取。每個物件另帶 `parent` 與 `joint`（D85，連動部件）：18 個物件以 `skirt`（臀部）為根連成一棵樹，轉動一個部件時，它的子孫部件跟著繞它的關節一起轉，例如轉 `head`（關節在脖子頂端）時頭髮、髮箍、側髮、後髮、眼睛與臉部標記跟著頭，轉 `blouse`（關節在腰）時脖子、頭、領子、圍巾與兩隻手臂跟著上身，轉 `legs`（關節在髖部中點）時襪子與鞋子跟著腿；`legs`、`socks`、`shoes` 各是雙腿合成的一個物件，所以兩腿一起動。核心忽略這兩個鍵。幾個要注意的地方：
+**網頁。** 在 Example 選單選 `miki`，3D 畫面與旁觀視角窗格會用各物件的 `display_color` 上色（頭髮薰衣草藍、上衣紅、圍巾黃、領子白、裙子粉、鞋子棕）。19 個物件都帶 `"group": "miki"`（D84），所以在旁觀視角窗格點她一下會選取整個人、一起轉動；再點一下才聚焦到點到的部件（頭、手臂、裙子…）轉動，第三下又回到整個人；點空白處取消選取。每個物件另帶 `parent` 與 `joint`（D85，連動部件）：19 個物件以 `skirt`（臀部）為根連成一棵樹，轉動一個部件時，它的子孫部件跟著繞它的關節一起轉，例如轉 `head`（關節在脖子頂端）時頭髮、髮箍、側髮、後髮、眼睛與臉部標記跟著頭，轉 `blouse`（關節在腰）時脖子、頭、領子、圍巾與兩隻手臂跟著上身，轉 `legs`（關節在髖部中點）時襪子與鞋子跟著腿；過膝襪在膝蓋分成兩段：大腿那段 `sock_tops` 跟著腿，小腿那段 `socks`（關節在膝蓋中心）可以單獨彎膝，鞋子跟著它，膝蓋處是以膝蓋中心為球心的圓頂，彎膝 ±15° 不會露出皮膚；`legs`、`sock_tops`、`socks`、`shoes` 各是雙腿合成的一個物件，所以兩腿一起動。核心忽略這兩個鍵。幾個要注意的地方：
 
 - 取消勾選 **labels** 圖層：網格的每個頂點都有標籤，開著會把畫面蓋滿。
 - 旁觀視角窗格的「視線」勾選框（預設開啟）會畫出從眼睛到第一個物件——髮箍「headband」——每個頂點的視線（以及它的光線），可以看出髮箍在透視中的位置；取消勾選就能看到不被遮擋的整個人物。
@@ -34,11 +34,11 @@ castplane render examples/miki.json -o out --formats svg,png --layers objects,ca
 castplane info examples/miki.json                       # 地平線、消失點與警告表（警告為空）
 ```
 
-**其他 3D 軟體與匯入。** `meshes/miki.obj`（加 `miki.mtl`：13 種材質，58 個零件各用其一，`display_color` 就是每個物件的主要材質色）與 `meshes/miki.glb`（18 個節點）是同一個模型，給 Blender 等軟體用。`castplane import` 讀 GLB 時一個節點變成一個 `mesh` 物件（共 18 個），OBJ 則整個模型是一個物件 `miki`：
+**其他 3D 軟體與匯入。** `meshes/miki.obj`（加 `miki.mtl`：13 種材質，60 個零件各用其一，`display_color` 就是每個物件的主要材質色）與 `meshes/miki.glb`（19 個節點）是同一個模型，給 Blender 等軟體用。`castplane import` 讀 GLB 時一個節點變成一個 `mesh` 物件（共 19 個），OBJ 則整個模型是一個物件 `miki`：
 
 ```sh
-castplane import examples/meshes/miki.glb --inline -o miki_glb.json   # 18 個物件，內嵌 data，約 0.3 秒
-castplane import examples/meshes/miki.obj --inline -o miki_obj.json   # 一個物件 miki（4514 個面）
+castplane import examples/meshes/miki.glb --inline -o miki_glb.json   # 19 個物件，內嵌 data，約 0.3 秒
+castplane import examples/meshes/miki.obj --inline -o miki_obj.json   # 一個物件 miki（4922 個面）
 ```
 
 匯入的場景用預設的包圍盒相機與預設平行光，所以和 `miki.json` 的畫面不同；也**不等於** `miki.json`：glTF 沒有平滑群組，線稿只能用法線夾角（30°）判斷特徵邊，設計好的線與平滑曲面上的輪廓頂點因此多很多，10 個物件超過 64 個特徵輪廓頂點、發 `MESH_RAYS_CAPPED`（對匯入的檔案跑 `info` 子命令會列出；SVG 約 870 KB，`miki.json` 的是約 200 KB）。OBJ 保留了平滑群組，但整個模型是一個物件，也超過上限發一個 `MESH_RAYS_CAPPED`。要畫圖或練習請用 `miki.json`。
@@ -52,4 +52,4 @@ python3 tools/make_miki_model.py --preview DIR          # 另寫著色的總覽�
 python3 tools/make_miki_model.py --lines DIR            # 另渲染各視角的線稿到 DIR（--lines-views 選視角，--no-hidden 略過消隱）
 ```
 
-預算是 6000 個多邊形、10000 個三角形（目前 4514 與 8242），每個物件最多 64 個特徵輪廓頂點（`MESH_MAX_RAYS`）；超過預算或有警告時產生器以結束碼 1 結束。細節見 `docs/USAGE.md` 的「`tools/make_miki_model.py`」一節。
+預算是 6000 個多邊形、10000 個三角形（目前 4922 與 8978），每個物件最多 64 個特徵輪廓頂點（`MESH_MAX_RAYS`）；超過預算或有警告時產生器以結束碼 1 結束。細節見 `docs/USAGE.md` 的「`tools/make_miki_model.py`」一節。

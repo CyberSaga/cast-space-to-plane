@@ -47,14 +47,16 @@ from .rig import Rig
 
 __all__ = ["PROFILE_VERSION", "PROFILE_NAME", "Select", "Zone", "Join", "Clear", "Proportion", "Pose",
            "DIAGNOSTIC_WIDTHS", "profile", "FACING_COS", "INNER_FACE_COS", "CAP_SIDES", "DECAL_FRONT_COS",
-           "CLEAR_METRICS", "BAND_CHORD_SAMPLES"]
+           "CLEAR_METRICS", "BAND_CHORD_SAMPLES", "SLEEVE_JOIN_FLOOR_Z"]
 
 #: Bump when a requirement is added, removed or changed (the report records it).  3: the close round (joins
 #: bangs~sidelock_{l,r} and sidelock_{l,r}~back, the scarf tips' root rim, the sidelock root depth with the
 #: turned inner edge).  4: milestone 2, one advisory ``Pose`` per pose of :data:`poses.POSES` (replacing the
 #: ``pose:rest-only`` stub).  5: the arms-inward poses (``arms-inward`` required at 5 / 10 deg; ``arms-inward-far``
-#: advisory at 15 / 20 / 25).
-PROFILE_VERSION = "5"
+#: advisory at 15 / 20 / 25).  6: the v6 lower body and the arms-inward fix: ``clear:limbs.sleeve_{l,r}^body.blouse/waist``
+#: (required; the sleeve below SLEEVE_JOIN_FLOOR_Z clears the blouse, both clipped there), ``arms-inward``
+#: required at 5 / 10 / 11 deg, ``arms-inward-far`` at 13 / 15 / 20 / 25.
+PROFILE_VERSION = "6"
 PROFILE_NAME = "miki"
 
 #: A face "faces" a direction when its unit normal's dot product with it is at least this (60 degrees).
@@ -72,6 +74,17 @@ CAP_SIDES = 5
 CLEAR_METRICS = ("euclid", "along", "band_chords", "band_stations")
 #: Samples per border chord in ``band_chords`` (``meshkit.lift_band_borders``' default, which the strap uses).
 BAND_CHORD_SAMPLES = 7
+#: The floor of the sleeve~blouse shoulder join (``clear:limbs.sleeve_*^body.blouse/waist`` measures below it).  From
+#: data (v6, d67f079): at rest the sleeve's intersection curve with the blouse (the round cap and the armpit) reaches
+#: down to z 1.029, and the sleeve's inner side then leaves the blouse side by 16 mm at z 1.00; turned inward the
+#: curve slides down the arm (+5: 1.008, +10: 0.978, +11: 0.970, +13: 0.952).  z 1.00 is the plane below which the
+#: v6 review measured the sink (5.5 mm at +10, 8 mm at +11, rev/crossing_depth.py).  It is NOT the join's floor: on
+#: the v6 model the rest crossing ends at z 1.034-1.035, 3.4 cm above this plane, and turned inward it slides into
+#: the band between (its lowest point +5: z 1.025, +10: 1.013-1.015, +11: 1.010, +13: 1.004-1.006), where the
+#: sleeve sinks into the blouse by up to 3.4-5.0 mm at +10, 5.3-6.5 mm at +11 and 8.2-10.4 mm at +13 (right-left,
+#: surface samples with z < 1.02).  No requirement measures that band (the join above is zone-exempt); this clear
+#: certifies the sleeve below z 1.00 only.
+SLEEVE_JOIN_FLOOR_Z = 1.00
 
 SIDES = ((1, "l"), (-1, "r"))
 UP = (0.0, 0.0, 1.0)
@@ -184,7 +197,13 @@ class Clear:
 
     Whatever the metric, a crossing, contact or coincident patch between ``faces_a`` and ``faces_b`` is a gap of 0.
     ``need_overlap``: without any measurement (no sample over ``b``) the requirement is INDETERMINATE; otherwise it
-    passes as "no overlap", reported as not exercised (never counted as a PASS)."""
+    passes as "no overlap", reported as not exercised (never counted as a PASS).
+
+    ``clip_z``: ``(lo, hi)`` (euclid only): both parts' selected triangles are clipped to ``lo <= z <= hi`` in the
+    rest pose's world frame before anything is measured, so the gap is the gap inside that slab -- a region that
+    cuts through faces (the sleeve's upper-arm band runs from the shoulder join down past the waist).  The clipped
+    pieces are barycentric sub-triangles of the rest triangles, carried into a pose by the part's rigid motion (the
+    frames rule)."""
 
     name: str
     a: str
@@ -201,6 +220,7 @@ class Clear:
     need_overlap: bool = True
     samples: int = BAND_CHORD_SAMPLES
     max_bulge: bool = False
+    clip_z: tuple | None = None
     kind: str = "clear"
 
 
@@ -537,12 +557,31 @@ def _body_requirements(rig: Rig) -> list:
             f"join:{leg}~body.skirt", leg, "body.skirt",
             Zone(faces=("b", ceiling), note="through the skirt's ceiling"), None, 0.0, "rig.skirt_ceiling_z",
             "body._skirt: from below the legs and the under-skirt still show through the ceiling"))
+        top = f"limbs.sock_top_{s}"
+        knee_z = rig.knee_pos[2]
+        knee_rim = Select(vz=(-INF, knee_z + 0.5 * limbs.KNEE_BLEND), note="its knee ring and the dome under it (the "
+                          "vertices below the knee centre + KNEE_BLEND / 2)")
+        out.append(Join(
+            f"join:{leg}~{top}", leg, top,
+            Zone(faces=("b", Select(groups=(3,))), note="the leg enters the sock top through its top cap only"),
+            Select(vz=(-INF, limbs.SOCK_TOP_Z[0] - 0.010), note="the leg's rings 1 cm and more under the sock top, "
+                   "and its knee dome"),
+            rig.sock_ease, "limbs.LEG_END_INSET / limbs.LEG_KNEE_RADIUS / rig.sock_ease",
+            "limbs.py (v6): the leg runs on inside the over-knee sock top down to the knee; sock top = leg + "
+            "sock_ease, every buried leg ring LEG_END_INSET thinner, the ends concentric knee domes"))
         out.append(Join(
             f"join:{leg}~{sock}", leg, sock,
-            Zone(faces=("b", Select(groups=(3,))), note="the leg enters the sock through its top cap only"),
-            Select(min_sides=CAP_SIDES, vz=(-INF, limbs.LEG_Z[-2]), note="the leg's bottom cap"),
-            rig.sock_ease, "limbs.LEG_Z[-1] / rig.sock_ease",
-            "limbs.py: the leg ends inside the sock; sock = leg + sock_ease"))
+            Zone(inside=top, note="the leg meets the shank sock's knee sphere only inside the sock top"),
+            knee_rim, rig.sock_ease, "limbs.LEG_KNEE_RADIUS / limbs.SOCK_KNEE_RADIUS / rig.sock_ease",
+            "limbs.py (v6): the leg's knee dome (LEG_KNEE_RADIUS, centred on the knee) lies inside the shank sock's "
+            "knee sphere (SOCK_KNEE_RADIUS), so it stays inside when the shank turns about the knee"))
+        out.append(Join(
+            f"join:{top}~{sock}", top, sock,
+            Zone(z=(knee_z, knee_z + limbs.SOCK_KNEE_RADIUS), note="the sock top leaves the shank sock's knee sphere "
+                 "above the knee centre (the seam)"),
+            knee_rim, rig.sock_ease, "limbs.SOCK_TOP_KNEE_RADIUS / limbs.SOCK_KNEE_RADIUS / rig.sock_ease",
+            "limbs.py (v6): the over-knee sock is split at the knee; the sock top's knee dome (SOCK_TOP_KNEE_RADIUS, "
+            "centred on the knee) lies inside the shank sock's knee sphere, so no skin opens when the shank turns"))
         out.append(Join(
             f"join:{sock}~{shoe}", sock, shoe,
             Zone(faces=("b", Select(groups=(3,))), note="the sock enters the shoe through its opening only"),
@@ -568,6 +607,15 @@ def _body_requirements(rig: Rig) -> list:
                  "inner arm (the armpit), which no builder constant bounds"),
             None, 0.0, "limbs.SLEEVE_START", "limbs._sleeve: the round sleeve cap sits inside the blouse's shoulder",
             zone_status="exempt"))
+        out.append(Clear(
+            f"clear:{sleeve}^body.blouse/waist", sleeve, "body.blouse",
+            Select(note="every sleeve face"), Select(note="every blouse face"),
+            body.SLEEVE_BLOUSE_CLEARANCE, INF, "body.SLEEVE_BLOUSE_CLEARANCE / acceptance.SLEEVE_JOIN_FLOOR_Z",
+            "the exempt join above leaves the sleeve's inner side against the blouse below the armpit untested (review "
+            "R1, v6): below SLEEVE_JOIN_FLOOR_Z (both parts clipped there, rest frame) the sleeve clears the blouse by "
+            "SLEEVE_BLOUSE_CLEARANCE, at rest and in every pose that moves the arm (arms-inward: the arm turned in "
+            "must not go into the body); the band between SLEEVE_JOIN_FLOOR_Z and the join's rest floor (z ~1.035), "
+            "into which the crossing slides when the arm turns in, stays untested", clip_z=(-INF, SLEEVE_JOIN_FLOOR_Z)))
         out.append(Join(
             f"join:{hand}~{sleeve}", hand, sleeve,
             Zone(faces=("b", Select(groups=(2,))), note="the hand enters the sleeve through the cuff opening only"),

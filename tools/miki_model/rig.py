@@ -84,14 +84,18 @@ class Rig:
         ("shoulder line", 1.180, 0.160, -0.055, 0.079),    # sleeve cap / collar flap; acromion x 0.150
         ("armpit", 1.065, 0.130, -0.104, 0.089),           # the sleeve leaves the torso side here
         ("bust", 1.040, 0.132, -0.110, 0.089),             # blouse; apex at x +-0.050
-        ("waist", 0.940, 0.122, -0.098, 0.076),            # blouse (body under it: body_waist)
-        ("blouse hem", 0.900, 0.130, -0.100, 0.080),       # loose hem, slight flare
-        ("hip widest", 0.780, 0.165, -0.102, 0.112),       # skirt (body: body_hip); pleats open below here
-        ("crotch", 0.690, 0.180, -0.120, 0.130),           # skirt
-        ("skirt hem", 0.450, 0.215, -0.158, 0.168),        # pleat crests
-        ("knee", 0.420, 0.123, -0.048, 0.048),             # legs: centre x 0.077, r 0.046
-        ("sock top", 0.385, 0.1245, -0.049, 0.049),        # sock = leg + 1.5 mm
-        ("ankle", 0.065, 0.106, -0.019, 0.039),            # ankle centre (0.077, 0.010), r 0.029
+        ("waist", 0.940, 0.107, -0.098, 0.076),            # blouse (body under it: body_waist); v6: was hw 0.122
+        ("blouse hem", 0.900, 0.113, -0.100, 0.080),       # loose hem, slight flare; v6: was hw 0.130
+        ("hip widest", 0.780, 0.119, -0.084, 0.090),       # skirt (body: body_hip); pleats open below here (v6:
+        #                                                    0.156 H, was (0.165, -0.102, 0.112))
+        ("crotch", 0.700, 0.1424, -0.100, 0.1071),         # skirt (the lofted surface there; v6: was 0.690 / 0.180)
+        ("skirt hem", 0.640, 0.160, -0.112, 0.120),        # pleat crests; v6: 0.419 H above the sole, 0.209 H wide
+        #                                                    (2026-11-03 frame A; was (0.450, 0.215, -0.158, 0.168))
+        ("knee", 0.420, 0.1185, -0.0415, 0.0415),          # the shank sock's knee sphere: centre x 0.077, r 0.0415
+        #                                                    (limbs.SOCK_KNEE_RADIUS; the leg there r 0.039)
+        ("sock top", 0.585, 0.1192, -0.0486, 0.0532),      # v6 over-knee socks (limbs.sock_top_*): leg + 1.5 mm,
+        #                                                    5.5 cm under the hem (was the knee sock, z 0.385)
+        ("ankle", 0.065, 0.1045, -0.0175, 0.0375),         # ankle centre (0.077, 0.010), sock r 0.0275
         ("sole", 0.0, 0.130, -0.175, 0.050),               # shoe outer / toe / heel; feet turned out 8 deg
     )
     head_depth_y: tuple = (-0.091, 0.115)    # §A head depth (skin) at z 1.40: forehead y, back of skull y
@@ -104,7 +108,9 @@ class Rig:
     #: 0.075 (the landmark row's 0.160 / 0.079 are the sleeve cap and the collar flap); at the armpit and the
     #: bust the blouse back is 0.085 (the landmark rows' 0.089 include the 4 mm collar flap; the collar point
     #: O1 = 0.085 at z 1.030 and §C.6's "blouse back 0.086 at z 1.10" agree).  The blouse is loose: from the
-    #: bust down it drapes straight.
+    #: bust down it drapes straight.  v6 (the arms-inward fix): narrowed below the bust -- the 0.990 row (left out
+    #: of the loft before) replaced by a 1.000 row, waist and hem 15 / 17 mm narrower (frame A of 2026-11-03: the
+    #: bodice ~0.112 H wide, the old blouse ~40 % wider).
     blouse_rows: tuple = (
         (1.215, 0.0275, -0.019, 0.043),    # neck root, 3 mm inside the neck (spec 0.031 / -0.026 / 0.050
                                            # sticks out of the neck front and, with the exponent, its diagonals)
@@ -112,9 +118,11 @@ class Rig:
         (1.130, 0.148, -0.085, 0.086),     # r4 F1: was hw 0.150
         (1.065, 0.130, -0.104, 0.085),     # armpit
         (1.040, 0.132, -0.110, 0.085),     # bust
-        (0.990, 0.128, -0.106, 0.080),
-        (0.940, 0.122, -0.098, 0.076),     # waist (blouse)
-        (0.900, 0.130, -0.100, 0.080),     # hem
+        (1.000, 0.110, -0.104, 0.0814),    # v6: under the bust, the sleeve's inner side turned inward clears it
+        #                                    (body.SLEEVE_BLOUSE_CLEARANCE); yb on the old line, yf 1.2 mm behind
+        #                                    it (on the old line, -0.1052, the faceted front crossed scarf tip A)
+        (0.940, 0.107, -0.098, 0.076),     # waist (blouse); v6: was hw 0.122 (frame A: the bodice is narrow)
+        (0.900, 0.113, -0.100, 0.080),     # hem; v6: was hw 0.130 (the flare kept)
     )
     #: The convex shoulder between the neck root and the acromion row: ``(z, hw)``; yf / yb are linear between
     #: blouse_rows[0] and blouse_rows[1].  A straight loft from the neck root would cut the trapezius.
@@ -124,8 +132,10 @@ class Rig:
     blouse_shoulder_hw: tuple = ((1.215, 0.0275), (1.197, 0.086), (1.185, 0.106), (1.172, 0.121), (1.159, 0.132),
                                  (1.145, 0.140))
     bust_apex_x: float = 0.050               # §A/§D.1 bust apex at x +-0.050 (y -0.110)
-    body_waist: tuple = (0.940, 0.105, -0.065, 0.060)   # §A body under the blouse at the waist (z, hw, yf, yb)
-    body_hip: tuple = (0.780, 0.150, -0.075, 0.090)     # §A body under the skirt at the hip (z, hw, yf, yb)
+    body_waist: tuple = (0.940, 0.095, -0.065, 0.060)   # §A body under the blouse at the waist (z, hw, yf, yb);
+    #                                                     v6: was hw 0.105 (the blouse waist is 0.107)
+    body_hip: tuple = (0.780, 0.111, -0.074, 0.080)     # §A body under the skirt at the hip (z, hw, yf, yb): the
+    #                                                     bloomers block (body.UNDERSKIRT[1]); v6: was 0.150 / -0.075 / 0.090
 
     # =====================================================================================================
     # B.1 Skin head, neck
@@ -476,33 +486,41 @@ class Rig:
     # =====================================================================================================
     # D.5 Skirt and under-skirt (object skirt, material skirt)
     # =====================================================================================================
-    #: Outer surface at the pleat crests: ``(z, hw, yf, yb)``; superellipse exponent skirt_exponent.
+    #: Outer surface at the pleat crests: ``(z, hw, yf, yb)``; superellipse exponent skirt_exponent.  The loft
+    #: (body._skirt) reads only the waist row, the ``pleat_top_z`` row and the hem row (rig.skirt_section at those
+    #: three heights); the rows between are spec-only, set on the lofted lines.  v6: a short A-line to the
+    #: 2026-11-03 frames (hem 0.419 H above the sole and 0.209 H wide, hip 0.156 H; was waist 0.108, hip 0.165,
+    #: hem 0.215 at z 0.450).
     skirt_rows: tuple = (
-        (0.950, 0.108, -0.068, 0.062),     # waist rim (hidden under the blouse)
-        (0.900, 0.122, -0.088, 0.075),     # inside the blouse hem
-        (0.860, 0.138, -0.093, 0.086),
-        (0.780, 0.165, -0.102, 0.112),     # pleats open below here
-        (0.690, 0.180, -0.120, 0.130),
-        (0.550, 0.200, -0.142, 0.152),
-        (0.450, 0.215, -0.158, 0.168),     # hem, 3 cm above the knee centre
+        (0.950, 0.100, -0.064, 0.060),     # waist rim (hidden under the blouse; 4 mm outside the block's top ring)
+        (0.900, 0.1056, -0.0699, 0.0688),  # spec-only: inside the blouse hem
+        (0.860, 0.1101, -0.0746, 0.0759),  # spec-only
+        (0.780, 0.119, -0.084, 0.090),     # pleats open below here
+        (0.700, 0.1424, -0.100, 0.1071),   # spec-only
+        (0.640, 0.160, -0.112, 0.120),     # hem, 22 cm above the knee centre, 5.5 cm over the sock tops
     )
     skirt_exponent: float = 2.2
     skirt_thickness: float = 0.003              # thick tube, open bottom
     skirt_pleats: int = 16                      # knife pleats, all clockwise from above, 22.5 deg each
-    pleat_depth: float = 0.010                  # valley radially inside the crest at the hem
+    pleat_depth: float = 0.008                  # valley radially inside the crest at the hem (v6: was 0.010)
     pleat_top_z: float = 0.780                  # depth tapers to 0 here; smooth yoke above
     underskirt_z: tuple = (0.700, 0.950)        # bloomers block with the body hip shape (body_hip)
     skirt_ceiling_z: float = 0.702              # one shell, not a thick tube: a short inner facing rises from the
-                                                # hem to here, where a ceiling closes it (just above the under-skirt)
+                                                # hem to here, where a ceiling closes it (just above the under-skirt;
+                                                # v6: the ceiling ring, 7 mm inside the pleated surface, is hw
+                                                # 0.135, front -0.093, back 0.100 there, measured)
 
     # =====================================================================================================
     # D.6 Legs, socks, shoes
     # =====================================================================================================
     leg_top_z: float = 0.720                    # inside the under-skirt block
-    #: Leg radius by z (circular): ``(z, r)`` top to bottom.
-    leg_radii: tuple = ((0.700, 0.072), (0.600, 0.064), (0.500, 0.054), (0.420, 0.046), (0.320, 0.050),
-                        (0.200, 0.040), (0.100, 0.030), (0.065, 0.029))
-    sock_ease: float = 0.0015                   # sock = leg + 1.5 mm, top rim a 1.5 mm step (white knee socks)
+    #: Leg radius by z (circular): ``(z, r)`` top to bottom.  v6 (frame A of 2026-11-03): thigh 0.066 H at the hem,
+    #: knee 0.051 H, calf 0.056 H, ankle 0.034 H; the top ring narrower than the thigh, so the cap sits in the
+    #: narrowed bloomers block (was ((0.700, 0.072), (0.600, 0.064), (0.500, 0.054), (0.420, 0.046),
+    #: (0.320, 0.050), (0.200, 0.040), (0.100, 0.030), (0.065, 0.029))).
+    leg_radii: tuple = ((0.720, 0.050), (0.700, 0.052), (0.600, 0.050), (0.500, 0.046), (0.420, 0.039),
+                        (0.320, 0.043), (0.200, 0.035), (0.100, 0.027), (0.065, 0.026))
+    sock_ease: float = 0.0015                   # sock = leg + 1.5 mm, top rim a 1.5 mm step (over-knee socks)
     shoe_length: float = 0.225                  # dark brown penny loafers, along the (turned-out) foot axis
     shoe_heel_y: float = 0.050                  # heel at y +0.050, toe at y -0.175
     shoe_toe_y: float = -0.175
@@ -535,7 +553,9 @@ class Rig:
     arm_flexion_deg: float = 4.0                # upper arm flexed forward
     elbow_bend_deg: float = 15.0                # forearm (0.210 long) bent forward
     wrist_extension_deg: float = 10.0           # hand extended back relative to the forearm
-    hip_joint_pos: tuple = (0.078, 0.005, 0.780)
+    hip_joint_pos: tuple = (0.058, 0.005, 0.780)        # v6: 20 mm in (was 0.078; knee and ankle kept): the
+    #                                                     thighs splay 3 deg and their top rims stay 5.5 mm deep
+    #                                                     in the narrowed block (join:limbs.leg_*~body.underskirt)
     knee_pos: tuple = (0.077, 0.000, 0.420)
     ankle_pos: tuple = (0.077, 0.010, 0.065)
 

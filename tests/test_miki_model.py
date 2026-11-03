@@ -71,14 +71,14 @@ def rendered(scene) -> dict:
 
 WEB_KEYS = ("display_color", "group", "parent", "joint")   # read only by the web UI; the core ignores them
 
-#: D85: the 18 joints (object-local = world: identity transforms), from rig.py (design table; 5 decimals).
+#: D85: the 19 joints (object-local = world: identity transforms), from rig.py (design table; 5 decimals).
 JOINTS = {
     "skirt": (0.0, 0.005, 0.78), "blouse": (0.0, 0.0, 0.94), "legs": (0.0, 0.005, 0.78), "socks": (0.0, 0.0, 0.42),
     "shoes": (0.0, 0.01, 0.065), "neck": (0.0, 0.013, 1.18), "head": (0.0, 0.013, 1.285),
     "hair": (0.0, 0.012, 1.405), "headband": (0.0, 0.012, 1.405), "sidelocks": (0.0, 0.012, 1.405),
     "back_hair": (0.0, 0.012, 1.405), "eyes": (0.0, 0.012, 1.405), "face_marks": (0.0, 0.012, 1.405),
     "collar": (0.0, 0.013, 1.18), "scarf": (0.0, -0.099, 1.09), "ring": (0.0, -0.1125, 1.07),
-    "arm_l": (0.126, 0.005, 1.137), "arm_r": (-0.126, 0.005, 1.137),
+    "arm_l": (0.126, 0.005, 1.137), "arm_r": (-0.126, 0.005, 1.137), "sock_tops": (0.0, 0.0, 0.42),
 }
 
 
@@ -183,7 +183,7 @@ def test_every_object_has_its_display_color(raw):
 
 
 def test_every_object_is_a_part_of_the_miki_group(raw):
-    # D84: one group with all 18 objects, so a click in the web UI selects the whole figure, a second click the part
+    # D84: one group with all 19 objects, so a click in the web UI selects the whole figure, a second click the part
     assert [o["group"] for o in raw["objects"]] == [export.GROUP] * len(asm.OBJECT_IDS)
     assert export.GROUP == "miki"
 
@@ -216,7 +216,7 @@ def test_parents_form_one_tree_rooted_at_the_skirt():
     assert children["blouse"] == ["scarf", "collar", "arm_l", "arm_r", "neck"]
     assert children["skirt"] == ["blouse", "legs"]
     assert (children["legs"], children["socks"], children["scarf"], children["neck"]) \
-        == (["socks"], ["shoes"], ["ring"], ["head"])
+        == (["socks", "sock_tops"], ["shoes"], ["ring"], ["head"])
 
 
 def test_the_file_links_are_the_rig_joints(raw):

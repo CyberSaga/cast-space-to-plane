@@ -62,7 +62,7 @@ the web UI, and a test pins the files byte for byte.
 
 - **Objects come first and are spatially compact.** Group parts into castplane objects by place, not by colour. The
   hidden-line pass tests a sample only against objects whose image rectangle contains it, and the ray cap of 64 is
-  per object. Miki has 18 objects, from 58 closed shells. Colour belongs to the part (`material`), and the object's
+  per object. Miki has 19 objects, from 60 closed shells. Colour belongs to the part (`material`), and the object's
   `display_color` is its dominant material colour (D81, read only by the web 3D views).
 - **`objects[0]` matters.** The web observer pane draws sight rays to every vertex of the first object. Put a small,
   telling part first (Miki: the headband, 120 vertices).
@@ -76,9 +76,15 @@ the web UI, and a test pins the files byte for byte.
     unknown id, a cycle or a bad joint.
   - Put each joint inside its parent's bounding box where the pieces meet (hip, waist, neck root, top of the neck,
     shoulders, knees, ankles). Pieces that only sit on a parent (hair, headband, eyes, face decals) turn about the
-    skull centre. Miki's root is the skirt (hips), with `blouse` → `neck` → `head` and `legs` → `socks` → `shoes`.
-  - Objects that hold both sides (Miki's `legs`, `socks`, `shoes`) take a midline joint and move together. Emit
-    left and right objects if one limb has to bend alone.
+    skull centre. Miki's root is the skirt (hips), with `blouse` → `neck` → `head` and `legs` → `socks` → `shoes`
+    (and `legs` → `sock_tops`).
+  - Objects that hold both sides (Miki's `legs`, `sock_tops`, `socks`, `shoes`) take a midline joint and move
+    together. Emit left and right objects if one limb has to bend alone.
+  - Where a piece that turns about a joint meets the piece above it, end both in domes centred on the joint (a
+    rotation about the joint maps them onto themselves), the moving piece outside. A cylinder end 2 cm from the pivot
+    moves 5 mm at 15°: Miki's old knee-sock top showed skin when the knee bent. A garment that crosses a joint is split
+    there (Miki's over-knee sock: `sock_tops` on the thigh, `socks` on the shank, its top a sphere about the knee).
+    Give such a joint an advisory bend pose (`knee-bend`) so the result is pinned.
   - Pin it in the model test: one tree rooted at the root, the file's keys equal the generator's, each joint inside
     its parent's box and near its own, and the key order.
 - **Split the builders by file ownership** so that two agents run in separate worktrees: head + hair in one, body +
