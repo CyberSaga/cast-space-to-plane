@@ -20,7 +20,8 @@ Sign convention (right-handed rotations about the world axes, as the web's ``rot
 * ``+z``: the face turns to her left (+X).
 
 So the table's motions are: head nod down ``+15`` / up ``-10``; arms raised sideways ``arm_l`` about ``y`` by
-``-angle`` and ``arm_r`` by ``+angle``; arms forward ``-angle`` about ``x``; bow ``+angle`` about ``x``.
+``-angle`` and ``arm_r`` by ``+angle``; arms inward (toward the body) the mirror, ``arm_l`` by ``+angle`` and ``arm_r``
+by ``-angle``; arms forward ``-angle`` about ``x``; bow ``+angle`` about ``x``.
 
 Only the rotation matrix / pivot maths is mirrored: nothing here writes a transform into the scene, and
 :func:`posed_parts` returns new meshes (the rest meshes are never modified).
@@ -48,12 +49,14 @@ _DEG = math.pi / 180.0
 @dataclass(frozen=True)
 class PoseSpec:
     """One pose of the table: ``steps`` ``((object, axis, deg), ...)`` where ``deg`` is ``"+"`` / ``"-"`` (plus /
-    minus the swept angle) or a number (fixed degrees); ``sweeps``: the angles tested (degrees, in test order).
-    The angles tested are what the report lists: never a "safe range"."""
+    minus the swept angle) or a number (fixed degrees); ``sweeps``: the angles tested (degrees, in test order);
+    ``level``: the profile level of the pose requirement (``"required"``: every tested angle must stay clean;
+    ``"advisory"``: printed only).  The angles tested are what the report lists: never a "safe range"."""
 
     label: str
     steps: tuple
     sweeps: tuple
+    level: str = "advisory"
 
 
 #: The poses tested (milestone 2).  See the module docstring for the signs.
@@ -63,6 +66,10 @@ POSES = {
     "head-nod": PoseSpec("head nod (about x; +15 down, -10 up)", (("head", "x", "+"),), (15.0, -10.0)),
     "arms-raised": PoseSpec("arms raised sideways (arm_l about y -angle, arm_r about y +angle)",
                             (("arm_l", "y", "-"), ("arm_r", "y", "+")), (30.0, 60.0, 90.0)),
+    "arms-inward": PoseSpec("arms inward (arm_l about y +angle, arm_r about y -angle; toward the body)",
+                            (("arm_l", "y", "+"), ("arm_r", "y", "-")), (5.0, 10.0), level="required"),
+    "arms-inward-far": PoseSpec("arms inward, beyond the tested-clean range (same steps as arms-inward)",
+                                (("arm_l", "y", "+"), ("arm_r", "y", "-")), (15.0, 20.0, 25.0), level="advisory"),
     "arms-forward": PoseSpec("arms forward (both arms about x, - swings forward)",
                              (("arm_l", "x", "+"), ("arm_r", "x", "+")), (-30.0, -60.0)),
     "step": PoseSpec("step (legs about x at the hips: both legs, one object; socks and shoes follow; - forward)",
@@ -239,6 +246,7 @@ def posed_parts(parts, rig, steps, links: dict | None = None) -> dict:
 def _check_table():
     for name, spec in POSES.items():
         assert spec.sweeps and len(set(spec.sweeps)) == len(spec.sweeps), name
+        assert spec.level in ("required", "advisory"), (name, spec.level)
         for obj, axis, deg in spec.steps:
             assert obj in asm.OBJECT_IDS and axis in AXES, (name, obj, axis)
             assert deg in ("+", "-") or isinstance(deg, float), (name, deg)

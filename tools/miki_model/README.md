@@ -273,7 +273,7 @@ builders' float output. It writes no model file, so `make_miki_model.py --check`
 python -m tools.miki_model.checks                        # the gate: exit 0 only if every required check passes
 python -m tools.miki_model.checks --report-only          # print everything, always exit 0 (use while modelling)
 python -m tools.miki_model.checks --out report.json      # also write the JSON report
-python -m tools.miki_model.checks --poses                # also check the named poses (advisory; "Poses" below)
+python -m tools.miki_model.checks --poses                # also check the named poses ("Poses" below)
 ```
 
 The review round runs the gate. While modelling, use `--report-only`. The report goes only where `--out` says (the
@@ -290,7 +290,9 @@ default is the printed summary); it has sorted keys and is deterministic.
   block the gate and is not counted as a PASS.
 
 Exit status: 0 when every `required` requirement is PASS (or not exercised), 1 otherwise. An `advisory` requirement
-is printed and never changes the exit status. `--report-only` always exits 0.
+is printed and never changes the exit status. `--report-only` always exits 0. A required pose (profile v5:
+`pose:arms-inward`) gates only the run that tests it: without `--poses` it is INDETERMINATE "not tested" and does
+not change the exit status; with `--poses` it must PASS at every tested angle.
 
 ### The three pair relations
 
@@ -357,8 +359,9 @@ they are, not fixed:
 - The advisory `clear:limbs.strap_{l,r}^limbs.shoe_{l,r}/surface` stays FAIL: its exact-distance metric covers every
   strap face, including the strap's end faces, which physically meet the shoe. The gated rule is the builder's
   border-chord clearance (`clear:limbs.strap_{l,r}^limbs.shoe_{l,r}`), which passes.
-- The seven `pose:*` requirements are advisory: INDETERMINATE "not tested" in the default run, PASS or FAIL with
-  `--poses` (see "Poses (milestone 2)").
+- The `pose:*` requirements are INDETERMINATE "not tested" in the default run, PASS or FAIL with `--poses` (see
+  "Poses (milestone 2)"). Eight are advisory; `pose:arms-inward` is required (profile v5) and PASSes at +5 and +10
+  under `--poses`.
 - Known minor, not a check result: at the bangs' ends (|x| 0.062-0.072, z 1.456-1.4585) the dome's front rim shows
   1-2 mm in front of the outermost strips just under the band in the shaded close-ups (a sub-pixel patch at 400 x 600;
   nothing in the line renders). `_dome_bottom_z` follows the rig's band line, which lies ~3 mm below the band mesh's
@@ -385,10 +388,16 @@ toward her left. The angles tested, with the step degrees they give:
 | `head-turn` | `head` about z by +angle (+: toward her left) | +10, -10, +20, -20, +30, -30 |
 | `head-nod` | `head` about x by +angle | +15 (down), -10 (up) |
 | `arms-raised` | `arm_l` about y by -angle, `arm_r` about y by +angle (sideways) | 30, 60, 90 |
+| `arms-inward` (required) | `arm_l` about y by +angle, `arm_r` about y by -angle (toward the body) | 5, 10 |
+| `arms-inward-far` | the same steps as `arms-inward`, beyond the tested-clean range | 15, 20, 25 |
 | `arms-forward` | `arm_l`, `arm_r` about x by +angle | -30, -60 (forward) |
 | `step` | `legs` about x by +angle (both legs are one object; socks and shoes follow) | +15, -15, +25, -25 (-: forward) |
 | `bow` | `blouse` about x at the waist (carries neck, head, arms, collar, scarf, ring) | +10, +20 (forward) |
 | `bow-head-turn` | `blouse` about x by +10, then `head` about z by +angle | +20 |
+
+The arm stops at +11 deg inward: tested clean through +11, first contact at +12 (the sleeve meets the skirt's
+flare); from +15 the sleeves and cuffs cross the skirt and the bloomers block (`body.underskirt`), and from +20 the
+hands and the thighs. This is a tested clearance, not a limit the UI enforces: the web UI still turns an arm further.
 
 What is re-checked: only the pairs a pose moves relative to each other (cross pairs: the two parts' objects lie in
 different motion groups, `poses.motion_groups`: for a one-step pose, one part in the turned subtree and the other not;
@@ -408,16 +417,19 @@ containment), with the posed boxes deciding which pairs touch. Joins and generic
 per-kind counts, and `changed`: every requirement whose verdict differs from rest, with its findings in the posed frame
 and its `rest_verdict`) and `report["pose_tables"][pose]` (the tested angles and, for each cross pair that fails, the
 first failing angle in each direction of the sweep). The `pose:*` requirements then get their verdict (FAIL when a
-cross pair fails at a tested angle) and stay advisory: a contact a pose creates is information about the drawing
+cross pair fails at a tested angle); all but `arms-inward` (required since profile v5) stay advisory: a contact a pose creates is information about the drawing
 reference's range, not a defect of the model, until the user sets which poses must stay clean (those then move to
-`required` with their tested angles cited). Without `--poses` the report is the default run's, byte for byte. The
+`required` with their tested angles cited, as `arms-inward` did). Without `--poses` the report is the default run's, byte for byte. The
 result is **tested clearance at the listed angles, never a safe range**: nothing between or beyond them is certified.
 
-As they stand (profile v4, pinned in `tests/test_miki_poses.py` as `MIKI_FIRST_FAILING`): turning the head 10 deg
+As they stand (profiles v4 and v5, pinned in `tests/test_miki_poses.py` as `MIKI_FIRST_FAILING`): turning the head 10 deg
 already pushes the back sheet into the blouse, collar and skirt and a sidelock into the collar and scarf ribbon; the
 nod crosses the sidelocks with the collar going down (+15) and the back sheet with the blouse going up (-10); the
 sleeve caps cross the collar at 90 deg raised; the step lifts the legs' top rims out of the under-skirt block at -15
-(forward) and +25 (back); arms forward and the bow are clean at the angles tested.
+(forward) and +25 (back); arms forward and the bow are clean at the angles tested. Profile v5: `arms-inward` is clean
+at +5 and +10 (required); `arms-inward-far` first fails at +15 (sleeves and cuff stripes against the skirt, sleeves
+against the under-skirt), +20 (hands against the skirt, cuffs against the under-skirt, sleeves and cuffs against the
+legs) and +25 (thumbs against the skirt, hands against the under-skirt and the legs).
 
 The pose maths is verified against the built web code: `tools/miki_model/pose_fixtures.mjs` applies every pose through
 `links.ts` (`resolve_links`, `subtree`) and `object_rotate.ts` (`rotate_unit` about `world_centre(T, joint)`) and writes

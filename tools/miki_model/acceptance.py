@@ -17,7 +17,9 @@ Kinds:
   width table only (``DIAGNOSTIC_WIDTHS``, never gated: no written rule exists yet).
 * **pose** -- a named pose of :data:`poses.POSES` (milestone 2: ``steps`` and the ``sweeps`` tested); without
   ``--poses`` it is reported as not tested, with ``--poses`` the cross pairs are re-checked at every swept angle
-  (advisory: the angles are "tested clearance", never a safe range).
+  (the angles are "tested clearance", never a safe range).  A pose is advisory unless its :class:`poses.PoseSpec`
+  says ``required``: then every tested angle must stay clean under ``--poses``; without ``--poses`` its
+  INDETERMINATE "not tested" does not gate the rest run (``checks.run``).
 * **generic** -- every part pair without a join: any triangle-triangle crossing, coincident patch or
   containment is a FAIL (``checks.py`` adds one generic requirement per pair; they are not listed here).
 
@@ -50,8 +52,9 @@ __all__ = ["PROFILE_VERSION", "PROFILE_NAME", "Select", "Zone", "Join", "Clear",
 #: Bump when a requirement is added, removed or changed (the report records it).  3: the close round (joins
 #: bangs~sidelock_{l,r} and sidelock_{l,r}~back, the scarf tips' root rim, the sidelock root depth with the
 #: turned inner edge).  4: milestone 2, one advisory ``Pose`` per pose of :data:`poses.POSES` (replacing the
-#: ``pose:rest-only`` stub).
-PROFILE_VERSION = "4"
+#: ``pose:rest-only`` stub).  5: the arms-inward poses (``arms-inward`` required at 5 / 10 deg; ``arms-inward-far``
+#: advisory at 15 / 20 / 25).
+PROFILE_VERSION = "5"
 PROFILE_NAME = "miki"
 
 #: A face "faces" a direction when its unit normal's dot product with it is at least this (60 degrees).
@@ -621,9 +624,13 @@ def profile(rig: Rig | None = None) -> list:
     rig = Rig() if rig is None else rig
     reqs = _decal_requirements(rig) + _hair_requirements(rig) + _body_requirements(rig) + _proportions(rig)
     for name, spec in poses.POSES.items():
-        reqs.append(Pose(f"pose:{name}", spec.label, f"poses.POSES[{name!r}]",
-                         "tested clearance of a drawing-reference pose (milestone 2): advisory until the user sets which "
-                         "poses must stay clean (then they move to required with their tested angles cited)",
+        if spec.level == "required":
+            reason = ("tested clearance of a drawing-reference pose (milestone 2): required: must stay clean at the "
+                      "tested angles (" + ", ".join(poses.angle_key(a) for a in spec.sweeps) + " deg)")
+        else:
+            reason = ("tested clearance of a drawing-reference pose (milestone 2): advisory until the user sets which "
+                      "poses must stay clean (then they move to required with their tested angles cited)")
+        reqs.append(Pose(f"pose:{name}", spec.label, f"poses.POSES[{name!r}]", reason, level=spec.level,
                          steps=spec.steps, sweeps=spec.sweeps))
     names = [r.name for r in reqs]
     assert len(names) == len(set(names)), "duplicate requirement names"
