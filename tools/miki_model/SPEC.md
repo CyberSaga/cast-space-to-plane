@@ -601,8 +601,9 @@ the frames show motion blowing them aside.
     over-knee socks** `#958a91`, leg + 1.5 mm up to the sock top at **z 0.585**, a 5.5 cm skin band under the hem. The
     sock is split at the knee: `sock_tops` (the thigh part, it moves with the legs) and `socks` (the shank, it turns
     about the knee). The leg and the sock top end in domes centred on the knee centre inside the shank sock's top, a
-    sphere of r 0.0415 about it, so a knee bend opens no skin; the shank sphere's edge shows as a seam about 1 cm
-    above the knee.
+    sphere of r 0.0415 about it, so a knee bend opens no skin; the shank sphere's edge shows as a seam under 1 cm
+    above the knee. The sock top's last full ring is 9 mm above the knee and the sphere has 6 rings, so the outline
+    keeps the leg + sock_ease line through the seam (with the ring 12 mm up and 3 sphere rings it dipped ~1.5 mm).
 - **Shoes** (object `shoes`): **Decision: dark brown penny loafers.**
   - Sole outline length 0.225: heel at y +0.050, toe at y −0.175. Width 0.084 at the ball and 0.062 at the heel.
     Each shoe is turned out 8°.

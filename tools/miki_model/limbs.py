@@ -18,7 +18,7 @@ The knee (v6): the shank sock (``socks``) turns about the knee centre (assemble.
 the sock top stay with the thigh.  So everything that ends at the knee ends in a dome centred on the knee centre,
 which a rotation about that point maps onto itself: the leg's buried end (LEG_KNEE_RADIUS) inside the sock top's
 (SOCK_TOP_KNEE_RADIUS), both inside the shank sock's top, a sphere of SOCK_KNEE_RADIUS.  The sock top's tube leaves
-that sphere ~1 cm above the knee (the seam); no skin opens and nothing pokes out when the knee bends.
+that sphere under 1 cm above the knee (the seam); no skin opens and nothing pokes out when the knee bends.
 """
 
 from __future__ import annotations
@@ -50,15 +50,22 @@ SLEEVE_CAP_RINGS = 2               # review r4 (F1): rings of the round sleeve c
 #                                    with square corners: the "coat-hanger" shoulder in the front views)
 LEG_POINTS = 10
 SOCK_POINTS = 12
-#: The last full-size leg / sock-top ring above the knee centre is this far above it; below it both taper into
-#: their knee domes (v6).
+#: The last full-size leg ring above the knee centre is this far above it; below it the leg tapers into its knee
+#: dome (v6).
 KNEE_BLEND = 0.012
+#: The sock top's last full-size ring is this far above the knee centre, nearer than the leg's (v6 review F4): its
+#: radius there (leg + sock_ease, ~41.3 mm) is under 1 mm outside the shank sock's knee sphere (~40.5 mm at that
+#: height), so the seam leaves no groove (from 0.012 the taper fell inside the sphere's first facet: a ~1.5 mm groove
+#: round the knee).
+#: The ring is square to the slanted thigh, so its vertices lie up to ~2 mm lower; they stay above knee centre +
+#: KNEE_BLEND / 2, the rim of acceptance join:limbs.sock_top_*~limbs.sock_* (at 0.006 and 0.007 they reached it).
+SOCK_TOP_KNEE_BLEND = 0.009
 #: The leg's rings, top to the knee centre (v6: the leg runs on inside the over-knee sock past the knee; was
 #: (0.720, 0.700, 0.500, 0.420, 0.390, 0.370), ending inside the old knee sock).  The last ring is the knee
 #: centre's (rig.knee_pos z); the dome closing it is centred there.
 LEG_Z = (0.720, 0.700, 0.600, 0.570, 0.500, 0.420 + KNEE_BLEND, 0.420)
 #: The sock top (object sock_tops, v6): from its top rim (rig.sock_top_z, the 1.5 mm step) down to the knee centre.
-SOCK_TOP_Z = (0.585, 0.500, 0.420 + KNEE_BLEND, 0.420)
+SOCK_TOP_Z = (0.585, 0.500, 0.420 + SOCK_TOP_KNEE_BLEND, 0.420)
 #: The shank sock (object socks): from inside the shoe up to the knee centre (v6: was (0.025, 0.065, 0.200,
 #: 0.320, 0.385), the white knee sock).
 SOCK_Z = (0.025, 0.065, 0.200, 0.320, 0.420)
@@ -67,12 +74,14 @@ SOCK_Z = (0.025, 0.065, 0.200, 0.320, 0.420)
 #: leg~sock_top; before v6 leg~sock).
 LEG_END_INSET = 0.002
 #: The knee domes (v6), all centred on the knee centre: the leg's end, the sock top's end (inside the shank sock's
-#: sphere with ~3 mm to spare after the facets) and the shank sock's top, a sphere of SOCK_KNEE_RADIUS (1 mm wider
-#: than leg + sock_ease on the leg's 0.039 knee: the knee reads a little round) with KNEE_DOME_RINGS rings.
+#: sphere with ~4 mm to spare after the facets) and the shank sock's top, a sphere of SOCK_KNEE_RADIUS (1 mm wider
+#: than leg + sock_ease on the leg's 0.039 knee: the knee reads a little round) with KNEE_DOME_RINGS rings (v6
+#: review F4: 15 deg apart, so the sphere's first facet, which carries the seam, stays within ~0.35 mm of the
+#: sphere; 3 rings left a straight cone 20 mm tall there, 1.2 mm inside the sphere at the seam).
 LEG_KNEE_RADIUS = 0.030
 SOCK_TOP_KNEE_RADIUS = 0.036
 SOCK_KNEE_RADIUS = 0.0415
-KNEE_DOME_RINGS = 3
+KNEE_DOME_RINGS = 6
 #: The sock's bottom ring (SOCK_Z[0], inside the shoe) is this much thinner: at the back-lateral side the
 #: straight sock wall grazed the shoe's upper just under the topline instead of entering through the opening.
 SOCK_BOTTOM_INSET = 0.002
