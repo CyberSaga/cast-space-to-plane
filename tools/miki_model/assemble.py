@@ -26,8 +26,8 @@ from . import meshkit as mk
 from .rig import SUN_TOWARDS, Rig
 
 __all__ = ["OBJECTS", "OBJECT_IDS", "MATERIALS", "DISPLAY_MATERIALS", "display_color", "PARENTS", "part_links",
-           "REGION_OBJECTS", "MODULES", "ALL_REGIONS", "BUDGET", "DECIMALS", "SUN_TOWARDS", "Assembly", "AssemblyError",
-           "build_parts", "assemble", "format_stats"]
+           "ARM_INWARD_MAX_DEG", "JOINT_LIMITS", "joint_limit", "REGION_OBJECTS", "MODULES", "ALL_REGIONS", "BUDGET",
+           "DECIMALS", "SUN_TOWARDS", "Assembly", "AssemblyError", "build_parts", "assemble", "format_stats"]
 
 #: The castplane objects in their fixed order with what each holds.  ``headband`` comes first: the web UI's
 #: observer pane draws its sight rays (視線) for every vertex of ``objects[0]``, and the headband's 120
@@ -129,6 +129,39 @@ def part_links(rig: Rig) -> dict:
     return {oid: (PARENTS[oid], tuple(round(float(v), DECIMALS) + 0.0 for v in joints[oid])) for oid in OBJECT_IDS}
 
 
+#: D86 joint limits (web only; the ``joint_limit`` key, :func:`joint_limit`): ``{object id: (axis, min_deg,
+#: max_deg)}`` with the axis in the parent's local frame and ``None`` for an absent bound.  The web measures the twist
+#: of ``D = R_Q^T R_P`` (the part's current rotation relative to its parent's) about the axis, zero when the part's
+#: frame is aligned with its parent's: every transform loads as the identity, so both arms read 0 at load and the
+#: parent frame is the world frame at rest.  Both arms read "inward at most ARM_INWARD_MAX_DEG": ``arm_l`` swings
+#: inward about +y, ``arm_r`` about -y (poses.py sign convention), so ``arm_r``'s axis is -y and both maxima are the
+#: same number; no outward bound is written, so by D86's absent-bound rule (-180) a sideways raise stops straight up,
+#: at -180 deg (the panel's "at the lower bound").  ARM_INWARD_MAX_DEG is the largest angle of the required
+#: ``arms-inward`` pose (tested clean) and below every ``arms-inward-far`` angle (tests/test_miki_poses.py pins both).
+#: The limit is exact only for the pure inward swing: the advisory combined poses of poses.py show a bowed or leaning
+#: blouse, or a forward arm, meeting other parts inside it, or clean beyond it.
+ARM_INWARD_MAX_DEG = 11.0
+JOINT_LIMITS = {
+    "arm_l": ((0.0, 1.0, 0.0), None, ARM_INWARD_MAX_DEG),
+    "arm_r": ((0.0, -1.0, 0.0), None, ARM_INWARD_MAX_DEG),
+}
+
+
+def joint_limit(oid: str) -> dict | None:
+    """The ``joint_limit`` value of object ``oid`` (``{"axis": [...], "min_deg"?: m, "max_deg"?: M}``, floats), or
+    ``None`` when the object has no limit."""
+    lim = JOINT_LIMITS.get(oid)
+    if lim is None:
+        return None
+    axis, lo, hi = lim
+    out = {"axis": [float(v) + 0.0 for v in axis]}
+    if lo is not None:
+        out["min_deg"] = float(lo) + 0.0
+    if hi is not None:
+        out["max_deg"] = float(hi) + 0.0
+    return out
+
+
 #: Default object of a part by its region (``Part.obj`` overrides it: e.g. ``hair`` parts that are
 #: sidelocks go to ``sidelocks``, the back hair to ``back_hair``, the scarf ring to ``ring``).  ``None``:
 #: the region has no default and every part must set ``obj`` (``arms`` / ``hands`` go to ``arm_l`` or
@@ -161,6 +194,8 @@ assert set(DISPLAY_MATERIALS.values()) <= set(MATERIALS)
 assert tuple(PARENTS) == OBJECT_IDS, "PARENTS must list every object in OBJECTS order"
 assert [p for p in PARENTS.values() if p is None] == [None], "PARENTS: exactly one root"
 assert set(PARENTS.values()) - {None} <= set(OBJECT_IDS), "PARENTS: every parent is an object"
+assert set(JOINT_LIMITS) <= set(OBJECT_IDS) and all(PARENTS[o] is not None for o in JOINT_LIMITS), \
+    "JOINT_LIMITS: only on objects with a parent"
 assert all(re.fullmatch(r"#[0-9a-f]{6}", c) for c in MATERIALS.values()), "MATERIALS: lower-case #rrggbb"
 assert set(REGION_OBJECTS.values()) - {None} <= set(OBJECT_IDS)
 

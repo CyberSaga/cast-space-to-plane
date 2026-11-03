@@ -379,8 +379,8 @@ they are, not fixed:
   strap face, including the strap's end faces, which physically meet the shoe. The gated rule is the builder's
   border-chord clearance (`clear:limbs.strap_{l,r}^limbs.shoe_{l,r}`), which passes.
 - The `pose:*` requirements are INDETERMINATE "not tested" in the default run, PASS or FAIL with `--poses` (see
-  "Poses (milestone 2)"). Nine are advisory; `pose:arms-inward` is required (profile v5; v6: at +5, +10 and +11) and
-  PASSes under `--poses`.
+  "Poses (milestone 2)"). Thirteen are advisory; `pose:arms-inward` is required (profile v5; v6: at +5, +10 and
+  +11, the angle the D86 arm limit cites since v7) and PASSes under `--poses`.
 - Known minor, not a check result: at the bangs' ends (|x| 0.062-0.072, z 1.456-1.4585) the dome's front rim shows
   1-2 mm in front of the outermost strips just under the band in the shaded close-ups (a sub-pixel patch at 400 x 600;
   nothing in the line renders). `_dome_bottom_z` follows the rig's band line, which lies ~3 mm below the band mesh's
@@ -414,6 +414,10 @@ toward her left. The angles tested, with the step degrees they give:
 | `knee-bend` | `socks` about x by +angle at the knees (both shanks; the shoes follow, the sock tops stay) | +-5, +-10, +-15 (+: heels back) |
 | `bow` | `blouse` about x at the waist (carries neck, head, arms, collar, scarf, ring) | +10, +20 (forward) |
 | `bow-head-turn` | `blouse` about x by +10, then `head` about z by +angle | +20 |
+| `bow-arms-inward` | `blouse` about x by +angle, then `arm_l` about y by +11, `arm_r` by -11 | +10 |
+| `lean-arms-inward` | `blouse` about y by +angle (+: toward her left), then the arms inward by 11 as above | +2, -2 |
+| `arms-forward45-inward` | each arm about x by -45 (forward), then about z inward: `arm_l` by -angle, `arm_r` by +angle | 30 |
+| `arms-forward60-inward` | each arm about x by -60, then about z inward as above | 15 |
 
 The arm stops at +11 deg inward. Profile v6 (the narrowed blouse and the A-line skirt), swept at every degree over
 every cross pair: below z 1.00 (the clip plane of the `.../waist` clear) the sleeve clears the blouse by 7.6 mm at
@@ -427,7 +431,37 @@ and 1.004-1.006 at +13, and there the sleeve sinks into the blouse by up to 3.4-
 8.2-10.4 mm at +13 (right-left, surface samples with z < 1.02). On the v5 model the crossing slid 5.7 cm by +11
 (from z 1.030 to 0.973), below z 1.00 from +10 (5.5 mm deep there) and +11 (8 mm); on v6 it slides 2.5 cm by +11
 and stays above z 1.00 through +14.
-This is a tested clearance, not a limit the UI enforces: the web UI still turns an arm further.
+
+**The arm limit (D86, profile v7).** `examples/miki.json` carries `joint_limit` on both arms:
+`{"axis": [0.0, 1.0, 0.0], "max_deg": 11.0}` on `arm_l` and `{"axis": [0.0, -1.0, 0.0], "max_deg": 11.0}` on
+`arm_r` (`assemble.JOINT_LIMITS`, one constant `assemble.ARM_INWARD_MAX_DEG = 11.0`; `min_deg` is absent, so no outward
+bound is written and D86 reads the absent bound as -180: a sideways raise stops straight up, at -180 deg, where the
+panel reads 「（已達下限）」). The web UI measures the twist about that axis of the arm's rotation relative to the
+blouse, `D = R_Q^T R_P` of the current transforms; every transform loads as the identity, so both arms read 0 at load
+and the axis is the blouse's (the world's, at rest) y. The mirrored `arm_r` axis makes inward positive on both arms
+(the `poses.py` signs: `arm_l` inward about +y, `arm_r` about -y), so the panel reads 「≤ 11.0°」 on both. A ring drag
+inward stops at exactly 11 deg and a typed pose beyond it is refused (`web/test/miki_limit.test.ts` on the real web
+code; also after a bow, where the stop is relative to the bowed blouse). `tests/test_miki_poses.py` pins
+`ARM_INWARD_MAX_DEG == max(arms-inward angles) < min(arms-inward-far angles)`, so the limit angle itself is a required
+clean angle; the posed checks still turn further (they call the rotation maths directly, no clamp), so
+`arms-inward-far` keeps measuring what the limit protects against. The limit certifies only what `arms-inward`
+certifies: the armpit band z 1.00-1.034 above stays unmeasured and the sleeve still sinks into the blouse there by
+5.3-6.5 mm at +11.
+
+**Combined poses (advisory, profile v7).** The limit is exact only for the pure inward swing about the blouse's y;
+combined with another motion it is neither sufficient nor necessary for clearance. The fixture
+(`tests/fixtures/miki_poses.json`) records each arm's angle as the web reads it (`limit_angles`, `limits.ts
+limit_angle`, not clamped), so each pose says whether the UI could reach it:
+
+| pose | angle | arms' D86 angle | UI | result |
+| --- | --- | --- | --- | --- |
+| `bow-arms-inward` | +10 | 10.83 (the world-y swing tilts off the bowed blouse's y) | reachable | clean |
+| `lean-arms-inward` | +2, -2 | 11.00 (the same world axis) | at the limit | clean |
+| `arms-forward45-inward` | 30 | 12.67 | stopped at 11 first | clean |
+| `arms-forward60-inward` | 15 | 8.69 | reachable | FAIL: each sleeve crosses its scarf ribbon end (`body.scarf_ribbon_{l,r}\|limbs.sleeve_{l,r}`, 14-16 crossings, the ribbon 1.5 mm inside the sleeve) |
+
+So a forward arm swung inward meets the scarf inside the limit (not sufficient), and another forward arm is clean past
+it (not necessary: a fixed-axis twist limit also blocks that clean motion, the price D86 states for a one-axis rule).
 
 What is re-checked: only the pairs a pose moves relative to each other (cross pairs: the two parts' objects lie in
 different motion groups, `poses.motion_groups`: for a one-step pose, one part in the turned subtree and the other not;
@@ -453,7 +487,7 @@ clean (those then move to `required` with their tested angles cited, as `arms-in
 is the default run's, byte for byte. The result is **tested clearance at the listed angles, never a safe range**:
 nothing between or beyond them is certified.
 
-As they stand (profile v6, pinned in `tests/test_miki_poses.py` as `MIKI_FIRST_FAILING`): turning the head 10 deg
+As they stand (profile v7, pinned in `tests/test_miki_poses.py` as `MIKI_FIRST_FAILING`): turning the head 10 deg
 already pushes the back sheet into the blouse and collar and a sidelock into the collar and scarf ribbon (the narrower
 skirt is clear of the back sheet now); the nod crosses the sidelocks with the collar going down (+15) and the back
 sheet with the blouse, skirt and under-skirt going up (-10); the sleeve caps cross the collar at 90 deg raised; the
@@ -461,13 +495,16 @@ step lifts the legs' top rims out of the under-skirt block at +25 and -25 (clean
 bend, arms forward and the bow are clean at the angles tested. `arms-inward` is clean at +5, +10 and +11 (required);
 `arms-inward-far` is clean at +13 and first fails at +15 (the sleeves against the blouse waist), +20 (sleeves and
 cuff stripes against the skirt) and +25 (hands against the skirt, sleeves and cuffs against the under-skirt, sleeves
-and the upper cuff stripes against the thighs).
+and the upper cuff stripes against the thighs). Of the combined poses only `arms-forward60-inward` fails (+15, the
+sleeves against the scarf ribbon ends, table above).
 
 The pose maths is verified against the built web code: `tools/miki_model/pose_fixtures.mjs` applies every pose through
 `links.ts` (`resolve_links`, `subtree`) and `object_rotate.ts` (`rotate_unit` about `world_centre(T, joint)`) and writes
-every object's final transform to `tests/fixtures/miki_poses.json` (committed); `tests/test_miki_poses.py` checks the
-Python rigid map of every object against it on the joint, joint + e_x and joint + e_z (within 1e-9 m; the measured
-deviation is 2.2e-16 m). After a change to `POSES` or the web's rotation code, regenerate it from the repository root:
+every object's final transform to `tests/fixtures/miki_poses.json` (committed), with the resolved D86 limits and every
+limited object's `limit_angle` after each pose; `tests/test_miki_poses.py` checks the Python rigid map of every object
+against it on the joint, joint + e_x and joint + e_z (within 1e-9 m; the measured deviation is 2.2e-16 m) and a Python
+mirror of `limits.ts` `twist_deg(relative_rotation(...))` against the angles (within 1e-9 deg). After a change to
+`POSES`, the limits or the web's rotation code, regenerate it from the repository root:
 
 ```sh
 npm ci && npm run build -w ts

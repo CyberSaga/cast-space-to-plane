@@ -70,6 +70,7 @@ def test_fixture_lists_the_python_poses(fixture, links):
                 assert s["moved"] == poses.subtree(s["object"]), (name, a, s["object"])
     for oid, (parent, joint) in links.items():
         assert fixture["parents"][oid] == parent and fixture["joints"][oid] == list(joint), oid
+        assert fixture["limits"][oid] == asm.joint_limit(oid), oid     # D86, as the web resolves the file's key
 
 
 def _points(R, p, X):
@@ -101,6 +102,94 @@ def test_pose_transforms_match_the_web_fixture(fixture, links):
     the joint, joint + e_x and joint + e_z, and every step's pivot is the web's world_centre(T, joint)."""
     dev = _parity(fixture, links)
     assert all(v <= PARITY_TOL for v in dev.values()), dev
+
+
+def _quat(D):
+    """``limits.ts::quat_from_matrix`` (Shepperd, ``w >= 0``)."""
+    tr = D[0][0] + D[1][1] + D[2][2]
+    if tr >= D[0][0] and tr >= D[1][1] and tr >= D[2][2]:
+        w = math.sqrt(1 + tr) / 2
+        q = (w, (D[2][1] - D[1][2]) / (4 * w), (D[0][2] - D[2][0]) / (4 * w), (D[1][0] - D[0][1]) / (4 * w))
+    elif D[0][0] >= D[1][1] and D[0][0] >= D[2][2]:
+        x = math.sqrt(max(0.0, 1 + D[0][0] - D[1][1] - D[2][2])) / 2
+        q = ((D[2][1] - D[1][2]) / (4 * x), x, (D[0][1] + D[1][0]) / (4 * x), (D[0][2] + D[2][0]) / (4 * x))
+    elif D[1][1] >= D[2][2]:
+        y = math.sqrt(max(0.0, 1 - D[0][0] + D[1][1] - D[2][2])) / 2
+        q = ((D[0][2] - D[2][0]) / (4 * y), (D[0][1] + D[1][0]) / (4 * y), y, (D[1][2] + D[2][1]) / (4 * y))
+    else:
+        z = math.sqrt(max(0.0, 1 - D[0][0] - D[1][1] + D[2][2])) / 2
+        q = ((D[1][0] - D[0][1]) / (4 * z), (D[0][2] + D[2][0]) / (4 * z), (D[1][2] + D[2][1]) / (4 * z), z)
+    return tuple(-v for v in q) if q[0] < 0 else q
+
+
+def _limit_angle(oid, T):
+    """``limits.ts::limit_angle``: the twist of ``D = R_Q^T R_P`` (P = ``oid``, Q its parent) about the limit's unit
+    axis, in degrees."""
+    axis, _lo, _hi = asm.JOINT_LIMITS[oid]
+    RP, RQ = poses.transform_matrix(T[oid]), poses.transform_matrix(T[asm.PARENTS[oid]])
+    D = [[RQ[0][i] * RP[0][j] + RQ[1][i] * RP[1][j] + RQ[2][i] * RP[2][j] for j in range(3)] for i in range(3)]
+    w, x, y, z = _quat(D)
+    a = np.asarray(axis, dtype=np.float64) / np.linalg.norm(axis)
+    n = float(a[0] * x + a[1] * y + a[2] * z)
+    return 0.0 if math.hypot(n, w) <= 1e-9 else poses._wrap_angle(2 * math.atan2(n, w) / poses._DEG)
+
+
+#: D86: the arms' angle (the twist relative to the blouse about +y / -y; inward positive on both arms) after each
+#: pose.  ``None``: 0 (the arms not moved relative to the blouse, also when the blouse carries them); ``"+angle"`` /
+#: ``"-angle"``: the swept angle, a number: that angle (within 1e-9); a pair ``(lo, hi)``: strictly between.  The
+#: combined poses (profile v7) read the angle the UI compares with ARM_INWARD_MAX_DEG: a bow before the inward swing
+#: about world y leaves the arms below it (the swing axis tilts off the blouse's y), a lean about the same world y
+#: keeps it exact, and an inward swing about world z after a forward one twists them past it (45 / 30: the UI stops
+#: that drag at 11) or leaves them below it (60 / 15).
+ARM_ANGLES = {
+    "head-turn": None, "head-nod": None, "arms-forward": None, "step": None, "knee-bend": None, "bow": None,
+    "bow-head-turn": None, "arms-raised": "-angle", "arms-inward": "+angle", "arms-inward-far": "+angle",
+    "bow-arms-inward": (10.8, 10.9), "lean-arms-inward": 11.0, "arms-forward45-inward": (12.6, 12.7),
+    "arms-forward60-inward": (8.6, 8.7),
+}
+
+
+def test_fixture_limit_angles_match_python(fixture, links):
+    """The web's limit_angle of both arms after every pose equals the Python mirror within 1e-9, and reads as
+    :data:`ARM_ANGLES` says: +angle for arms-inward (both arms: the mirrored arm_r axis), beyond the limit for every
+    arms-inward-far angle, -angle (outward: no written bound, D86's -180) for arms-raised, 0 when the blouse carries
+    the arms."""
+    assert set(ARM_ANGLES) == set(poses.POSES)
+    lim = asm.ARM_INWARD_MAX_DEG
+    for name, spec in poses.POSES.items():
+        for a in spec.sweeps:
+            case = fixture["poses"][name][poses.angle_key(a)]
+            T = poses.pose_transforms(Rig(), poses.pose_steps(spec, a), links)
+            assert set(case["limit_angles"]) == set(asm.JOINT_LIMITS), (name, a)
+            for oid in asm.JOINT_LIMITS:
+                phi, web = _limit_angle(oid, T), case["limit_angles"][oid]
+                assert abs(phi - web) <= 1e-9, (name, a, oid, phi, web)
+                want = ARM_ANGLES[name]
+                if want is None:
+                    assert abs(phi) <= 1e-9, (name, a, oid, phi)
+                elif isinstance(want, tuple):
+                    assert want[0] < phi < want[1], (name, a, oid, phi)
+                else:
+                    w = {"+angle": a, "-angle": -a}.get(want, want)
+                    assert abs(phi - w) <= 1e-9, (name, a, oid, phi, w)
+            if name == "arms-inward-far":
+                assert all(case["limit_angles"][o] > lim + 1e-9 for o in asm.JOINT_LIMITS), (name, a)
+
+
+def test_arm_limit_is_the_largest_required_inward_angle():
+    """D86: the emitted limit is one constant (assemble.ARM_INWARD_MAX_DEG) on both arms, equal to the largest angle
+    of the required arms-inward pose (so the limit angle itself is tested clean:
+    test_miki_first_failing_angles_are_pinned) and below every arms-inward-far angle (what the limit protects
+    against)."""
+    lim = asm.ARM_INWARD_MAX_DEG
+    req, far = poses.POSES["arms-inward"], poses.POSES["arms-inward-far"]
+    assert req.level == "required" and far.level == "advisory"
+    assert lim == max(req.sweeps) == 11.0 and lim < min(far.sweeps)
+    assert asm.JOINT_LIMITS == {"arm_l": ((0.0, 1.0, 0.0), None, lim), "arm_r": ((0.0, -1.0, 0.0), None, lim)}
+    assert req.steps == far.steps == (("arm_l", "y", "+"), ("arm_r", "y", "-"))
+    assert poses.ARM_INWARD == lim
+    for name in ("bow-arms-inward", "lean-arms-inward"):
+        assert poses.POSES[name].steps[1:] == (("arm_l", "y", lim), ("arm_r", "y", -lim)), name
 
 
 def test_two_step_pose_turns_about_the_carried_joint(fixture, links):
@@ -146,6 +235,13 @@ DIRECTIONS = (
     ("step", 15.0, "limbs.shoe_l", 1, +1),               # back
     ("bow", 10.0, "hair.dome", 1, -1),                   # the bow leans forward ...
     ("bow", 10.0, "hair.dome", 2, -1),                   # ... and down
+    ("lean-arms-inward", 2.0, "hair.dome", 0, +1),       # the lean toward her left (+X) ...
+    ("lean-arms-inward", -2.0, "hair.dome", 0, -1),      # ... and her right
+    ("arms-forward45-inward", 30.0, "limbs.hand_l", 1, -1),  # forward (-Y) ...
+    ("arms-forward45-inward", 30.0, "limbs.hand_l", 0, -1),  # ... then inward: her left hand toward -X ...
+    ("arms-forward45-inward", 30.0, "limbs.hand_r", 0, +1),  # ... her right hand toward +X
+    ("arms-forward60-inward", 15.0, "limbs.hand_l", 0, -1),
+    ("arms-forward60-inward", 15.0, "limbs.hand_r", 0, +1),
 )
 
 
@@ -323,7 +419,7 @@ def test_posed_report_shape(miki_runs):
     json.loads(checks.dumps(posed))                                       # finite, serialisable
 
 
-#: The first tested angle at which each cross pair of Miki FAILs (profile v6, poses.POSES), per pose and per sweep
+#: The first tested angle at which each cross pair of Miki FAILs (profile v7, poses.POSES), per pose and per sweep
 #: direction ("+" first).  Information about the drawing reference's range, not a model defect: the pose
 #: requirements are advisory until the user sets which poses must stay clean.  ``arms-inward`` is required (v5; v6:
 #: at 5 / 10 / 11): it must stay empty.  ``arms-inward-far`` starts past the tested-clean range (v6: clean through
@@ -333,9 +429,18 @@ def test_posed_report_shape(miki_runs):
 #: clear:limbs.sleeve_*^body.blouse/waist; from +20 the sleeves and cuffs meet the A-line skirt, from +25 the hands,
 #: the under-skirt and the thighs).  v6: ``step`` keeps the legs in the bloomers block through +-15 (was -15 out),
 #: ``knee-bend`` is clean (the split over-knee sock), and the back sheet no longer meets the narrower skirt in
-#: ``head-turn``.  A change is deliberate: update this with the reason in the commit message.
+#: ``head-turn``.  v7: the combined poses (advisory; D86's limit is exact only for the pure inward swing): a bow of 10
+#: or a lean of +-2 with both arms inward by the limit angle stays clean (the arms' angle 10.83 / 11.0), the arms
+#: forward 45 then inward 30 about z stays clean although the UI would stop it at 11 (angle 12.67), and forward 60
+#: then inward 15 (angle 8.69, inside the limit) puts each sleeve into its scarf ribbon end.  A change is deliberate:
+#: update this with the reason in the commit message.
 MIKI_FIRST_FAILING = {
     "arms-forward": {},
+    "arms-forward45-inward": {},
+    "arms-forward60-inward": {
+        "body.scarf_ribbon_l|limbs.sleeve_l": ("+15",),
+        "body.scarf_ribbon_r|limbs.sleeve_r": ("+15",),
+    },
     "arms-inward": {},
     "arms-inward-far": {
         "body.blouse|limbs.sleeve_l": ("+15",),
@@ -364,6 +469,7 @@ MIKI_FIRST_FAILING = {
         "body.collar|limbs.sleeve_r": ("+90",),
     },
     "bow": {},
+    "bow-arms-inward": {},
     "bow-head-turn": {
         "body.blouse|hair.back": ("+20",),
         "body.blouse|hair.sidelock_l": ("+20",),
@@ -405,6 +511,7 @@ MIKI_FIRST_FAILING = {
         "hair.sidelock_r|limbs.sleeve_r": ("-30",),
     },
     "knee-bend": {},
+    "lean-arms-inward": {},
     "step": {
         "body.underskirt|limbs.leg_l": ("+25", "-25"),
         "body.underskirt|limbs.leg_r": ("+25", "-25"),
