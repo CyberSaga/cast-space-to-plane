@@ -78,7 +78,6 @@ const rand_unit = (r: () => number): Vec3 => {
 };
 const cross = (a: readonly number[], b: readonly number[]): Vec3 =>
   [a[1]! * b[2]! - a[2]! * b[1]!, a[2]! * b[0]! - a[0]! * b[2]!, a[0]! * b[1]! - a[1]! * b[0]!];
-const dot = (a: readonly number[], b: readonly number[]): number => a[0]! * b[0]! + a[1]! * b[1]! + a[2]! * b[2]!;
 /** A unit vector ⟂ `a`. */
 const perp = (a: Vec3, r: () => number): Vec3 => unit(cross(a, rand_unit(r)));
 
