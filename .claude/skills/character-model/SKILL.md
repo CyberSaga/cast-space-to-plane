@@ -87,6 +87,13 @@ the web UI, and a test pins the files byte for byte.
     Give such a joint an advisory bend pose (`knee-bend`) so the result is pinned.
   - Pin it in the model test: one tree rooted at the root, the file's keys equal the generator's, each joint inside
     its parent's box and near its own, and the key order.
+  - A part may also carry the web-only D86 `joint_limit` (`{"axis": [x, y, z], "min_deg"?, "max_deg"?}`, the axis in
+    the parent's frame; the web bounds the twist of the part's rotation relative to its parent about it). Cite each
+    bound from a required pose that tests that angle clean, keep it in the generator as one constant, and pin the
+    relation in the pose test (Miki: `assemble.ARM_INWARD_MAX_DEG = 11.0` on both arms, mirrored axes `+y` / `-y` so
+    inward is positive on both, `== max(arms-inward angles) < min(arms-inward-far angles)`). The limit is exact only
+    for the swing about its axis: add advisory combined poses (a parent motion, or another axis, then the limited one)
+    to show what it does not cover.
 - **Split the builders by file ownership** so that two agents run in separate worktrees: head + hair in one, body +
   limbs in the other. Each writes only its own modules; one merger agent merges both, fits the seams (neck / collar,
   hair / shoulders) and regenerates.
@@ -135,7 +142,7 @@ owner, part, view, observed, expected, and a fix concrete enough to implement ("
   examples (`len(examples) == 9`), so a new example must update that count.
 - Write `tests/test_<name>_model.py`, modelled on `tests/test_miki_model.py`. It pins byte-identical regeneration,
   closed manifolds with no mesh fallback, `warnings == []`, the budget and the ray cap, `display_color`, `group` and
-  the links (`parent` / `joint`).
+  the links (`parent` / `joint`) and any `joint_limit`.
 - Docs: the generator's README and SPEC (in English), `examples/README.md`, `docs/USAGE.md` and `README.md` (in
   Traditional Chinese), and a §5.4 implementation note when the model needs a contract-visible change. Quote the
   object and polygon counts, and update them whenever the model changes.

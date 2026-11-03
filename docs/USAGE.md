@@ -867,7 +867,7 @@ vite + three.js（版本釘選：three 0.186.1、vite 8.3.3）。`vite build` �
 
 ## 5. 開發工具：`tools/make_miki_model.py`（花菱美希參考模型）
 
-`tools/make_miki_model.py` 產生角色範例：`examples/miki.json`（19 個內嵌網格物件）與同一個模型的 `examples/meshes/miki.{obj,mtl,glb}`（說明見 [`examples/README.md`](../examples/README.md)）。生成器本體在 `tools/miki_model/`（`rig.py` 放全部比例、`head.py` / `hair.py` / `body.py` / `limbs.py` 是各部位，`assemble.py` 把零件組成 19 個物件並配材質與 `display_color`，`export.py` 寫出場景 JSON、OBJ + MTL、GLB，`preview.py` 做著色預覽與線稿預覽）。幾何部分只用 numpy 與標準函式庫；只有 `--preview` 與 `--lines` 的圖片需要 Pillow 與 cairosvg。核心與 TypeScript 移植不讀取、也不依賴它。
+`tools/make_miki_model.py` 產生角色範例：`examples/miki.json`（19 個內嵌網格物件）與同一個模型的 `examples/meshes/miki.{obj,mtl,glb}`（說明見 [`examples/README.md`](../examples/README.md)）。生成器本體在 `tools/miki_model/`（`rig.py` 放全部比例、`head.py` / `hair.py` / `body.py` / `limbs.py` 是各部位，`assemble.py` 把零件組成 19 個物件並配材質與 `display_color`，兩臂向內最多 11°（兩隻手臂的 `joint_limit`，D86），`export.py` 寫出場景 JSON、OBJ + MTL、GLB，`preview.py` 做著色預覽與線稿預覽）。幾何部分只用 numpy 與標準函式庫；只有 `--preview` 與 `--lines` 的圖片需要 Pillow 與 cairosvg。核心與 TypeScript 移植不讀取、也不依賴它。
 
 ```sh
 python3 tools/make_miki_model.py                      # 建模、驗證、寫出 examples/miki.json 與 examples/meshes/miki.{obj,mtl,glb}
