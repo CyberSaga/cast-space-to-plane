@@ -64,11 +64,11 @@ SOCK_TOP_Z = (0.585, 0.500, 0.420 + KNEE_BLEND, 0.420)
 SOCK_Z = (0.025, 0.065, 0.200, 0.320, 0.420)
 #: Every leg ring buried in the sock top (z below SOCK_TOP_Z[0]) is this much thinner: the sock's 12-gon chords
 #: cut further in than rig.sock_ease, and the leg's 10-gon corners poked through the sock wall (checks: join
-#: leg~sock).
+#: leg~sock_top; before v6 leg~sock).
 LEG_END_INSET = 0.002
 #: The knee domes (v6), all centred on the knee centre: the leg's end, the sock top's end (inside the shank sock's
-#: sphere with ~3 mm to spare after the facets) and the shank sock's top, a sphere of SOCK_KNEE_RADIUS (2 mm wider
-#: than the sock on the leg's 0.039 knee: the knee reads a little round) with KNEE_DOME_RINGS rings.
+#: sphere with ~3 mm to spare after the facets) and the shank sock's top, a sphere of SOCK_KNEE_RADIUS (1 mm wider
+#: than leg + sock_ease on the leg's 0.039 knee: the knee reads a little round) with KNEE_DOME_RINGS rings.
 LEG_KNEE_RADIUS = 0.030
 SOCK_TOP_KNEE_RADIUS = 0.036
 SOCK_KNEE_RADIUS = 0.0415
