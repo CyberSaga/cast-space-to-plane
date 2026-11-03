@@ -11,7 +11,7 @@ npm run -w ts build        # the core package "castplane" the UI imports
 npm run -w web dev         # vite dev server
 npm run -w web build       # tsc type check + vite build -> web/dist (static, base './')
 npm run -w web preview     # serve web/dist locally
-npm run -w web test        # orbit / download / colours / rig / equation / observer / plane / object-rotation unit tests (node:test, web/test/; 179 tests)
+npm run -w web test        # orbit / download / colours / rig / equation / observer / plane / object-rotation unit tests (node:test, web/test/; 184 tests)
 ```
 
 ![web UI](../docs/images/web_ui.png)
@@ -200,11 +200,13 @@ drag):
     unchanged by group and ancestor turns. Nothing is stored, so a downloaded posed scene reloads at the same angle.
   - A ring drag (and `rotate_object`) is clamped at the bound ahead in closed form (`clamp_drag_angle`; snapping first,
     never re-snapped); at or beyond the bound an outward drag moves nothing and records no step, a drag back is free.
-    With `min` absent, +180 and -180 are one pose, so a second outward drag never goes round the far side. A numeric
-    *套用* (and `set_object_rotation`) beyond the range is refused, not clamped: the three fields and the limit line turn
-    red with 「套用被拒：繞 mast 的 (0, 1, 0) 軸會轉到 20.0°，超出上限 11.0°」, nothing moves, no step; the refusal stays
-    until the next *套用*, Escape, a drag, a selection change or a successful action. *還原此物體*, undo, *落地* and group
-    actions are never checked; a part loaded outside its range can only be turned back.
+    With `min` absent (or `max` absent), +180 and -180 are one pose at that bound, so a second outward drag never
+    goes round the far side. A turn of 180° about an axis perpendicular to `axis` (the singular pose, read as 0) is
+    left only by a drag that lands inside the range. A numeric *套用* (and `set_object_rotation`) beyond the range is
+    refused, not clamped: the three fields and the limit line turn red with
+    「套用被拒：繞 mast 的 (0, 1, 0) 軸會轉到 20.0°，超出上限 11.0°」, nothing moves, no step; the refusal stays
+    until the next *套用*, Escape, a drag, a selection change or a successful action. *還原此物體*, undo, *落地* and
+    group actions are never checked; a part loaded outside its range can only be turned back.
   - The panel line `#obj-limit` reads 「關節限制：繞 mast 的 (0, 1, 0) 軸 ≤ 11.0°，目前 8.3°」 (「-30.0°～30.0°」 /
     「≥ -30.0°」 by the written bounds), with 「（已達上限）」, 「（已達下限）」, 「（超出上限，只能往回轉）」 or
     「（超出下限，只能往回轉）」; on a slow scene it follows the drag's candidate. The limit is exact for a swing about its
