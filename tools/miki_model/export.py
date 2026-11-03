@@ -11,7 +11,9 @@ material of every part (:data:`~miki_model.assemble.MATERIALS`).
   :func:`~miki_model.assemble.display_color`; read only by the web UI's 3D views, ignored by the core), ``group``
   (:data:`GROUP`, D84) and the D85 links ``parent`` (not on the root) and ``joint``
   (:func:`~miki_model.assemble.part_links`; read only by the web UI, which turns a part with its descendants about
-  its joint, ignored by the core); the structure is indented, every ``data`` block is compact on one line.
+  its joint, ignored by the core) and, on the arms, the D86 ``joint_limit`` (:func:`~miki_model.assemble.joint_limit`:
+  inward at most :data:`~miki_model.assemble.ARM_INWARD_MAX_DEG`; read only by the web UI, which stops a ring drag at
+  the bound, ignored by the core); the structure is indented, every ``data`` block is compact on one line.
   :func:`check_scene` loads it with ``castplane.load_scene`` (lazy import).
 * :func:`write_obj`: ``mtllib``, one ``o <object>`` per object and a ``usemtl <material>`` per part block
   (castplane's OBJ reader ignores ``usemtl``), ``s`` per smooth group (group ids made unique across objects;
@@ -33,7 +35,7 @@ import struct
 import numpy as np
 
 from . import meshkit as mk
-from .assemble import MATERIALS, OBJECTS, display_color, part_links
+from .assemble import MATERIALS, OBJECTS, display_color, joint_limit, part_links
 from .rig import SUN_TOWARDS
 
 __all__ = ["SCENE_SETTINGS", "DESCRIPTION", "GROUP", "scene_dict", "scene_text", "write_scene", "check_scene",
@@ -98,8 +100,8 @@ def scene_dict(assembly, description: str = DESCRIPTION) -> dict:
     out = {"description": description}
     for k in ("version", "units", "up"):
         out[k] = s[k]
-    # each object: id, type, display_color, group, parent (not on the root) and joint (web only; the core ignores
-    # them), data
+    # each object: id, type, display_color, group, parent (not on the root), joint and joint_limit (the arms only;
+    # web only, the core ignores them), data
     links = part_links(assembly.rig)
     out["objects"] = []
     for o in assembly.objects():
@@ -108,6 +110,9 @@ def scene_dict(assembly, description: str = DESCRIPTION) -> dict:
         if parent is not None:
             obj["parent"] = parent
         obj["joint"] = list(joint)
+        lim = joint_limit(o["id"])
+        if lim is not None:
+            obj["joint_limit"] = lim
         obj["data"] = o["data"]
         out["objects"].append(obj)
     for k in ("lights", "receivers", "camera", "output"):

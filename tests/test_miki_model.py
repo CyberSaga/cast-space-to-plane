@@ -69,7 +69,8 @@ def rendered(scene) -> dict:
     return castplane.render(scene)
 
 
-WEB_KEYS = ("display_color", "group", "parent", "joint")   # read only by the web UI; the core ignores them
+#: read only by the web UI; the core ignores them
+WEB_KEYS = ("display_color", "group", "parent", "joint", "joint_limit")
 
 #: D85: the 19 joints (object-local = world: identity transforms), from rig.py (design table; 5 decimals).
 JOINTS = {
@@ -177,9 +178,10 @@ def test_every_object_has_its_display_color(raw):
         colour = o["display_color"]
         assert COLOUR.fullmatch(colour), (o["id"], colour)
         assert colour == asm.display_color(o["id"]) == asm.MATERIALS[asm.DISPLAY_MATERIALS[o["id"]]]
-        # deterministic key order; the root (skirt) has no parent key
+        # deterministic key order; the root (skirt) has no parent key, only the arms carry joint_limit (D86)
         parent = ["parent"] if asm.PARENTS[o["id"]] is not None else []
-        assert list(o) == ["id", "type", "display_color", "group", *parent, "joint", "data"]
+        limit = ["joint_limit"] if o["id"] in asm.JOINT_LIMITS else []
+        assert list(o) == ["id", "type", "display_color", "group", *parent, "joint", *limit, "data"]
 
 
 def test_every_object_is_a_part_of_the_miki_group(raw):
@@ -230,6 +232,22 @@ def test_the_file_links_are_the_rig_joints(raw):
         assert o["joint"] == list(joint) == list(JOINTS[o["id"]]), o["id"]
         assert all(type(x) is float for x in o["joint"]), o["id"]
         assert o["group"] == export.GROUP                # a link counts only inside one group (D85 §1)
+
+
+def test_the_arms_carry_the_inward_joint_limit(raw):
+    """D86: both arms (children of the blouse, identity transforms, so the angle reads 0 at load) carry
+    ``joint_limit`` "inward at most ARM_INWARD_MAX_DEG" about their parent's +y (arm_l) / -y (arm_r), floats, no
+    ``min_deg``; no other object has a limit."""
+    assert set(asm.JOINT_LIMITS) == {"arm_l", "arm_r"} and asm.ARM_INWARD_MAX_DEG == 11.0
+    want = {"arm_l": {"axis": [0.0, 1.0, 0.0], "max_deg": 11.0}, "arm_r": {"axis": [0.0, -1.0, 0.0], "max_deg": 11.0}}
+    for o in raw["objects"]:
+        assert o.get("joint_limit") == asm.joint_limit(o["id"]) == want.get(o["id"]), o["id"]
+        assert "transform" not in o, o["id"]                    # identity at load: the arm frame = the blouse frame
+        if o["id"] in want:
+            assert o["parent"] == "blouse" and asm.PARENTS[o["id"]] == "blouse", o["id"]
+            lim = o["joint_limit"]
+            assert all(type(x) is float for x in lim["axis"]) and type(lim["max_deg"]) is float
+            assert "min_deg" not in lim
 
 
 def _bbox_distance(p, vertices) -> float:
