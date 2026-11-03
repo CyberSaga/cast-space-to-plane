@@ -73,6 +73,8 @@ export interface Controls {
   objectRestore: HTMLButtonElement;
   objectGround: HTMLButtonElement;
   objectCentre: HTMLDivElement;
+  /** D86: the joint-limit line (a part with a resolved limit; the refusal of a 套用 in red). */
+  objectLimit: HTMLDivElement;
   objectNotice: HTMLDivElement;
   /** D84: the line naming the selection (whole group or part). */
   objectSelected: HTMLDivElement;
@@ -126,6 +128,7 @@ export function controls(): Controls {
     objectRestore: $<HTMLButtonElement>("obj-restore"),
     objectGround: $<HTMLButtonElement>("obj-ground"),
     objectCentre: $<HTMLDivElement>("obj-centre"),
+    objectLimit: $<HTMLDivElement>("obj-limit"),
     objectNotice: $<HTMLDivElement>("obj-notice"),
     objectSelected: $<HTMLDivElement>("obj-selected"),
   };

@@ -11,7 +11,7 @@ npm run -w ts build        # the core package "castplane" the UI imports
 npm run -w web dev         # vite dev server
 npm run -w web build       # tsc type check + vite build -> web/dist (static, base './')
 npm run -w web preview     # serve web/dist locally
-npm run -w web test        # orbit / download / colours / rig / equation / observer / plane / object-rotation unit tests (node:test, web/test/; 166 tests)
+npm run -w web test        # orbit / download / colours / rig / equation / observer / plane / object-rotation unit tests (node:test, web/test/; 184 tests)
 ```
 
 ![web UI](../docs/images/web_ui.png)
@@ -188,6 +188,32 @@ drag):
     `descendants(id)`, `object_matrices(id)` (the 3D matrices of both panes), `world_px([x, y, z])`; `rotate_object`,
     `set_object_rotation` and `select_object` with the panel buttons run the UI's own path, so they carry the subtree.
     Unit tests: `test/links.test.ts` (15) on `test/fixtures/basic_linked.json`.
+- **Joint limits** (D86, contract §5.8 notes, spec-v0.3 §10; `src/limits.ts`, the parse / resolve in `src/links.ts`, the
+  `UnitDrag` clamp in `src/object_rotate.ts`, the `PlaneSession` limit helpers in `src/plane.ts`). One more web-only
+  object key on a part with a resolved `parent`: `joint_limit = {axis: [x, y, z], min_deg?, max_deg?}`. `axis` is a
+  non-zero direction in the **parent's local** frame; each bound is a finite number in [-180, 180], at least one is
+  written, `min_deg ≤ max_deg`, an absent one is ±180. The core ignores it, *Download scene* writes it back as parsed; a
+  malformed value, or the key on a root part, an ungrouped object or a dropped link, is ignored silently.
+  - The angle is the **twist** about `axis` of the part's rotation relative to its parent, `D = R_Qᵀ·R_P` (the current
+    transforms; a Shepperd quaternion `(w, v)`, `φ = 2·atan2(a·v, w)` in (-180°, 180°]): 0 when the part's frame is
+    aligned with its parent's, the drag angle for a turn about that axis, 0 for a turn about a perpendicular one, and
+    unchanged by group and ancestor turns. Nothing is stored, so a downloaded posed scene reloads at the same angle.
+  - A ring drag (and `rotate_object`) is clamped at the bound ahead in closed form (`clamp_drag_angle`; snapping first,
+    never re-snapped); at or beyond the bound an outward drag moves nothing and records no step, a drag back is free.
+    With `min` absent (or `max` absent), +180 and -180 are one pose at that bound, so a second outward drag never
+    goes round the far side. A turn of 180° about an axis perpendicular to `axis` (the singular pose, read as 0) is
+    left only by a drag that lands inside the range. A numeric *套用* (and `set_object_rotation`) beyond the range is
+    refused, not clamped: the three fields and the limit line turn red with
+    「套用被拒：繞 mast 的 (0, 1, 0) 軸會轉到 20.0°，超出上限 11.0°」, nothing moves, no step; the refusal stays
+    until the next *套用*, Escape, a drag, a selection change or a successful action. *還原此物體*, undo, *落地* and
+    group actions are never checked; a part loaded outside its range can only be turned back.
+  - The panel line `#obj-limit` reads 「關節限制：繞 mast 的 (0, 1, 0) 軸 ≤ 11.0°，目前 8.3°」 (「-30.0°～30.0°」 /
+    「≥ -30.0°」 by the written bounds), with 「（已達上限）」, 「（已達下限）」, 「（超出上限，只能往回轉）」 or
+    「（超出下限，只能往回轉）」; on a slow scene it follows the drag's candidate. The limit is exact for a swing about its
+    axis; it does not prove clearance in combined poses or when the parent moves against parts outside the subtree.
+  - Hooks: `joint_limit(id)` (`{axis, min_deg, max_deg, min_written, max_written, angle_deg, state, inside, parent}` or
+    null), `object_limits()` (the parsed keys); `rotate` gains `limit` and `limit_bad`. Unit tests:
+    `test/limits.test.ts` (13) on `test/fixtures/basic_limited.json`.
 - **Overlay** (`src/overlay.ts`): an `<svg>` over the canvas with the same CSS box and `viewBox`. On each
   animation frame where something changed, the frame runs `project_scene` → `compose` → `write_svg` (all six
   layers) against the cached stage A. Pointer events only update the state and at most one core render runs per
@@ -414,6 +440,12 @@ The script needs a Playwright installed outside the repository; it is not a depe
   step; 落地 on the tilted base lifts its whole subtree by one translation (`OBJECT_BELOW_RECEIVER` gone); the undos
   restore the SVG byte for byte; *Download scene* keeps `parent` and `joint` verbatim and its reload gives the same
   links and world joints; loading `basic` clears the links.
+- D86 (joint limits, on the fixture `web/test/fixtures/basic_limited.json`): `object_limits()` and `joint_limit(id)`
+  give the parsed and resolved limits (none on the ungrouped post or the malformed flag); `rotate_object("arm", 1, 15)` stops
+  at 11° (「（已達上限）」, one undo step) and a further outward one records nothing; `set_object_rotation("arm", [0, 20,
+  0])` and a typed 12.5 are refused (the three fields and `#obj-limit` red, 「套用被拒」, no step), the refusal survives an
+  undo's panel sync and Escape clears it; a typed 10 is applied; a group and a parent turn leave the angle; the tip's
+  axis is read in the pole's frame; *Download scene* keeps `joint_limit` and the reload keeps the angles.
 
 Last run (phase 2, part 5; exit 0, no failed check, no page error):
 

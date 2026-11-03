@@ -11,7 +11,7 @@ import type { Camera, GeometryDocument, Scene, SceneObject } from "castplane";
 
 import { DISPLAY_COLOR_KEY, display_color_text } from "./colours.js";
 import { GROUP_KEY } from "./groups.js";
-import { JOINT_KEY, PARENT_KEY } from "./links.js";
+import { JOINT_KEY, LIMIT_KEY, PARENT_KEY, limit_for_file } from "./links.js";
 import type { RawLink } from "./links.js";
 import type { TargetCamera } from "./orbit.js";
 
@@ -54,7 +54,8 @@ export function json_blob(doc: GeometryDocument, sceneName: string): DownloadFil
  * `group` (the string verbatim), so the file reloads with the same groups. D85: `links` (the loaded raw scene's
  * parse-valid link keys, `links.ts::object_links`) likewise: `parent` verbatim and `joint` as three numbers (local
  * frame, so no conversion at the moved pose; `dumps` writes Python-repr doubles, so the reload gives the same doubles),
- * also when resolution dropped the link (a reload drops it again).
+ * also when resolution dropped the link (a reload drops it again). D86: `joint_limit` as parsed (`{axis, min_deg?,
+ * max_deg?}`, `links.ts::limit_for_file`), also when resolution dropped it.
  * A `mesh` object (§5.2.1) is written so that the Python validator accepts it (`mesh_object_for_file`): `data.faces`,
  * `data.smooth_groups` and an integer `node` as JSON integers, and `path` / `node` left out when null. A scene without
  * mesh objects is `dumps({...scene, objects, camera, output}) + "\n"`, as before.
@@ -73,6 +74,7 @@ export function scene_blob(scene: Scene, cam: TargetCamera | Camera, sceneName: 
     if (group !== undefined) obj = { ...obj, [GROUP_KEY]: group };
     if (link?.parent !== undefined) obj = { ...obj, [PARENT_KEY]: link.parent };
     if (link?.joint !== undefined) obj = { ...obj, [JOINT_KEY]: [link.joint[0], link.joint[1], link.joint[2]] };
+    if (link?.joint_limit !== undefined) obj = { ...obj, [LIMIT_KEY]: limit_for_file(link.joint_limit) };
     return obj;
   });
   return { filename: `${sceneName}.scene.json`, type: JSON_MIME, text: ints.fill(dumps({ ...scene, objects, camera: cam, output })) + "\n" };
