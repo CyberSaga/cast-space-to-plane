@@ -20,9 +20,9 @@ import {
   FRAMING_FIT, derive_board, dist_point_segment, document_drawables, first_inside, frame_camera_block, frame_view, framing_points,
   frustum, hit_point, hit_polyline, initial_view, line_art, observer_D, observer_accepts_pointer, observer_basis, observer_project,
   orbit_camera, orbit_view, pinch_view,
-  sample_arc, sample_ellipse, scene_centre, vertex_rays, zoom_view,
+  rays_from_points, sample_arc, sample_ellipse, scene_centre, vertex_ray_points, vertex_rays, zoom_view,
 } from "../src/observer.js";
-import type { Board } from "../src/observer.js";
+import type { Board, VertexRays } from "../src/observer.js";
 
 // web/build/test/observer.test.js -> repository root
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..", "..");
@@ -471,6 +471,66 @@ test("vertex rays: the focus object's sight lines, crossings on the board, light
   for (const [S, T] of rays2.light) {
     const d = sub(T, S);
     close(dot(d, l) / (len(d) * len(l)), 1, 1e-12, "along the light direction (towards the light)");
+  }
+});
+
+/** `vertex_rays` as it was before the split into `vertex_ray_points` + `rays_from_points` (the reference of the test below). */
+function vertex_rays_before_split(doc: GeometryDocument, scene: Scene, board: Pick<Board, "E" | "f" | "D">, near_m: number): VertexRays {
+  const out: VertexRays = { sight: [], crossings: [], light: [], shadows: [], shadow_sight: [], shadow_crossings: [] };
+  const crossing = (X: Vec3): Vec3 | null => {
+    const dep = dot(board.f, sub(X, board.E));
+    return dep > near_m ? add(board.E, mul(sub(X, board.E), board.D / dep)) : null;
+  };
+  const focus = scene.objects[0];
+  if (focus === undefined) return out;
+  const re = new RegExp(`^${focus.id.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\.v(\\d+)$`);
+  const names = Object.keys(doc.points).filter((n) => re.test(n)).sort((a, b) => Number(re.exec(a)![1]) - Number(re.exec(b)![1]));
+  const world = (name: string): Vec3 | null => {
+    const p = doc.points[name];
+    return p !== undefined && "world" in p ? [p.world[0]!, p.world[1]!, p.world[2]!] : null;
+  };
+  for (const n of names) {
+    const P = world(n)!;
+    out.sight.push([board.E, P]);
+    const c = crossing(P);
+    if (c !== null) out.crossings.push(c);
+  }
+  const light = scene.lights[0];
+  if (light === undefined) return out;
+  const vertices = new Set(names);
+  for (const [kind, name] of doc.construction.rays) {
+    if (kind !== "L" || !vertices.has(name)) continue;
+    const S = world(`${name}.shadow.${light.id}`);
+    if (S === null) continue;
+    const P = world(name)!;
+    if (light.type === "point") out.light.push([[light.position![0]!, light.position![1]!, light.position![2]!], S]);
+    else {
+      const d = light.direction!, n = len(d);
+      const k = Math.max(1.5 * len(sub(P, S)), 1);
+      out.light.push([S, add(S, mul(mul(d, 1 / n), k))]);
+    }
+    out.shadows.push(S);
+    out.shadow_sight.push([board.E, S]);
+    const c = crossing(S);
+    if (c !== null) out.shadow_crossings.push(c);
+  }
+  return out;
+}
+
+test("vertex rays: vertex_rays = rays_from_points(vertex_ray_points) = the pre-split result, exactly, on every example", () => {
+  for (const name of [...FIVE, "two_lights", "wall_and_ground"]) {
+    const scene = example(name);
+    const orbit = orbit_from_camera(scene.camera, scene);
+    const { doc, rec } = render(scene, camera_from_orbit(orbit, scene.camera));
+    const b = derive_board(rec, orbit, 4);
+    const pts = vertex_ray_points(doc, scene);
+    assert.equal(pts.light_P.length, pts.light_S.length, `${name}: parallel light arrays`);
+    const split = rays_from_points(pts, scene, b, rec.near);
+    assert.deepStrictEqual(vertex_rays(doc, scene, b, rec.near), split, `${name}: vertex_rays is the composition`);
+    assert.deepStrictEqual(split, vertex_rays_before_split(doc, scene, b, rec.near), `${name}: same arrays, same order as before`);
+    // the worker sends the points by structured clone: the rays from the copy are the same
+    assert.deepStrictEqual(rays_from_points(structuredClone(pts), scene, b, rec.near), split, `${name}: after a structured clone`);
+    if (name === "basic") assert.ok(pts.P.length > 0 && pts.light_P.length > 0, "basic: vertices and light rays");
   }
 });
 

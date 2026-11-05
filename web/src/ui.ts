@@ -8,6 +8,7 @@
 import { SceneError } from "castplane";
 import type { CameraRecord, GeometryDocument, Scene } from "castplane";
 
+import type { DocSummary } from "./doc_summary.js";
 import type { DownloadFile } from "./download.js";
 import { slider_from_focal } from "./orbit.js";
 import type { OverlayMode } from "./overlay.js";
@@ -264,28 +265,25 @@ export function save(file: DownloadFile): void {
 }
 
 // ---------------------------------------------------------------------------- status and warnings
-/** Construction rays of every light (`constructions` with N ≥ 2 lights, else `construction`). */
-export function ray_count(doc: GeometryDocument): number {
-  const blocks = doc.constructions !== undefined ? Object.values(doc.constructions) : [doc.construction];
-  return blocks.reduce((n, b) => n + b.rays.length, 0);
-}
+export { ray_count, umbra_count } from "./doc_summary.js";
 
-/** Umbra pieces of the frame (`null` polygons — a drag frame, `umbra = false` — count as none). */
-export function umbra_count(doc: GeometryDocument): number {
-  return (doc.umbra ?? []).reduce((n, u) => n + (u.polygons?.length ?? 0), 0);
-}
+/** The suffix of the status line's second line while a resting frame's hidden lines / umbra are still being computed
+ * (the core worker's two-phase render: the quick document is shown, the final one is pending). */
+export const PENDING_SUFFIX = "（隱藏線計算中）";
 
 /** The status line of a rendered frame; `obs_ms` (the observer's per-frame cost, §5.6.3) only while the observer pane is shown (not 預覽).
- * The camera line reads the record of the rendered block (`C`, `forward`) and its form. */
+ * The camera line reads the record of the rendered block (`C`, `forward`) and its form. `summary`: the document's counts
+ * (`doc_summary.ts::doc_summary_of`); `pending`: the resting frame's final document is still being computed. */
 export function status_text(
   sceneName: string, timings: { stage_a_ms: number; core_ms: number; dom_ms: number }, mode: OverlayMode,
-  doc: GeometryDocument, scene: Scene, rec: CameraRecord, focal_mm: number, form: string, obs_ms: number | null = null,
+  summary: DocSummary, scene: Scene, rec: CameraRecord, focal_mm: number, form: string, obs_ms: number | null = null,
+  pending = false,
 ): string {
   return `${sceneName}: stage A ${timings.stage_a_ms.toFixed(1)} ms (cached)\n` +
     `core ms ${timings.core_ms.toFixed(1)} · dom ms ${timings.dom_ms.toFixed(1)}` +
-    (obs_ms === null ? "" : ` · obs ms ${obs_ms.toFixed(1)}`) + ` · overlay ${mode}\n` +
-    `points ${Object.keys(doc.points).length} · edges ${doc.edges.length} · rays ${ray_count(doc)}` +
-    (doc.umbra !== undefined ? ` · umbra pieces ${umbra_count(doc)}` : "") + "\n" +
+    (obs_ms === null ? "" : ` · obs ms ${obs_ms.toFixed(1)}`) + ` · overlay ${mode}` + (pending ? PENDING_SUFFIX : "") + "\n" +
+    `points ${summary.points} · edges ${summary.edges} · rays ${summary.rays}` +
+    (summary.umbra_pieces !== null ? ` · umbra pieces ${summary.umbra_pieces}` : "") + "\n" +
     `lights ${scene.lights.map((l) => l.id).join(", ")} · receivers ${scene.receivers.map((r) => r.id).join(", ")}\n` +
     `camera (${form}) at (${rec.C.map((x) => x.toFixed(2)).join(", ")}) looking (${rec.forward.map((x) => x.toFixed(3)).join(", ")}), ` +
     `f ${focal_mm.toFixed(1)} mm`;
@@ -298,11 +296,16 @@ export class WarningsTable {
   constructor(private readonly body: HTMLTableSectionElement) {}
 
   update(doc: GeometryDocument): void {
-    const key = JSON.stringify(doc.warnings);
+    this.update_list(doc.warnings);
+  }
+
+  /** The table of `warnings` (a document's `warnings`, e.g. from the core worker's reply). */
+  update_list(warnings: readonly GeometryDocument["warnings"][number][]): void {
+    const key = JSON.stringify(warnings);
     if (key === this.last) return;
     this.last = key;
     this.body.replaceChildren(
-      ...doc.warnings.map((w) => {
+      ...warnings.map((w) => {
         const tr = document.createElement("tr");
         for (const text of [w.code, w.ids.join(", "), w.message]) {
           const td = document.createElement("td");
@@ -312,7 +315,7 @@ export class WarningsTable {
         return tr;
       }),
     );
-    if (doc.warnings.length === 0) {
+    if (warnings.length === 0) {
       const tr = document.createElement("tr");
       const td = document.createElement("td");
       td.colSpan = 3;
