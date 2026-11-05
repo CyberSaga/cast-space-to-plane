@@ -4330,9 +4330,13 @@ and the hidden-run SVG groups (§5.1.8). Nothing an M4–M6 case needs lies beyo
   SVG costs the main thread its parse, layout and paint (an `<img>` SVG is laid out on the main thread like the DOM
   overlay: about 100 ms for a 10 k-element drawing). A drag frame's overlay is therefore applied only when
   `OVERLAY_DRAG_INTERVAL_K · dom_ms` has passed since the last one, with `OVERLAY_DRAG_INTERVAL_K = 16` and `dom_ms` the
-  last resting DOM update's `innerHTML` time (the examples, about 0.5–1 ms: every reply; the character scene, about 35
-  ms: every 0.6 s). The observer's drawing on the frame, the warnings and the status follow every reply, and the resting
-  frame always applies. (6) **What requests no core render.** A selection, the 板子 and 視線 checkboxes, 整體顯示, the
+  last resting DOM update's `innerHTML` time (a resting frame's only, never a drag frame's); an interval under one
+  animation frame (`OVERLAY_DRAG_MIN_INTERVAL_MS = 17`) means no throttling at all (the examples, about 0.5–1 ms: every
+  reply); the character scene, about 35 ms: every 0.6 s. A skipped reply is applied when the interval has passed unless
+  a newer reply was applied first (a trailing apply), so a pointer held still never leaves the drawing pane with a
+  stale picture; a load or a synchronous render drops it. The observer's drawing on the frame, the warnings and the
+  status follow every reply, and the resting frame always applies. (`web/scripts/smoke.mjs` checks after every example
+  load and drag that the worker's resting overlay, warnings and counts equal the synchronous render's, `settle()`.) (6) **What requests no core render.** A selection, the 板子 and 視線 checkboxes, 整體顯示, the
   observer orbit, resizes and the 3D-view checkbox request only an observer (and view) redraw
   (`request_observer_render`); a pivot pick (`點選物體`) requests a core render only when the block changed. (7)
   **`FrameRecord`** gains `phase` (`quick` | `final` | `sync`), `stage_a_ms` (null when no stage A ran for the frame) and
@@ -6364,7 +6368,8 @@ D86, spec-v0.3 §10).
   thread and only on success records the undo step, never waiting for a frame; the nothing-to-commit rule, `cancel()` (a
   second finger) and the stage-A exception path hold as written. `LIVE_STAGE_A_MS` and the notice apply only in the
   synchronous fallback. The hook `object_transform(id)` returns the drag candidate while an object drag is held in
-  worker mode (the pose being shown) and the committed pose otherwise; `timings.stage_a_runs` counts the worker's stage A
+  worker mode (the pose being shown; `object_matrices` shows it too), while `object_vertices`, `object_centre` and `svg`
+  keep reporting the committed pose until the release, as stage A has not run on the main thread; `timings.stage_a_runs` counts the worker's stage A
   runs (`stage_a_ran` replies) together with the main thread's. A drag frame's document is the §5.4.11 drag document
   (hidden lines and umbra off), its overlay is throttled by `OVERLAY_DRAG_INTERVAL_K`, and the resting document arrives in
   the two phases (all in the §5.4 D87 note). The committed pose, the undo steps, the document and the downloads are those

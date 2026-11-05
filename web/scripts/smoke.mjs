@@ -11,7 +11,8 @@
 // every example's scene-camera SVG / JSON through the bundled core is written to out/<name>.svg / .json (compare them
 // with the Python reference); a 30-step drag per example (a ring drag in the observer pane: the drawing pane is
 // view-only) records the drag frames' `core ms` / `dom ms` and overlay mode (web/README.md); the optional scene file
-// is loaded through the file picker and dragged likewise; a page-wide
+// is loaded through the file picker and dragged likewise; with the core worker (D87) the resting overlay, warnings
+// and counts the worker put on screen after each load and drag must equal the synchronous render (`settle()`); a page-wide
 // drop loads a scene; the three downloads are saved to out/; a non-JSON file and an invalid scene show the error
 // panel. Phase 2 (contract §5.4.10): an example that fails to load (the path-only `mesh_demo`, the core has no loader)
 // is reported and loaded instead from its Python expansion (`ts/test/fixtures/<name>.expanded.json`) through the file
@@ -124,6 +125,39 @@ async function observer_blank() {
 
 const failures = [];
 const check = (ok, what) => { if (!ok) failures.push(what); };
+
+/** Wait until the page is idle: the status line and the frame count unchanged five times in a row and no 「計算中」. */
+async function idle() {
+  let last = "", same = 0;
+  for (let i = 0; i < 300; i++) {
+    const now = await page.evaluate(() => JSON.stringify([document.getElementById("status").textContent, window.castplane_web.frames.length]));
+    if (now === last && !now.includes("計算中")) {
+      if (++same >= 5) return true;
+    } else same = 0;
+    last = now;
+    await page.waitForTimeout(60);
+  }
+  return false;
+}
+
+/** With the core worker (D87): what the worker put on screen at rest — the DOM overlay, the warnings table and the
+ * status line's counts — must equal the synchronous render of the same state (`settle()`), and the `<img>` overlay must
+ * not be displayed. Without the worker (`castplane_web.worker === false`) `settle()` renders nothing and the check is
+ * trivially true. */
+async function worker_matches_sync(label) {
+  const quiet = await idle();
+  const strip = (t) => t.replace(/core ms [\d.]+ · dom ms [\d.]+( · obs ms [\d.]+)?/, "");
+  const snap = () => page.evaluate(() => ({ ov: document.querySelector("svg.overlay").innerHTML,
+    img: getComputedStyle(document.querySelector("img.overlay")).display, warn: document.getElementById("warnings").innerHTML,
+    status: document.getElementById("status").textContent.split("\n").slice(1, 3).join(" | ") }));
+  const w = await snap();
+  const settled = await page.evaluate(() => window.castplane_web.settle());
+  const s = await snap();
+  const same = w.ov === s.ov && w.warn === s.warn && strip(w.status) === strip(s.status);
+  check(quiet && same && w.img === "none",
+    `${label}: the worker's resting overlay, warnings and counts equal the synchronous render's (idle ${quiet}, settled ${settled}, overlay ${w.ov.length} vs ${s.ov.length} chars, img ${w.img})`);
+  return same;
+}
 
 /** A mouse drag of `steps` steps of `step` px from pane px `p` of `selector` (the observer: its centre region off the
  * handles when `p` is omitted, i.e. an observer orbit); `mid` runs after the first step with the button held. */
@@ -369,11 +403,13 @@ for (const name of first.examples) {
     await load_file_as(name, expanded);
   }
   await frames2();
+  await worker_matches_sync(`${name}: load`);
   const ref = await page.evaluate(() => window.castplane_web.reference_render());
   if (ref.name !== name) throw new Error(`reference_render rendered ${ref.name}, not ${name}`);
   writeFileSync(join(outdir, `${name}.svg`), ref.svg);
   writeFileSync(join(outdir, `${name}.json`), ref.json + "\n");
   rows[name] = await drag_stats();
+  await worker_matches_sync(`${name}: after the drag`);
 }
 toggle_checks.after_every_example = await toggles();
 check(is_default(toggle_checks.after_every_example), "toggles: still the defaults after loading every example");

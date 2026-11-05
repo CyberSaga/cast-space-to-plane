@@ -918,3 +918,13 @@ test("hidden-line prune: the BVH is cached per stage-A record and rebuilt when t
   assert.notEqual(a1, a2);
   assert.notDeepEqual(Array.from(a1.box.subarray(0, 6)), Array.from(a2.box.subarray(0, 6)));
 });
+
+test("mesh_blocks equals first_hit_ray < 1 - eps also for eps <= 0 (the segment then starts behind the eye)", () => {
+  // a triangle behind the eye at z = -0.2, the ray towards +z: first_mesh accepts t = -0.2 > eps for eps = -0.5
+  const tri: [number, number, number][] = [[-1, -1, -0.2], [1, -1, -0.2], [0, 1, -0.2]];
+  const occ = mesh_occluder({ id: "m", mesh: { vertices: tri, faces: [[0, 1, 2]] } });
+  for (const eps of [-0.5, -1e-12, 0, 1e-12, 1e-5]) {
+    const ref = first_hit_ray(occ, [0, 0, 0], [0, 0, 1], eps) < 1 - eps;
+    assert.equal(mesh_blocks(occ, [0, 0, 0], [0, 0, 1], eps), ref, `eps ${eps}`);
+  }
+});

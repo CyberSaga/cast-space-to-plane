@@ -489,7 +489,8 @@ export function first_hit(occ: Occluder, O: readonly number[] | readonly (readon
 // `eps < t < 1 − eps` is left out. The subset is:
 //
 // 1. every triangle in a leaf of a triangle-AABB BVH whose box, grown by `margin = PRUNE_MARGIN · mag`, the segment
-//    `C + t D`, `t ∈ [max(0, eps − 1e-9), 1 − eps + 1e-9]`, reaches (slab test);
+//    `C + t D`, `t ∈ [eps − 1e-9, 1 − eps + 1e-9]`, reaches (slab test; `eps` may be zero or negative: the range then
+//    runs behind `C`, as `first_mesh`'s `t > eps` does);
 // 2. every "ill-conditioned" triangle, tested for every ray: a sliver (`|e1 × e2| <= PRUNE_SLIVER · |e1| |e2|`, or a
 //    non-finite vertex), or one whose plane passes within `PRUNE_EYE_PLANE · mag` of the eye `C`;
 // 3. every polygon face (unchanged code, never pruned).
@@ -693,7 +694,7 @@ export function mesh_blocks(occ: MeshOccluder, C: readonly number[], D: readonly
     }
     // 1. the BVH leaves the grown segment reaches
     const m = PRUNE_MARGIN * mag;
-    const t_lo = Math.max(0.0, eps - 1e-9), t_hi = limit + 1e-9;
+    const t_lo = eps - 1e-9, t_hi = limit + 1e-9; // also for eps <= 0: the slab test takes any parameter range
     const box = acc.box, info = acc.info;
     const stack = acc.stack;
     let sp = 0;

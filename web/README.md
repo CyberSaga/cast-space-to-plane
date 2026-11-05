@@ -303,8 +303,10 @@ or fails, the page falls back to the synchronous frame of before (`frame_sync`).
   until it arrives. A resting `quick` document longer than `IMG_MODE_THRESHOLD` is shown through the `<img>` overlay
   until the `final` one restores the DOM overlay.
 - **Overlay throttle during drags.** A drag frame's overlay is applied only when `OVERLAY_DRAG_INTERVAL_K · dom_ms`
-  (`OVERLAY_DRAG_INTERVAL_K = 16`, `dom_ms` the last resting `innerHTML` time) has passed since the last one: the
-  examples (≈ 0.5–1 ms) apply every reply, the 19-mesh character scene (≈ 35 ms) about every 0.6 s. The observer's
+  (`OVERLAY_DRAG_INTERVAL_K = 16`, `dom_ms` the last resting `innerHTML` time) has passed since the last one; an
+  interval under one frame (17 ms) means no throttling, so the examples (≈ 0.5–1 ms) apply every reply, while the
+  19-mesh character scene (≈ 35 ms) applies about every 0.6 s, and a skipped reply is applied late when the interval
+  has passed unless a newer one came first (so a pointer held still never leaves a stale picture). The observer's
   drawing, the warnings and the status follow every reply. `FrameRecord` carries `phase` (`quick` | `final` | `sync`),
   `stage_a_ms` and `overlay`.
 - **Object drags** run the `UnitDrag` machine with `live: false`: the 3D proxies and the panel follow the pointer at frame
