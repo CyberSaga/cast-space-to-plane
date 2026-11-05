@@ -22,7 +22,7 @@ import {
   observer_accepts_pointer, observer_basis, orbit_view, pinch_view, zoom_view,
 } from "./observer.js";
 import type {
-  Board, BoardLabel, FillStyle, HandleHit, Handles, LineArt, LineStyle, ObjectRingSet, ObserverView, VertexRays,
+  Board, BoardLabel, FillStyle, HandleHit, Handles, LineStyle, ObjectRingSet, ObserverView, VertexRays,
 } from "./observer.js";
 import type { ArtBuffers } from "./art_buffers.js";
 import { OBJECT_ID_KEY, RECEIVER_ID_KEY, object_id_of } from "./helpers3d.js";
@@ -31,26 +31,6 @@ import { Stage3D } from "./stage.js";
 
 /** Opacity of the receiver plates in the observer pane (see {@link ObserverPane.set_scene}). */
 const RECEIVER_OPACITY = 0.5;
-
-/** What one pre-incremental observer update drew (the input of {@link ObserverPane.legacy_update}). */
-export interface ObserverGeometry {
-  board: Board;
-  art: LineArt;
-  rays: VertexRays | null;
-  /** M10 (§5.7.9): the ring and the arrow, or null (no handles). */
-  handles?: Handles | null;
-  /** M10: the id of a picked pivot object (its label `旋轉中心：<id>`). */
-  pivot_id?: string | null;
-  /** M10: the handle being dragged (drawn thicker). */
-  active?: "ring" | "arrow" | null;
-  /** M11 (§5.8.4): the selected object's three rings (D83: drawn with the board's handles, modeless), or null. */
-  object_rings?: ObjectRingSet | null;
-  /** M11: the axis of the object ring being dragged (drawn thicker). */
-  active_axis?: 0 | 1 | 2 | null;
-  /** D83: whether the board group (eye, patch, frame with the drawing, frustum, Q, D and g lines, pivot, the board's
-   * handles) and its labels are drawn (default true); the rays and the object rings are drawn either way. */
-  board_visible?: boolean;
-}
 
 /**
  * M10 handle input of the observer pane (§5.7.9): on pointer-down the pane asks {@link hit} first (arrow tip > ring);
@@ -150,8 +130,6 @@ function dot_texture(shape: "circle" | "diamond"): THREE.Texture {
   return t;
 }
 
-/** The column-major identity (the art matrix of {@link ObserverPane.legacy_update}: world-space art). */
-const IDENTITY16: readonly number[] = [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1];
 /** The two dashed art styles: their dash lengths are metres, their line distances canvas mm (`dashScale`). */
 const DASHED_ART: readonly LineStyle[] = ["objects_back", "hidden"];
 /** The triangles of a quad in {@link Board.corners} order (the patch and the frame back). */
@@ -615,27 +593,6 @@ export class ObserverPane {
       this.art.add(mesh);
       this.artFills.push(mesh);
     }
-  }
-
-  /**
-   * MERGE: Agent A replaces this. The pre-incremental entry point (`main.ts`'s one call): the drawing in world
-   * coordinates (`LineArt.world`) under the identity art matrix, then {@link update}.
-   */
-  legacy_update(geo: ObserverGeometry): void {
-    const by_style = new Map<LineStyle, [Vec3, Vec3][]>();
-    for (const s of geo.art.segments) {
-      const list = by_style.get(s.style) ?? [];
-      list.push(s.world);
-      by_style.set(s.style, list);
-    }
-    this.apply_art([...by_style].map(([style, pairs]) => ({ style, n: pairs.length, write: pairs_writer(pairs) })),
-      geo.art.fills.map((f) => ({ style: f.style, uv: f.uv.map((p) => new THREE.Vector2(p[0], p[1])),
-        pos: Float32Array.from(f.world.flatMap((p) => [p[0], p[1], p[2]])) })));
-    this.update({
-      board: geo.board, board_visible: geo.board_visible ?? true, handles: geo.handles ?? null, pivot_id: geo.pivot_id ?? null,
-      active: geo.active ?? null, object_rings: geo.object_rings ?? null, active_axis: geo.active_axis ?? null, rays: geo.rays,
-      art_matrix: IDENTITY16,
-    });
   }
 
   /**

@@ -438,11 +438,21 @@ function crossing(board: Pick<Board, "E" | "f" | "D">, X: Vec3, near_m: number):
 }
 
 /**
- * The vertex rays (§5.6.5, checkbox "視線"): focus object `scene.objects[0]`, its vertices `<obj>.v<k>` (document
- * `points[*].world`, `k` ascending); light rays from `construction.rays` (`lights[0]`) entries `["L", <vertex>]`.
+ * The world points of the vertex rays (§5.6.5), read from a document: `P` the focus object's vertices (`scene.objects[0]`,
+ * its points `<obj>.v<k>` of `doc.points[*].world`, `k` ascending) and, for each `construction.rays` (`lights[0]`)
+ * entry `["L", <vertex>]` whose `<vertex>.shadow.<light>` point exists, the vertex `light_P[i]` and its shadow point
+ * `light_S[i]` (parallel arrays, in the rays' order). Plain arrays (a few hundred numbers): the core worker sends them
+ * with each document, so the main thread draws the rays without the document ({@link rays_from_points}).
  */
-export function vertex_rays(doc: GeometryDocument, scene: Scene, board: Pick<Board, "E" | "f" | "D">, near_m: number): VertexRays {
-  const out: VertexRays = { sight: [], crossings: [], light: [], shadows: [], shadow_sight: [], shadow_crossings: [] };
+export interface RayPoints {
+  P: Vec3[];
+  light_P: Vec3[];
+  light_S: Vec3[];
+}
+
+/** The {@link RayPoints} of `doc` (only read). */
+export function vertex_ray_points(doc: GeometryDocument, scene: Scene): RayPoints {
+  const out: RayPoints = { P: [], light_P: [], light_S: [] };
   const focus = scene.objects[0];
   if (focus === undefined) return out;
   const re = new RegExp(`^${escape_re(focus.id)}\\.v(\\d+)$`);
@@ -452,12 +462,7 @@ export function vertex_rays(doc: GeometryDocument, scene: Scene, board: Pick<Boa
     const p = doc.points[name];
     return p !== undefined && "world" in p ? copy3(p.world) : null;
   };
-  for (const n of names) {
-    const P = world(n)!;
-    out.sight.push([board.E, P]);
-    const c = crossing(board, P, near_m);
-    if (c !== null) out.crossings.push(c);
-  }
+  for (const n of names) out.P.push(world(n)!);
   const light = scene.lights[0];
   if (light === undefined) return out;
   const vertices = new Set(names);
@@ -465,7 +470,27 @@ export function vertex_rays(doc: GeometryDocument, scene: Scene, board: Pick<Boa
     if (kind !== "L" || !vertices.has(name)) continue;
     const S = world(`${name}.shadow.${light.id}`);
     if (S === null) continue;
-    const P = world(name)!;
+    out.light_P.push(world(name)!);
+    out.light_S.push(S);
+  }
+  return out;
+}
+
+/** The vertex rays (§5.6.5) of `points` ({@link vertex_ray_points}) for the board `board` (sight lines from its eye,
+ * crossings with it beyond `near_m`); the light rays from `scene.lights[0]`. */
+export function rays_from_points(points: RayPoints, scene: Scene, board: Pick<Board, "E" | "f" | "D">, near_m: number): VertexRays {
+  const out: VertexRays = { sight: [], crossings: [], light: [], shadows: [], shadow_sight: [], shadow_crossings: [] };
+  if (scene.objects[0] === undefined) return out;
+  for (const p of points.P) {
+    const P = copy3(p);
+    out.sight.push([board.E, P]);
+    const c = crossing(board, P, near_m);
+    if (c !== null) out.crossings.push(c);
+  }
+  const light = scene.lights[0];
+  if (light === undefined) return out;
+  points.light_P.forEach((p, i) => {
+    const P = copy3(p), S = copy3(points.light_S[i]!);
     if (light.type === "point") {
       out.light.push([copy3(light.position as Vec3), S]);
     } else {
@@ -476,8 +501,17 @@ export function vertex_rays(doc: GeometryDocument, scene: Scene, board: Pick<Boa
     out.shadow_sight.push([board.E, S]);
     const c = crossing(board, S, near_m);
     if (c !== null) out.shadow_crossings.push(c);
-  }
+  });
   return out;
+}
+
+/**
+ * The vertex rays (§5.6.5, checkbox "視線"): focus object `scene.objects[0]`, its vertices `<obj>.v<k>` (document
+ * `points[*].world`, `k` ascending); light rays from `construction.rays` (`lights[0]`) entries `["L", <vertex>]`.
+ * `rays_from_points(vertex_ray_points(doc, scene), …)`.
+ */
+export function vertex_rays(doc: GeometryDocument, scene: Scene, board: Pick<Board, "E" | "f" | "D">, near_m: number): VertexRays {
+  return rays_from_points(vertex_ray_points(doc, scene), scene, board, near_m);
 }
 
 // ------------------------------------------------------------------------------------------------ observer camera (§5.6.4)
