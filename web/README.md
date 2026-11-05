@@ -292,47 +292,48 @@ restores the DOM overlay.
 ### Core worker and interaction latency
 
 Contract §5.4 (D87 note), §5.6 (D87 note), §5.8 (D87 note). The core (`CoreEngine`, `src/core_engine.ts`) runs in a Web
-Worker (`src/core_worker.ts`, a Vite worker chunk) behind `CoreClient` (`src/core_client.ts`); if the worker cannot start
-or fails, the page falls back to the synchronous frame of before (`frame_sync`).
+Worker (`src/core_worker.ts`, a Vite worker chunk) behind `CoreClient` (`src/core_client.ts`); if the worker cannot
+start or fails, the page falls back to the synchronous frame of before (`frame_sync`).
 
 - **Worker path.** The worker holds the loaded scene and its stage A. The page posts `scene`, `pose` (every object's
-  transform), `render`, `art` and `download` messages; one render is in flight and the latest camera wins. The
-  documents are byte-identical to the synchronous path (`web/test/core_engine.test.ts`).
+  transform), `render`, `art` and `download` messages; one render is in flight and the latest camera wins. The documents
+  are byte-identical to the synchronous path (`web/test/core_engine.test.ts`).
 - **Two phases at rest.** With hidden lines or the umbra on, a resting render is answered with the `quick` document
-  (both off, the drag document) and then with the `final` one; the status line's second line reads 「（隱藏線計算中）」
-  until it arrives. A resting `quick` document longer than `IMG_MODE_THRESHOLD` is shown through the `<img>` overlay
-  until the `final` one restores the DOM overlay.
+  (both off, the drag document) and then with the `final` one; the status line's second line reads 「（隱藏線計算中）」 until it
+  arrives. A resting `quick` document longer than `IMG_MODE_THRESHOLD` is shown through the `<img>` overlay until the
+  `final` one restores the DOM overlay.
 - **The drawing pane during a drag.** A light overlay (the smallest resting `innerHTML` time since the load under
   `OVERLAY_HEAVY_MS` = 3 ms: every bundled example, ≈ 0.5–2 ms) takes every reply. A heavy one (the 19-mesh character
-  scene, ≈ 35 ms; replacing it is a 100–400 ms long task) is not replaced while the pointer moves: a drag reply is
-  shown when the replies pause for `OVERLAY_DRAG_PAUSE_MS` = 150 ms (the pointer stopped), or when
-  `OVERLAY_DRAG_INTERVAL_K` (40) × that time has passed since the last update (≈ every 1.4 s of continuous motion).
-  The observer's drawing on the frame, the warnings and the status follow every reply; the resting frame always
-  applies. `FrameRecord` carries `phase` (`quick` | `final` | `sync`), `stage_a_ms` and `overlay`.
-- **Object drags** run the `UnitDrag` machine with `live: false`: the 3D proxies and the panel follow the pointer at frame
-  rate, the worker recomputes at its own pace, and release (`end()`) still runs stage A synchronously. The slow-scene
-  notice 此場景拖動放開後更新 appears only in the synchronous fallback.
+  scene, ≈ 35 ms; replacing it is a 100–400 ms long task) is not replaced while the pointer moves: a drag reply is shown
+  when the replies pause for `OVERLAY_DRAG_PAUSE_MS` = 150 ms (the pointer stopped), or when `OVERLAY_DRAG_INTERVAL_K`
+  (40) × that time has passed since the last update (≈ every 1.4 s of continuous motion). The observer's drawing on the
+  frame, the warnings and the status follow every reply; the resting frame always applies. `FrameRecord` carries `phase`
+  (`quick` | `final` | `sync`), `stage_a_ms` and `overlay`.
+- **Object drags** run the `UnitDrag` machine with `live: false`: the 3D proxies and the panel follow the pointer at
+  frame rate, the worker recomputes at its own pace, and release (`end()`) still runs stage A synchronously. The
+  slow-scene notice 此場景拖動放開後更新 appears only in the synchronous fallback.
 - **What does not render the core**: a selection, the 板子 and 視線 checkboxes, 整體顯示, the observer orbit, a resize and the
   *3D view* checkbox redraw the observer (and the views) only. The 物體 panel's status lines have fixed line boxes, so a
   selection no longer resizes the panes.
-- **Incremental observer** (`ObserverPane.update(ObserverFrame)`, `set_art`): only the parts whose inputs changed value
-  for value are redrawn; lines are pooled `LineSegments2` rewritten in place, dots pooled `Points`, the fills one mesh
-  per style, and an empty object is detached. The drawing on the frame is kept in canvas mm and placed by one matrix
-  (`art_frame_matrix`, `src/art_buffers.ts`), so a camera change moves it without a rebuild. Materials are compiled at
-  construction.
+- **Incremental observer** (`ObserverPane.update(ObserverFrame)`, `set_art`): only the parts whose inputs changed
+  value for value are redrawn; lines are pooled `LineSegments2` rewritten in place, dots pooled `Points`, the fills one
+  mesh per style, and an empty object is detached. The drawing on the frame is kept in canvas mm and placed by one
+  matrix (`art_frame_matrix`, `src/art_buffers.ts`), so a camera change moves it without a rebuild. Materials are
+  compiled at construction.
 - **Hooks**: `settle()` (renders synchronously when a render is pending; `svg`, `svg_length`, `download_texts` and
   `doc_summary` call it first), `worker` (true in worker mode) and `set_gl(on)` (skips the WebGL draw calls, for
   measuring the page's own cost). `smoke.mjs` calls `settle()` before it reads the DOM after a drag.
-- **Tool**: `web/scripts/interact_bench.mjs` (a dev helper like `smoke.mjs`) times a real click on an object, the first
-  proxy motion, the animation-frame gaps and the long tasks of a ring drag and of a board-ring drag, and the release.
+- **Tool**: `web/scripts/interact_bench.mjs` (a dev helper like `smoke.mjs`) times a real click on an object, the
+  first proxy motion, the animation-frame gaps and the long tasks of a ring drag and of a board-ring drag, and the
+  release.
 
 #### Interaction latency (`web/scripts/interact_bench.mjs`)
 
-Setup: `vite build` + `vite preview`, headless Chromium 141 (WebGL through SwiftShader) on the CI container, a real mouse
-click on an object, a 40-step ring drag and a 30-step board-ring drag. The scene is the 19-mesh character scene (4 922
-triangles, 9 324 document edges, a 644 k-character SVG, ≈ 10.5 k elements). "After" is measured with `--nogl`
-(`set_gl(false)`), which skips the WebGL draw calls so that it shows the page's JavaScript; the WebGL draws of a real GPU
-cost ≈ 1–2 ms per frame.
+Setup: `vite build` + `vite preview`, headless Chromium 141 (WebGL through SwiftShader) on the CI container, a real
+mouse click on an object, a 40-step ring drag and a 30-step board-ring drag. The scene is the 19-mesh character scene
+(4 922 triangles, 9 324 document edges, a 644 k-character SVG, ≈ 10.5 k elements). "After" is measured with `--nogl`
+(`set_gl(false)`), which skips the WebGL draw calls so that it shows the page's JavaScript; the WebGL draws of a real
+GPU cost ≈ 1–2 ms per frame.
 
 | measurement | before (main) | after |
 | --- | --- | --- |
@@ -344,14 +345,14 @@ cost ≈ 1–2 ms per frame.
 | board-ring drag: frame gaps median / p90 | 133 / 400 ms | 16.7 / 16.7 ms (two long tasks of 58–256 ms in 1.5 s) |
 | worker `core ms` per drag frame (B + C + SVG) | 28 ms median on the main thread | 28–32 ms median in the worker |
 
-The bundled examples after (`basic`, `two_lights`, `wall_and_ground`): click 13–15 ms, first proxy motion 13–29 ms, every
-frame gap 16.7–16.8 ms, no long tasks, every drag overlay applied (40 / 40), `core ms` 0.6–2.1 ms median.
+The bundled examples after (`basic`, `two_lights`, `wall_and_ground`): click 13–15 ms, first proxy motion 13–29 ms,
+every frame gap 16.7–16.8 ms, no long tasks, every drag overlay applied (40 / 40), `core ms` 0.6–2.1 ms median.
 
-**GL caveat.** With the WebGL draws on, SwiftShader (software rasteriser) spends ≈ 100–130 ms per frame in the observer's
-`renderer.render` alone for the character scene (≈ 9 k fat-line instances), so the frame gaps of a GL run stay ≈ 300 ms
-there. That cost is the software rasteriser's, not the page's; the table is therefore the `--nogl` run. Hidden-line
-`compose(…, true)` on the same scene went from 1 320–1 376 ms to 67–111 ms with the TS triangle-BVH prune (contract §5.1
-D87 note); the first compose after a stage A costs ≈ 150 ms more (the BVH build).
+**GL caveat.** With the WebGL draws on, SwiftShader (software rasteriser) spends ≈ 100–130 ms per frame in the
+observer's `renderer.render` alone for the character scene (≈ 9 k fat-line instances), so the frame gaps of a GL run
+stay ≈ 300 ms there. That cost is the software rasteriser's, not the page's; the table is therefore the `--nogl` run.
+Hidden-line `compose(…, true)` on the same scene went from 1 320–1 376 ms to 67–111 ms with the TS triangle-BVH prune
+(contract §5.1 D87 note); the first compose after a stage A costs ≈ 150 ms more (the BVH build).
 
 ## Measured `core ms` / `dom ms` (acceptance §5.4.13 (b))
 
