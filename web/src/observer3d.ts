@@ -744,6 +744,7 @@ export class ObserverPane {
   pick_object(p: Vec2): string | null {
     const group = this.stage.group;
     if (group === null) return null;
+    group.updateMatrixWorld(true); // a pick right after a pose change, before any draw, still sees the posed meshes
     this.render_camera();
     const ndc = new THREE.Vector2((p[0] / this.W) * 2 - 1, -(p[1] / this.H) * 2 + 1);
     const ray = this.raycaster;
