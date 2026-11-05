@@ -24,7 +24,7 @@ interface Rig {
 
 function rig(): Rig {
   const sent: ToWorker[] = [], applied: Rig["applied"] = [], errors: string[] = [], arts: number[] = [], downloads: string[] = [];
-  const params: RenderParams = { block: { focal: 50 }, hidden: true, umbra: true, layers: null, quick_layers: ["objects"],
+  const params: RenderParams = { block: { focal: 50 }, hidden: true, umbra: true, layers: null, quick_layers: ["objects"], img_threshold: 250_000,
     hidden_style: "dashed", two_phase: false, art_layers: ["objects"], dragging: true, img: false, transforms: null };
   const r: Rig = { sent, applied, errors, arts, downloads, params, client: null as unknown as CoreClient };
   r.client = new CoreClient((m) => sent.push(structuredClone(m)), {

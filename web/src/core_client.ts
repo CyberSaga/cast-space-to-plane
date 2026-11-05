@@ -39,9 +39,10 @@ export interface RenderParams {
   umbra: boolean;
   /** `write_svg`'s layers: null = all six (`LAYER_IDS`, the DOM overlay), a list = the `<img>` mode's checked subset. */
   layers: string[] | null;
-  /** The checked layers in §2.10 order: a `quick` reply whose all-layer SVG is longer than `IMG_MODE_THRESHOLD` is
-   * written again with these and shown through the `<img>` overlay. */
+  /** The checked layers in §2.10 order: a `quick` reply whose all-layer SVG is longer than `img_threshold`
+   * (`overlay.ts::IMG_MODE_THRESHOLD`) is written again with these and shown through the `<img>` overlay. */
   quick_layers: string[];
+  img_threshold: number;
   hidden_style: "dashed" | "omit";
   /** Reply `quick` (hidden lines and umbra off) before `final` when `hidden || umbra`. */
   two_phase: boolean;
@@ -62,7 +63,8 @@ export interface SceneMessage { type: "scene"; gen: number; scene: unknown }
 export interface PoseMessage { type: "pose"; gen: number; transforms: PoseEntries }
 export interface RenderMessage {
   type: "render"; req: number; gen: number; block: unknown; hidden: boolean; umbra: boolean; layers: string[] | null;
-  quick_layers: string[]; hidden_style: "dashed" | "omit"; two_phase: boolean; art_layers: string[]; dragging: boolean;
+  quick_layers: string[]; img_threshold: number; hidden_style: "dashed" | "omit"; two_phase: boolean; art_layers: string[];
+  dragging: boolean;
 }
 export interface ArtMessage { type: "art"; req: number; gen: number; art_layers: string[] }
 export interface DownloadMessage {
@@ -278,7 +280,7 @@ export class CoreClient {
     this.newest = info;
     this.final_wait = null;
     this.post({ type: "render", req: info.req, gen: info.gen, block: p.block, hidden: p.hidden, umbra: p.umbra, layers: p.layers,
-      quick_layers: p.quick_layers, hidden_style: p.hidden_style, two_phase: p.two_phase, art_layers: [...p.art_layers],
+      quick_layers: p.quick_layers, img_threshold: p.img_threshold, hidden_style: p.hidden_style, two_phase: p.two_phase, art_layers: [...p.art_layers],
       dragging: p.dragging });
   }
 }
