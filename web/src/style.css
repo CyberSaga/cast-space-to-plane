@@ -74,8 +74,10 @@ body { display: flex; flex-direction: column; }
 #obj-panel .obj-angle { font-family: ui-monospace, monospace; width: 5.5em; }
 #obj-panel .obj-angle.bad { border-color: #d33; background: #fff4f4; color: #a00; outline-color: #d33; }
 #obj-selected { font-size: 12px; color: #2f2e29; min-height: 1.3em; }
-#obj-centre { font-variant-numeric: tabular-nums; font-size: 12px; color: #47463f; }
-#obj-limit { font-variant-numeric: tabular-nums; font-size: 12px; color: #47463f; }
+/* fixed heights: a selection must not change the controls' height, which would resize both panes and re-lay out the
+   whole overlay (tens of ms for a large drawing) */
+#obj-centre { font-variant-numeric: tabular-nums; font-size: 12px; color: #47463f; min-height: 1.3em; }
+#obj-limit { font-variant-numeric: tabular-nums; font-size: 12px; color: #47463f; min-height: 1.3em; }
 #obj-limit.bad { color: #a00; }
 #obj-notice { color: #a14b00; font-size: 12px; min-height: 1.3em; }
 #obj-panel button[hidden] { display: none; }
