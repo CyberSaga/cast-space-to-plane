@@ -96,6 +96,34 @@ mkdirSync(outdir, { recursive: true });
 
 const browser = await chromium.launch({ args: ["--use-angle=swiftshader", "--enable-unsafe-swiftshader", "--ignore-gpu-blocklist"] });
 const page = await browser.newPage({ viewport: { width: 1500, height: 900 } });
+// D88 review: a gate on the core worker's replies, inert unless a check sets `__gate.hold`, so the re-grab check below
+// keeps a reply in flight across a release and a new press instead of racing it; `posted` counts the render requests
+await page.addInitScript(() => {
+  const W = window.Worker;
+  if (W === undefined) return;
+  const gate = { hold: false, q: [], posted: 0 };
+  gate.flush = () => {
+    gate.hold = false;
+    const q = gate.q;
+    gate.q = [];
+    for (const f of q) f();
+    return q.length;
+  };
+  window.__gate = gate;
+  window.Worker = class extends W {
+    set onmessage(h) {
+      const pass = (ev) => (gate.hold ? gate.q.push(() => h.call(this, ev)) : h.call(this, ev));
+      super.onmessage = h === null ? null : pass;
+    }
+    get onmessage() {
+      return super.onmessage;
+    }
+    postMessage(m, t) {
+      if (m && m.type === "render") gate.posted += 1;
+      return super.postMessage(m, t);
+    }
+  };
+});
 const logs = [];
 page.on("console", (m) => logs.push(`${m.type()}: ${m.text()}`));
 page.on("pageerror", (e) => logs.push(`pageerror: ${e.message}`));
@@ -497,6 +525,50 @@ const phase2 = {};
   check(during.doc.umbra_pieces === 0 && after.doc.umbra_pieces > 0, "two_lights: umbra skipped during a drag only");
   phase2.two_lights = { names: s.names, umbra_pieces: s.doc.umbra_pieces, umbra_pieces_drag: during.doc.umbra_pieces,
     umbra_pieces_after: after.doc.umbra_pieces, overlay_groups: ids, status: s.status, screenshot: shot_path };
+}
+// D88 review: a re-grab while the release's resting request waits behind an in-flight drag reply. That request is
+// posted when the reply arrives, with the new press held, so it goes out as a drag request; the second release (no
+// motion) must still bring the resting frame. Before the fix the drag document (no hidden lines) stayed at rest.
+{
+  await page.evaluate(() => window.castplane_web.load_example("wall_and_ground"));
+  await frames2();
+  await idle();
+  if (await page.evaluate(() => window.__gate !== undefined && window.castplane_web.worker === true)) {
+    await with_observer(async () => {
+      const box = await page.locator("#observer").boundingBox();
+      const q = await ring_px(80);
+      check(q !== null, "regrab: a ring point for the first drag");
+      if (q === null) return;
+      await page.mouse.move(box.x + q[0], box.y + q[1]);
+      await page.mouse.down();
+      for (let i = 1; i <= 10; i++) {
+        await page.mouse.move(box.x + q[0] + 3 * i, box.y + q[1] + 0.7 * i);
+        await frames2();
+      }
+      await page.evaluate(() => { window.__gate.hold = true; });
+      await page.mouse.move(box.x + q[0] + 40, box.y + q[1] + 9); // a drag request whose reply is held
+      await frames2();
+      await page.mouse.up(); // the release's resting request waits behind it
+      await frames2();
+      await frames2();
+      const q2 = await ring_px(80);
+      check(q2 !== null, "regrab: a ring point for the second press");
+      if (q2 === null) {
+        await page.evaluate(() => window.__gate.flush());
+        return;
+      }
+      await page.mouse.move(box.x + q2[0], box.y + q2[1]);
+      await page.mouse.down();
+      await frames2();
+      const posted = await page.evaluate(() => { const n = window.__gate.posted; window.__gate.flush(); return n; });
+      const deferred = await page.waitForFunction((n) => window.__gate.posted > n, posted, { timeout: 10000 })
+        .then(() => true, () => false);
+      await page.mouse.up(); // no motion: the plane did not change
+      await frames2();
+      check(deferred, "regrab: the waiting request was posted while the second press was held");
+    });
+    await worker_matches_sync("wall_and_ground: after a re-grab across an in-flight reply");
+  }
 }
 if (sceneFile) {
   const stem = sceneFile.replace(/^.*\//, "").replace(/\.json$/, "");

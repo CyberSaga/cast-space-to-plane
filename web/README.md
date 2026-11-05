@@ -11,7 +11,7 @@ npm run -w ts build        # the core package "castplane" the UI imports
 npm run -w web dev         # vite dev server
 npm run -w web build       # tsc type check + vite build -> web/dist (static, base './')
 npm run -w web preview     # serve web/dist locally
-npm run -w web test        # orbit / download / colours / rig / equation / observer / plane / object-rotation / limits / core-worker (core_client, core_engine, doc_summary, art_buffers, overlay_policy) unit tests (node:test, web/test/; 204 tests)
+npm run -w web test        # orbit / download / colours / rig / equation / observer / plane / object-rotation / limits / core-worker (core_client, core_engine, doc_summary, art_buffers, overlay_policy) unit tests (node:test, web/test/; 206 tests)
 ```
 
 ![web UI](../docs/images/web_ui.png)
@@ -307,10 +307,13 @@ start or fails, the page falls back to the synchronous frame of before (`frame_s
   every reply. A heavy one (the 19-mesh character scene, ≈ 30–40 ms; replacing it is a 100–400 ms long task, DOM or
   `<img>`) is replaced only when nothing moves: during a drag when the pointer has not moved for
   `OVERLAY_DRAG_PAUSE_MS` = 250 ms (measured from the pointer's last move, not from the replies, which for that scene
-  come 110–160 ms apart), never by a drag reply that arrives after the release (the resting frame replaces it), and a
-  resting `quick` reply waits up to `OVERLAY_QUICK_HOLD_MS` = 500 ms for its `final` one. The observer's drawing on the
-  frame, the warnings and the status follow every reply; every resting frame is shown. `FrameRecord` carries `phase`
-  (`quick` | `final` | `sync`), `stage_a_ms` and `overlay` (shown on arrival).
+  come 60–150 ms apart), never by a drag reply that arrives after the release (the resting frame replaces it; every
+  release requests one, also after a re-grab whose drag posted only `CoreClient`'s deferred request), and a resting
+  `quick` reply waits up to `OVERLAY_QUICK_HOLD_MS` = 500 ms for its `final` one. Continuous resting input (a slider,
+  a held key) counts as moving: the pane shows the last document once it stops. Before the cost is measured, a scene
+  whose SVG is longer than `IMG_MODE_THRESHOLD` counts as heavy for a drag. The observer's drawing on the frame, the
+  warnings and the status follow every reply; the last resting document is always shown. `FrameRecord` carries
+  `phase` (`quick` | `final` | `sync`), `stage_a_ms` and `overlay` (shown on arrival).
 - **Object drags** run the `UnitDrag` machine with `live: false`: the 3D proxies and the panel follow the pointer at
   frame rate, the worker recomputes at its own pace, and release (`end()`) still runs stage A synchronously. The
   slow-scene notice 此場景拖動放開後更新 appears only in the synchronous fallback.
@@ -340,19 +343,19 @@ understated the drag's long tasks; "now" adds D88 (three runs).
 
 | measurement | before (main) | D87 head | now (D87 + D88) |
 | --- | --- | --- | --- |
-| click → rings shown | 3.1 s (long tasks 1 767 + 1 327 ms: compose with hidden lines 1.3 s, `innerHTML`, observer rebuild) | 14–25 ms, no long task | 17–23 ms (a second click for the part: 11–20 ms), no long task |
-| ring drag: first proxy motion | 5.9 s | 27–28 ms | 16–32 ms |
+| click → rings shown | 3.1 s (long tasks 1 767 + 1 327 ms: compose with hidden lines 1.3 s, `innerHTML`, observer rebuild) | 14–25 ms, no long task | 19–26 ms (a second click for the part: 12–15 ms), no long task |
+| ring drag: first proxy motion | 5.9 s | 27–28 ms | 17–31 ms |
 | ring drag: animation-frame gaps median / p90 / max | 117 / 433 / 650 ms | 16.7 / 16.7 / 350–500 ms | 16.7 / 16.7 / 16.8 ms |
-| ring drag: long tasks | 50–653 ms every frame | 2–4 of 62–310 ms in 1.0–1.9 s | none |
-| ring drag: drawing-pane overlay updates | every frame | 1–2 | 0 (of 10–13 replies) |
-| ring release: long tasks | one of 1 265 ms | 5–6 of 56–336 ms | 2 of 65–167 ms (the main-thread stage A of `end()`, the final DOM overlay) |
-| board-ring drag: frame gaps median / p90 / max | 133 / 400 ms / – | 16.7 / 16.8 / 200–350 ms (2 long tasks of 90–228 ms) | 16.7 / 16.7 / 16.8 ms, no long task |
-| board-ring release: long tasks | – | 4 of 91–275 ms | 1–2 of 75–243 ms |
-| worker `core ms` per drag frame (B + C + SVG) | 28 ms median on the main thread | 34–35 ms median in the worker | 29–31 ms median in the worker |
+| ring drag: long tasks | 50–653 ms every frame | 2–4 of 62–301 ms in 1.4–1.9 s | none |
+| ring drag: drawing-pane overlay replacements | every frame | 1 | 0 (of 9–11 replies; counted by a `MutationObserver`) |
+| ring release: long tasks | one of 1 265 ms | 5–6 of 56–336 ms | 2 of 67–90 ms (the main-thread stage A of `end()`, the final DOM overlay); one overlay replacement |
+| board-ring drag: frame gaps median / p90 / max | 133 / 400 ms / – | 16.7 / 16.8 / 200–350 ms (2 long tasks of 90–228 ms) | 16.7 / 16.7 / 16.8 ms, no long task, no overlay replacement |
+| board-ring release: long tasks | – | 4 of 91–275 ms | 1–2 of 51–82 ms |
+| worker `core ms` per drag frame (B + C + SVG) | 28 ms median on the main thread | 34–35 ms median in the worker | 31–35 ms median in the worker |
 
 The bundled examples now (`basic`, `two_lights`, `wall_and_ground`; unchanged by D88, their overlays are light): click
-18–19 ms, first proxy motion 18–28 ms, every frame gap 16.6–16.8 ms, no long tasks, every drag overlay applied
-(40 / 40), `core ms` 0.6–1.9 ms median.
+15–17 ms, first proxy motion 12–27 ms, every frame gap 16.5–16.8 ms, no long tasks, every reply replaces the overlay
+(40 / 40 in the ring drag, 30 / 30 in the board-ring drag), `core ms` 0.7–2.2 ms median.
 
 **GL caveat.** With the WebGL draws on, SwiftShader (software rasteriser) spends ≈ 100–130 ms per frame in the
 observer's `renderer.render` alone for the character scene (≈ 9 k fat-line instances), so the frame gaps of a GL run

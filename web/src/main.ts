@@ -60,7 +60,9 @@ import {
 import type { Axis, ObjectRings, UnitPose } from "./object_rotate.js";
 import { IMG_MODE_THRESHOLD, Overlay } from "./overlay.js";
 import type { OverlayMode } from "./overlay.js";
-import { OVERLAY_DRAG_PAUSE_MS, OVERLAY_HEAVY_MS, OVERLAY_QUICK_HOLD_MS, overlay_kind, overlay_wait } from "./overlay_policy.js";
+import {
+  OVERLAY_DRAG_PAUSE_MS, OVERLAY_QUICK_HOLD_MS, overlay_heavy, overlay_kind, overlay_wait,
+} from "./overlay_policy.js";
 import type { OverlayKind } from "./overlay_policy.js";
 import { PlaneSession, arrow_drag, object_centres, ring_drag, ring_grab } from "./plane.js";
 import { arrowScreenVector, clone, equation, sync } from "./rig.js";
@@ -236,6 +238,7 @@ function load(name: string, make: () => Scene, colours: Map<string, number>, gro
   obj_drag.abandon();
   drop_pending_overlay();
   resting_dom_ms = Infinity; // the new scene's overlay cost is measured afresh
+  overlay_long = false;
   state.object_error = false;
   state.scene = scene;
   state.sceneName = name;
@@ -1297,6 +1300,10 @@ function render_params(): RenderParams | null {
   const pl = state.plane, scene = state.scene;
   if (pl === null || scene === null) return null;
   const dragging = state.dragging;
+  // D88 review: a drag request posted for this drag, also the one `CoreClient` posts by itself when the in-flight reply
+  // arrives (a resting request wanted at a release becomes a drag request when a new drag began meanwhile), makes the
+  // release request the resting frame (`request_after_drag`); a heavy overlay never shows that drag's replies after it
+  if (dragging) drag_rendered = true;
   // §5.4.11: during a drag of a large scene the <img> overlay with the checked layers; hidden lines and umbra off
   const img = dragging && state.full_svg_length > IMG_MODE_THRESHOLD;
   const block = pl.block();
@@ -1320,8 +1327,9 @@ function show_status(summary: DocSummary, rec: CameraRecord, meta: StatusMeta, o
  * reply; a heavy one is replaced only when nothing moves (during a drag: when the pointer has rested for
  * {@link OVERLAY_DRAG_PAUSE_MS} since its last move; never by a drag reply that arrives after the release; a resting
  * `quick` reply waits up to {@link OVERLAY_QUICK_HOLD_MS} for its `final` one). The observer's drawing on the frame,
- * the warnings and the status follow every reply, and every resting frame is shown, so a pointer held still or released
- * never leaves a stale picture.
+ * the warnings and the status follow every reply, and the last resting document is always shown (every release requests
+ * the resting frame: `render_params` marks `drag_rendered`), so a pointer held still or released never leaves a stale
+ * picture; continuous resting input (a slider, a held key) shows the last document once it stops.
  */
 /** The smallest resting DOM `innerHTML` time since the load (ms; `Infinity` until one was measured: the overlay then
  * counts as light; the first, cold one overstates it). */
@@ -1337,8 +1345,14 @@ function drop_pending_overlay(): void {
   pending_overlay = null;
 }
 
-/** Whether the current scene's overlay is heavy (`overlay_policy.ts`). */
-const heavy_overlay = (): boolean => Number.isFinite(resting_dom_ms) && resting_dom_ms >= OVERLAY_HEAVY_MS;
+/** Whether a reply since the load carried an SVG longer than `IMG_MODE_THRESHOLD` (or one the worker wrote again for
+ * the `<img>`): for a drag the overlay counts as heavy before its cost is measured (D88 review). A resting reply of an
+ * unmeasured scene is still shown at once: the pane must replace the previous scene's picture after a load. */
+let overlay_long = false;
+
+/** Whether the current scene's overlay is heavy for a reply of `kind` (`overlay_policy.ts::overlay_heavy`). */
+const heavy_overlay = (kind: OverlayKind): boolean =>
+  overlay_heavy(resting_dom_ms, overlay_long && (state.dragging || kind === "drag"));
 
 /** Show `svg` in the drawing pane (`<img>` or DOM), now. */
 function apply_overlay(svg: string, img: boolean): void {
@@ -1351,7 +1365,8 @@ function apply_overlay(svg: string, img: boolean): void {
  * whether it was shown now. */
 function show_or_wait(svg: string, img: boolean, kind: OverlayKind, arrived: number): boolean {
   drop_pending_overlay();
-  const wait = overlay_wait(kind, { now: performance.now(), heavy: heavy_overlay(), dragging: state.dragging, moved_at: drag_moved_at, arrived });
+  const now = performance.now();
+  const wait = overlay_wait(kind, { now, heavy: heavy_overlay(kind), dragging: state.dragging, moved_at: drag_moved_at, arrived });
   if (wait === null) return false;
   if (wait <= 0) {
     apply_overlay(svg, img);
@@ -1377,6 +1392,7 @@ function show_or_wait(svg: string, img: boolean, kind: OverlayKind, arrived: num
 function apply_reply(r: RenderedReply, info: RequestInfo): void {
   if (state.scene === null || state.plane === null) return;
   const img = info.img || (r.phase === "quick" && r.img);
+  if (r.img || r.svg.length > IMG_MODE_THRESHOLD) overlay_long = true;
   const t1 = performance.now();
   let shown: boolean;
   try {

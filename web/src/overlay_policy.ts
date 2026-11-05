@@ -5,7 +5,10 @@
  * A new overlay costs the main thread its parse, layout and paint; an `<img>` SVG document is parsed, laid out and
  * painted on the main thread like the DOM overlay. For a large drawing that is one long task of 100–400 ms. Below
  * {@link OVERLAY_HEAVY_MS} (the smallest resting `innerHTML` time since the load; every bundled example takes 0.5–2 ms)
- * the overlay is **light** and every reply is shown at once. A **heavy** overlay is shown only when nothing moves:
+ * the overlay is **light** and every reply is shown at once; until that time is measured, a scene counts as heavy for a
+ * drag when a reply since the load was longer than the `<img>` threshold ({@link overlay_heavy}; the caller passes
+ * that flag only for a held drag or a drag reply, so a load's resting replies still replace the previous scene's
+ * picture at once). A **heavy** overlay is shown only when nothing moves:
  * - **During a held drag** (any reply, also a resting one that arrives after a new drag began): when the pointer has
  *   not moved for {@link OVERLAY_DRAG_PAUSE_MS}. The pause is measured from the pointer's last move, not from the last
  *   reply: a slow scene's replies come about as far apart as the pause, so a reply-keyed wait would fire while the
@@ -15,7 +18,9 @@
  *   (`request_after_drag`, `finish_object_drag`), which replaces it.
  * - **A resting `quick` reply** waits {@link OVERLAY_QUICK_HOLD_MS} for its `final` one (which replaces it at once), so
  *   a release or a resting edit pays one overlay update instead of two; a late `final` still lets the `quick` one
- *   show.
+ *   show. Continuous resting input (a slider moved, a key held) counts as moving too: each newer reply replaces the
+ *   waiting one and restarts its hold, and a newer render drops the pending `final`, so the pane shows the last
+ *   document once the input stops.
  * - **A resting `final` reply** is shown at once.
  */
 
@@ -40,6 +45,14 @@ export interface OverlayClock {
   moved_at: number;
   /** When the reply arrived. */
   arrived: number;
+}
+
+/** Whether the overlay is heavy: the smallest resting `innerHTML` time since the load (`Infinity` while none was
+ * measured) is at least {@link OVERLAY_HEAVY_MS}; before a measurement, whether a reply since the load was longer than
+ * the `<img>` threshold (`long_svg`; such a scene is far above the cost threshold, and a drag begun before its first
+ * resting `final` is shown must not replace the overlay on every reply). */
+export function overlay_heavy(resting_dom_ms: number, long_svg: boolean): boolean {
+  return Number.isFinite(resting_dom_ms) ? resting_dom_ms >= OVERLAY_HEAVY_MS : long_svg;
 }
 
 /** The reply kind of a render reply: its request's drag flag and its phase. */

@@ -2,7 +2,7 @@ import { strict as assert } from "node:assert";
 import { test } from "node:test";
 
 import {
-  OVERLAY_DRAG_PAUSE_MS, OVERLAY_QUICK_HOLD_MS, overlay_kind, overlay_wait,
+  OVERLAY_DRAG_PAUSE_MS, OVERLAY_HEAVY_MS, OVERLAY_QUICK_HOLD_MS, overlay_heavy, overlay_kind, overlay_wait,
 } from "../src/overlay_policy.js";
 import type { OverlayClock, OverlayKind } from "../src/overlay_policy.js";
 
@@ -55,4 +55,20 @@ test("heavy, at rest: a quick reply waits for its final up to the hold, a final 
 test("heavy: a resting reply that arrives after a new drag began waits for the pointer's pause", () => {
   assert.equal(overlay_wait("final", clock({ dragging: true, moved_at: 995 })), OVERLAY_DRAG_PAUSE_MS - 5);
   assert.equal(overlay_wait("quick", clock({ dragging: true, moved_at: 995, arrived: 0 })), OVERLAY_DRAG_PAUSE_MS - 5);
+});
+
+test("overlay_heavy: the measured resting innerHTML time decides; before it, a long SVG since the load counts as heavy", () => {
+  assert.equal(overlay_heavy(OVERLAY_HEAVY_MS, false), true);
+  assert.equal(overlay_heavy(OVERLAY_HEAVY_MS - 0.01, true), false); // a measurement wins over the length
+  assert.equal(overlay_heavy(40, false), true);
+  assert.equal(overlay_heavy(0.5, false), false);
+  // review: a drag begun right after a large load (before its first resting final was measured) replaced the overlay
+  // on every reply because an unmeasured scene counted as light
+  assert.equal(overlay_heavy(Infinity, true), true);
+  assert.equal(overlay_heavy(Infinity, false), false);
+});
+
+test("heavy, continuous resting input: each newer quick restarts the hold, so none is shown while the input goes on", () => {
+  // replies every 130 ms (each replaces the waiting one and is evaluated at its own arrival)
+  for (let t = 0; t < 3000; t += 130) assert.ok(overlay_wait("quick", clock({ now: t, arrived: t }))! > 0);
 });

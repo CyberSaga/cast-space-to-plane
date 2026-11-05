@@ -32,12 +32,18 @@ await page.evaluate(() => {
   const tick = (t) => { window.__raf.push(t); requestAnimationFrame(tick); };
   requestAnimationFrame(tick);
   new PerformanceObserver((l) => { for (const e of l.getEntries()) window.__lt.push([e.startTime, e.duration]); }).observe({ entryTypes: ["longtask"] });
+  // every replacement of the drawing pane's overlay (the DOM overlay's children, the <img>'s source), whichever path
+  // applied it (on arrival or from a waiting reply's timer, D88)
+  window.__ov = [];
+  const sv = document.querySelector("svg.overlay"), im = document.querySelector("img.overlay");
+  new MutationObserver(() => window.__ov.push(performance.now())).observe(sv, { childList: true });
+  new MutationObserver(() => window.__ov.push(performance.now())).observe(im, { attributes: true, attributeFilter: ["src"] });
 });
-const mark = () => page.evaluate(() => ({ t: performance.now(), raf: window.__raf.length, lt: window.__lt.length }));
+const mark = () => page.evaluate(() => ({ t: performance.now(), raf: window.__raf.length, lt: window.__lt.length, ov: window.__ov.length }));
 const since = (m) => page.evaluate((m) => {
   const raf = window.__raf.slice(m.raf), lt = window.__lt.slice(m.lt);
   const gaps = []; for (let i = 1; i < raf.length; i++) gaps.push(raf[i] - raf[i - 1]);
-  return { gaps, lt: lt.map(([s, d]) => +d.toFixed(0)), t: performance.now() - m.t };
+  return { gaps, lt: lt.map(([s, d]) => +d.toFixed(0)), t: performance.now() - m.t, ov: window.__ov.length - m.ov };
 }, m);
 const settle = async (ms = 400) => { await sleep(ms); };
 
@@ -144,9 +150,10 @@ const dragFrames = frames.filter((f) => f.dragging);
 out.drag_frame_list = dragFrames.map((f) => [f.phase, +f.dom_ms.toFixed(1), f.overlay]);
 out.drag = { axis: grab.axis, down_wall_ms: down_wall, first_proxy_move_ms: firstMoveWall, first_stage_a_ms: firstStageA, drag_wall_ms: drag_wall,
   raf_gaps: stats(rd.gaps), longtasks: rd.lt, drag_frames: dragFrames.length, overlays_applied: dragFrames.filter((f) => f.overlay !== false).length,
+  overlay_replacements: rd.ov,
   core_ms: stats(dragFrames.map((f) => f.core_ms)), dom_ms: stats(dragFrames.map((f) => f.dom_ms)), obs_ms: stats(dragFrames.map((f) => f.obs_ms ?? 0)),
   mode: [...new Set(dragFrames.map((f) => f.mode))], stage_a_runs: (await page.evaluate(() => window.castplane_web.timings)).stage_a_runs - runs0,
-  release: { up_wall_ms: up_wall, longtasks: ru.lt, raf_gaps: stats(ru.gaps) }, undo: (await page.evaluate(() => window.castplane_web.rig)).undo };
+  release: { up_wall_ms: up_wall, longtasks: ru.lt, raf_gaps: stats(ru.gaps), overlay_replacements: ru.ov }, undo: (await page.evaluate(() => window.castplane_web.rig)).undo };
 console.log("drag:", JSON.stringify(out.drag));
 
 // ---- board ring drag (camera) for reference
@@ -162,7 +169,7 @@ if (bq !== null) {
   await page.mouse.up(); await settle(2500);
   const rbu = await since(mb);
   const fr = (await page.evaluate(() => window.castplane_web.frames)).filter((f) => f.dragging);
-  out.camera_drag = { raf_gaps: stats(rb.gaps), longtasks: rb.lt, core_ms: stats(fr.map((f) => f.core_ms)), dom_ms: stats(fr.map((f) => f.dom_ms)), obs_ms: stats(fr.map((f) => f.obs_ms ?? 0)), release_longtasks: rbu.lt };
+  out.camera_drag = { raf_gaps: stats(rb.gaps), longtasks: rb.lt, overlay_replacements: rb.ov, release_overlay_replacements: rbu.ov, core_ms: stats(fr.map((f) => f.core_ms)), dom_ms: stats(fr.map((f) => f.dom_ms)), obs_ms: stats(fr.map((f) => f.obs_ms ?? 0)), release_longtasks: rbu.lt };
   console.log("camera_drag:", JSON.stringify(out.camera_drag));
 }
 out.status = await page.evaluate(() => document.getElementById("status").textContent);
