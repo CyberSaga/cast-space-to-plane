@@ -21,7 +21,9 @@
  *   opaque plane, and **any other kind** through the generic closed-mesh occluder (`rec.triangles` on the welded
  *   vertices when present, the `rec.mesh` faces otherwise; nothing throws). `first_hit` returns the smallest
  *   boundary-crossing parameter `t > eps` of rays `O + t D` (`Infinity` when none);
- * - `occluded` (§5.1.6.3) and `image_bounds` (the result-identical image-space cull; `null` = no cull);
+ * - `occluded` (§5.1.6.3) and `image_bounds` (the result-identical image-space cull; `null` = no cull); for a mesh
+ *   occluder `occluded` asks `mesh_blocks`, a result-identical triangle-BVH prune of `first_mesh(...) < 1 − eps`
+ *   (port-only speed-up; `set_hlr_prune(false)` restores the plain loop, and a test compares both);
  * - `classify_curve` / `classify_batch` (§5.1.6.4: midpoint samples, exactly 6 bisection steps);
  * - `drawn_segment_4d` / `drawn_segments_4d` / `clip_polygon_4d` (§5.1.6.4; the rectangle steps decide on the projected
  *   3-vectors, as the M4 implementation note "The 4-D clip decides on the drawn 3-vectors" requires of the port);
@@ -134,6 +136,10 @@ export interface PlateOccluder { kind: "plate"; id: string; n: Vec3; d: number; 
 export interface GroundOccluder { kind: "ground"; id: string; n: Vec3; d: number; points: null }
 export interface MeshOccluder {
   kind: "mesh"; id: string | null; triangles: [Vec3, Vec3, Vec3][]; faces: Vec3[][]; band: number; points: Vec3[] | null;
+  /** The source record (the key of the cached triangle BVH of `occluded`; absent for hand-built occluders). */
+  src?: object;
+  /** The triangle BVH of `occluded` (built lazily; `null` until then). */
+  accel?: MeshAccel | null;
 }
 export type Occluder = BoxOccluder | PrismOccluder | RoundOccluder | SphereOccluder | PlateOccluder | GroundOccluder | MeshOccluder;
 
@@ -240,8 +246,10 @@ export function mesh_occluder(rec: any): MeshOccluder {
     ext = 0.0;
     for (const p of V) ext = Math.max(ext, Math.abs(p[0]), Math.abs(p[1]), Math.abs(p[2]));
   }
-  return { kind: "mesh", id: rec?.id ?? null, triangles: tris, faces: polys, band: SURFACE_BAND * Math.max(ext, 1.0),
-    points: V.length > 0 ? V : null };
+  const occ: MeshOccluder = { kind: "mesh", id: rec?.id ?? null, triangles: tris, faces: polys,
+    band: SURFACE_BAND * Math.max(ext, 1.0), points: V.length > 0 ? V : null, accel: null };
+  if (rec !== null && typeof rec === "object") occ.src = rec;
+  return occ;
 }
 
 /** First crossing `> eps` of a ray with a convex solid met on `[t_in, t_out]` (`Infinity` when none). */
@@ -421,6 +429,11 @@ function first_mesh(occ: MeshOccluder, O: readonly number[], D: readonly number[
     const t = dot3(q, e2) * inv;
     if (ok && u >= -band && v >= -band && u + v <= 1.0 + band && t > eps) best = Math.min(best, t);
   }
+  return first_mesh_faces(occ, O, D, eps, best);
+}
+
+/** The polygon-face part of `first_mesh`: lowers `best` to the first inside crossing `eps < t < best` of a face. */
+function first_mesh_faces(occ: MeshOccluder, O: readonly number[], D: readonly number[], eps: number, best: number): number {
   for (const F of occ.faces) {
     const F0 = F[0] as Vec3;
     let nrm = cross3(sub3(F[1] as Vec3, F0), sub3(F[2] as Vec3, F0));
@@ -464,6 +477,262 @@ export function first_hit(occ: Occluder, O: readonly number[] | readonly (readon
   return D.map((d, i) => first_hit_ray(occ, (per_ray ? (O as readonly (readonly number[])[])[i] : O) as readonly number[], d, eps));
 }
 
+// ---------------------------------------------------------------------------
+// result-identical triangle prune of `occluded` (contract §5.1.6 culling note, §5.3 / §5.4 notes on HLR culling)
+// ---------------------------------------------------------------------------
+//
+// `occluded` asks one boolean per ray and occluder: `first_mesh(occ, C, D, eps) < 1 − eps`. `first_mesh` is the minimum
+// of the Möller–Trumbore crossings `t > eps` over all triangles (and the polygon faces), so the answer is "some triangle
+// is accepted with eps < t < 1 − eps" (or some face is). The pruned path runs the *same* Möller–Trumbore arithmetic
+// (operand for operand; `first_mesh_tri` below) on a subset of the triangles and answers true at the first accepted
+// crossing below `1 − eps`; it is result-identical as long as no triangle that the reference would accept with
+// `eps < t < 1 − eps` is left out. The subset is:
+//
+// 1. every triangle in a leaf of a triangle-AABB BVH whose box, grown by `margin = PRUNE_MARGIN · mag`, the segment
+//    `C + t D`, `t ∈ [max(0, eps − 1e-9), 1 − eps + 1e-9]`, reaches (slab test);
+// 2. every "ill-conditioned" triangle, tested for every ray: a sliver (`|e1 × e2| <= PRUNE_SLIVER · |e1| |e2|`, or a
+//    non-finite vertex), or one whose plane passes within `PRUNE_EYE_PLANE · mag` of the eye `C`;
+// 3. every polygon face (unchanged code, never pruned).
+//
+// Here `mag = max(ext, |C|∞, |X|∞)` for the ray `C → X` (ext = largest vertex coordinate magnitude), so
+// `|C − T0|, |D| <= 2√3 mag`. Why 1 is conservative: let a triangle not in 2 be accepted with computed (u, v, t). The
+// rounding of the 3×3 Cramer quotients is bounded to first order by `c ε |a||b||c|` per triple product; the accepted
+// `t < 1` forces `|det| > |q·e2| ≈ dist(C, plane) |e1 × e2|`, so the exact plane crossing `P*` of the ray lies within
+// `K ε mag² / (dist σ)` of the (band-grown) triangle and the exact `t*` within the same distance (along the ray) of the
+// computed `t`, with `σ = |e1 × e2| / (|e1||e2|)` and a generous `K <= 10³`. With `dist > 1e-4 mag` and `σ > 1e-3`
+// that is `<= 1.1e-6 mag`; the ±1e-12 barycentric band adds `<= 1e-11 mag` and the slab test's own rounding
+// `<= 1e-15 mag`. All of it is well inside `margin = 1e-5 mag`: the segment comes within `margin` of the triangle,
+// hence enters the grown box of its leaf and of every ancestor (a node box is the exact union of its children's
+// boxes). Non-finite data keep it conservative: a NaN slab parameter fails every "miss" comparison (the node is
+// tested), a non-finite vertex makes its triangle a sliver, and a non-finite or zero `mag` or `D` calls the reference
+// `first_mesh`.
+
+const PRUNE_MARGIN = 1e-5;
+const PRUNE_EYE_PLANE = 1e-4;
+const PRUNE_SLIVER = 1e-3;
+const PRUNE_LEAF = 4;
+
+let hlr_prune = true;
+
+/** Switch the result-identical triangle prune of `occluded` on or off (default on; the identity tests compare both).
+ * Returns the previous state. */
+export function set_hlr_prune(on: boolean): boolean {
+  const prev = hlr_prune;
+  hlr_prune = on;
+  return prev;
+}
+
+/** Flat triangle BVH of one mesh occluder (built once per stage-A record; see `mesh_accel`). */
+export interface MeshAccel {
+  /** Number of triangles; `tri` holds `T0, T1, T2` (9 floats) per triangle in leaf order. */
+  n: number;
+  tri: Float64Array;
+  /** Node boxes `[lo x y z, hi x y z]`; `info[2i]` = triangle count (0: internal, left child `i + 1`, right child
+   * `info[2i + 1]`), else `info[2i + 1]` = first triangle. */
+  box: Float64Array;
+  info: Int32Array;
+  depth: number;
+  /** Traversal stack (`depth + 2` entries suffice: a pop pushes at most two children one level down). */
+  stack: Int32Array;
+  ext: number;
+  /** Unit normal and `T0` per triangle (eye-plane distance); `sliver[k] = 1`: always tested. */
+  unit: Float64Array;
+  sliver: Uint8Array;
+  /** Per-eye cache: triangle indices sorted by the eye-plane distance (`-1` for slivers) and those distances. */
+  eye: number[] | null;
+  order: Int32Array;
+  dist: Float64Array;
+  /** Source arrays the cached entry was built from (a record whose arrays were replaced rebuilds). */
+  src_tris: unknown;
+  src_verts: unknown;
+}
+
+const ACCEL_CACHE = new WeakMap<object, MeshAccel>();
+
+function build_accel(tris: readonly (readonly (readonly number[])[])[]): MeshAccel {
+  const n = tris.length;
+  const cen = new Float64Array(3 * n), tb = new Float64Array(6 * n);
+  let ext = 0.0;
+  for (let i = 0; i < n; i++) {
+    const T = tris[i] as readonly (readonly number[])[];
+    for (let a = 0; a < 3; a++) {
+      const x0 = (T[0] as readonly number[])[a] as number, x1 = (T[1] as readonly number[])[a] as number;
+      const x2 = (T[2] as readonly number[])[a] as number;
+      tb[6 * i + a] = Math.min(x0, x1, x2);
+      tb[6 * i + 3 + a] = Math.max(x0, x1, x2);
+      cen[3 * i + a] = (x0 + x1 + x2) / 3.0;
+      ext = Math.max(ext, Math.abs(x0), Math.abs(x1), Math.abs(x2));
+    }
+  }
+  const idx = new Int32Array(n);
+  for (let i = 0; i < n; i++) idx[i] = i;
+  const boxes: number[] = [], info: number[] = [];
+  let depth = 0;
+  const build = (lo: number, hi: number, d: number): void => {   // [lo, hi) of idx; depth-first node order
+    const node = info.length / 2;
+    depth = Math.max(depth, d);
+    const b = [INF, INF, INF, -INF, -INF, -INF];
+    const cl = [INF, INF, INF], ch = [-INF, -INF, -INF];
+    for (let k = lo; k < hi; k++) {
+      const i = idx[k] as number;
+      for (let a = 0; a < 3; a++) {               // Math.min / Math.max propagate NaN: a NaN box never misses
+        b[a] = Math.min(b[a] as number, tb[6 * i + a] as number);
+        b[3 + a] = Math.max(b[3 + a] as number, tb[6 * i + 3 + a] as number);
+        cl[a] = Math.min(cl[a] as number, cen[3 * i + a] as number);
+        ch[a] = Math.max(ch[a] as number, cen[3 * i + a] as number);
+      }
+    }
+    for (const x of b) boxes.push(x);
+    info.push(0, 0);
+    if (hi - lo <= PRUNE_LEAF) {
+      info[2 * node] = hi - lo;
+      info[2 * node + 1] = lo;
+      return;
+    }
+    let ax = 0;
+    for (let a = 1; a < 3; a++) if ((ch[a] as number) - (cl[a] as number) > (ch[ax] as number) - (cl[ax] as number)) ax = a;
+    const part = Array.from(idx.subarray(lo, hi))
+      .sort((i, j) => ((cen[3 * i + ax] as number) - (cen[3 * j + ax] as number)) || i - j);
+    idx.set(part, lo);
+    const mid = (lo + hi) >>> 1;                   // median split: depth <= ceil(log2(n / PRUNE_LEAF))
+    build(lo, mid, d + 1);
+    info[2 * node + 1] = info.length / 2;
+    build(mid, hi, d + 1);
+  };
+  if (n > 0) build(0, n, 0);
+  const tri = new Float64Array(9 * n), unit = new Float64Array(6 * n), sliver = new Uint8Array(n);
+  for (let k = 0; k < n; k++) {
+    const T = tris[idx[k] as number] as readonly (readonly number[])[];
+    for (let j = 0; j < 3; j++) for (let a = 0; a < 3; a++) tri[9 * k + 3 * j + a] = (T[j] as readonly number[])[a] as number;
+    const e1 = sub3(T[1] as readonly number[], T[0] as readonly number[]);
+    const e2 = sub3(T[2] as readonly number[], T[0] as readonly number[]);
+    const nr = cross3(e1, e2);
+    const ln = Math.hypot(nr[0], nr[1], nr[2]);
+    const ok = Number.isFinite(ln) && ln > PRUNE_SLIVER * Math.hypot(e1[0], e1[1], e1[2]) * Math.hypot(e2[0], e2[1], e2[2]);
+    sliver[k] = ok ? 0 : 1;
+    for (let a = 0; a < 3; a++) {
+      unit[6 * k + a] = ok ? (nr[a] as number) / ln : 0.0;
+      unit[6 * k + 3 + a] = (T[0] as readonly number[])[a] as number;
+    }
+  }
+  return { n, tri, box: Float64Array.from(boxes), info: Int32Array.from(info), depth,
+    stack: new Int32Array(depth + 2), ext, unit, sliver, eye: null,
+    order: new Int32Array(n), dist: new Float64Array(n), src_tris: null, src_verts: null };
+}
+
+/** The triangle BVH of a mesh occluder: on the occluder, else from the per-record cache (`scene_occluders` rebuilds the
+ * occluders per `compose`; a cached stage A keeps its BVHs), else built and cached on both. */
+export function mesh_accel(occ: MeshOccluder): MeshAccel {
+  if (occ.accel) return occ.accel;
+  const rec = occ.src as any;
+  const st = rec?.triangles ?? rec?.mesh?.faces ?? null, sv = rec?.mesh?.vertices ?? null;
+  let acc = rec !== undefined ? ACCEL_CACHE.get(rec) : undefined;
+  if (acc === undefined || acc.src_tris !== st || acc.src_verts !== sv || acc.n !== occ.triangles.length) {
+    acc = build_accel(occ.triangles);
+    acc.src_tris = st;
+    acc.src_verts = sv;
+    if (rec !== undefined && st !== null && sv !== null) ACCEL_CACHE.set(rec, acc);
+  }
+  occ.accel = acc;
+  return acc;
+}
+
+/** Sort the triangles by the distance of their plane to the eye `C` (slivers first, as `-1`); cached per eye. */
+function eye_order(acc: MeshAccel, C: readonly number[]): void {
+  const c0 = C[0] as number, c1 = C[1] as number, c2 = C[2] as number;
+  if (acc.eye !== null && acc.eye[0] === c0 && acc.eye[1] === c1 && acc.eye[2] === c2) return;
+  const n = acc.n, u = acc.unit, dist = new Float64Array(n);
+  for (let k = 0; k < n; k++) {
+    const d = (c0 - (u[6 * k + 3] as number)) * (u[6 * k] as number) + (c1 - (u[6 * k + 4] as number)) * (u[6 * k + 1] as number)
+      + (c2 - (u[6 * k + 5] as number)) * (u[6 * k + 2] as number);
+    dist[k] = acc.sliver[k] === 1 || !Number.isFinite(d) ? -1.0 : Math.abs(d);
+  }
+  const order = Array.from({ length: n }, (_, k) => k).sort((i, j) => ((dist[i] as number) - (dist[j] as number)) || i - j);
+  acc.order = Int32Array.from(order);
+  acc.dist = Float64Array.from(order.map((k) => dist[k] as number));
+  acc.eye = [c0, c1, c2];
+}
+
+/** Möller–Trumbore of triangle `k` of `tri`: the operations of `first_mesh` in its operand order (the same bits);
+ * true iff accepted with `eps < t < limit`. */
+function first_mesh_tri(tri: Float64Array, k: number, o0: number, o1: number, o2: number, d0: number, d1: number, d2: number,
+  eps: number, limit: number): boolean {
+  const band = 1e-12;
+  const b = 9 * k;
+  const a0 = tri[b] as number, a1 = tri[b + 1] as number, a2 = tri[b + 2] as number;
+  const e10 = (tri[b + 3] as number) - a0, e11 = (tri[b + 4] as number) - a1, e12 = (tri[b + 5] as number) - a2;
+  const e20 = (tri[b + 6] as number) - a0, e21 = (tri[b + 7] as number) - a1, e22 = (tri[b + 8] as number) - a2;
+  const p0 = d1 * e22 - d2 * e21, p1 = d2 * e20 - d0 * e22, p2 = d0 * e21 - d1 * e20;  // cross3(D, e2)
+  const det = p0 * e10 + p1 * e11 + p2 * e12;                                        // dot3(p, e1)
+  const ok = det !== 0.0;
+  const inv = 1.0 / (ok ? det : 1.0);
+  const s0 = o0 - a0, s1 = o1 - a1, s2 = o2 - a2;                                    // sub3(O, T0)
+  const u = (s0 * p0 + s1 * p1 + s2 * p2) * inv;                                     // dot3(s, p)
+  const q0 = s1 * e12 - s2 * e11, q1 = s2 * e10 - s0 * e12, q2 = s0 * e11 - s1 * e10;  // cross3(s, e1)
+  const v = (d0 * q0 + d1 * q1 + d2 * q2) * inv;                                     // dot3(D, q)
+  const t = (q0 * e20 + q1 * e21 + q2 * e22) * inv;                                  // dot3(q, e2)
+  return ok && u >= -band && v >= -band && u + v <= 1.0 + band && t > eps && t < limit;
+}
+
+/** `first_mesh(occ, C, D, eps) < 1 − eps` through the BVH (result-identical; see the comment above). */
+export function mesh_blocks(occ: MeshOccluder, C: readonly number[], D: readonly number[], eps: number = HLR_RAY_EPS): boolean {
+  const limit = 1.0 - eps;
+  const acc = mesh_accel(occ);
+  const o0 = C[0] as number, o1 = C[1] as number, o2 = C[2] as number;
+  const d0 = D[0] as number, d1 = D[1] as number, d2 = D[2] as number;
+  const mag = Math.max(acc.ext, Math.abs(o0), Math.abs(o1), Math.abs(o2),
+    Math.abs(o0 + d0), Math.abs(o1 + d1), Math.abs(o2 + d2));
+  if (!(Number.isFinite(mag) && mag > 0.0) || !Number.isFinite(d0 + d1 + d2)) return first_mesh(occ, C, D, eps) < limit;
+  const tri = acc.tri;
+  if (acc.n > 0) {
+    // 2. the ill-conditioned triangles (slivers, eye near the plane): a prefix of the per-eye order
+    eye_order(acc, C);
+    const th = PRUNE_EYE_PLANE * mag, dist = acc.dist, order = acc.order;
+    for (let r = 0; r < acc.n && (dist[r] as number) <= th; r++) {
+      if (first_mesh_tri(tri, order[r] as number, o0, o1, o2, d0, d1, d2, eps, limit)) return true;
+    }
+    // 1. the BVH leaves the grown segment reaches
+    const m = PRUNE_MARGIN * mag;
+    const t_lo = Math.max(0.0, eps - 1e-9), t_hi = limit + 1e-9;
+    const box = acc.box, info = acc.info;
+    const stack = acc.stack;
+    let sp = 0;
+    stack[sp++] = 0;
+    while (sp > 0) {
+      const node = stack[--sp] as number;
+      const bb = 6 * node;
+      let tmin = t_lo, tmax = t_hi, miss = false;
+      for (let a = 0; a < 3 && !miss; a++) {
+        const o = a === 0 ? o0 : a === 1 ? o1 : o2, d = a === 0 ? d0 : a === 1 ? d1 : d2;
+        const lo = (box[bb + a] as number) - m, hi = (box[bb + 3 + a] as number) + m;
+        if (d === 0.0) {
+          if (o < lo || o > hi) miss = true;
+        } else {
+          const inv = 1.0 / d;
+          let ta = (lo - o) * inv, tb = (hi - o) * inv;
+          if (ta > tb) { const x = ta; ta = tb; tb = x; }
+          if (ta > tmin) tmin = ta;
+          if (tb < tmax) tmax = tb;
+          if (tmin > tmax) miss = true;
+        }
+      }
+      if (miss) continue;
+      const cnt = info[2 * node] as number;
+      if (cnt === 0) {
+        stack[sp++] = info[2 * node + 1] as number;
+        stack[sp++] = node + 1;
+      } else {
+        const first = info[2 * node + 1] as number;
+        for (let k = first; k < first + cnt; k++) {
+          if (first_mesh_tri(tri, k, o0, o1, o2, d0, d1, d2, eps, limit)) return true;
+        }
+      }
+    }
+  }
+  // 3. the polygon faces, never pruned (`first_mesh` lowers its triangle minimum by them; only `< limit` matters)
+  return occ.faces.length > 0 && first_mesh_faces(occ, C, D, eps, INF) < limit;
+}
+
 /** Image-space cull data `[u_min, u_max, v_min, v_max, depth_min]` of an occluder's hull points (contract §5.1.6.4), or
  * `null` ("no cull") for the unbounded ground and whenever some hull point has `ν <= 0`. */
 export type ImageBounds = [number, number, number, number, number];
@@ -495,6 +764,7 @@ export function occluded(occs: readonly Occluder[], C: readonly number[], X: rea
   if (n === 0 || occs.length === 0) return hidden;
   const use_img = bounds !== null && cam !== null && bounds.some((b) => b !== null);
   const limit = 1.0 - eps;
+  const prune = hlr_prune;
   for (let i = 0; i < n; i++) {
     const P = X[i] as readonly number[];
     const D = sub3(P, C);
@@ -516,7 +786,8 @@ export function occluded(occs: readonly Occluder[], C: readonly number[], X: rea
         const cull = depth > 0.0 && (u < bu0 - mu || u > bu1 + mu || v < bv0 - mv || v > bv1 + mv || dmin >= depth * (1.0 + 1e-9));
         if (cull) continue;
       }
-      if (first_hit_ray(occs[k] as Occluder, C, D, eps) < limit) {
+      const occ = occs[k] as Occluder;
+      if (prune && occ.kind === "mesh" ? mesh_blocks(occ, C, D, eps) : first_hit_ray(occ, C, D, eps) < limit) {
         hidden[i] = true;
         break;
       }

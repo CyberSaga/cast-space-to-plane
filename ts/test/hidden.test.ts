@@ -12,9 +12,10 @@ import { test } from "node:test";
 import { clip_segment_rect_h, project, rect_functionals } from "../src/camera.js";
 import {
   HLR_BISECTIONS, HLR_MAX_SAMPLES, HLR_MIN_SAMPLES, HLR_RAY_EPS, HLR_SPACING_MM, classify_curve, classify_document, clip_polygon_4d,
-  drawn_segment_4d, first_hit, hlr_sample_count, hlr_tol_mm, image_bounds, mesh_occluder, occluded, occluder, scene_occluders,
+  drawn_segment_4d, first_hit, first_hit_ray, hlr_sample_count, hlr_tol_mm, image_bounds, mesh_accel, mesh_blocks, mesh_occluder,
+  occluded, occluder, scene_occluders, set_hlr_prune,
 } from "../src/hidden.js";
-import type { Occluder } from "../src/hidden.js";
+import type { MeshOccluder, Occluder } from "../src/hidden.js";
 import { clip_segment_halfspace, clip_segment_halfspace_keep } from "../src/homogeneous.js";
 import { dumps } from "../src/output/geometry_json.js";
 import { write_svg } from "../src/output/svg.js";
@@ -794,4 +795,126 @@ test("the batched-row clip, the scalar clip and the scalar rectangle clip are on
     else dropped++;
   }
   assert.ok(kept > 100 && dropped > 100, `${kept} ${dropped}`);
+});
+
+// --------------------------------------------------------------------------- the result-identical triangle prune
+// (contract §5.1.6 culling note; §5.4 implementation note item 6: every HLR fast path has its result-identity test)
+
+function compose_hidden_dumps(scene: any, prune: boolean): string {
+  const prev = set_hlr_prune(prune);
+  try {
+    const s = load_scene(clone(scene));
+    const A = shadow_geometry(s);
+    return dumps(compose(s, project_scene(s, A), true));
+  } finally {
+    set_hlr_prune(prev);
+  }
+}
+
+const FIXTURES = repo_path("ts", "test", "fixtures");
+const PRUNE_SCENES: [string, () => any][] = [
+  ...json_stems(CASES).map((n) => [`case ${n}`, () => load_case(n)] as [string, () => any]),
+  ...json_stems(FIXTURES).filter((n) => n.endsWith(".expanded"))
+    .map((n) => [`fixture ${n}`, () => read_json(`${FIXTURES}/${n}.json`)] as [string, () => any]),
+];
+
+for (const [name, make] of PRUNE_SCENES) {
+  test(`hidden-line prune on equals off, byte for byte: ${name}`, () => {
+    const scene = make();
+    assert.equal(compose_hidden_dumps(scene, true), compose_hidden_dumps(scene, false));
+  });
+}
+
+test("hidden-line prune: the identity set covers mesh occluders", () => {
+  let meshes = 0;
+  for (const [, make] of PRUNE_SCENES) {
+    const s = load_scene(make());
+    meshes += scene_occluders(shadow_geometry(s)).filter((o) => o.kind === "mesh" && o.triangles.length > 12).length;
+  }
+  assert.ok(meshes >= 3, `${meshes}`);
+});
+
+/** `mesh_blocks` against the reference answer `first_hit_ray(...) < 1 − eps` for every ray; returns the hit count. */
+function check_rays(occ: Occluder, C: readonly number[], targets: readonly (readonly number[])[], label: string): number {
+  let hits = 0;
+  for (let i = 0; i < targets.length; i++) {
+    const X = targets[i]!;
+    const D = [X[0]! - C[0]!, X[1]! - C[1]!, X[2]! - C[2]!];
+    const ref = first_hit_ray(occ, C, D, HLR_RAY_EPS) < 1.0 - HLR_RAY_EPS;
+    assert.equal(mesh_blocks(occ as MeshOccluder, C, D, HLR_RAY_EPS), ref, `${label} ray ${i}`);
+    if (ref) hits++;
+  }
+  return hits;
+}
+
+test("hidden-line prune: 200 random rays against a random triangle soup equal first_mesh < 1 − eps", () => {
+  const r = rng(20261105);
+  const P = (): Vec3 => [r() * 10 - 5, r() * 10 - 5, r() * 10 - 5];
+  const V: number[][] = [], F: number[][] = [];
+  for (let k = 0; k < 300; k++) {
+    const c = P(), s = 0.2 + 2.0 * r();
+    const base = V.length;
+    for (let j = 0; j < 3; j++) V.push([c[0] + s * (r() - 0.5), c[1] + s * (r() - 0.5), c[2] + s * (r() - 0.5)]);
+    F.push([base, base + 1, base + 2]);
+  }
+  // degenerate members: a sliver, a zero-area (collinear) triangle and a repeated vertex
+  const b = V.length;
+  V.push([0, 0, 0], [3, 0, 0], [6, 1e-9, 0], [1, 1, 1], [2, 2, 2], [3, 3, 3]);
+  F.push([b, b + 1, b + 2], [b + 3, b + 4, b + 5], [b, b, b + 1]);
+  const occ = mesh_occluder({ mesh: { vertices: V, faces: F } });
+  const C = [20, -15, 9];
+  const targets: number[][] = [];
+  for (let i = 0; i < 200; i++) {
+    if (i % 2 === 0) targets.push(P());
+    else {                                                         // aimed at a point of a triangle edge
+      const f = F[Math.floor(r() * F.length)]!, w = r();
+      const A0 = V[f[0]!]!, A1 = V[f[1]!]!;
+      targets.push([0, 1, 2].map((a) => A0[a]! + w * (A1[a]! - A0[a]!)));
+    }
+  }
+  const hits = check_rays(occ, C, targets, "soup");
+  assert.ok(hits > 20 && hits < 180, `${hits}`);
+  // the eye in a triangle's plane, a zero direction, and rays from an eye inside the soup
+  const T = occ.triangles[7]!;
+  const inplane = [0, 1, 2].map((a) => T[0][a]! + 2.0 * (T[0][a]! - T[1][a]!));
+  check_rays(occ, inplane, [[0, 1, 2].map((a) => (T[1][a]! + T[2][a]!) / 2), T[2], inplane], "in-plane");
+  check_rays(occ, [0.1, 0.2, 0.3], targets.slice(0, 60), "inside");
+});
+
+test("hidden-line prune: rays to every mesh vertex and edge midpoint of the conformance meshes", () => {
+  let rays = 0, hits = 0;
+  for (const name of json_stems(CASES)) {
+    const s = load_scene(load_case(name));
+    const A = shadow_geometry(s);
+    const occs = scene_occluders(A).filter((o) => o.kind === "mesh") as MeshOccluder[];
+    if (occs.length === 0) continue;
+    const C = [...project_scene(s, A).camera.C];
+    for (const occ of occs) {
+      const tg: number[][] = [];
+      for (const T of occ.triangles) {
+        for (let j = 0; j < 3; j++) {
+          const a = T[j]!, b = T[(j + 1) % 3]!;
+          tg.push([...a], [(a[0] + b[0]) / 2, (a[1] + b[1]) / 2, (a[2] + b[2]) / 2]);
+        }
+      }
+      hits += check_rays(occ, C, tg, name);
+      rays += tg.length;
+    }
+  }
+  assert.ok(rays > 1000 && hits > 0, `${rays} ${hits}`);
+});
+
+test("hidden-line prune: the BVH is cached per stage-A record and rebuilt when the record's arrays change", () => {
+  const s = load_scene(read_json(`${FIXTURES}/mesh_demo.expanded.json`));
+  const A = shadow_geometry(s);
+  const m1 = scene_occluders(A).filter((o) => o.kind === "mesh") as MeshOccluder[];
+  const m2 = scene_occluders(A).filter((o) => o.kind === "mesh") as MeshOccluder[];
+  assert.ok(m1.length > 0);
+  m1.forEach((o, i) => assert.equal(mesh_accel(o), mesh_accel(m2[i]!)));
+  const rec = (A.objects as any[]).find((o) => occluder(o).kind === "mesh");
+  const a1 = mesh_accel(occluder(rec) as MeshOccluder);
+  const moved = { ...rec, mesh: { ...rec.mesh, vertices: rec.mesh.vertices.map((v: number[]) => [v[0]! + 1, v[1], v[2]]) } };
+  const a2 = mesh_accel(occluder(moved) as MeshOccluder);
+  assert.notEqual(a1, a2);
+  assert.notDeepEqual(Array.from(a1.box.subarray(0, 6)), Array.from(a2.box.subarray(0, 6)));
 });
