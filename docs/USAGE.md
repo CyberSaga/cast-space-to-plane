@@ -708,7 +708,7 @@ npm run -w web build && npm run -w web preview             # 網頁 UI（靜態�
 npm run -w web test                                        # orbit / download / colours / rig / equation / observer / plane 單元測試
 ```
 
-`npm test` 與 `npm run build` 會依 ts → web 的順序執行兩個 workspace。Python 的 `tests/test_ts_port.py` 檢查兩邊共用的檔案：版本、`rules.json` 與比對常數、`INT_KEYS`、核心不碰 node API、npm 版本釘選。PATH 上有 node 時，它也會建置並執行移植的整套測試；單獨執行 TypeScript 一致性執行器，要求每個案例各有一個通過的測試、沒有失敗、略過或 todo；比對全部九個範例（含 M4–M6 的 `wall_and_ground`、`mesh_demo`、`two_lights`，以及角色範例 `miki`，其 18 個內嵌網格物件、隱藏線開啟）的 SVG（逐位元組）與 JSON；並跑網頁的單元測試。
+`npm test` 與 `npm run build` 會依 ts → web 的順序執行兩個 workspace。Python 的 `tests/test_ts_port.py` 檢查兩邊共用的檔案：版本、`rules.json` 與比對常數、`INT_KEYS`、核心不碰 node API、npm 版本釘選。PATH 上有 node 時，它也會建置並執行移植的整套測試；單獨執行 TypeScript 一致性執行器，要求每個案例各有一個通過的測試、沒有失敗、略過或 todo；比對全部十個範例（含 M4–M6 的 `wall_and_ground`、`mesh_demo`、`two_lights`，以及兩個角色範例 `miki` 與 `reiya`，各有 18 與 27 個內嵌網格物件、隱藏線開啟）的 SVG（逐位元組）與 JSON；並跑網頁的單元測試。
 
 ### 4.2 API
 
@@ -747,7 +747,7 @@ const out   = render(scene, camera, hidden_lines, hidden_style); // {geometry: d
 
 **相機覆寫一律明確建構。** 傳給 `project_scene` 的相機區塊要從鏡頭欄位逐一建出：`{position, target, roll_deg, focal_length_mm, frame_mm, shift_mm, near_m}`，不要寫 `{...scene.camera, position, target}`。若場景相機是 yaw/pitch 形式（例如 `examples/directional.json`），展開後會同時帶 `yaw_deg` 與 `target`，`validate_camera` 會拒絕。`ts/test/helpers.ts` 的 `camera_override` 與網頁 UI 的 `camera_from_orbit` 都照這個規則建構。
 
-**數值與確定性。** 全程 binary64，V8 不做 FMA 收縮。因為 numpy / BLAS 的求和順序不同，兩個實作在最後幾位會有 ulp 差異，所以 JSON 以測試集的容差比對。第一階段實測 34/34 通過，最差的葉節點為容差的 0.22；第二階段 v6 的 50/50 通過。SVG 寫出器在 50 個案例、八個範例與 `benchmark_100.json` 上都與 Python 逐位元組相同（多光源場景若物體立在受影面上，本影碎片的切分可能不同而區域相同，見 §4.2 多光源一段；測試集與範例中沒有這種差異）。同一個 node 版本中，相同輸入的 JSON 與 SVG 字串位元相同。後來加入的 `miki.json` 也是：移植寫出的 SVG 與 Python 逐位元組相同（203 163 位元組，`tools/compare_svg.py examples/miki.json` 回報 0 個不一致）。
+**數值與確定性。** 全程 binary64，V8 不做 FMA 收縮。因為 numpy / BLAS 的求和順序不同，兩個實作在最後幾位會有 ulp 差異，所以 JSON 以測試集的容差比對。第一階段實測 34/34 通過，最差的葉節點為容差的 0.22；第二階段 v6 的 50/50 通過。SVG 寫出器在 50 個案例、八個範例與 `benchmark_100.json` 上都與 Python 逐位元組相同（多光源場景若物體立在受影面上，本影碎片的切分可能不同而區域相同，見 §4.2 多光源一段；測試集與範例中沒有這種差異）。同一個 node 版本中，相同輸入的 JSON 與 SVG 字串位元相同。後來加入的 `miki.json` 也是：移植寫出的 SVG 與 Python 逐位元組相同（203 163 位元組，`tools/compare_svg.py examples/miki.json` 回報 0 個不一致）。`reiya.json` 也是（276 854 位元組，`tools/compare_svg.py examples/reiya.json` 回報 0 個不一致）。
 
 ### 4.3 基準（規格 §8）
 
@@ -766,7 +766,7 @@ const out   = render(scene, camera, hidden_lines, hidden_style); // {geometry: d
 vite + three.js（版本釘選：three 0.186.1、vite 8.3.3）。`vite build` 產生靜態檔，不需要伺服器。執行時不連網，範例在建置時打包進去。
 
 - **載入**：
-  - 「Example」選單（全部 `examples/*.json`，九個檔案，含角色範例 `miki`）、檔案選擇器，或把 JSON 檔拖放到頁面任何位置；
+  - 「Example」選單（全部 `examples/*.json`，十個檔案，含角色範例 `miki` 與 `reiya`）、檔案選擇器，或把 JSON 檔拖放到頁面任何位置；
   - 不是 JSON 的檔案顯示「not a JSON file」；
   - 場景無效時，錯誤面板顯示 `SceneError` 的欄位路徑與訊息，原本的場景保留。
 - **3D 顯示**：
@@ -804,7 +804,7 @@ vite + three.js（版本釘選：three 0.186.1、vite 8.3.3）。`vite build` �
   - 編輯畫面與預覽之間，同一台相機下載的 SVG 與 JSON 逐位元組相同（`web/scripts/smoke.mjs` 檢查）。狀態列另外顯示 `obs ms`（旁觀視角每格的成本），五個範例拖曳時每格總計約 4–24 ms；
   - 載入後第一次移動板子之前，直接用場景自己的相機區塊算圖（任何形式），所以文件、警告與下載都和 CLI 相同（水平板子不會出現 `CAMERA_LOOKING_ALONG_UP`）；移動之後改畫板子的 `picture_plane` 區塊，畫面不變，「Download scene」此後寫出 `picture_plane` 形式；「重設」回到場景的區塊。
 
-範例與 `benchmark_100.json` 拖曳時的 `core ms` / `dom ms` 實測見 `web/README.md`：八個範例每格約 1–3 ms，`benchmark_100.json` 約 66–78 ms（`<img>` 模式，第二階段量測）。第九個範例 `miki`（18 個網格物件、4 469 個多邊形）載入或放開後的靜止影格（含消隱）約 1.4 秒，拖曳時每格約 40 ms（不做消隱）。截圖見 `docs/images/web_ui.png`，角色範例 `miki`（各物件用自己的 `display_color` 上色）是 `docs/images/web_ui_miki.png`，第二階段的三張是 `docs/images/web_ui_wall_and_ground.png`（開啟消隱：箱子背面的邊畫成虛線，牆畫成有界的板子）、`docs/images/web_ui_mesh_demo.png`（網格房子與圓柱，房子由展開後的場景載入）與 `docs/images/web_ui_two_lights.png`（兩盞點光源各有一個輔助小球，兩組影子與較深的本影）。旁觀視角的截圖是 `docs/images/web_ui_observer.png`，平面模式（輸入 `y=2` 後拖過圓環）的截圖是 `docs/images/web_ui_plane_mode.png`。
+範例與 `benchmark_100.json` 拖曳時的 `core ms` / `dom ms` 實測見 `web/README.md`：八個範例每格約 1–3 ms，`benchmark_100.json` 約 66–78 ms（`<img>` 模式，第二階段量測）。第九個範例 `miki`（18 個網格物件、4 469 個多邊形）載入或放開後的靜止影格（含消隱）約 1.4 秒，拖曳時每格約 40 ms（不做消隱）。第十個範例 `reiya`（27 個網格物件、6 354 個多邊形、10 576 個三角形）以 `node tools/web_frame_bench.mjs examples/miki.json 5` 與 `... examples/reiya.json 5` 在同一個環境交錯量（2026-11-01，去掉折疊薄片、調整皮膚之後；空閒的容器，四輪、每輪 `miki` 先量，取各輪中位數的中位數）：`reiya` 的靜止影格約 2.8 秒（2783 ms，各輪 2620–2936 ms）、拖曳每格約 100 ms（100.8 ms，各輪 77–108 ms）、階段 A 約 267 ms（250–328 ms）；同一時段的 `miki` 是靜止影格約 3.1 秒（3060 ms）、拖曳每格 71 ms（63–94 ms）、階段 A 約 197 ms，所以 `reiya` 的靜止影格不比 `miki` 慢（中位數快 9 %，四輪都快），拖曳每格則比 `miki` 慢（兩者的範圍重疊），中位數在 120 ms 目標內，但最差的一輪是 108 ms，餘裕比上一次薄，單輪也可能碰到 108–124 ms；拖曳影格的 SVG 是 730 492 個字元（`miki` 是 549 042）。這個容器的雜訊很大：沒有改動的 `miki.json` 自己的中位數也比上次高（靜止影格 +6 %、階段 A +17 %），`reiya` 的 SVG 還縮短了 0.45 %（與少 16 個三角形相符），而改動前後的 `reiya.json` 在同一時段交錯量分不出差別（拖曳影格的中位數 94.6 與 96.9 ms），所以這一次拖曳每格比 `miki` 多出的幅度不能當成幾何變慢。這些數字隨容器與負載而變（`miki` 在較早的環境量到約 1.4 秒），要比較請在同一環境交錯量。截圖見 `docs/images/web_ui.png`，角色範例 `miki`（各物件用自己的 `display_color` 上色）是 `docs/images/web_ui_miki.png`，`reiya` 是 `docs/images/web_ui_reiya.png`（旁觀視角窗格以 `display_color` 上色，右邊是消隱後的線稿與地面上的影子），第二階段的三張是 `docs/images/web_ui_wall_and_ground.png`（開啟消隱：箱子背面的邊畫成虛線，牆畫成有界的板子）、`docs/images/web_ui_mesh_demo.png`（網格房子與圓柱，房子由展開後的場景載入）與 `docs/images/web_ui_two_lights.png`（兩盞點光源各有一個輔助小球，兩組影子與較深的本影）。旁觀視角的截圖是 `docs/images/web_ui_observer.png`，平面模式（輸入 `y=2` 後拖過圓環）的截圖是 `docs/images/web_ui_plane_mode.png`。
 
 ### 4.5 網頁 UI：平面模式（M10，合約 §5.7、spec-v0.2 §4.2、§5）
 
@@ -839,9 +839,19 @@ vite + three.js（版本釘選：three 0.186.1、vite 8.3.3）。`vite build` �
 
 **下載**：「Download scene」與「Copy camera block」寫出目前畫的那個區塊：移動過板子後為 `picture_plane` 形式（鎖水平且滾轉 0 時省略 `up`），`castplane render` 可重現同一張圖。
 
-## 5. 開發工具：`tools/make_miki_model.py`（花菱美希參考模型）
+## 5. 開發工具：角色參考模型（`tools/make_miki_model.py`、`tools/make_reiya_model.py`）
 
-`tools/make_miki_model.py` 產生角色範例：`examples/miki.json`（18 個內嵌網格物件）與同一個模型的 `examples/meshes/miki.{obj,mtl,glb}`（說明見 [`examples/README.md`](../examples/README.md)）。生成器本體在 `tools/miki_model/`（`rig.py` 放全部比例、`head.py` / `hair.py` / `body.py` / `limbs.py` 是各部位，`assemble.py` 把零件組成 18 個物件並配材質與 `display_color`，`export.py` 寫出場景 JSON、OBJ + MTL、GLB，`preview.py` 做著色預覽與線稿預覽）。幾何部分只用 numpy 與標準函式庫；只有 `--preview` 與 `--lines` 的圖片需要 Pillow 與 cairosvg。核心與 TypeScript 移植不讀取、也不依賴它。
+兩個角色範例由兩支開發工具產生：`tools/make_miki_model.py` 產生花菱美希（`examples/miki.json`，18 個內嵌網格物件），`tools/make_reiya_model.py` 產生 Reiya（`examples/reiya.json`，27 個內嵌網格物件）；各自也寫出同一個模型的 `examples/meshes/<名稱>.{obj,mtl,glb}`（說明見 [`examples/README.md`](../examples/README.md)）。兩支工具共用工具箱 `tools/charmodel/`，幾何部分只用 numpy 與標準函式庫；只有 `--preview`、`--lines` 與 `--overlay` 的圖片需要 Pillow 與 cairosvg（`--overlay` 只要 Pillow）。核心與 TypeScript 移植不讀取、也不依賴它們。兩個角色都不在本專案的授權散布與傳播範圍內，見 [`COPYRIGHT_NOTICE.md`](../COPYRIGHT_NOTICE.md)。
+
+### 5.1 共用工具箱 `tools/charmodel/`
+
+`tools/charmodel/` 是兩個生成器共用、與角色無關的那一半：`meshkit.py`（網格與封閉殼的建造器、`validate`、`fix_nesting`、特徵輪廓頂點）、`assembly.py`（把零件組成 castplane 物件：取整、驗證、依物件合併、統計與預算檢查）、`export.py`（場景 JSON、OBJ + MTL 與 GLB 的寫出器）、`preview.py`（著色預覽、castplane 線稿預覽與總覽圖）、`overlay.py`（把模型疊在角色設計稿上量差異、網格平滑度的度量與通過條件的判定，讀設計稿與寫疊圖需要 Pillow）和 `cli.py`（命令列，下面兩支腳本的選項、結束碼與輸出都來自它）。一個角色的套件 `tools/<名稱>_model/` 只放跟角色有關的東西：`rig.py`（全部比例）、各部位的建造器、`mannequin.py`（`--context` 畫成灰色的假人）、`assemble.py`（物件、材質與 `display_color` 的對應）、`export.py`（場景設定與文字）與 `preview.py`（相機預設），有設計稿可以對照的角色另有 `overlay.py`（設計稿的視圖對應、色塊類別、地標與通過條件）；`tools/make_<名稱>_model.py` 只是把它交給 `charmodel.cli.main`。工具箱裡沒有任何角色的數字、顏色或文字，API 與角色套件必須提供的名稱見 [`tools/charmodel/README.md`](../tools/charmodel/README.md)，建新角色的流程見 `.claude/skills/character-model/SKILL.md`。
+
+工具箱改動會改變每個角色的輸出：兩個角色都要重新產生（`--check`）並跑 `tests/test_miki_model.py` 與 `tests/test_reiya_model.py`；單純的重構必須讓所有檔案逐位元組不變。`Character` 另有選用的整體縮放 `scale`（數字，或以 rig 為參數的函式）：先用設計稿的比例建模，再縮放到已知的身高，腳底仍在 z = 0，`reiya` 用它。
+
+### 5.2 `tools/make_miki_model.py`（花菱美希參考模型）
+
+`tools/make_miki_model.py` 產生角色範例：`examples/miki.json`（18 個內嵌網格物件）與同一個模型的 `examples/meshes/miki.{obj,mtl,glb}`。生成器本體在 `tools/miki_model/`（`rig.py` 放全部比例、`head.py` / `hair.py` / `body.py` / `limbs.py` 是各部位，`assemble.py` 把零件組成 18 個物件並配材質與 `display_color`，`export.py` 與 `preview.py` 放她的場景設定、文字與相機預設，其餘的寫出與預覽程式在 `tools/charmodel/`）。
 
 ```sh
 python3 tools/make_miki_model.py                      # 建模、驗證、寫出 examples/miki.json 與 examples/meshes/miki.{obj,mtl,glb}
@@ -863,8 +873,41 @@ python3 tools/make_miki_model.py --only hair headband --preview DIR --context
 
 結束碼：0 成功；1 模型無效、超過預算或場景檢查有警告；2 用法錯誤。
 
-**確定性。** 輸出是確定的：連跑兩次得到逐位元組相同的檔案，而且與 numpy / BLAS 的建置無關。在平面四邊形上，`n·(d−a)` 的符號只是 BLAS 核心的捨入雜訊，`inscribed_fan` 與 `fan_fold` 原本用它決定要不要轉動四邊形的頂點順序，不同的核心（原生、`OPENBLAS_CORETYPE=Haswell`、Python 3.10 的 numpy 2.2.6）會轉動不同的面，寫出不同的檔案。現在 `meshkit._below_fan` 把 `|n·(d−a)| <= 1e-9·|n|·|d−a|` 的四邊形視為平面、不轉動（31 個頭髮與側髮的平面四邊形保持原順序；頂點、群組與數量不變，場景相機的 SVG 逐位元組不變）。`tests/test_miki_model.py` 逐位元組比對 `miki.json` 與 OBJ / MTL / GLB。
+**確定性。** 輸出是確定的：連跑兩次得到逐位元組相同的檔案，而且與 numpy / BLAS 的建置無關。在平面四邊形上，`n·(d−a)` 的符號只是 BLAS 核心的捨入雜訊，`inscribed_fan` 與 `fan_fold` 原本用它決定要不要轉動四邊形的頂點順序，不同的核心（原生、`OPENBLAS_CORETYPE=Haswell`、Python 3.10 的 numpy 2.2.6）會轉動不同的面，寫出不同的檔案。現在 `charmodel.meshkit._below_fan` 把 `|n·(d−a)| <= 1e-9·|n|·|d−a|` 的四邊形視為平面、不轉動（31 個頭髮與側髮的平面四邊形保持原順序；頂點、群組與數量不變，場景相機的 SVG 逐位元組不變）。`tests/test_miki_model.py` 逐位元組比對 `miki.json` 與 OBJ / MTL / GLB。
 
 **預算。** 全部物件加起來 ≤ 6000 個多邊形與 ≤ 10000 個三角形（現在 4469 與 8154；castplane 的消隱成本隨三角形數上升，目前網頁上的靜止影格約 1.4 秒），每個物件的特徵輪廓頂點 ≤ 64（`MESH_MAX_RAYS`，超過會發 `MESH_RAYS_CAPPED`）。目前每個物件最多 39 個。每個殼都必須是封閉、方向一致的 2-流形，沒有低於地面的頂點。
 
 **時間（參考值）。** 建模約 18 秒；`--check` 約 26 秒；命令列渲染 `miki.json` 約 4–5 秒；TypeScript 移植（`ts/scripts/render.mjs`）約 1.8 秒；A 段約 0.13 秒；匯入 GLB 約 0.1 秒、OBJ 約 0.06 秒。檔案大小：`miki.json` 190 304 B、`miki.obj` 202 354 B、`miki.mtl` 1 000 B、`miki.glb` 182 364 B。
+
+### 5.3 `tools/make_reiya_model.py`（Reiya 參考模型）
+
+`tools/make_reiya_model.py` 產生角色範例：`examples/reiya.json`（27 個內嵌網格物件）與同一個模型的 `examples/meshes/reiya.{obj,mtl,glb}`（說明見 [`examples/README.md`](../examples/README.md)）。Reiya（レイヤ）是依創作者的設計稿做成的角色，沒有官方身高，使用者給的是 1.52 m（赤腳，腳底到頭頂）。生成器本體在 `tools/reiya_model/`，維護指南是 [`tools/reiya_model/README.md`](../tools/reiya_model/README.md)（物件與材質、身高縮放、零件規則、檢查與已知限制），角色規格是 [`tools/reiya_model/SPEC.md`](../tools/reiya_model/SPEC.md)（比例、各部位、相似度檢查表與設計決定）；結構與 `tools/miki_model/` 相同：`rig.py` 放全部比例，`head.py`（頭與臉）、`hair.py`（頭髮、耳朵形髮束、辮子）、`body.py`（脖子、上衣、背心裙、釦子）、`cardigan.py`（外套與袖子）、`limbs.py`（手、腿、襪子、鞋子）是各部位，`assemble.py` 把 115 個零件組成 27 個物件並配 18 種材質與 `display_color`，`export.py` 與 `preview.py` 放她的場景設定、文字與相機預設，`overlay.py` 放她的設計稿資料與 41 條通過條件。設計稿的比例（皮膚高度 1.555 m）建好之後，`assemble.CHARACTER.scale`（`rig.figure_scale` = 1.52 / 1.555 = 0.97749）把整個模型縮放到 1.52 m，腳底仍在 z = 0；場景相機與預覽的取景也乘同一個係數，所以畫面不變。
+
+**修整（2026-10-31）。** 使用者檢閱五輪修正後的模型，Reiya 又做了一輪修整（`tools/reiya_model/SPEC.md` 的 Decision 30–32）：皮膚改成暖色 `#fae3d8`（設計稿的近白色拿來當 3D 反照率會被著色成灰色；2026-11-01 又調成帶玫瑰色的 `#fad8cd`，見下面）；鮑伯頭重做成平滑的鐘形（每側 13 條輪廓欄），髮尾是依設計稿分層的細長髮絡，帶縫隙，並沿背後兩條外側髮絡線切成 `bob_l`、`bob`、`bob_r` 三個殼（所以物件從 25 個變成 27 個；目的是讓網頁的消隱靜止影格不比 `miki` 慢，代價是仰視時鮑伯頭底面多一條線、頭部的影子裡多幾筆）；燈籠袖由五圈橢圓環擬合設計稿，底部圓潤並在袖口收攏；手指微微彎曲（每個關節 16–26°）、手腕收進到設計稿的位置並有 17° 的手肘彎度。總量因此從 5540 個多邊形、9816 個三角形增加到 6216 與 10396，超過原來的 6000 與 10000，所以預算放寬為 6500 與 10500（見下面的「預算」）。完成度用疊圖檢查（`--overlay`）以數字判定，修整之後 41 條通過條件有 35 條通過。
+
+**葉形髮尾（2026-11-01）。** 修整之後唯一還沒過的 P1 條件是 M2（鮑伯頭輪廓的轉角）：斜著看，每一個疊層、邊是直線的髮絡末端都投影成 20–58° 的角，95 % 的輪廓轉角是 45°，上限是 15°。使用者決定「保留放寬後的預算與三殼的切法，加上葉形髮尾」，所以鮑伯頭的髮絡末端改成葉形：在原有的髮絡欄之間插入新的欄（`rig.bob_leaf_columns`，原有欄的索引不變），讓背後髮絡的下緣落在設計稿的凸曲線上，背後的階梯髮絡收成單一頂點的尖端，側邊髮絡的前角是圓弧、後角是尖點（`tools/reiya_model/SPEC.md` §C.3「Leaf-shaped lock ends」與 Decision 31）。M2 因此通過（三個視角的第 95 百分位是 13.75、13.73、13.27°），41 條通過條件有 36 條通過，M5 沒有東西可量，H11、S4、M10、M11 四條未通過，都是 P2。這一步讓鮑伯頭多了 148 個多邊形、196 個三角形，總量是 6364 與 10592。
+
+**去掉折疊薄片與玫瑰色皮膚（2026-11-01）。** 使用者在葉形髮尾之後又提出：「去掉折疊的薄片、加寬 M2 的餘裕；皮膚看起來還是有點暗淡，請給她自然的玫瑰色光澤」（`tools/reiya_model/SPEC.md` 的 §C.3 與 Decision 33）。**髮：** 葉形髮尾留下一個問題：斜著看（±35° 的兩個 3/4 視角），背後縫隙的末端（第 13 欄）與第 13.66 欄之間，輪廓會描出一個背對觀者的細薄三角形，成為約 5 px 的折返環（兩個折返頂點，夾角超過 170°）；度量不算它，但畫面上是一個多餘的小圈。這一步從結構上去掉它，而不是蓋住它或把它縮到 1 px 以下：第 13.66 與 14.51 欄改成貼著輪廓的新種類 `backc`（六個欄位 `(after, frac, "backc", a, z_bottom, phi_top)`），第 14 欄移到 (0.0995, 1.4128)，接合相鄰兩欄的帶狀面改成沿較短的對角線切成三角形（`hair._zip_param`；M3 因此從 23.56° 降到 19.72°），側邊髮絡前角的圓弧改成 19 mm、以明確的角度步進（`BOB_SIDE_CORNER_STEPS`），第一條側欄從 78° 移到 84°，90° 欄的尖端降到 z 1.4070，並且讓前縫隙的 V 收在同一個頂點上（V 的頂端原本有一個與兩側鄰面都夾 180° 的翻轉細三角形，現在沒有了；鮑伯頭裡不再有背對背折回自身的面對）。結果：背後縫隙的折返環不見了，髮絡區在三個 M2 視角都沒有折返頂點（鐘形下緣每個視角各有的兩個照舊）；M2 從 13.75° 降到 11.83°（三個視角的第 95 百分位是 11.3、11.8、11.8°，最大轉角是 13.7、13.7、13.4°，餘裕從 1.25° 加到約 3.2°），M4 11.84°（原 11.93°），H3 4.86 mm（原 4.88 mm），仍是 36 條通過、M5 沒有東西可量、同樣四條 P2 未通過。鮑伯頭因此少了 16 個三角形、10 個多邊形與 8 個頂點，總量是 5530 個頂點、6354 個多邊形、10576 個三角形（預算 6500 與 10600，還剩 146 個多邊形與 24 個三角形，原來剩 8 個三角形）；`bob_l` 與 `bob_r` 各是 251 個頂點、323 個多邊形、498 個三角形，`bob` 是 268、328、532，特徵輪廓頂點是 22、28、34 個。**皮膚：** 暖色從 `#fae3d8` 改成 `#fad8cd`（HSV 14.7° / 18 % / 98 %；Decision 33，以引用的方式修正 Decision 30 的顏色，Decision 30 的文字不變）。挑這個顏色的理由是：原來顯得暗淡，主要是飽和度太低（13.6 %）與光照把顏色壓灰，不是色相的問題，所以色相只往粉紅移 4.7°，飽和度提高、明度不變，這是玫瑰色而不是把整張臉塗成腮紅的顏色。另外比較了四個更粉的候選（`#fad0c6`、`#f7c6bc`、`#f5ccbf`、`#fed6cb`），在著色特寫、three.js 的 PBR 檢視（GLB）與網頁 UI 裡，它是最大的一步暖色，同時仍讓臉與鮭魚粉的頭髮分得開（額頭與瀏海、臉頰與側髮相接處的 Lab 色差 dE 是 11.9 與 9.5，原來是 16.1 與 14.0，更粉的候選只有 5.8–9.7），也守住受光面的明度（網頁上的臉頰 L* 只從 78.4 降到 75.9，其他候選是 71–76）；網頁上受光臉頰的 R − B 從 29 升到 39，C1 從 21 升到 27。不加腮紅貼花或頂點色（Decision 6：腮紅橢圓會畫出輪廓）。只有頭、脖子與腿三個物件的 `display_color`、MTL 裡 `skin` 的 Kd 與 GLB 裡 `skin` 的 baseColorFactor 改了，OBJ 逐位元組不變。
+
+命令列與 5.2 的相同（選項表、結束碼與 `--rig` 都一樣），只有檔名、預設輸出與 `--only` 的區域不同：
+
+```sh
+python3 tools/make_reiya_model.py                      # 建模、驗證、寫出 examples/reiya.json 與 examples/meshes/reiya.{obj,mtl,glb}
+python3 tools/make_reiya_model.py --check              # 另跑場景檢查與渲染（警告必須為空）並印出面數預算表
+python3 tools/make_reiya_model.py --preview DIR        # 另寫著色的總覽圖與頭部特寫
+python3 tools/make_reiya_model.py --lines DIR --lines-views front head_side --no-hidden
+python3 tools/make_reiya_model.py --only hair tufts --preview DIR --context
+python3 tools/make_reiya_model.py --out-dir OUT --overlay SHEET.png DIR   # 疊圖檢查（設計稿 SHEET.png 與 DIR 都在儲存庫之外）
+```
+
+`--overlay SHEET DIR` 是 Reiya 才有的選項（`make_miki_model.py` 沒有設計稿資料，用了會以結束碼 2 結束）：以正交投影（長焦鏡頭的極限）把模型畫進設計稿的像素格，各以 50 % 的透明度疊在設計稿上，寫出 `overlay_<視圖>.png`、`diff_<視圖>.png`、`report.md` 與 `report.json`，報告以模型身高 152 cm 上的 mm 表示每個地標與輪廓的差異、各色塊的 IoU、鮑伯頭、袖子與頭頂的平滑度、皮膚的暖度、手臂與手指的角度、袖子與裙子的間隙，以及每一條通過條件（`tools/reiya_model/overlay.py` 的 `CRITERIA`，共 41 條，P1 必須通過、P2 應該通過）的數值、上限與通過與否；有條件未通過時結束碼為 1。設計稿不在儲存庫裡，`DIR` 也必須在儲存庫之外（疊圖裡有設計稿的像素），否則以結束碼 2 拒絕；整個檢查約 45 秒，方法見 [`tools/charmodel/README.md`](../tools/charmodel/README.md)，各條的意義與目前未通過的項目見 [`tools/reiya_model/README.md`](../tools/reiya_model/README.md)。
+
+`--only` 的區域是 `head eyes face_marks hair tufts braids neck top dress buttons cardigan sleeves hands legs socks shoes`（或模組名 `head hair body cardigan limbs`）；`--lines-views` 的預設視角與 5.2 列的相同。`--rig 檔案` 以 JSON 檔覆寫 `Rig` 的欄位，例如檔案內容 `{"stated_height": 1.555}` 就不縮放（係數 1.0，場景相機也回到設計稿上的位置 `[1.8, -3.53, 1.4]`）。
+
+**確定性。** 連跑兩次得到逐位元組相同的檔案，在原生、`OPENBLAS_CORETYPE=Haswell` 與 Python 3.10 的 numpy 2.2.6 上也相同（三者都與 `examples/` 的檔案 `cmp` 相同）。縮放是逐元素的乘法、沒有求和，所以不影響這一點。`tests/test_reiya_model.py` 逐位元組比對 `reiya.json` 與 OBJ / MTL / GLB。
+
+**預算。** 全部物件加起來 ≤ 6500 個多邊形與 ≤ 10600 個三角形（現在 6354 與 10576，還剩 146 個多邊形與 24 個三角形），這是使用者在 2026-11-01 決定的上限：修整前是 6000 與 10000（`miki` 仍是這個），修整後的模型超出，先暫時放寬為 6500 與 10500；使用者看過之後決定保留放寬、保留三殼的切法、加上葉形髮尾，葉形髮尾要 196 個三角形，所以三角形的上限取到能容納的最小整數百，10600（之後去掉折疊薄片讓鮑伯頭少了 16 個三角形，才有現在的餘裕）。castplane 的消隱成本隨三角形數上升，網頁上的靜止影格在修整完成時約 2.7–2.9 秒，不比同一環境的 `miki` 慢（量法見 §4.4，數字隨容器而變；去掉折疊薄片、調整皮膚之後，2026-11-01 在空閒的容器上交替量了四輪：靜止影格約 2.8 秒，比 `miki` 的約 3.1 秒快 9 %，拖曳影格約 100 ms，中位數在 120 ms 的目標內，但餘裕比之前薄，單輪可能碰到 108–124 ms），每個物件的特徵輪廓頂點 ≤ 64（`MESH_MAX_RAYS`，仍是硬限制）。目前最多的是 `top` 的 51 個，鮑伯頭三個物件是 22、28、34 個。每個殼都必須是封閉、方向一致的 2-流形，沒有低於地面的頂點。場景檔超過 700 KiB 也算失敗（現在 255.7 KiB）。
+
+**數量（參考值）。** 115 個零件、123 個封閉殼、27 個物件、5530 個頂點、6354 個多邊形、10576 個三角形；`reiya.json` 261 874 B（255.7 KiB）、`reiya.obj` 278 460 B、`reiya.mtl` 1 664 B、`reiya.glb` 240 776 B；場景相機的 SVG 是 275 654 個字元。
+
+**時間（參考值）。** 建模約 7 秒；不加選項的完整執行約 15 秒，`--check` 約 23 秒；命令列渲染 `reiya.json` 約 6–7 秒；TypeScript 移植（`ts/scripts/render.mjs`）約 3.5 秒（含 node 啟動）；A 段約 0.25–0.3 秒；匯入 GLB 約 0.4 秒、OBJ 約 0.35 秒。

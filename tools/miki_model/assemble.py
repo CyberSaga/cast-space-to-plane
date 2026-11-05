@@ -1,4 +1,10 @@
-"""Parts -> the 18 castplane mesh objects of the Miki model (fixed order), with validation and statistics.
+"""Parts -> the 18 castplane mesh objects of the Miki model (fixed order): Miki's character description.
+
+The machinery (rounding, validation, the per-object merge, statistics, budget checks) is character-free and lives
+in :mod:`charmodel.assembly`; this module holds Miki's data (:data:`OBJECTS`, :data:`MATERIALS`,
+:data:`DISPLAY_MATERIALS`, :data:`REGION_OBJECTS`, :data:`MODULES`, :data:`BUDGET`, :data:`DECIMALS`), the
+:class:`~charmodel.assembly.Character` built from it (:data:`CHARACTER`) and thin wrappers with the public
+names the CLI and ``tests/test_miki_model.py`` import.
 
 Flow: :func:`build_parts` asks each part module (``head``, ``hair``, ``body``, ``limbs``) for its parts;
 a module whose ``build(rig)`` returns ``None`` is replaced by the mannequin parts of its ``REGIONS``.
@@ -17,16 +23,15 @@ statistics.
 
 from __future__ import annotations
 
-import dataclasses
-import re
-from dataclasses import dataclass, field
+from charmodel import assembly as _asm
+from charmodel.assembly import Assembly, AssemblyError
 
 from . import body, hair, head, limbs, mannequin
-from . import meshkit as mk
 from .rig import SUN_TOWARDS, Rig
 
-__all__ = ["OBJECTS", "OBJECT_IDS", "MATERIALS", "DISPLAY_MATERIALS", "display_color", "REGION_OBJECTS", "MODULES", "ALL_REGIONS", "BUDGET",
-           "DECIMALS", "SUN_TOWARDS", "Assembly", "AssemblyError", "build_parts", "assemble", "format_stats"]
+__all__ = ["OBJECTS", "OBJECT_IDS", "MATERIALS", "DISPLAY_MATERIALS", "display_color", "REGION_OBJECTS", "MODULES",
+           "ALL_REGIONS", "BUDGET", "DECIMALS", "SUN_TOWARDS", "CHARACTER", "Assembly", "AssemblyError", "build_parts",
+           "assemble", "format_stats"]
 
 #: The castplane objects in their fixed order with what each holds.  ``headband`` comes first: the web UI's
 #: observer pane draws its sight rays (視線) for every vertex of ``objects[0]``, and the headband's 120
@@ -52,7 +57,6 @@ OBJECTS = (
     ("ring", "scarf ring, its two pink stripes"),
     ("neck", "neck + decollete bib"),
 )
-OBJECT_IDS = tuple(oid for oid, _ in OBJECTS)
 
 #: Materials (sRGB colours for the MTL, GLB and shaded previews), in a fixed order.
 MATERIALS = {
@@ -81,12 +85,6 @@ DISPLAY_MATERIALS = {
     "shoes": "shoes", "ring": "collar", "neck": "skin",
 }
 
-
-def display_color(oid: str) -> str:
-    """Lower-case ``"#rrggbb"`` display colour of object ``oid`` (:data:`DISPLAY_MATERIALS`)."""
-    return MATERIALS[DISPLAY_MATERIALS[oid]].lower()
-
-
 #: Default object of a part by its region (``Part.obj`` overrides it: e.g. ``hair`` parts that are
 #: sidelocks go to ``sidelocks``, the back hair to ``back_hair``, the scarf ring to ``ring``).  ``None``:
 #: the region has no default and every part must set ``obj`` (``arms`` / ``hands`` go to ``arm_l`` or
@@ -103,216 +101,42 @@ REGION_OBJECTS = {
 
 #: Part modules in assembly order (each defines ``REGIONS`` and ``build(rig)``).
 MODULES = (head, hair, body, limbs)
-ALL_REGIONS = tuple(r for m in MODULES for r in m.REGIONS)
 
 #: Web-UI budget (SPEC.md §G): polygons = faces as written, triangles = castplane's fan triangulation.
 BUDGET = {"polygons": 6000, "triangles": 10000}
 
-
 #: Coordinates are rounded to this many decimals (0.01 mm) before validation and writing.
 DECIMALS = 5
 
-assert set(mannequin.REGIONS) == set(ALL_REGIONS), "mannequin regions and module REGIONS disagree"
-assert set(REGION_OBJECTS) == set(ALL_REGIONS), "REGION_OBJECTS must name every region"
-assert tuple(DISPLAY_MATERIALS) == OBJECT_IDS, "DISPLAY_MATERIALS must list every object in OBJECTS order"
-assert set(DISPLAY_MATERIALS.values()) <= set(MATERIALS)
-assert all(re.fullmatch(r"#[0-9a-f]{6}", c) for c in MATERIALS.values()), "MATERIALS: lower-case #rrggbb"
-assert set(REGION_OBJECTS.values()) - {None} <= set(OBJECT_IDS)
+#: Miki's character description for :mod:`charmodel` (its constructor checks that the mannequin regions, the
+#: module ``REGIONS``, :data:`REGION_OBJECTS`, :data:`DISPLAY_MATERIALS` and :data:`MATERIALS` agree).
+CHARACTER = _asm.Character(
+    name="miki", objects=OBJECTS, materials=MATERIALS, display_materials=DISPLAY_MATERIALS,
+    region_objects=REGION_OBJECTS, modules=MODULES, mannequin=mannequin, rig_factory=Rig, sun_towards=SUN_TOWARDS,
+    budget=BUDGET, decimals=DECIMALS)
+
+OBJECT_IDS = CHARACTER.object_ids
+ALL_REGIONS = CHARACTER.all_regions
 
 
-class AssemblyError(ValueError):
-    """Invalid parts (the message lists every failing part / object)."""
-
-
-@dataclass
-class Assembly:
-    """Result of :func:`assemble`."""
-
-    rig: Rig
-    parts: list                                   # Part list (rounded meshes, ``obj`` resolved), assembly order
-    sources: dict                                 # region -> "head" / "hair" / ... / "mannequin"
-    meshes: dict                                  # object id -> merged Mesh (fixed OBJECTS order)
-    part_faces: dict                              # object id -> [(part name, material, first face, n faces)]
-    reports: dict = field(default_factory=dict)   # part / object name -> ValidationReport
-    stats: dict = field(default_factory=dict)
-
-    @property
-    def ok(self) -> bool:
-        return all(r.ok for r in self.reports.values())
-
-    def materials(self, oid: str) -> list:
-        """``[(material, [face index, ...])]`` of object ``oid``, materials in first-appearance order."""
-        out = {}
-        for _name, mat, first, n in self.part_faces[oid]:
-            out.setdefault(mat, []).extend(range(first, first + n))
-        return list(out.items())
-
-    def objects(self) -> list:
-        """castplane mesh object dicts ``{"id", "type": "mesh", "data": {...}}`` in the fixed order."""
-        out = []
-        for oid, m in self.meshes.items():
-            out.append({"id": oid, "type": "mesh", "data": {
-                "vertices": [[float(x) + 0.0 for x in v] for v in m.vertices],
-                "faces": [list(f) for f in m.faces],
-                "smooth_groups": list(m.groups)}})
-        return out
-
-
-def _module_name(module) -> str:
-    return module.__name__.rsplit(".", 1)[-1]
-
-
-def _wanted(module, only):
-    if only is None:
-        return list(module.REGIONS)
-    return [r for r in module.REGIONS if r in only]
-
-
-def _resolve(p: mk.Part, where: str) -> mk.Part:
-    """``p`` with ``obj`` filled in from its region; checks the material and the object."""
-    if p.material not in MATERIALS:
-        raise AssemblyError(f"part {p.name!r} ({where}) has unknown material {p.material!r}; "
-                            f"one of {list(MATERIALS)}")
-    obj = p.obj
-    if not obj:
-        if not p.region or REGION_OBJECTS.get(p.region, "") is None:
-            raise AssemblyError(f"part {p.name!r} ({where}) has no obj and its region {p.region!r} has no default "
-                                f"object: set obj= to one of {list(OBJECT_IDS)}")
-        obj = REGION_OBJECTS[p.region]
-    if obj not in OBJECT_IDS:
-        raise AssemblyError(f"part {p.name!r} ({where}) has unknown object {obj!r}; one of {list(OBJECT_IDS)}")
-    return dataclasses.replace(p, obj=obj)
+def display_color(oid: str) -> str:
+    """Lower-case ``"#rrggbb"`` display colour of object ``oid`` (:data:`DISPLAY_MATERIALS`)."""
+    return CHARACTER.display_color(oid)
 
 
 def build_parts(rig: Rig, only=None):
     """``(parts, sources)``: the parts of every region (or of the regions in ``only``) with ``obj``
     resolved, and which module built each region.  ``only`` may also name a module (``head``, ``hair``,
     ``body``, ``limbs``)."""
-    if only is not None:
-        only = set(only)
-        for m in MODULES:
-            if _module_name(m) in only:
-                only |= set(m.REGIONS)
-        unknown = sorted(only - set(ALL_REGIONS) - {_module_name(m) for m in MODULES})
-        if unknown:
-            raise AssemblyError(f"unknown region(s) {unknown}; regions: {list(ALL_REGIONS)}")
-    parts, sources = [], {}
-    for module in MODULES:
-        wanted = _wanted(module, only)
-        if not wanted:
-            continue
-        name = _module_name(module)
-        built = module.build(rig)
-        if built is None:
-            parts.extend(_resolve(p, "mannequin") for p in mannequin.build(rig, wanted))
-            sources.update({r: "mannequin" for r in wanted})
-            continue
-        for p in built:
-            if not isinstance(p, mk.Part):
-                raise AssemblyError(f"{name}.build returned a {type(p).__name__}, not a Part")
-            if p.region and p.region not in module.REGIONS:
-                raise AssemblyError(f"part {p.name!r} of {name}.py has region {p.region!r}, "
-                                    f"not one of {module.REGIONS}")
-            if not p.region or p.region in wanted:
-                parts.append(_resolve(p, f"{name}.py"))
-        sources.update({r: name for r in wanted})
-    seen = set()
-    for p in parts:
-        if p.name in seen:
-            raise AssemblyError(f"duplicate part name {p.name!r}")
-        seen.add(p.name)
-    return parts, sources
+    return _asm.build_parts(CHARACTER, rig, only)
 
 
 def assemble(rig: Rig | None = None, only=None, strict: bool = True) -> Assembly:
     """Build, round, validate and merge the model.  ``strict`` raises :class:`AssemblyError` listing every
     invalid part / object; otherwise the reports are kept on the result (``Assembly.ok``)."""
-    rig = Rig() if rig is None else rig
-    raw, sources = build_parts(rig, only)
-    parts, reports = [], {}
-    for p in raw:
-        m = p.mesh.rounded(DECIMALS)
-        parts.append(dataclasses.replace(p, mesh=m))
-        reports[p.name] = mk.validate(m, p.name, check_nesting=False)   # nesting: per object, below
-    meshes, part_faces = {}, {}
-    for oid in OBJECT_IDS:
-        group_parts = [p for p in parts if p.obj == oid]
-        if not group_parts:
-            continue
-        pieces, next_group, ranges, first = [], 1, [], 0
-        for p in group_parts:
-            local = sorted(set(g for g in p.mesh.groups if g != 0))
-            remap = {g: next_group + k for k, g in enumerate(local)}
-            next_group += len(local)
-            pieces.append(p.mesh.with_groups(remap))
-            ranges.append((p.name, p.material, first, p.mesh.n_faces))
-            first += p.mesh.n_faces
-        merged = mk.merge(pieces)
-        try:
-            merged = mk.fix_nesting(merged)
-        except mk.MeshError as exc:
-            reports[f"object {oid}"] = mk.ValidationReport(name=f"object {oid}", errors=[str(exc)])
-        else:
-            reports[f"object {oid}"] = mk.validate(merged, f"object {oid}")
-        meshes[oid] = merged
-        part_faces[oid] = ranges
-    result = Assembly(rig, parts, sources, meshes, part_faces, reports)
-    result.stats = _stats(result)
-    if strict and not result.ok:
-        bad = [r.summary() for r in reports.values() if not r.ok]
-        raise AssemblyError("invalid model:\n" + "\n".join(bad))
-    return result
-
-
-def _stats(a: Assembly) -> dict:
-    parts = []
-    for p in a.parts:
-        rep = a.reports.get(p.name)
-        parts.append({"name": p.name, "object": p.obj, "material": p.material, "region": p.region,
-                      "source": a.sources.get(p.region, ""), "vertices": p.mesh.n_vertices,
-                      "polygons": p.mesh.n_faces, "triangles": p.mesh.n_triangles,
-                      "shells": rep.n_shells if rep else 0,
-                      "ray_vertices": len(mk.feature_silhouette_vertices(p.mesh, SUN_TOWARDS))})
-    objects = []
-    for oid, m in a.meshes.items():
-        rep = a.reports.get(f"object {oid}")
-        objects.append({"id": oid, "vertices": m.n_vertices, "polygons": m.n_faces, "triangles": m.n_triangles,
-                        "shells": rep.n_shells if rep else 0, "groups": len(set(m.groups) - {0}),
-                        "parts": len(a.part_faces[oid]), "materials": [mat for mat, _ in a.materials(oid)],
-                        "ray_vertices": len(mk.feature_silhouette_vertices(m, SUN_TOWARDS))})
-    total = {k: sum(o[k] for o in objects) for k in ("vertices", "polygons", "triangles", "shells")}
-    rays = mk.MAX_FEATURE_SILHOUETTE_VERTICES
-    return {"parts": parts, "objects": objects, "total": total, "budget": dict(BUDGET, ray_vertices=rays),
-            "within_budget": total["polygons"] <= BUDGET["polygons"] and total["triangles"] <= BUDGET["triangles"],
-            "rays_ok": all(o["ray_vertices"] <= rays for o in objects),
-            "rays_over": [o["id"] for o in objects if o["ray_vertices"] > rays]}
+    return _asm.assemble(CHARACTER, rig, only, strict)
 
 
 def format_stats(stats: dict, parts: bool = True) -> str:
     """Plain-text table of :func:`assemble` statistics (per part, per object, total vs budget)."""
-    lines = []
-    if parts:
-        lines.append(f"{'part':30s} {'object':10s} {'material':10s} {'source':9s} {'verts':>6s} {'polys':>6s} "
-                     f"{'tris':>6s} {'shells':>6s} {'rays':>5s}")
-        for p in stats["parts"]:
-            lines.append(f"{p['name']:30s} {p['object']:10s} {p['material']:10s} {p['source']:9s} "
-                         f"{p['vertices']:6d} {p['polygons']:6d} {p['triangles']:6d} {p['shells']:6d} "
-                         f"{p['ray_vertices']:5d}")
-        lines.append("")
-    lines.append(f"{'#':>2s} {'object':10s} {'parts':>5s} {'verts':>6s} {'polys':>6s} {'tris':>6s} {'shells':>6s} "
-                 f"{'groups':>6s} {'rays':>5s}  materials")
-    for o in stats["objects"]:
-        k = OBJECT_IDS.index(o["id"])
-        flag = "  OVER" if o["ray_vertices"] > stats["budget"]["ray_vertices"] else ""
-        lines.append(f"{k:2d} {o['id']:10s} {o['parts']:5d} {o['vertices']:6d} {o['polygons']:6d} "
-                     f"{o['triangles']:6d} {o['shells']:6d} {o['groups']:6d} {o['ray_vertices']:5d}  "
-                     f"{', '.join(o['materials'])}{flag}")
-    t, b = stats["total"], stats["budget"]
-    lines.append(f"{'':2s} {'TOTAL':10s} {'':5s} {t['vertices']:6d} {t['polygons']:6d} {t['triangles']:6d} "
-                 f"{t['shells']:6d}")
-    lines.append(f"budget: polygons {t['polygons']} / {b['polygons']}, triangles {t['triangles']} / {b['triangles']}"
-                 f" -> {'OK' if stats['within_budget'] else 'OVER BUDGET'}")
-    over = stats.get("rays_over", [])
-    lines.append(f"rays: feature silhouette vertices per object <= {b['ray_vertices']} (castplane MESH_RAYS_CAPPED) "
-                 f"-> {'OK' if stats['rays_ok'] else 'OVER in ' + ', '.join(over) + ' (castplane will warn)'}")
-    return "\n".join(lines)
+    return _asm.format_stats(stats, OBJECT_IDS, parts)

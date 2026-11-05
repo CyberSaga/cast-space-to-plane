@@ -34,6 +34,7 @@ node tools/web_frame_bench.mjs examples/miki.json 5                  # web-path 
 
 castplane render examples/basic.json -o out    # CLI: render | validate | info | stages | import
 python3 tools/make_miki_model.py --check       # regenerates examples/miki.json + meshes/miki.*; must exit 0
+python3 tools/make_reiya_model.py --check      # the same for examples/reiya.json + meshes/reiya.*; must exit 0
 ```
 
 ## Verify before you push
@@ -119,19 +120,24 @@ Python is the reference.
   for byte**, with round-half-even at 4 decimals.
 - **When the two disagree, suspect TS first.** If Python breaks the contract, fix Python and bump the conformance set.
 
-## Character models (`tools/miki_model/`, `examples/miki.json`)
+## Character models (`tools/charmodel/`, `tools/miki_model/`, `tools/reiya_model/`)
 
 - **To build a new character or figure model, load the `character-model` skill**
-  (`.claude/skills/character-model/SKILL.md`). The maintainer guide and the mesh rules are in
-  `tools/miki_model/README.md`.
+  (`.claude/skills/character-model/SKILL.md`). The shared, character-free toolkit is `tools/charmodel/` (README there);
+  a character is a package on top of it. The maintainer guide and the mesh rules are in `tools/miki_model/README.md`,
+  and `tools/reiya_model/README.md` covers the second character (the stated-height scale, per-side objects).
 - **Generated files are never edited by hand.** `examples/miki.json` and `examples/meshes/miki.{obj,mtl,glb}` come from
   the generator, and `tests/test_miki_model.py` compares them byte for byte, including the text in them (the
-  description and the copyright headers live in `tools/miki_model/export.py`). Change the generator, run `--check`,
-  and commit the generator and the regenerated files together.
-- **Adding an example** changes the count asserted in `tests/test_ts_port.py` (`len(examples) == 9`) and the
+  description and the copyright headers live in `tools/miki_model/export.py`). The same holds for
+  `examples/reiya.json`, `examples/meshes/reiya.{obj,mtl,glb}`, `tests/test_reiya_model.py` and
+  `tools/reiya_model/export.py`. Change the generator, run `--check`, and commit the generator and the regenerated
+  files together. A change in `tools/charmodel/` changes every character: regenerate and test both. The counts, file
+  sizes and test count that the docs quote for Reiya are pinned by `tests/test_reiya_model.py` (`DOC_QUOTES`); when it
+  names a stale number, fix the document.
+- **Adding an example** changes the count asserted in `tests/test_ts_port.py` (`len(examples) == 10`) and the
   example lists in `examples/README.md`, `docs/USAGE.md` and `web/README.md`.
-- **Third-party characters** carry the notice in `COPYRIGHT_NOTICE.md`: the character is not part of the project's
-  authorized distribution. Keep the notice in the docs and in the generated file headers.
+- **Third-party characters** carry the notice in `COPYRIGHT_NOTICE.md` (a section per character): the character is not
+  part of the project's authorized distribution. Keep the notice in the docs and in the generated file headers.
 
 ## Gotchas
 

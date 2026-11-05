@@ -34,8 +34,9 @@ drag):
 
 ## What it does
 
-- **Loading**: the *Example* menu (every `examples/*.json`, nine files, embedded by `import.meta.glob`; `miki` is the 18-mesh character reference model
-  made by `tools/make_miki_model.py`), the file picker,
+- **Loading**: the *Example* menu (every `examples/*.json`, ten files, embedded by `import.meta.glob`; `miki` and
+  `reiya` are the character reference models, 18 and 27 inline meshes, made by `tools/make_miki_model.py` and
+  `tools/make_reiya_model.py`), the file picker,
   or a file dropped anywhere on the page. A dropped file that is not JSON shows "not a JSON file". A scene
   that fails validation shows the `SceneError` field path and message in the error panel, and the previous
   scene stays loaded. The core reads expanded scenes only (contract §5.4.0): a `mesh` object must carry its
@@ -62,8 +63,8 @@ drag):
   and the document, the SVG and the warnings are byte-identical with or without it. It is read from the **raw JSON**
   where a scene is loaded (`ex.data` for a bundled example, the parsed text for the file picker, a drop and the
   `castplane_web.load_text` hook) into a `Map` by object id (`display_colours`); malformed entries are skipped silently.
-  `PALETTE` moved from `scene3d.ts` to `colours.ts`, its values unchanged. The bundled `miki` example carries one
-  colour per object.
+  `PALETTE` moved from `scene3d.ts` to `colours.ts`, its values unchanged. The bundled `miki` and `reiya` examples carry
+  one colour per object.
 - **Modules**: `src/main.ts` keeps the page state, loading, the wiring and the render loop. `src/plane.ts` is plane
   mode's session (the rig of `src/rig.ts`, undo, pivot, readouts; pure, unit-tested). The drawing pane has no input
   handler (below). `src/stage.ts` is one three.js view (`Stage3D`, plus `letterbox` for the canvas size), `src/input.ts`
@@ -230,6 +231,27 @@ The ninth example, `miki` (18 inline meshes, 4469 polygons, hidden lines on), wa
 its resting frame (stage B + C with hidden lines) takes about 1.4 s in the TypeScript port (`ts/scripts/render.mjs`
 renders it in about 1.8 s including start-up) and a drag frame, which skips the hidden lines, about 40 ms. Its SVG
 is byte-identical to the Python writer's (203 163 characters with the scene's own layers).
+
+The tenth example, `reiya` (27 inline meshes, 6354 polygons, 10576 triangles, hidden lines on), was added later and
+grew in a finishing pass (the smooth bob, fuller sleeves; the bob is cut into three objects to keep the hidden-line
+pass fast), then a leaf pass (leaf-shaped lock ends on the bob, +196 triangles) and a V4 pass (the back slit's fold
+loop removed, -16 triangles; a rosier skin colour). The timings below were measured on the finishing pass, at 6216
+polygons / 10396 triangles. After the V4 pass, four alternating rounds on an idle container (2026-11-01, `miki` first
+in each round, medians of the per-round medians) gave `reiya` a resting frame of 2783 ms against `miki`'s 3060 ms
+(9.0 % faster, faster in 4 of 4 rounds), a drag frame of 101 ms against 71 ms (the 120 ms target holds on the median;
+single rounds reached 108 ms, and 124 ms in a supplementary round), stage A 267 ms against 197 ms, and drag-frame
+SVGs of 730 492 against 549 042 characters. The container was noisy: `miki`'s unchanged file moved +6 % (resting
+frame) and +17 % (stage A) against the leaf pass's rounds, and `reiya`'s file before the V4 pass, run alternately with
+the new one, gave the same drag frame (94.6 against 96.9 ms, medians of three rounds).
+Measured with `node tools/web_frame_bench.mjs <scene> 5`, `reiya` and `miki` alternating in the same container: in two sessions of six rounds each, `reiya`'s resting frame took 2937 and 2778 ms (medians) against `miki`'s
+3396 and 2938 ms, 14.0 % and 7.7 % faster per round (faster in 11 of 12 rounds), and its drag frame 106 and 114 ms
+against `miki`'s 83 and 78 ms; a shorter check later gave `reiya` 2.75-2.83 s, 97-123 ms and stage A 0.24-0.30 s,
+`miki` 3.07-3.20 s, 65-76 ms and 0.21-0.24 s. So `reiya`'s resting frame is not slower than `miki`'s, and its drag
+frame is slower, around the 120 ms target of the script. These figures move with the container and its load (the 1.4 s
+and 40 ms above come from the earlier container, and `reiya`'s budget of 6500 polygons / 10600 triangles is
+the user's decision of 2026-11-01 to keep the raised cap, made on exactly this comparison), so compare two scenes
+only when they are measured alternately in the same container. Its SVG is byte-identical to the Python writer's (275 654 characters with the
+scene's own layers; `tools/compare_svg.py examples/reiya.json` reports 0 mismatches).
 
 At rest (hidden lines and umbra recomputed) the overlay update took 0.6–2.8 ms for the examples; the status line of
 the screenshots shows the resting frame's `core ms`: `wall_and_ground` 3.4 ms with hidden lines on, `two_lights`

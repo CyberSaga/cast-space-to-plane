@@ -4,9 +4,13 @@
 
 This package generates the 花菱美希 (Hanabishi Miki) drawing-reference model: `examples/miki.json` (the castplane
 scene, 18 inline `mesh` objects) and `examples/meshes/miki.{obj,mtl,glb}` (the same model for other 3D software). It is
-a development tool outside the castplane core. The geometry modules import numpy and the standard library only;
-the previews also use Pillow and cairosvg (both in the `dev` extra). The four generated files are never edited by
-hand: change the generator and regenerate. `tests/test_miki_model.py` compares them byte for byte.
+a development tool outside the castplane core. This package holds Miki's character content (rig, part builders,
+mannequin, objects, materials, texts, camera presets); the character-free machinery (mesh builders, assembly, writers,
+previews, the command line) lives in the shared toolkit [`tools/charmodel/`](../charmodel/README.md), which the second
+character's package, [`tools/reiya_model/`](../reiya_model/README.md), uses too. The geometry modules import numpy
+and the standard library only; the previews also use Pillow and cairosvg (both in the `dev` extra). The four generated
+files are never edited by hand: change the generator and regenerate. `tests/test_miki_model.py` compares them byte for
+byte.
 
 The user-facing description of the scene is in `examples/README.md`, the command line in `docs/USAGE.md` (section 5),
 and the contract note in `docs/ARCHITECTURE.md` (§5.4 implementation notes). The character spec is
@@ -18,14 +22,21 @@ elsewhere in the repository means `docs/spec/spec-v0.1.md`.
 
 | file | what it holds |
 | --- | --- |
-| `../make_miki_model.py` | the CLI: build, validate, write the four files, optional previews and checks |
+| `../make_miki_model.py` | the CLI: Miki's `charmodel.cli.Tool` (name, title, rig, the three modules below) handed to `charmodel.cli.main` (build, validate, write the four files, optional previews and checks) |
 | `rig.py` | `Rig`, a frozen dataclass: every proportion, landmark and pose number, with the SPEC.md section in its comment; `SUN_TOWARDS` |
-| `meshkit.py` | `Mesh`, `Part`, the closed-shell builders, `validate`, `fix_nesting`, `feature_silhouette_vertices` |
+| `meshkit.py` | a re-export of `charmodel.meshkit`: `Mesh`, `Part`, the closed-shell builders, `validate`, `fix_nesting`, `feature_silhouette_vertices` |
 | `mannequin.py` | simple placeholder parts for every region (what `--context` draws in grey) |
 | `head.py`, `hair.py`, `body.py`, `limbs.py` | the detailed parts; each has `REGIONS` and `build(rig)` |
-| `assemble.py` | parts to castplane objects (`OBJECTS`, `MATERIALS`, `assemble`, statistics, `BUDGET`) |
-| `export.py` | the scene JSON (`SCENE_SETTINGS`, `DESCRIPTION`), the OBJ + MTL and the GLB writers |
-| `preview.py` | shaded colour renders, castplane line renders, contact sheets, the camera presets |
+| `assemble.py` | Miki's objects and materials (`OBJECTS`, `MATERIALS`, `DISPLAY_MATERIALS`, `REGION_OBJECTS`, `MODULES`, `BUDGET`), her `charmodel.assembly.Character` (`CHARACTER`) and wrappers (`assemble`, `build_parts`, `format_stats`, `display_color`) over `charmodel.assembly` |
+| `export.py` | Miki's texts (`SCENE_SETTINGS`, `DESCRIPTION`, `NOTICE`, the OBJ / MTL headers, the GLB generator and copyright) and wrappers over the scene JSON, OBJ + MTL and GLB writers of `charmodel.export` |
+| `preview.py` | Miki's camera presets (`PRESETS`, `cameras(rig)`) and wrappers over the shaded colour renders, castplane line renders and contact sheets of `charmodel.preview` |
+
+The generic code is in `tools/charmodel/`: `meshkit.py` (the toolkit), `assembly.py` (rounding, validation, the
+per-object merge with smooth-group renumbering, statistics and budget checks, the `Assembly` / `AssemblyError` types),
+`export.py` (the writers), `preview.py` (the z-buffer renderer, the castplane line renders, contact sheets, the
+camera-preset machinery) and `cli.py` (the command line). Its [`README.md`](../charmodel/README.md) lists the API and
+what a character package has to define. A change there changes every character it touches, so regenerate and test
+each of them.
 
 Regions per module: `head.py` has `head`, `eyes`, `face_marks`; `hair.py` has `hair`, `headband`; `body.py` has
 `neck`, `torso`, `collar`, `scarf`, `skirt`; `limbs.py` has `arms`, `hands`, `legs`, `socks`, `shoes`. A module whose
@@ -33,7 +44,8 @@ Regions per module: `head.py` has `head`, `eyes`, `face_marks`; `hair.py` has `h
 
 ## The part, object and material model
 
-A **part** is one named piece: `Part(name, material, mesh, region="", *, obj="")` (`meshkit.Part`).
+A **part** is one named piece: `Part(name, material, mesh, region="", *, obj="")` (`meshkit.Part`, i.e.
+`charmodel.meshkit.Part`).
 - `name` is unique in the whole model and carries the module as a prefix (`hair.sidelock_l`).
 - `material` is the part's **colour**, a key of `assemble.MATERIALS` (13 of them: `hair`, `skin`, `eye_white`,
   `iris`, `pupil`, `headband`, `scarf`, `socks`, `uniform`, `skirt`, `collar`, `face_marks`, `shoes`). The pink stripes
@@ -95,9 +107,13 @@ def build(rig: Rig):
 When `build` returns a list it replaces **all** of the module's regions, so return every region. `assemble` then rounds
 every part to `DECIMALS` (5, i.e. 0.01 mm), validates it, merges the parts per object (keeping each part's face range
 and material for the exporters), renumbers smooth groups per part so local ids 1, 2, 3 ... never collide, and
-reorders vertices against castplane's nesting-parity flip (`meshkit.fix_nesting`).
+reorders vertices against castplane's nesting-parity flip (`meshkit.fix_nesting`). That machinery is
+`charmodel.assembly.assemble`, driven by the `Character` in `assemble.py`.
 
 ### Building blocks (`meshkit`)
+
+The code is `tools/charmodel/meshkit.py`; `miki_model.meshkit` re-exports it, so `from . import meshkit as mk` keeps
+working in the part modules.
 
 Meshes are values: `Mesh(vertices, faces, groups)` with faces counter-clockwise seen from outside and one smooth-group
 id per face. Every method returns a new mesh: `translate`, `rotate(axis, deg, origin)`, `scale`, `transform`,

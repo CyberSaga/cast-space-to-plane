@@ -1,0 +1,128 @@
+# Reiya model materials (tools/make_reiya_model.py)
+# COPYRIGHT: Reiya and her design belong to her creator; this model is a drawing reference made from the creator's design sheet; the character is not part of this project's authorized distribution (the GPL-3.0 licence covers the castplane software only; see COPYRIGHT_NOTICE.md).
+
+newmtl hair
+Kd 0.94902 0.709804 0.654902
+Ka 0 0 0
+Ks 0 0 0
+d 1
+illum 1
+
+newmtl hair_inner
+Kd 0.882353 0.843137 0.937255
+Ka 0 0 0
+Ks 0 0 0
+d 1
+illum 1
+
+newmtl tuft_inner
+Kd 1.0 0.87451 0.823529
+Ka 0 0 0
+Ks 0 0 0
+d 1
+illum 1
+
+newmtl skin
+Kd 0.980392 0.847059 0.803922
+Ka 0 0 0
+Ks 0 0 0
+d 1
+illum 1
+
+newmtl eye_white
+Kd 1.0 1.0 1.0
+Ka 0 0 0
+Ks 0 0 0
+d 1
+illum 1
+
+newmtl iris_red
+Kd 0.823529 0.341176 0.329412
+Ka 0 0 0
+Ks 0 0 0
+d 1
+illum 1
+
+newmtl pupil_red
+Kd 0.623529 0.164706 0.160784
+Ka 0 0 0
+Ks 0 0 0
+d 1
+illum 1
+
+newmtl iris_blue
+Kd 0.388235 0.529412 0.65098
+Ka 0 0 0
+Ks 0 0 0
+d 1
+illum 1
+
+newmtl pupil_blue
+Kd 0.164706 0.223529 0.266667
+Ka 0 0 0
+Ks 0 0 0
+d 1
+illum 1
+
+newmtl lashes
+Kd 0.247059 0.160784 0.141176
+Ka 0 0 0
+Ks 0 0 0
+d 1
+illum 1
+
+newmtl face_marks
+Kd 0.552941 0.34902 0.27451
+Ka 0 0 0
+Ks 0 0 0
+d 1
+illum 1
+
+newmtl top
+Kd 0.94902 0.94902 0.94902
+Ka 0 0 0
+Ks 0 0 0
+d 1
+illum 1
+
+newmtl dress
+Kd 0.094118 0.25098 0.34902
+Ka 0 0 0
+Ks 0 0 0
+d 1
+illum 1
+
+newmtl buttons
+Kd 0.85098 0.584314 0.34902
+Ka 0 0 0
+Ks 0 0 0
+d 1
+illum 1
+
+newmtl cardigan
+Kd 0.65098 0.419608 0.388235
+Ka 0 0 0
+Ks 0 0 0
+d 1
+illum 1
+
+newmtl socks
+Kd 0.94902 0.94902 0.94902
+Ka 0 0 0
+Ks 0 0 0
+d 1
+illum 1
+
+newmtl star
+Kd 0.090196 0.203922 0.286275
+Ka 0 0 0
+Ks 0 0 0
+d 1
+illum 1
+
+newmtl shoes
+Kd 0.568627 0.392157 0.235294
+Ka 0 0 0
+Ks 0 0 0
+d 1
+illum 1
