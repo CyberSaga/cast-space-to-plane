@@ -4330,9 +4330,10 @@ and the hidden-run SVG groups (§5.1.8). Nothing an M4–M6 case needs lies beyo
   SVG costs the main thread its parse, layout and paint (an `<img>` SVG is laid out on the main thread like the DOM
   overlay: about 100 ms for a 10 k-element drawing). A drag frame's overlay is therefore applied only when
   `OVERLAY_DRAG_INTERVAL_K · dom_ms` has passed since the last one, with `OVERLAY_DRAG_INTERVAL_K = 16` and `dom_ms` the
-  last resting DOM update's `innerHTML` time (a resting frame's only, never a drag frame's); an interval under one
-  animation frame (`OVERLAY_DRAG_MIN_INTERVAL_MS = 17`) means no throttling at all (the examples, about 0.5–1 ms: every
-  reply); the character scene, about 35 ms: every 0.6 s. A skipped reply is applied when the interval has passed unless
+  smallest resting DOM update's `innerHTML` time measured since the load (a resting frame's only, never a drag frame's;
+  the first one after a load is cold and overstates it); an interval under one animation frame
+  (`OVERLAY_DRAG_MIN_INTERVAL_MS = 17`) means no throttling at all (`basic`, about 0.5 ms: every reply; `two_lights`,
+  about 1–2 ms: at most every other frame); the character scene, about 35 ms: every 0.6 s. A skipped reply is applied when the interval has passed unless
   a newer reply was applied first (a trailing apply), so a pointer held still never leaves the drawing pane with a
   stale picture; a load or a synchronous render drops it. The observer's drawing on the frame, the warnings and the
   status follow every reply, and the resting frame always applies. (`web/scripts/smoke.mjs` checks after every example

@@ -233,6 +233,7 @@ function load(name: string, make: () => Scene, colours: Map<string, number>, gro
   // M11: an object drag held across the load belongs to the old scene (forgotten, nothing restored)
   obj_drag.abandon();
   drop_pending_overlay();
+  resting_dom_ms = Infinity; // the new scene's overlay cost is measured afresh
   state.object_error = false;
   state.scene = scene;
   state.sceneName = name;
@@ -1314,9 +1315,10 @@ function show_status(summary: DocSummary, rec: CameraRecord, meta: StatusMeta, o
  * layout and paint (an `<img>` SVG document is laid out on the main thread like the DOM overlay), which for a large
  * scene exceeds a frame many times over, while the worker replies at its own pace. The last resting DOM update's
  * `innerHTML` time (`dom_ms`) scales with the SVG's element count, so a drag frame's overlay is applied only when
- * `OVERLAY_DRAG_INTERVAL_K · dom_ms` has passed since the last one (the examples: ≈ 1 ms → an interval under one frame,
- * so no throttling and every reply; a 10 k-element scene: ≈ 30–90 ms of `innerHTML`, whose `<img>` paint costs about
- * three times that → every 0.5–1.5 s, so the main thread spends under a fifth of the drag on it). A skipped reply is
+ * `OVERLAY_DRAG_INTERVAL_K · dom_ms` has passed since the last one (`basic`: ≈ 0.5 ms → an interval under one frame,
+ * so no throttling and every reply; `two_lights`: ≈ 1–2 ms → at most every other frame; a 10 k-element scene: ≈ 30–90
+ * ms of `innerHTML`, whose `<img>` paint costs about three times that → every 0.5–1.5 s, so the main thread spends
+ * under a fifth of the drag on it). A skipped reply is
  * applied when the interval has passed unless a newer one came first (`pending_overlay`), so a pointer held still
  * never leaves a stale picture. The observer's drawing on the frame, the warnings and the status follow every reply;
  * the resting frame always applies.
@@ -1324,8 +1326,10 @@ function show_status(summary: DocSummary, rec: CameraRecord, meta: StatusMeta, o
 export const OVERLAY_DRAG_INTERVAL_K = 16;
 /** No throttling at all when the interval would be shorter than one animation frame (ms): the examples get every reply. */
 export const OVERLAY_DRAG_MIN_INTERVAL_MS = 17;
-/** When the overlay was last applied, and the `innerHTML` time of the last resting DOM overlay (ms). */
-let overlay_applied_at = -Infinity, resting_dom_ms = 0;
+/** When the overlay was last applied, and the resting DOM overlay's `innerHTML` time (ms): the smallest measured since
+ * the load (the first resting frame after a load is cold and overstates it; `Infinity` until one was measured, which
+ * means no throttling). */
+let overlay_applied_at = -Infinity, resting_dom_ms = Infinity;
 /** A drag reply whose overlay was skipped: applied when the interval has passed (a trailing apply, so the drawing pane
  * never keeps a stale picture while the pointer is held still), unless a newer reply applies first. */
 let pending_overlay: { svg: string; img: boolean; timer: number } | null = null;
@@ -1339,7 +1343,7 @@ function drop_pending_overlay(): void {
 /** The drag-frame overlay interval now (0: no throttling). */
 function overlay_interval(): number {
   const ms = OVERLAY_DRAG_INTERVAL_K * resting_dom_ms;
-  return ms < OVERLAY_DRAG_MIN_INTERVAL_MS ? 0 : ms;
+  return !Number.isFinite(ms) || ms < OVERLAY_DRAG_MIN_INTERVAL_MS ? 0 : ms;
 }
 
 /** Show `svg` in the drawing pane (`<img>` or DOM), now. */
@@ -1379,7 +1383,7 @@ function apply_reply(r: RenderedReply, info: RequestInfo): void {
   }
   const t2 = performance.now();
   if (!img && !skip_overlay) state.full_svg_length = r.svg.length;
-  if (!img && !info.dragging) resting_dom_ms = t2 - t1; // a resting DOM frame: the cost the throttle scales with
+  if (!img && !info.dragging) resting_dom_ms = Math.min(resting_dom_ms, t2 - t1); // a resting DOM frame's cost
   state.svg = r.svg;
   state.rec = r.rec;
   last_rays = r.ray_points;
@@ -1537,7 +1541,7 @@ function frame_sync(drag_step = false): boolean {
   const t2 = performance.now();
   if (!img_mode) {
     state.full_svg_length = svg.length;
-    if (!state.dragging) resting_dom_ms = t2 - t1;
+    if (!state.dragging) resting_dom_ms = Math.min(resting_dom_ms, t2 - t1);
   }
   state.doc = doc;
   state.svg = svg;
