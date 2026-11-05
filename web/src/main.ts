@@ -1086,7 +1086,8 @@ function update_observer(rec: CameraRecord, doc: GeometryDocument): number {
   // D83: the board's handles and the selected object's rings are drawn together (modeless); 「板子」 unchecked hides the
   // board group and its labels and passes no board handles (not hit-tested, not hover-highlighted)
   const hd = state.handle;
-  observer.update({ board, art, rays, board_visible: shown, handles: shown ? handles_of(rig, state.scene.camera.frame_mm) : null,
+  // MERGE: Agent A replaces this
+  observer.legacy_update({ board, art, rays, board_visible: shown, handles: shown ? handles_of(rig, state.scene.camera.frame_mm) : null,
     pivot_id: pl.pivot.mode === "object" ? pivot_label(pl.pivot.object_id) : null,
     active: hd?.kind === "ring" || hd?.kind === "arrow" ? hd.kind : null,
     object_rings: object_rings_now(), active_axis: hd?.kind === "object" ? hd.axis : null });

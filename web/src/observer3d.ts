@@ -3,7 +3,9 @@
  * (`scene3d.ts`, the same builder as the drawing pane), plus the board group built from the pure arrays of
  * `observer.ts` (eye, board patch, frame with the drawing on it, frustum, principal point, D and g lines, pivot,
  * vertex rays) and HTML labels. D83: the vertex rays and the object rings live in a second group, so the 「板子」
- * checkbox can hide the board group and its labels while they stay. Its camera is an ordinary `THREE.PerspectiveCamera` (40° vertical field of view) set
+ * checkbox can hide the board group and its labels while they stay. The pane is incremental ({@link ObserverFrame}):
+ * pooled line objects, each part redrawn only when its inputs changed, the drawing kept in canvas mm under one
+ * matrix. Its camera is an ordinary `THREE.PerspectiveCamera` (40° vertical field of view) set
  * from {@link observer_basis}; left drag orbits it, the wheel and a two-finger pinch zoom it. Nothing here changes the
  * drawing camera, the document or the SVG (read-only, §5.6.0).
  */
@@ -22,6 +24,7 @@ import {
 import type {
   Board, BoardLabel, FillStyle, HandleHit, Handles, LineArt, LineStyle, ObjectRingSet, ObserverView, VertexRays,
 } from "./observer.js";
+import type { ArtBuffers } from "./art_buffers.js";
 import { OBJECT_ID_KEY, RECEIVER_ID_KEY, object_id_of } from "./helpers3d.js";
 import { build_scene3d } from "./scene3d.js";
 import { Stage3D } from "./stage.js";
@@ -29,7 +32,7 @@ import { Stage3D } from "./stage.js";
 /** Opacity of the receiver plates in the observer pane (see {@link ObserverPane.set_scene}). */
 const RECEIVER_OPACITY = 0.5;
 
-/** What one observer update draws. */
+/** What one pre-incremental observer update drew (the input of {@link ObserverPane.legacy_update}). */
 export interface ObserverGeometry {
   board: Board;
   art: LineArt;
@@ -147,28 +150,148 @@ function dot_texture(shape: "circle" | "diamond"): THREE.Texture {
   return t;
 }
 
-const flat = (pairs: readonly (readonly [Vec3, Vec3])[]): number[] => {
-  const out: number[] = [];
-  for (const [a, b] of pairs) out.push(a[0], a[1], a[2], b[0], b[1], b[2]);
-  return out;
+/** The column-major identity (the art matrix of {@link ObserverPane.legacy_update}: world-space art). */
+const IDENTITY16: readonly number[] = [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1];
+/** The two dashed art styles: their dash lengths are metres, their line distances canvas mm (`dashScale`). */
+const DASHED_ART: readonly LineStyle[] = ["objects_back", "hidden"];
+/** The triangles of a quad in {@link Board.corners} order (the patch and the frame back). */
+const SQUARE_TRIS: number[] = THREE.ShapeUtils.triangulateShape(
+  ([[-1, -1], [1, -1], [1, 1], [-1, 1]] as const).map(([a, b]) => new THREE.Vector2(a, b)), []).flat();
+
+/** Writes segments (6 floats each, `x0 y0 z0 x1 y1 z1`) into the start of a pooled buffer. */
+type SegmentWriter = (a: Float32Array) => void;
+
+const pairs_writer = (pairs: readonly (readonly [Vec3, Vec3])[]): SegmentWriter => (a) => {
+  let j = 0;
+  for (const [p, q] of pairs) {
+    a[j] = p[0]; a[j + 1] = p[1]; a[j + 2] = p[2]; a[j + 3] = q[0]; a[j + 4] = q[1]; a[j + 5] = q[2];
+    j += 6;
+  }
 };
 
-/** The observer pane: one three.js view, the board group and the labels. */
+/** The closed polyline through `pts` (segment `i` joins point `i` and point `i + 1 mod n`). */
+const loop_writer = (pts: readonly Vec3[]): SegmentWriter => (a) => {
+  const n = pts.length;
+  for (let i = 0, j = 0; i < n; i++, j += 6) {
+    const p = pts[i]!, q = pts[(i + 1) % n]!;
+    a[j] = p[0]; a[j + 1] = p[1]; a[j + 2] = p[2]; a[j + 3] = q[0]; a[j + 4] = q[1]; a[j + 5] = q[2];
+  }
+};
+
+/** Canvas-mm segments (4 floats each, `u0 v0 u1 v1`) on the plane `z = 0`. */
+const uv_writer = (uv: Float32Array): SegmentWriter => (a) => {
+  for (let i = 0, j = 0; i + 3 < uv.length; i += 4, j += 6) {
+    a[j] = uv[i]!; a[j + 1] = uv[i + 1]!; a[j + 2] = 0; a[j + 3] = uv[i + 2]!; a[j + 4] = uv[i + 3]!; a[j + 5] = 0;
+  }
+};
+
+/** Value keys: the change detection of {@link ObserverPane.update} (flat lists of numbers, compared value for value). */
+function key_points(out: number[], pts: readonly (readonly number[])[]): void {
+  out.push(pts.length);
+  for (const p of pts) out.push(p[0]!, p[1]!, p[2]!);
+}
+function key_pairs(out: number[], pairs: readonly (readonly [Vec3, Vec3])[]): void {
+  out.push(pairs.length);
+  for (const [p, q] of pairs) out.push(p[0], p[1], p[2], q[0], q[1], q[2]);
+}
+function same_key(a: readonly number[] | null, b: readonly number[] | null): boolean {
+  if (a === null || b === null) return a === b;
+  if (a.length !== b.length) return false;
+  for (let i = 0; i < a.length; i++) if (a[i] !== b[i]) return false;
+  return true;
+}
+
+/** A pooled `LineSegments2`: its instance buffers are rewritten in place; a new geometry only when it must grow. */
+interface PooledLines {
+  line: LineSegments2;
+  cap: number;
+  pos: THREE.InstancedInterleavedBuffer;
+  /** The instance distances (dashed materials only, laid out as `LineSegments2.computeLineDistances` does). */
+  dist: THREE.InstancedInterleavedBuffer | null;
+}
+
+function line_geometry(cap: number, dashed: boolean): { g: LineSegmentsGeometry; pos: THREE.InstancedInterleavedBuffer;
+  dist: THREE.InstancedInterleavedBuffer | null } {
+  const g = new LineSegmentsGeometry();
+  const pos = new THREE.InstancedInterleavedBuffer(new Float32Array(6 * cap), 6, 1);
+  pos.setUsage(THREE.DynamicDrawUsage);
+  g.setAttribute("instanceStart", new THREE.InterleavedBufferAttribute(pos, 3, 0));
+  g.setAttribute("instanceEnd", new THREE.InterleavedBufferAttribute(pos, 3, 3));
+  let dist: THREE.InstancedInterleavedBuffer | null = null;
+  if (dashed) {
+    dist = new THREE.InstancedInterleavedBuffer(new Float32Array(2 * cap), 2, 1);
+    dist.setUsage(THREE.DynamicDrawUsage);
+    g.setAttribute("instanceDistanceStart", new THREE.InterleavedBufferAttribute(dist, 1, 0));
+    g.setAttribute("instanceDistanceEnd", new THREE.InterleavedBufferAttribute(dist, 1, 1));
+  }
+  g.instanceCount = 0;
+  return { g, pos, dist };
+}
+
+/** One frame of the observer pane ({@link ObserverPane.update}): every input of the board group, the extras and the
+ * placement of the drawing. */
+export interface ObserverFrame {
+  board: Board;
+  /** D83: whether the board group (with the drawing and the board's handles) and its labels are drawn. */
+  board_visible: boolean;
+  /** M10 (§5.7.9): the ring and the arrow; null while the board is hidden or without a rig. */
+  handles: Handles | null;
+  /** M10: the id of a picked pivot object (its label `旋轉中心：<id>`). */
+  pivot_id: string | null;
+  /** M10: the handle being dragged (drawn thicker). */
+  active: "ring" | "arrow" | null;
+  /** M11 (§5.8.4): the selected object's three rings, or null. */
+  object_rings: ObjectRingSet | null;
+  /** M11: the axis of the object ring being dragged (drawn thicker). */
+  active_axis: 0 | 1 | 2 | null;
+  /** The vertex rays, or null (the 視線 checkbox unchecked). */
+  rays: VertexRays | null;
+  /** The drawing's placement on the frame: canvas mm (`z = 0`) → world, 16 numbers column-major
+   * (`art_buffers.ts::art_frame_matrix`; `THREE.Matrix4.fromArray`). */
+  art_matrix: readonly number[];
+}
+
+/**
+ * The observer pane: one three.js view, the board group and the labels. Incremental: each part (board, the board's
+ * handles, object rings, rays) is redrawn only when its inputs changed, into pooled line / dot objects whose GPU
+ * buffers are reused; the drawing on the frame is kept in canvas mm and placed with the art matrix, so a camera
+ * change moves it without a rebuild ({@link set_art} replaces its content).
+ */
 export class ObserverPane {
   readonly stage: Stage3D;
   readonly camera: THREE.PerspectiveCamera;
   view: ObserverView = initial_view();
+  /** The board group (hidden by the 「板子」 checkbox): its parts, the drawing, the board's handles. */
   private readonly board = new THREE.Group();
+  private readonly boardParts = new THREE.Group();
+  /** The drawing on the frame: canvas mm under the art matrix. */
+  private readonly art = new THREE.Group();
+  private readonly handleParts = new THREE.Group();
   /** D83: the vertex rays and the object rings (not hidden by the 「板子」 checkbox). */
   private readonly extras = new THREE.Group();
+  private readonly rayParts = new THREE.Group();
+  private readonly ringParts = new THREE.Group();
   private readonly lineMats = new Map<string, LineMaterial>();
   private readonly dotMats = new Map<string, THREE.PointsMaterial>();
   private readonly fillMats = new Map<string, THREE.MeshBasicMaterial>();
+  /** Pooled objects by name. */
+  private readonly lines = new Map<string, PooledLines>();
+  private readonly dots = new Map<string, { points: THREE.Points; cap: number }>();
+  private readonly quads = new Map<string, THREE.Mesh>();
+  private artFills: THREE.Mesh[] = [];
   private readonly labelEls = new Map<string, HTMLDivElement>();
   private labels: BoardLabel[] = [];
   private boardNow: Board | null = null;
   private handlesNow: Handles | null = null;
   private objectRingsNow: ObjectRingSet | null = null;
+  /** The value keys of the drawn parts (null: drawn from null, or nothing drawn yet for the board). */
+  private boardKey: number[] | null = null;
+  private boardEquation = "";
+  private handlesKey: number[] | null | undefined = undefined;
+  private ringsKey: number[] | null | undefined = undefined;
+  private ringsId: string | null = null;
+  private raysKey: number[] | null | undefined = undefined;
+  private readonly raycaster = new THREE.Raycaster();
   private W = 1;
   private H = 1;
 
@@ -177,8 +300,57 @@ export class ObserverPane {
     this.stage.scene3.background = new THREE.Color(0xf3f2ec);
     this.camera = new THREE.PerspectiveCamera(OBSERVER_FOV_DEG, 1, OBSERVER_NEAR_M, OBSERVER_FAR_M);
     this.board.name = "observer-board";
+    this.boardParts.name = "observer-board-parts";
+    this.art.name = "observer-art";
+    this.art.matrixAutoUpdate = false;
+    this.handleParts.name = "observer-handles";
     this.extras.name = "observer-extras";
+    this.rayParts.name = "observer-rays";
+    this.ringParts.name = "observer-object-rings";
+    this.board.add(this.boardParts, this.art, this.handleParts);
+    this.extras.add(this.rayParts, this.ringParts);
     this.stage.scene3.add(this.board, this.extras);
+    this.precompile();
+  }
+
+  /** Compile every line, dot and fill material once (one temporary object each), so that the first selection or drag
+   * does not wait for a shader compile. A failure only defers the compile to the first draw. */
+  private precompile(): void {
+    const tmp = new THREE.Group();
+    const geos: THREE.BufferGeometry[] = [];
+    const specs: [string, LineSpec][] = [
+      ...Object.entries(ART_LINES).map(([k, s]) => [`art:${k}`, s] as [string, LineSpec]),
+      ...Object.entries(HELPER_LINES),
+    ];
+    for (const [key, spec] of specs) {
+      const { g, pos, dist } = line_geometry(1, spec.dash !== undefined);
+      (pos.array as Float32Array).set([0, 0, 0, 1, 0, 0]);
+      if (dist !== null) (dist.array as Float32Array).set([0, 1]);
+      g.instanceCount = 1;
+      geos.push(g);
+      tmp.add(new LineSegments2(g, this.line_mat(key, spec)));
+    }
+    for (const key of Object.keys(DOTS) as (keyof typeof DOTS)[]) {
+      const g = new THREE.BufferGeometry().setAttribute("position", new THREE.Float32BufferAttribute([0, 0, 0], 3));
+      geos.push(g);
+      tmp.add(new THREE.Points(g, this.dot_mat(key)));
+    }
+    const tri = (): THREE.BufferGeometry => {
+      const g = new THREE.BufferGeometry().setAttribute("position", new THREE.Float32BufferAttribute([0, 0, 0, 1, 0, 0, 0, 1, 0], 3));
+      geos.push(g);
+      return g;
+    };
+    tmp.add(new THREE.Mesh(tri(), this.fill_mat("patch", 0x2563d9, 0.08)), new THREE.Mesh(tri(), this.fill_mat("frame", 0xffffff, 0.72)));
+    for (const [style, spec] of Object.entries(ART_FILLS)) tmp.add(new THREE.Mesh(tri(), this.fill_mat(`art:${style}`, spec.color, spec.opacity)));
+    this.stage.scene3.add(tmp);
+    try {
+      this.stage.renderer.compile(this.stage.scene3, this.camera);
+    } catch {
+      // nothing: the shaders are then compiled at their first draw
+    } finally {
+      this.stage.scene3.remove(tmp);
+      for (const g of geos) g.dispose();
+    }
   }
 
   /** Show `scene` (a second build of the `scene3d` group: three.js objects belong to one scene each). Its receiver
@@ -223,9 +395,19 @@ export class ObserverPane {
     return this.W / this.H;
   }
 
-  /** The names of the board group's children, then the rays' and object rings' (smoke test). */
+  /** The names of the drawn objects: the board group's while it is shown (its parts, the drawing's `art-fill:<style>` /
+   * `art:<style>` of the non-empty styles, the board's handles), then the rays' and object rings' (smoke test). */
   get names(): string[] {
-    return [...this.board.children, ...this.extras.children].map((c) => c.name);
+    const out: string[] = [];
+    const walk = (g: THREE.Object3D): void => {
+      for (const c of g.children) {
+        if (c instanceof THREE.Group) walk(c);
+        else out.push(c.name);
+      }
+    };
+    if (this.board.visible) walk(this.board);
+    walk(this.extras);
+    return out;
   }
 
   /** D83: whether the board group is shown (the 「板子」 checkbox; smoke test). */
@@ -252,31 +434,15 @@ export class ObserverPane {
     return m;
   }
 
-  private add_lines(name: string, key: string, spec: LineSpec, pairs: readonly (readonly [Vec3, Vec3])[], group = this.board): void {
-    if (pairs.length === 0) return;
-    const g = new LineSegmentsGeometry();
-    g.setPositions(flat(pairs));
-    const line = new LineSegments2(g, this.line_mat(key, spec));
-    if (spec.dash !== undefined) line.computeLineDistances();
-    line.name = name;
-    line.renderOrder = spec.order;
-    group.add(line);
-  }
-
-  private add_dots(name: string, spec: DotSpec, pts: readonly Vec3[], group = this.board): void {
-    if (pts.length === 0) return;
-    let m = this.dotMats.get(name);
+  private dot_mat(key: keyof typeof DOTS): THREE.PointsMaterial {
+    let m = this.dotMats.get(key);
     if (m === undefined) {
+      const spec: DotSpec = DOTS[key];
       m = new THREE.PointsMaterial({ color: spec.color, size: spec.size, sizeAttenuation: false, map: dot_texture(spec.shape),
         transparent: true, alphaTest: 0.5, depthTest: false });
-      this.dotMats.set(name, m);
+      this.dotMats.set(key, m);
     }
-    const g = new THREE.BufferGeometry();
-    g.setAttribute("position", new THREE.Float32BufferAttribute(pts.flatMap((p) => [p[0], p[1], p[2]]), 3));
-    const pointsObj = new THREE.Points(g, m);
-    pointsObj.name = name;
-    pointsObj.renderOrder = 10;
-    group.add(pointsObj);
+    return m;
   }
 
   private fill_mat(key: string, color: number, opacity: number): THREE.MeshBasicMaterial {
@@ -288,104 +454,311 @@ export class ObserverPane {
     return m;
   }
 
-  /** A filled polygon: triangulated in its own 2D frame (`uv`, canvas mm or patch coordinates), drawn at `world`. */
-  private add_fill(name: string, mat: THREE.Material, uv: readonly (readonly number[])[], world: readonly Vec3[], order: number): void {
-    const tris = THREE.ShapeUtils.triangulateShape(uv.map((p) => new THREE.Vector2(p[0], p[1])), []);
-    if (tris.length === 0) return;
-    const g = new THREE.BufferGeometry();
-    g.setAttribute("position", new THREE.Float32BufferAttribute(world.flatMap((p) => [p[0], p[1], p[2]]), 3));
-    g.setIndex(tris.flat());
-    const mesh = new THREE.Mesh(g, mat);
-    mesh.name = name;
-    mesh.renderOrder = order;
-    this.board.add(mesh);
-  }
-
-  /** Rebuild the board group from one frame's geometry (the materials are kept). */
-  update(geo: ObserverGeometry): void {
-    for (const g of [this.board, this.extras]) {
-      for (const c of [...g.children]) {
-        g.remove(c);
-        (c as THREE.Mesh).geometry.dispose();
+  /**
+   * The pooled line object `name` with `n` segments written by `write` (material `key` / `spec`), in `parent`; with
+   * `n = 0` it is detached (not drawn, not in {@link names}). A dashed material gets the instance distances that
+   * `LineSegments2.computeLineDistances` computes (cumulative, in the geometry's local units).
+   */
+  private set_lines(name: string, key: string, spec: LineSpec, parent: THREE.Group, n: number, write: SegmentWriter): void {
+    let e = this.lines.get(name);
+    if (n === 0) {
+      if (e !== undefined && e.line.parent !== null) e.line.parent.remove(e.line);
+      return;
+    }
+    const mat = this.line_mat(key, spec);
+    if (e === undefined || e.cap < n) {
+      const cap = Math.max(n, e === undefined ? 0 : Math.ceil(1.5 * e.cap), 8);
+      const { g, pos, dist } = line_geometry(cap, spec.dash !== undefined);
+      if (e === undefined) {
+        const line = new LineSegments2(g, mat);
+        line.name = name;
+        line.frustumCulled = false; // its bounding volumes would cover the whole (partly stale) buffer
+        e = { line, cap, pos, dist };
+        this.lines.set(name, e);
+      } else {
+        e.line.geometry.dispose();
+        e.line.geometry = g;
+        e.cap = cap;
+        e.pos = pos;
+        e.dist = dist;
       }
     }
-    const b = geo.board;
-    this.boardNow = b;
-    const shown = geo.board_visible ?? true;
+    e.line.material = mat;
+    e.line.renderOrder = spec.order;
+    const a = e.pos.array as Float32Array;
+    write(a);
+    e.pos.clearUpdateRanges();
+    e.pos.addUpdateRange(0, 6 * n);
+    e.pos.needsUpdate = true;
+    if (e.dist !== null) {
+      const d = e.dist.array as Float32Array;
+      let s = 0;
+      for (let i = 0, j = 0; i < n; i++, j += 6) {
+        d[2 * i] = s;
+        s += Math.hypot(a[j + 3]! - a[j]!, a[j + 4]! - a[j + 1]!, a[j + 5]! - a[j + 2]!);
+        d[2 * i + 1] = s;
+      }
+      e.dist.clearUpdateRanges();
+      e.dist.addUpdateRange(0, 2 * n);
+      e.dist.needsUpdate = true;
+    }
+    e.line.geometry.instanceCount = n;
+    if (e.line.parent !== parent) parent.add(e.line);
+  }
+
+  private set_pairs(name: string, key: string, spec: LineSpec, parent: THREE.Group, pairs: readonly (readonly [Vec3, Vec3])[]): void {
+    this.set_lines(name, key, spec, parent, pairs.length, pairs_writer(pairs));
+  }
+
+  /** The pooled dot object `name` (material {@link DOTS}`[key]`) at `pts`, in `parent`; detached when empty. */
+  private set_dots(name: string, key: keyof typeof DOTS, parent: THREE.Group, pts: readonly Vec3[]): void {
+    let e = this.dots.get(name);
+    const n = pts.length;
+    if (n === 0) {
+      if (e !== undefined && e.points.parent !== null) e.points.parent.remove(e.points);
+      return;
+    }
+    if (e === undefined || e.cap < n) {
+      const cap = Math.max(n, e === undefined ? 0 : Math.ceil(1.5 * e.cap), 4);
+      const g = new THREE.BufferGeometry();
+      g.setAttribute("position", new THREE.BufferAttribute(new Float32Array(3 * cap), 3).setUsage(THREE.DynamicDrawUsage));
+      if (e === undefined) {
+        const points = new THREE.Points(g, this.dot_mat(key));
+        points.name = name;
+        points.renderOrder = 10;
+        points.frustumCulled = false;
+        e = { points, cap };
+        this.dots.set(name, e);
+      } else {
+        e.points.geometry.dispose();
+        e.points.geometry = g;
+        e.cap = cap;
+      }
+    }
+    const attr = e.points.geometry.getAttribute("position") as THREE.BufferAttribute;
+    const a = attr.array as Float32Array;
+    pts.forEach((p, i) => a.set(p, 3 * i));
+    attr.clearUpdateRanges();
+    attr.addUpdateRange(0, 3 * n);
+    attr.needsUpdate = true;
+    e.points.geometry.setDrawRange(0, n);
+    if (e.points.parent !== parent) parent.add(e.points);
+  }
+
+  /** The pooled filled quad `name` over `corners` ({@link Board.corners} order), in the board parts. */
+  private set_quad(name: string, mat: THREE.Material, corners: readonly Vec3[], order: number): void {
+    let mesh = this.quads.get(name);
+    if (mesh === undefined) {
+      const g = new THREE.BufferGeometry();
+      g.setAttribute("position", new THREE.BufferAttribute(new Float32Array(12), 3).setUsage(THREE.DynamicDrawUsage));
+      g.setIndex(SQUARE_TRIS);
+      mesh = new THREE.Mesh(g, mat);
+      mesh.name = name;
+      mesh.renderOrder = order;
+      mesh.frustumCulled = false;
+      this.quads.set(name, mesh);
+      this.boardParts.add(mesh);
+    }
+    const attr = mesh.geometry.getAttribute("position") as THREE.BufferAttribute;
+    const a = attr.array as Float32Array;
+    corners.slice(0, 4).forEach((p, i) => a.set(p, 3 * i));
+    attr.needsUpdate = true;
+  }
+
+  /**
+   * Replace the drawing on the frame (a new document's): one pooled line object per non-empty style (canvas mm,
+   * `z = 0`, placed by the art matrix of {@link update}); the fills are rebuilt (triangulated in canvas mm).
+   */
+  set_art(art: ArtBuffers): void {
+    this.apply_art(
+      art.lines.map(({ style, uv }) => ({ style, n: Math.floor(uv.length / 4), write: uv_writer(uv) })),
+      art.fills.map(({ style, uv }) => {
+        const m = Math.floor(uv.length / 2);
+        const pts: THREE.Vector2[] = [];
+        const pos = new Float32Array(3 * m);
+        for (let i = 0; i < m; i++) {
+          pts.push(new THREE.Vector2(uv[2 * i]!, uv[2 * i + 1]!));
+          pos[3 * i] = uv[2 * i]!;
+          pos[3 * i + 1] = uv[2 * i + 1]!;
+        }
+        return { style, uv: pts, pos };
+      }),
+    );
+  }
+
+  private apply_art(lines: { style: LineStyle; n: number; write: SegmentWriter }[],
+    fills: { style: FillStyle; uv: THREE.Vector2[]; pos: Float32Array }[]): void {
+    const seen = new Set<string>();
+    for (const l of lines) {
+      const name = `art:${l.style}`;
+      seen.add(name);
+      this.set_lines(name, name, ART_LINES[l.style], this.art, l.n, l.write);
+    }
+    for (const [name, e] of this.lines) {
+      if (name.startsWith("art:") && !seen.has(name) && e.line.parent !== null) e.line.parent.remove(e.line);
+    }
+    for (const m of this.artFills) {
+      this.art.remove(m);
+      m.geometry.dispose();
+    }
+    this.artFills = [];
+    for (const f of fills) {
+      const tris = THREE.ShapeUtils.triangulateShape(f.uv, []);
+      if (tris.length === 0) continue;
+      const g = new THREE.BufferGeometry();
+      g.setAttribute("position", new THREE.BufferAttribute(f.pos, 3));
+      g.setIndex(tris.flat());
+      const spec = ART_FILLS[f.style];
+      const mesh = new THREE.Mesh(g, this.fill_mat(`art:${f.style}`, spec.color, spec.opacity));
+      mesh.name = `art-fill:${f.style}`;
+      mesh.renderOrder = 3;
+      this.art.add(mesh);
+      this.artFills.push(mesh);
+    }
+  }
+
+  /**
+   * MERGE: Agent A replaces this. The pre-incremental entry point (`main.ts`'s one call): the drawing in world
+   * coordinates (`LineArt.world`) under the identity art matrix, then {@link update}.
+   */
+  legacy_update(geo: ObserverGeometry): void {
+    const by_style = new Map<LineStyle, [Vec3, Vec3][]>();
+    for (const s of geo.art.segments) {
+      const list = by_style.get(s.style) ?? [];
+      list.push(s.world);
+      by_style.set(s.style, list);
+    }
+    this.apply_art([...by_style].map(([style, pairs]) => ({ style, n: pairs.length, write: pairs_writer(pairs) })),
+      geo.art.fills.map((f) => ({ style: f.style, uv: f.uv.map((p) => new THREE.Vector2(p[0], p[1])),
+        pos: Float32Array.from(f.world.flatMap((p) => [p[0], p[1], p[2]])) })));
+    this.update({
+      board: geo.board, board_visible: geo.board_visible ?? true, handles: geo.handles ?? null, pivot_id: geo.pivot_id ?? null,
+      active: geo.active ?? null, object_rings: geo.object_rings ?? null, active_axis: geo.active_axis ?? null, rays: geo.rays,
+      art_matrix: IDENTITY16,
+    });
+  }
+
+  /**
+   * One frame: place the drawing (the art matrix, every call) and redraw each part whose inputs changed value for
+   * value — the board (patch, frame back, frame, frustum, D and g lines, Q / pivot / E), the board's handles, the
+   * object rings, the vertex rays. Cheap when nothing changed.
+   */
+  update(frame: ObserverFrame): void {
+    const M = frame.art_matrix;
+    this.art.matrix.fromArray(M as number[]);
+    this.art.matrixWorldNeedsUpdate = true;
+    // the art matrix turns canvas mm into metres (its uniform scale); the art dash lengths are metres
+    const s = Math.hypot(M[0]!, M[1]!, M[2]!);
+    for (const style of DASHED_ART) this.line_mat(`art:${style}`, ART_LINES[style]).dashScale = s;
+    this.boardNow = frame.board;
+    this.draw_rays(frame.rays);
+    this.draw_object_rings(frame.object_rings, frame.active_axis);
+    const shown = frame.board_visible;
     this.board.visible = shown;
-    // vertex rays (D83: in the extras group, shown with or without the board)
-    const r = geo.rays;
-    if (r !== null) {
-      const x = this.extras;
-      this.add_lines("rays:sight", "sight", HELPER_LINES.sight, r.sight, x);
-      this.add_lines("rays:light", "light", HELPER_LINES.light, r.light, x);
-      this.add_lines("rays:shadow-sight", "shadow_sight", HELPER_LINES.shadow_sight, r.shadow_sight, x);
-      this.add_dots("dots:crossing", DOTS.crossing, r.crossings, x);
-      this.add_dots("dots:shadow", DOTS.shadow, r.shadows, x);
-      this.add_dots("dots:shadow-crossing", DOTS.shadow_crossing, r.shadow_crossings, x);
-    }
-    // M11 object rings (§5.8.4): one closed polyline per world axis around the object's pivot (D83: extras group)
-    const orings = geo.object_rings ?? null;
-    this.objectRingsNow = orings;
-    if (orings !== null) {
-      orings.rings.forEach((ring, axis) => {
-        const key = `object_ring_${axis}${geo.active_axis === axis ? "_active" : ""}` as keyof typeof HELPER_LINES;
-        this.add_lines(`object-ring:${"xyz"[axis]}`, key, HELPER_LINES[key], ring.map((p, i) => [p, ring[(i + 1) % ring.length]!] as [Vec3, Vec3]),
-          this.extras);
-      });
-    }
     if (!shown) {
-      // D83: 「板子」 unchecked: no board group, no board handles (the caller passes none), no labels
+      // D83: 「板子」 unchecked: no board group, no board handles (the caller passes none), no labels; the drawn parts
+      // keep their keys and are compared again when the board is shown
       this.handlesNow = null;
       this.labels = [];
       return;
     }
-    const loop = (pts: readonly Vec3[]): [Vec3, Vec3][] => pts.map((p, i) => [p, pts[(i + 1) % pts.length]!]);
-    const square: [number, number][] = [[-1, -1], [1, -1], [1, 1], [-1, 1]];
-    // board patch and frame (back-filled), then the drawing on the frame
-    this.add_fill("board:patch", this.fill_mat("patch", 0x2563d9, 0.08), square, b.patch, 1);
-    this.add_lines("board:patch-outline", "patch", HELPER_LINES.patch, loop(b.patch));
-    this.add_fill("board:frame-back", this.fill_mat("frame", 0xffffff, 0.72), square, b.corners, 2);
-    const fills = new Map<FillStyle, LineArt["fills"]>();
-    for (const f of geo.art.fills) {
-      const list = fills.get(f.style) ?? [];
-      list.push(f);
-      fills.set(f.style, list);
-    }
-    for (const [style, list] of fills) {
-      const spec = ART_FILLS[style];
-      const mat = this.fill_mat(`art:${style}`, spec.color, spec.opacity);
-      for (const f of list) this.add_fill(`art-fill:${style}`, mat, f.uv, f.world, 3);
-    }
-    const lines = new Map<LineStyle, [Vec3, Vec3][]>();
-    for (const s of geo.art.segments) {
-      const list = lines.get(s.style) ?? [];
-      list.push(s.world);
-      lines.set(s.style, list);
-    }
-    for (const [style, pairs] of lines) this.add_lines(`art:${style}`, `art:${style}`, ART_LINES[style], pairs);
-    this.add_lines("board:frame", "frame", HELPER_LINES.frame, loop(b.corners));
-    // frustum, D line, g line
-    const fr = frustum(b);
-    this.add_lines("frustum", "frustum", HELPER_LINES.frustum, fr.solid);
-    this.add_lines("frustum:far", "frustum_far", HELPER_LINES.frustum_far, fr.dotted);
-    this.add_lines("d-line", "d_line", HELPER_LINES.d_line, [[b.E, b.Q]]);
-    this.add_lines("g-line", "g_line", HELPER_LINES.g_line, [[b.Q, b.P]]);
-    this.add_dots("dots:Q", DOTS.Q, [b.Q]);
-    this.add_dots("dots:pivot", DOTS.pivot, [b.P]);
-    this.add_dots("dots:E", DOTS.E, [b.E]);
-    // M10 handles (§5.7.9): the orange dashed ring around Q and the blue arrow Q → tip (towards the eye)
-    const h = geo.handles ?? null;
+    const b = frame.board;
+    this.draw_board(b);
+    const h = frame.handles;
     this.handlesNow = h;
+    this.draw_handles(h, frame.active, b);
+    this.labels = board_labels(b, { pivot_id: frame.pivot_id, ...(h !== null ? { tip: h.tip } : {}) });
+  }
+
+  private draw_board(b: Board): void {
+    const key = [b.D, b.g];
+    key_points(key, [b.E, b.Q, b.P]);
+    key_points(key, b.corners);
+    key_points(key, b.patch);
+    if (same_key(this.boardKey, key) && this.boardEquation === b.equation) return;
+    this.boardKey = key;
+    this.boardEquation = b.equation;
+    const p = this.boardParts;
+    this.set_quad("board:patch", this.fill_mat("patch", 0x2563d9, 0.08), b.patch, 1);
+    this.set_lines("board:patch-outline", "patch", HELPER_LINES.patch, p, b.patch.length, loop_writer(b.patch));
+    this.set_quad("board:frame-back", this.fill_mat("frame", 0xffffff, 0.72), b.corners, 2);
+    this.set_lines("board:frame", "frame", HELPER_LINES.frame, p, b.corners.length, loop_writer(b.corners));
+    const fr = frustum(b);
+    this.set_pairs("frustum", "frustum", HELPER_LINES.frustum, p, fr.solid);
+    this.set_pairs("frustum:far", "frustum_far", HELPER_LINES.frustum_far, p, fr.dotted);
+    this.set_pairs("d-line", "d_line", HELPER_LINES.d_line, p, [[b.E, b.Q]]);
+    this.set_pairs("g-line", "g_line", HELPER_LINES.g_line, p, [[b.Q, b.P]]);
+    this.set_dots("dots:Q", "Q", p, [b.Q]);
+    this.set_dots("dots:pivot", "pivot", p, [b.P]);
+    this.set_dots("dots:E", "E", p, [b.E]);
+  }
+
+  /** M10 handles (§5.7.9): the orange dashed ring around Q and the blue arrow Q → tip (towards the eye). */
+  private draw_handles(h: Handles | null, active: "ring" | "arrow" | null, b: Board): void {
+    let key: number[] | null = null;
     if (h !== null) {
-      const ring: [Vec3, Vec3][] = h.ring.map((p, i) => [p, h.ring[(i + 1) % h.ring.length]!]);
-      const ra = geo.active === "ring", aa = geo.active === "arrow";
-      this.add_lines("handle:ring", ra ? "ring_active" : "ring", ra ? HELPER_LINES.ring_active : HELPER_LINES.ring, ring);
-      this.add_lines("handle:arrow", aa ? "arrow_active" : "arrow", aa ? HELPER_LINES.arrow_active : HELPER_LINES.arrow,
-        [[h.Q, h.tip], ...arrow_head(h.Q, h.tip, b.r)]);
-      this.add_dots("handle:tip", DOTS.tip, [h.tip]);
+      key = [active === "ring" ? 1 : active === "arrow" ? 2 : 0];
+      key_points(key, h.ring);
+      key_points(key, [h.Q, h.tip, b.r]);
     }
-    this.labels = board_labels(b, { pivot_id: geo.pivot_id ?? null, ...(h !== null ? { tip: h.tip } : {}) });
+    if (this.handlesKey !== undefined && same_key(this.handlesKey, key)) return;
+    this.handlesKey = key;
+    const p = this.handleParts;
+    if (h === null) {
+      this.set_lines("handle:ring", "ring", HELPER_LINES.ring, p, 0, () => {});
+      this.set_lines("handle:arrow", "arrow", HELPER_LINES.arrow, p, 0, () => {});
+      this.set_dots("handle:tip", "tip", p, []);
+      return;
+    }
+    const ra = active === "ring", aa = active === "arrow";
+    this.set_lines("handle:ring", ra ? "ring_active" : "ring", ra ? HELPER_LINES.ring_active : HELPER_LINES.ring, p,
+      h.ring.length, loop_writer(h.ring));
+    this.set_pairs("handle:arrow", aa ? "arrow_active" : "arrow", aa ? HELPER_LINES.arrow_active : HELPER_LINES.arrow, p,
+      [[h.Q, h.tip], ...arrow_head(h.Q, h.tip, b.r)]);
+    this.set_dots("handle:tip", "tip", p, [h.tip]);
+  }
+
+  /** M11 object rings (§5.8.4): one closed polyline per world axis around the object's pivot (D83: extras group). */
+  private draw_object_rings(orings: ObjectRingSet | null, active_axis: 0 | 1 | 2 | null): void {
+    this.objectRingsNow = orings;
+    let key: number[] | null = null;
+    if (orings !== null) {
+      key = [active_axis ?? -1];
+      key_points(key, [orings.centre]);
+      for (const ring of orings.rings) key_points(key, ring);
+    }
+    const id = orings?.id ?? null;
+    if (this.ringsKey !== undefined && same_key(this.ringsKey, key) && this.ringsId === id) return;
+    this.ringsKey = key;
+    this.ringsId = id;
+    for (const axis of [0, 1, 2] as const) {
+      const ring = orings?.rings[axis] ?? [];
+      const k = `object_ring_${axis}${active_axis === axis ? "_active" : ""}` as keyof typeof HELPER_LINES;
+      this.set_lines(`object-ring:${"xyz"[axis]}`, k, HELPER_LINES[k], this.ringParts, ring.length, loop_writer(ring));
+    }
+  }
+
+  /** The vertex rays (D83: in the extras group, shown with or without the board). */
+  private draw_rays(r: VertexRays | null): void {
+    let key: number[] | null = null;
+    if (r !== null) {
+      key = [];
+      key_pairs(key, r.sight);
+      key_pairs(key, r.light);
+      key_pairs(key, r.shadow_sight);
+      key_points(key, r.crossings);
+      key_points(key, r.shadows);
+      key_points(key, r.shadow_crossings);
+    }
+    if (this.raysKey !== undefined && same_key(this.raysKey, key)) return;
+    this.raysKey = key;
+    const x = this.rayParts;
+    this.set_pairs("rays:sight", "sight", HELPER_LINES.sight, x, r?.sight ?? []);
+    this.set_pairs("rays:light", "light", HELPER_LINES.light, x, r?.light ?? []);
+    this.set_pairs("rays:shadow-sight", "shadow_sight", HELPER_LINES.shadow_sight, x, r?.shadow_sight ?? []);
+    this.set_dots("dots:crossing", "crossing", x, r?.crossings ?? []);
+    this.set_dots("dots:shadow", "shadow", x, r?.shadows ?? []);
+    this.set_dots("dots:shadow-crossing", "shadow_crossing", x, r?.shadow_crossings ?? []);
   }
 
   /** The handles of the last update (null without handles, D83 also while the board is hidden). */
@@ -407,7 +780,7 @@ export class ObserverPane {
     if (group === null) return null;
     this.render_camera();
     const ndc = new THREE.Vector2((p[0] / this.W) * 2 - 1, -(p[1] / this.H) * 2 + 1);
-    const ray = new THREE.Raycaster();
+    const ray = this.raycaster;
     ray.setFromCamera(ndc, this.camera);
     const objects = group.children.filter((c) => typeof c.userData[OBJECT_ID_KEY] === "string");
     for (const hit of ray.intersectObjects(objects, true)) {
