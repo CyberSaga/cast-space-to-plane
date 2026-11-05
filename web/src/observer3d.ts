@@ -646,6 +646,15 @@ export class ObserverPane {
   update(frame: ObserverFrame): void {
     const M = frame.art_matrix;
     this.art.matrix.fromArray(M as number[]);
+    // the columns (s·r', s·u', f) of `art_frame_matrix` are left-handed (r' × u' = −f): with a negative determinant
+    // three.js flips the winding and culls the front-sided `LineMaterial` quads. The z column is never used (the
+    // drawing has z = 0), so it is negated instead.
+    if (this.art.matrix.determinant() < 0) {
+      const e = this.art.matrix.elements;
+      e[8] = -e[8]!;
+      e[9] = -e[9]!;
+      e[10] = -e[10]!;
+    }
     this.art.matrixWorldNeedsUpdate = true;
     // the art matrix turns canvas mm into metres (its uniform scale); the art dash lengths are metres
     const s = Math.hypot(M[0]!, M[1]!, M[2]!);
