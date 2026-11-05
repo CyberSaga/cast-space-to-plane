@@ -44,7 +44,9 @@ export function art_transferables(art: ArtBuffers): ArrayBuffer[] {
 /**
  * The column-major 4×4 matrix `M` with `M · (u, v, 0, 1) = unproject_to_plane(rec, [u, v], depth)` for every canvas
  * point `(u, v)` (§5.6.1: `X = C + depth · [((u − u0) / k) · r' + ((v − v0) / k) · u' + f]`, `k = K[0][0]`, `r'`, `u'`,
- * `f` the rows of `R`). Its z column is `f` (never used: the drawing has `z = 0`), so the matrix is invertible.
+ * `f` the rows of `R`). Its z column is `−f` = `r' × u'` (the camera basis `(r', u', f)` is left-handed): never used,
+ * since the drawing has `z = 0`, but it keeps the matrix right-handed (positive determinant), so three.js does not flip
+ * the winding of the front-sided line quads drawn under it.
  */
 export function art_frame_matrix(rec: Pick<CameraRecord, "K" | "R" | "C" | "u0" | "v0">, depth: number): number[] {
   const k = rec.K[0][0];
@@ -61,7 +63,7 @@ export function art_frame_matrix(rec: Pick<CameraRecord, "K" | "R" | "C" | "u0" 
   return [
     su * r[0], su * r[1], su * r[2], 0,
     sv * u[0], sv * u[1], sv * u[2], 0,
-    f[0], f[1], f[2], 0,
+    -f[0], -f[1], -f[2], 0,
     origin[0], origin[1], origin[2], 1,
   ];
 }

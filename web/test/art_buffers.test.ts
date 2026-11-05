@@ -57,6 +57,9 @@ test("art_frame_matrix maps canvas mm to unproject_to_plane within 1e-9 m, for r
     const rec = camera_matrix(block, [180, 120]);
     const depth = 0.05 + 12 * rnd() - DRAWING_OFFSET_M;
     const M = art_frame_matrix(rec, depth);
+    // right-handed: the z column is r' × u' up to scale, so the determinant is positive
+    const det = M[0]! * (M[5]! * M[10]! - M[6]! * M[9]!) - M[4]! * (M[1]! * M[10]! - M[2]! * M[9]!) + M[8]! * (M[1]! * M[6]! - M[2]! * M[5]!);
+    assert.ok(det > 0, `camera ${i}: determinant ${det}`);
     for (const uv of [[0, 0], [90, 60], [-90, -60], [37.5, -11.25], [-70, 55]]) {
       const X = unproject_to_plane(rec, uv, depth), Y = mul(M, [uv[0]!, uv[1]!, 0]);
       for (let k = 0; k < 3; k++) assert.ok(Math.abs(X[k]! - Y[k]!) < 1e-9, `camera ${i} uv ${uv}: ${X} vs ${Y}`);
