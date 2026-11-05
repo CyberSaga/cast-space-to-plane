@@ -1587,6 +1587,31 @@ worktree and the merge rule are in `docs/PLAN-v2.md`.
   3 MiB limit of `test_expected_files_are_canonical_and_small`; the next additions should stay small. Also on the
   merge: `conics.classify` / `classify_and_condition` evaluate `det` / `svd` under `np.errstate(all="ignore")` (a singular
   centred conic with subnormal entries made numpy warn "divide by zero"; values unchanged, the conic is degenerate).
+- **[implementation] (web smooth interaction, D87) TS-only, result-identical triangle-BVH prune of `occluded`.** Amends,
+  by reference and with the existing text unchanged, the §5.1.6.2 remark that a BVH is an optional result-identical
+  optimisation, and rests on the culling permission of §5.1.6.4 ("must not change any result … A test compares culled
+  and unculled runs") and on the fast-path rule of §5.4.4 item 6 (each vectorised or pruned path has its result-identity
+  test). In `ts/src/hidden.ts`, `occluded` asks `mesh_blocks(occ, C, D, eps)` for a `kind === "mesh"` occluder instead of
+  running every triangle: `mesh_accel(occ)` builds a flat BVH over the triangle AABBs (median split on the longest
+  centroid axis, leaves of at most 4 triangles, typed arrays), and the segment `C + tD`, `t ∈ [max(0, eps − 1e-9),
+  1 − eps + 1e-9]`, is walked against the node boxes grown by `PRUNE_MARGIN · mag = 1e-5 · mag`, `mag = max(ext, |C|∞,
+  |X|∞)`. The candidate set is a superset of every triangle that can give `first_mesh(...) < 1 − eps`: the candidates run
+  `first_mesh_tri`, the *same* Möller–Trumbore operations in the same operand order as `first_mesh`, so the boolean is
+  bit-identical, not merely equal within a tolerance. Triangles whose test is ill-conditioned are never pruned and are
+  tested on every ray: slivers (`|e1×e2| ≤ 1e-3·|e1||e2|`), a triangle with a non-finite vertex, and a triangle whose
+  plane lies within `1e-4·mag` of the eye. Polygon faces are never pruned, and a non-finite `mag` or `D` falls back to
+  the plain loop. `first_mesh`, `first_hit_ray` and `first_hit` are unchanged. The BVH is cached per stage-A record
+  (`WeakMap`, validated by the identity of its `triangles` / `vertices` arrays), so a cached stage A keeps its BVHs across
+  camera frames and across the web UI's renders; `set_hlr_prune(on)` switches the prune off (tests only). **Python is
+  unchanged**: it is the reference and keeps the brute-force loop, and no expected file changes (v8 / 63 cases, dry run
+  0 changes). Tests (`ts/test/hidden.test.ts`): for the 63 conformance cases and the expanded `mesh_demo`,
+  `dumps(compose(…, true))` is identical with the prune on and off; 200 seeded random rays against a 300-triangle soup
+  that includes a sliver, collinear and repeated vertices give the same boolean; rays from the case camera to every vertex
+  and edge midpoint of every conformance mesh; and a cache test. A mutation (`PRUNE_MARGIN = −3e-2`) makes 8 tests fail.
+  Measured on a 19-mesh / 4 922-triangle / 9 324-edge character scene: `compose(scene, B, true)` 1 320–1 376 ms → 67–111
+  ms (12–18×), the first compose after a stage A about 150 ms more (the BVH build); `mesh_demo.expanded` 4.9–5.9 ms →
+  2–5 ms. The TS perf gate passes unchanged (full render median 360.6 ms, limit 1 000; camera-only 78.2 ms, limit 100)
+  and `tools/compare_svg.py` reports 0 mismatches (docs/DECISIONS.md D87).
 
 ### 5.2 M5 — mesh import (spec §9 rows 網格匯入 / 匯入格式, spec §10 M5, spec §11.3)
 
@@ -4274,6 +4299,57 @@ and the hidden-run SVG groups (§5.1.8). Nothing an M4–M6 case needs lies beyo
   object's `faces` / `smooth_groups` text to `json.dumps(indent=1)` at depth 4, and the fifth pins the placeholder guard). No Python change, no conformance
   case change. The core's TypeScript `dumps` still writes mesh indices as floats; no other `web/src` path serialises a
   validated mesh scene.
+- **[decision, implementation] (web smooth interaction, D87) The core runs in a Web Worker.** Uses the permission of
+  §5.4.11 ("running B + C + SVG in a Web Worker: acceptable (pure functions, no shared state)") and amends, by reference
+  and with the existing text unchanged, the sentence of §5.4.10 that each frame runs `project_scene` → `compose` →
+  `write_svg` on the main thread, and the §5.4.10 overlay-mode rule "DOM overlay at rest" in the one respect of item (4)
+  below. (1) **Path.** `main.ts` starts `core_worker.ts` (`new Worker(new URL("./core_worker.ts", import.meta.url),
+  {type: "module"})`, a Vite worker chunk) inside `try/catch`; `onerror`, or a failed construction, selects the
+  **synchronous fallback**, which is the former frame (`frame_sync`, unchanged). The worker holds the loaded scene and
+  its stage A (`CoreEngine` in `core_engine.ts`; the main thread's side is `CoreClient` in `core_client.ts`). Messages to
+  the worker: `scene` (a load, generation 1), `pose` (every object's transform; the worker re-runs stage A; a new
+  generation only when the transforms differ value for value, `CoreClient.publish_pose`), `render` (block, hidden,
+  umbra, layers, hidden_style, `two_phase`, `art_layers`, `dragging`), `art` (re-pack the drawing of the last document
+  for other layers) and `download` (the SVG and JSON download texts of the resting document of a block, rendered in the
+  worker if its last document is not that one). Replies: `rendered {phase: quick | final, svg, img, rec, art
+  (ArtBuffers, transferred), ray_points, warnings, summary, core_ms, stage_a_ms, stage_a_ran}`, `stale`, `art`,
+  `downloaded` and `error`. The documents are the contract documents: `core_engine.test.ts` pins the quick and the final
+  SVG, the downloads, the art buffers, the ray points and the summary byte for byte to the synchronous path. (2)
+  **Scheduling.** One render is in flight and the latest camera wins (`CoreClient` keeps a dirty flag, and the next
+  request is posted with the then-current parameters when the in-flight one is answered). A reply of another generation,
+  a reply to a request older than a `settle()`, and a `final` after a newer render are dropped. The main thread computes
+  the current camera record itself (`camera_matrix(block, canvas_mm)`) in every frame that draws the observer, so the
+  board follows the rig at once and only the drawing's content follows the reply. (3) **Two phases.** A resting render
+  with hidden lines or the umbra on (`two_phase`) is answered first with the `quick` document (hidden lines and umbra
+  off: the §5.4.11 drag document) and then, from a later worker task, with the `final` one; a newer `render`, `pose` or
+  `scene` drops a pending final, and `art` / `download` run it first. While a final is pending the second line of the
+  status carries 「（隱藏線計算中）」. (4) **Overlay-mode amendment.** A resting `quick` reply whose all-layer SVG is longer
+  than `IMG_MODE_THRESHOLD` is written again with the checked layers and shown through the `<img>` overlay (as a drag
+  frame is) until the `final` reply restores the DOM overlay; "DOM overlay at rest" holds for the final document. In
+  both modes the picture is the writer's unchanged text for that document. (5) **Overlay throttle during drags.** A new
+  SVG costs the main thread its parse, layout and paint (an `<img>` SVG is laid out on the main thread like the DOM
+  overlay: about 100 ms for a 10 k-element drawing). A drag frame's overlay is therefore applied only when
+  `OVERLAY_DRAG_INTERVAL_K · dom_ms` has passed since the last one, with `OVERLAY_DRAG_INTERVAL_K = 16` and `dom_ms` the
+  last resting DOM update's `innerHTML` time (the examples, about 0.5–1 ms: every reply; the character scene, about 35
+  ms: every 0.6 s). The observer's drawing on the frame, the warnings and the status follow every reply, and the resting
+  frame always applies. (6) **What requests no core render.** A selection, the 板子 and 視線 checkboxes, 整體顯示, the
+  observer orbit, resizes and the 3D-view checkbox request only an observer (and view) redraw
+  (`request_observer_render`); a pivot pick (`點選物體`) requests a core render only when the block changed. (7)
+  **`FrameRecord`** gains `phase` (`quick` | `final` | `sync`), `stage_a_ms` (null when no stage A ran for the frame) and
+  `overlay` (false for a skipped drag overlay). (8) **Hooks.** `settle()` renders synchronously when a render is pending
+  (`svg`, `svg_length`, `download_texts` and `doc_summary` call it first; `probe_rig` uses `frame_sync`), `worker` (true in
+  worker mode) and `set_gl(on)` (a measurement aid that skips the WebGL draw calls). The download buttons go through the
+  worker in worker mode. `status_text` takes a `DocSummary` (`doc_summary.ts`: `doc_summary_of`, `umbra_count`,
+  `ray_count`, re-exported by `ui.ts`), `WarningsTable` gains `update_list(warnings)`, and `observer.ts` gains
+  `vertex_ray_points` / `rays_from_points`, of which `vertex_rays` is the composition (same arrays). (9) **Fixed line
+  boxes.** The panel's status lines (`#obj-selected`, `#obj-centre`, `#obj-limit`, `#obj-notice`) have fixed line boxes
+  in CSS: a selection that changed the controls' height by one pixel resized both panes and re-laid out the whole overlay
+  (about 70 ms). (10) **Tests and tool.** `web/test/core_client.test.ts` (6), `core_engine.test.ts` (3: `basic`,
+  `two_lights`, `wall_and_ground`), `doc_summary.test.ts`, `art_buffers.test.ts` (2) and one more test in
+  `observer.test.ts`: 184 → 197 web tests. `web/scripts/smoke.mjs` calls `settle()` before it reads the overlay DOM, the
+  warnings, the status or the frames after a drag; every check is kept. `web/scripts/interact_bench.mjs` is a dev helper
+  that measures click-to-rings, the first proxy motion, the animation-frame gaps and the long tasks of a ring drag. The
+  core, the output bytes of `ts/src`, the conformance set and the warning codes are unchanged (docs/DECISIONS.md D87).
 
 ### 5.5 M8 — STEP import (spec §9 row "STEP", spec §10 M8) — a loader, outside the core
 
@@ -5196,6 +5272,29 @@ The observer shows lights as in §5.4.10 (`scene3d`). Nothing in this table is w
   is ignored: the checkbox returns to its state, so the held board never vanishes under the pointer; during an
   object-ring drag or an orbit it applies. Hooks: `set_board_visible(on)` (acts as the checkbox; returns the resulting
   state), `board_visible()`, and the `observer` hook's `board_shown` and `labels_shown` (docs/DECISIONS.md D83).
+- **[decision, implementation] (web smooth interaction, D87) The incremental `ObserverPane`.** Amends, by reference and
+  with the existing text unchanged, the "drawing on the frame" row of §5.6.5 (the mapping is the same affine map, now
+  applied as one matrix) and the M9 module note of §5.6.6. (1) **`update(frame: ObserverFrame)`** runs per main-thread
+  frame and redraws only the parts whose inputs changed value for value: the board (D, g, E, Q, P, corners, patch,
+  equation), the handles (active, ring, Q, tip, `b.r`), an object's rings (id, active axis, centre, points) and the rays
+  (the six arrays); the labels are placed on every call. (2) **Pools.** Every line object is a pooled `LineSegments2`
+  whose instance buffer is rewritten in place (`DynamicDrawUsage`, update ranges; a new geometry only when it must grow,
+  ×1.5; dashed styles get their instance distances as `computeLineDistances` would); dots are pooled `Points`
+  (`setDrawRange`); the patch and the frame back are pooled quads, and the drawing's fills are one indexed mesh per style.
+  An empty object is detached, so `names` lists the non-empty styles only; its order is now board parts, art, handles,
+  rays, rings (the smoke test checks membership only). Pooled objects have `frustumCulled = false`. The groups keep their
+  meaning: the board group (board parts, art, handles; hidden together by 「板子」) and the extras (rays, object rings).
+  (3) **The drawing on the frame** (`set_art(art: ArtBuffers)`, `web/src/art_buffers.ts::pack_art`) is kept in canvas mm
+  (`z = 0`) and placed by the art matrix `art_frame_matrix(rec, D − 0.012)`, the affine form of `unproject_to_plane`
+  (§5.6.1) at the same 0.012 m offset, so a camera change moves it without a rebuild; `web/test/art_buffers.test.ts` pins
+  it within 1e-9 m to `unproject_to_plane`. The matrix is right-handed (its z column is `−f = r' × u'`); the pane negates
+  the z column if a left-handed one is passed, because three.js would cull the front-sided line quads. The two dashed art
+  materials get `dashScale = depth / k` (the matrix's mm→m scale) at each update. (4) **Scene and picking.**
+  `scene3d.ts::set_object_matrices(group, entries)` does one `updateMatrixWorld` per pose (`set_object_matrix` wraps it),
+  and `pick_object` updates the world matrices itself before the ray cast. (5) **Material precompile.** At construction
+  the pane calls `renderer.compile` on one temporary object per line, dot and fill material, so the first interactive
+  frame does not pay the shader build. What is drawn, and every number shown, is that of §5.6.5; only how it reaches the
+  GPU changes (docs/DECISIONS.md D87).
 
 ### 5.7 M10 — plane mode, board-first (spec-v0.2 §1, §4, §5, §6, §7)
 
@@ -6252,3 +6351,21 @@ limited part stays inside, and a subnormal axis; `web/scripts/smoke.mjs` drives 
 and parent turns that leave the angle, the tip's parent-frame axis and *Download scene* + reload on the fixture. Core,
 TS port, conformance set and warning codes unchanged; a scene without the key behaves exactly as D85 (docs/DECISIONS.md
 D86, spec-v0.3 §10).
+- **[decision, implementation] (web smooth interaction, D87) Object drags with the core worker.** Amends, by reference
+  and with the existing text unchanged, §5.8.2 (the sentences "`frame()` start: … run steps 1–4 with `record: none`, then
+  stages B and C" and the `LIVE_STAGE_A_MS` bullet), the row "stage A at load > `LIVE_STAGE_A_MS`" of §5.8.7, and the
+  sentences of §5.8.8 and of the D82–D86 notes that name the slow-scene notice 「此場景拖動放開後更新」, in one respect:
+  they describe the synchronous fallback only, i.e. the core worker of the §5.4 D87 note not running. In worker mode an
+  object drag runs the `UnitDrag` machine with `live: false` (the machine is unchanged); its `proxy` effect moves the 3D
+  proxies of both panes and syncs the panel's fields, centre and limit line from the candidate (`sync_object_panel(force,
+  pending)`), and the render request carries the candidate's transforms (published right before the render and
+  deduplicated by value), so the worker runs stage A + B + C + SVG at its own pace while the proxies move at frame rate.
+  `end()` is unchanged and still synchronous (§5.8.2): it takes the last pending candidate, runs stage A on the main
+  thread and only on success records the undo step, never waiting for a frame; the nothing-to-commit rule, `cancel()` (a
+  second finger) and the stage-A exception path hold as written. `LIVE_STAGE_A_MS` and the notice apply only in the
+  synchronous fallback. The hook `object_transform(id)` returns the drag candidate while an object drag is held in
+  worker mode (the pose being shown) and the committed pose otherwise; `timings.stage_a_runs` counts the worker's stage A
+  runs (`stage_a_ran` replies) together with the main thread's. A drag frame's document is the §5.4.11 drag document
+  (hidden lines and umbra off), its overlay is throttled by `OVERLAY_DRAG_INTERVAL_K`, and the resting document arrives in
+  the two phases (all in the §5.4 D87 note). The committed pose, the undo steps, the document and the downloads are those
+  of the synchronous path (docs/DECISIONS.md D87).

@@ -778,7 +778,7 @@ vite + three.js（版本釘選：three 0.186.1、vite 8.3.3）。`vite build` �
   - three.js 不產生任何陰影，畫面上的影子全部來自移植的核心。
 - **相機**：M10 起由平面模式驅動（見 §4.5）：**右窗（作圖畫面）唯讀，在它上面拖動或滾輪都不做事**；板子只在左窗（旁觀視角）拖橘色圓環與藍色箭頭，以及用工具列與面板的控制調整（焦距、D、滾轉三個滑桿在兩窗下方，另有六個一鍵視圖、平面方程式、復原、重設）；「重設」回到場景相機換算出的初始狀態。M7 的環繞相機（`web/src/orbit.ts`）與它的測試保留，不再驅動介面。
 - **SVG 疊圖**：
-  - 每個動畫影格最多重算一次（最新的相機為準）：沿用快取的 A 段，執行 `project_scene` → `compose` → `write_svg`；
+  - 每個動畫影格最多重算一次（最新的相機為準）：沿用快取的 A 段，執行 `project_scene` → `compose` → `write_svg`；這段計算在 Web Worker 中進行（D87），所以拖動時畫面與 3D 代理不會被它擋住，開啟隱藏線或本影的靜止畫面先送出不含它們的文件，稍後再送出完整文件（狀態列顯示「（隱藏線計算中）」），worker 無法啟動時退回主執行緒計算；
   - 圖層勾選框以 CSS 隱藏圖層；「3D view」勾選框隱藏 WebGL 畫面（隱藏時不繪製）；
   - **勾選框的預設是頁面層級的狀態**（M10，D79）：頁面開啟時 horizon、objects、form_shadow、cast_shadow、labels 與「Hidden lines」為勾選，construction（兩窗下方的「作圖線」勾選框與它同步）與「3D view」為不勾選（3D 畫面從第一格起就隱藏）。之後只由你改變，載入場景或範例不會重設，也不再取場景的 `output.layers`、`output.hidden_lines`（這兩個欄位仍是場景檔的一部分，命令列照舊使用）。預設畫面是完成的線稿（被遮住的線依 Hidden style 畫出，預設為虛線），不含作圖線；要看作圖過程就勾選 construction；
   - 「Hidden lines」勾選框（第二階段）：以 `hidden_lines` 傳給 `compose`；「Hidden style」選單（`dashed` / `omit`，只在「Hidden lines」勾選時可用）初值取場景的 `output.hidden_style`，傳給 `write_svg`；
