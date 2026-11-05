@@ -124,6 +124,8 @@ async function observer_blank() {
 }
 
 const failures = [];
+/** D87: one entry per `worker_matches_sync` call (label → equal), printed with the results. */
+const worker_sync = {};
 const check = (ok, what) => { if (!ok) failures.push(what); };
 
 /** Wait until the page is idle: the status line and the frame count unchanged five times in a row and no 「計算中」. */
@@ -154,6 +156,7 @@ async function worker_matches_sync(label) {
   const settled = await page.evaluate(() => window.castplane_web.settle());
   const s = await snap();
   const same = w.ov === s.ov && w.warn === s.warn && strip(w.status) === strip(s.status);
+  worker_sync[label] = { same, idle: quiet, settled, img: w.img };
   check(quiet && same && w.img === "none",
     `${label}: the worker's resting overlay, warnings and counts equal the synchronous render's (idle ${quiet}, settled ${settled}, overlay ${w.ov.length} vs ${s.ov.length} chars, img ${w.img})`);
   return same;
@@ -2184,6 +2187,6 @@ await page.waitForFunction(() => document.getElementById("error").textContent.in
 const scene_error = await page.locator("#error").textContent();
 
 const engine = { chromium: browser.version() };
-console.log(JSON.stringify({ engine, first, toggles: toggle_checks, preview: preview_checks, rows, load_errors, phase2, observer, plane, objrot, failures, downloads, errors: { not_json, scene_error }, logs }, null, 1));
+console.log(JSON.stringify({ engine, first, toggles: toggle_checks, preview: preview_checks, rows, load_errors, phase2, observer, plane, objrot, worker_sync, failures, downloads, errors: { not_json, scene_error }, logs }, null, 1));
 await browser.close();
 process.exitCode = logs.some((l) => l.startsWith("pageerror")) || failures.length > 0 ? 1 : 0;
