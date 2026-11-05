@@ -99,6 +99,10 @@ page.on("console", (m) => logs.push(`${m.type()}: ${m.text()}`));
 page.on("pageerror", (e) => logs.push(`pageerror: ${e.message}`));
 
 const frames2 = () => page.evaluate(() => new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r))));
+/** With the core worker (`castplane_web.worker`) the overlay, the warnings table and the status follow a render reply
+ * some time after the change: `settle()` renders the resting frame synchronously first (a no-op without the worker, or
+ * when nothing is pending). Called before every check that reads the overlay DOM or the warnings table. */
+const settle = () => page.evaluate(() => window.castplane_web.settle());
 const median = (xs) => {
   const s = [...xs].sort((a, b) => a - b), n = s.length;
   return n === 0 ? NaN : n % 2 ? s[(n - 1) / 2] : (s[n / 2 - 1] + s[n / 2]) / 2;
@@ -204,6 +208,7 @@ async function arrow_push(k, n = 8) {
 
 async function drag_stats() {
   await camera_drag(30);
+  await settle(); // the resting frame recorded before the frames are read
   const frames = await page.evaluate(() => window.castplane_web.frames);
   const d = frames.filter((f) => f.dragging), rest = frames.filter((f) => !f.dragging);
   return {
@@ -218,6 +223,7 @@ async function drag_stats() {
 
 await page.goto(url);
 await page.waitForFunction(() => document.getElementById("status").textContent.includes("core ms"), null, { timeout: 30000 });
+await settle();
 const first = await page.evaluate(() => ({
   status: document.getElementById("status").textContent,
   groups: [...document.querySelectorAll("svg.overlay > g")].map((g) => g.id),
@@ -231,6 +237,7 @@ if (shot) {
 
 // the view toggles are page-level: their defaults at page load, kept (not reset from the scene) across loads
 const toggles = () => page.evaluate(() => {
+  window.castplane_web.settle();
   const gl = document.getElementById("gl");
   // the three.js canvas was never drawn while "3D view" is off: its buffer is still fully transparent
   const c = document.createElement("canvas");
@@ -290,6 +297,7 @@ const toggle_checks = {};
 // D80: the page opens in the edit view (the observer pane shown); "預覽" hides the pane (the drawing pane takes the
 // full width, the drawing unchanged) and toggles back on a second click or Esc; nothing is remembered across visits
 const preview_state = () => page.evaluate(() => {
+  window.castplane_web.settle(); // the status line below is the resting frame's
   const b = document.getElementById("preview");
   return {
     observer_shown: !document.getElementById("observer").hidden,
@@ -371,7 +379,10 @@ toggle_checks.after_every_example = await toggles();
 check(is_default(toggle_checks.after_every_example), "toggles: still the defaults after loading every example");
 
 // phase 2 (§5.4.10): receivers, mesh objects, several lights, the hidden-line switch and style
-const overlay_ids = () => page.evaluate(() => [...document.querySelectorAll("svg.overlay g[id]")].map((g) => g.id));
+const overlay_ids = () => page.evaluate(() => {
+  window.castplane_web.settle();
+  return [...document.querySelectorAll("svg.overlay g[id]")].map((g) => g.id);
+});
 const ui = () => page.evaluate(() => ({ names: window.castplane_web.scene3d_names, doc: window.castplane_web.doc_summary,
   hidden: window.castplane_web.hidden, status: document.getElementById("status").textContent }));
 async function shoot(name) {
@@ -395,6 +406,7 @@ const phase2 = {};
   check(s.names.includes("receiver:wall") && s.names.includes("outline:wall") && !s.names.includes("grid:wall"),
     "wall_and_ground: the wall as a bounded plate");
   check(JSON.stringify(s.doc.receivers) === '["ground","wall"]', "wall_and_ground: receivers in the document");
+  await settle();
   const dashed = await page.evaluate(() => ({
     dasharray: document.querySelector('svg.overlay g[id="objects.hidden"]')?.getAttribute("stroke-dasharray") ?? null,
     elements: document.querySelectorAll('svg.overlay [id^="objects.hidden."] > *').length,
@@ -404,6 +416,7 @@ const phase2 = {};
   await page.evaluate(() => window.castplane_web.set_hidden(true, "omit"));
   await frames2();
   const omit_ids = await overlay_ids();
+  await settle();
   const omit_hidden_children = await page.evaluate(() => document.querySelectorAll('svg.overlay [id^="objects.hidden."] > *').length);
   check(omit_hidden_children === 0, "wall_and_ground: the omit style draws no hidden runs");
   await page.evaluate(() => window.castplane_web.set_hidden(false));
@@ -422,6 +435,7 @@ const phase2 = {};
   await page.evaluate(() => window.castplane_web.set_hidden(true)); // back to the page default
   await frames2();
   check(s.names.includes("house") && s.names.includes("tank"), "mesh_demo: the house mesh and the tank in the 3D view");
+  await settle();
   const house_edges = await page.evaluate(() => document.querySelectorAll('svg.overlay [id="objects.house"] > *').length);
   check(house_edges > 0, "mesh_demo: the house's edges in the overlay");
   phase2.mesh_demo = { names: s.names, house_elements: house_edges, status: s.status, screenshot: await shoot("mesh_demo") };
@@ -455,6 +469,7 @@ if (sceneFile) {
 const observer = { rows: {} };
 const PHASE1 = ["basic", "construction_demo", "curved_demo", "directional", "three_point"];
 const drawing = () => page.evaluate(() => ({
+  settled: window.castplane_web.settle(), // before the overlay is read (the svg hook settles too)
   svg: window.castplane_web.svg,
   overlay: document.querySelector("svg.overlay").innerHTML,
   dl: window.castplane_web.download_texts(),
@@ -556,6 +571,7 @@ if (sceneFile) {
   // must not stay on top
   await page.evaluate(() => window.castplane_web.load_example("basic"));
   await frames2();
+  await settle();
   const img = await page.evaluate(() => getComputedStyle(document.querySelector("img.overlay")).display);
   check(img === "none", "the <img> overlay of a drag frame is not displayed at rest");
 }
@@ -1099,7 +1115,10 @@ const objrot = {};
         pivot: r.pivot }) };
   };
   const verts = async (ids) => Object.fromEntries(await Promise.all(ids.map(async (id) => [id, JSON.stringify(await api("object_vertices", id))])));
-  const warning_codes = () => page.evaluate(() => [...document.querySelectorAll("#warnings tbody tr td:first-child")].map((td) => td.textContent));
+  const warning_codes = () => page.evaluate(() => {
+    window.castplane_web.settle();
+    return [...document.querySelectorAll("#warnings tbody tr td:first-child")].map((td) => td.textContent);
+  });
   const undo_size = async () => (await get("rig")).undo;
   /** Render a scene file with the Python CLI; its SVG text. */
   const cli_svg = (path) => {
@@ -1358,6 +1377,7 @@ const objrot = {};
     const ob = await page.locator("#observer").boundingBox();
     const h0 = await get("handles_px"), o0 = await get("observer");
     const svg0 = await get("svg"), dl0 = await api("download_texts"), cam0 = JSON.stringify(await get("camera")), u0 = await undo_size();
+    await settle();
     const overlay0 = await page.evaluate(() => document.querySelector("svg.overlay")?.outerHTML ?? null);
     check(o0.board_shown && o0.labels_shown > 0 && await page.evaluate(() => document.getElementById("observer-board").checked),
       "D83: 板子 is checked by default, the board and its labels shown");
@@ -1379,6 +1399,7 @@ const objrot = {};
     const cur = await page.evaluate(([x, y]) => getComputedStyle(document.elementFromPoint(x, y)).cursor, [ob.x + h0.tip[0], ob.y + h0.tip[1]]);
     check(cur !== "pointer", `D83: the hidden arrow tip is not hover-highlighted (${cur})`);
     await page.mouse.move(ob.x + 4, ob.y + 4);
+    await settle();
     const overlay1 = await page.evaluate(() => document.querySelector("svg.overlay")?.outerHTML ?? null);
     check(await get("svg") === svg0 && JSON.stringify(await api("download_texts")) === JSON.stringify(dl0) && overlay1 === overlay0
       && JSON.stringify(await get("camera")) === cam0 && await undo_size() === u0,
