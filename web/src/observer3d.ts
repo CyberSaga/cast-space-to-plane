@@ -256,7 +256,9 @@ export class ObserverPane {
   private readonly lines = new Map<string, PooledLines>();
   private readonly dots = new Map<string, { points: THREE.Points; cap: number }>();
   private readonly quads = new Map<string, THREE.Mesh>();
-  private artFills: THREE.Mesh[] = [];
+  /** The drawing's fills, one pooled indexed mesh per style (`art-fill:<style>`): thousands of shading polygons would
+   * otherwise be thousands of objects created and removed per document. */
+  private readonly artFills = new Map<FillStyle, { mesh: THREE.Mesh; vcap: number; icap: number }>();
   private readonly labelEls = new Map<string, HTMLDivElement>();
   private labels: BoardLabel[] = [];
   private boardNow: Board | null = null;
@@ -548,51 +550,81 @@ export class ObserverPane {
    * `z = 0`, placed by the art matrix of {@link update}); the fills are rebuilt (triangulated in canvas mm).
    */
   set_art(art: ArtBuffers): void {
-    this.apply_art(
-      art.lines.map(({ style, uv }) => ({ style, n: Math.floor(uv.length / 4), write: uv_writer(uv) })),
-      art.fills.map(({ style, uv }) => {
-        const m = Math.floor(uv.length / 2);
-        const pts: THREE.Vector2[] = [];
-        const pos = new Float32Array(3 * m);
-        for (let i = 0; i < m; i++) {
-          pts.push(new THREE.Vector2(uv[2 * i]!, uv[2 * i + 1]!));
-          pos[3 * i] = uv[2 * i]!;
-          pos[3 * i + 1] = uv[2 * i + 1]!;
-        }
-        return { style, uv: pts, pos };
-      }),
-    );
-  }
-
-  private apply_art(lines: { style: LineStyle; n: number; write: SegmentWriter }[],
-    fills: { style: FillStyle; uv: THREE.Vector2[]; pos: Float32Array }[]): void {
     const seen = new Set<string>();
-    for (const l of lines) {
-      const name = `art:${l.style}`;
+    for (const { style, uv } of art.lines) {
+      const name = `art:${style}`;
       seen.add(name);
-      this.set_lines(name, name, ART_LINES[l.style], this.art, l.n, l.write);
+      this.set_lines(name, name, ART_LINES[style], this.art, Math.floor(uv.length / 4), uv_writer(uv));
     }
     for (const [name, e] of this.lines) {
       if (name.startsWith("art:") && !seen.has(name) && e.line.parent !== null) e.line.parent.remove(e.line);
     }
-    for (const m of this.artFills) {
-      this.art.remove(m);
-      m.geometry.dispose();
-    }
-    this.artFills = [];
-    for (const f of fills) {
-      const tris = THREE.ShapeUtils.triangulateShape(f.uv, []);
+    // the fills: every polygon of a style triangulated (canvas mm, `z = 0`) into that style's one pooled mesh
+    const by_style = new Map<FillStyle, { pos: number[]; idx: number[] }>();
+    for (const { style, uv } of art.fills) {
+      const m = Math.floor(uv.length / 2);
+      const pts: THREE.Vector2[] = [];
+      for (let i = 0; i < m; i++) pts.push(new THREE.Vector2(uv[2 * i]!, uv[2 * i + 1]!));
+      const tris = THREE.ShapeUtils.triangulateShape(pts, []);
       if (tris.length === 0) continue;
-      const g = new THREE.BufferGeometry();
-      g.setAttribute("position", new THREE.BufferAttribute(f.pos, 3));
-      g.setIndex(tris.flat());
-      const spec = ART_FILLS[f.style];
-      const mesh = new THREE.Mesh(g, this.fill_mat(`art:${f.style}`, spec.color, spec.opacity));
-      mesh.name = `art-fill:${f.style}`;
-      mesh.renderOrder = 3;
-      this.art.add(mesh);
-      this.artFills.push(mesh);
+      let acc = by_style.get(style);
+      if (acc === undefined) {
+        acc = { pos: [], idx: [] };
+        by_style.set(style, acc);
+      }
+      const base = acc.pos.length / 3;
+      for (let i = 0; i < m; i++) acc.pos.push(uv[2 * i]!, uv[2 * i + 1]!, 0);
+      for (const t of tris) acc.idx.push(base + t[0]!, base + t[1]!, base + t[2]!);
     }
+    for (const style of Object.keys(ART_FILLS) as FillStyle[]) {
+      const acc = by_style.get(style);
+      this.set_fill(style, acc?.pos ?? [], acc?.idx ?? []);
+    }
+  }
+
+  /** The pooled fill mesh of art style `style` over `pos` (3 floats per vertex) and `idx` (3 per triangle), in the art
+   * group; detached when empty. Its buffers are rewritten in place and replaced only when they must grow. */
+  private set_fill(style: FillStyle, pos: readonly number[], idx: readonly number[]): void {
+    let e = this.artFills.get(style);
+    const nv = pos.length / 3, ni = idx.length;
+    if (ni === 0) {
+      if (e !== undefined && e.mesh.parent !== null) e.mesh.parent.remove(e.mesh);
+      return;
+    }
+    const spec = ART_FILLS[style];
+    if (e === undefined || e.vcap < nv || e.icap < ni) {
+      const vcap = Math.max(nv, e === undefined ? 0 : Math.ceil(1.5 * e.vcap), 64);
+      const icap = Math.max(ni, e === undefined ? 0 : Math.ceil(1.5 * e.icap), 192);
+      const g = new THREE.BufferGeometry();
+      g.setAttribute("position", new THREE.BufferAttribute(new Float32Array(3 * vcap), 3).setUsage(THREE.DynamicDrawUsage));
+      g.setIndex(new THREE.BufferAttribute(new Uint32Array(icap), 1).setUsage(THREE.DynamicDrawUsage));
+      if (e === undefined) {
+        const mesh = new THREE.Mesh(g, this.fill_mat(`art:${style}`, spec.color, spec.opacity));
+        mesh.name = `art-fill:${style}`;
+        mesh.renderOrder = 3;
+        mesh.frustumCulled = false;
+        e = { mesh, vcap, icap };
+        this.artFills.set(style, e);
+      } else {
+        e.mesh.geometry.dispose();
+        e.mesh.geometry = g;
+        e.vcap = vcap;
+        e.icap = icap;
+      }
+    }
+    const g = e.mesh.geometry;
+    const pa = g.getAttribute("position") as THREE.BufferAttribute;
+    (pa.array as Float32Array).set(pos);
+    pa.clearUpdateRanges();
+    pa.addUpdateRange(0, 3 * nv);
+    pa.needsUpdate = true;
+    const ia = g.getIndex()!;
+    (ia.array as Uint32Array).set(idx);
+    ia.clearUpdateRanges();
+    ia.addUpdateRange(0, ni);
+    ia.needsUpdate = true;
+    g.setDrawRange(0, ni);
+    if (e.mesh.parent !== this.art) this.art.add(e.mesh);
   }
 
   /**
