@@ -93,7 +93,9 @@ export interface RenderedReply {
 }
 export interface StaleReply { type: "stale"; req: number }
 export interface ArtReply { type: "art"; req: number; gen: number; art: ArtBuffers; ray_points: RayPoints }
-export interface DownloadedReply { type: "downloaded"; req: number; gen: number; kind: "svg" | "json"; filename: string; mime: string; text: string }
+export interface DownloadedReply {
+  type: "downloaded"; req: number; gen: number; kind: "svg" | "json"; filename: string; mime: string; text: string;
+}
 export interface ErrorReply { type: "error"; req: number | null; message: string }
 export type FromWorker = RenderedReply | StaleReply | ArtReply | DownloadedReply | ErrorReply;
 
@@ -133,7 +135,8 @@ const same3 = (p: readonly number[], q: readonly number[]): boolean =>
   p.length === q.length && p.every((x, i) => Object.is(x, q[i]));
 
 const copy_entries = (t: PoseEntries): PoseEntries =>
-  t.map(([id, x]) => [id, { ...x, position: [...x.position] as Transform["position"], rotation_deg: [...x.rotation_deg] as Transform["rotation_deg"] }]);
+  t.map(([id, x]) => [id, { ...x, position: [...x.position] as Transform["position"],
+    rotation_deg: [...x.rotation_deg] as Transform["rotation_deg"] }]);
 
 export class CoreClient {
   /** The scene generation the worker holds (after the messages posted so far). */
@@ -239,7 +242,7 @@ export class CoreClient {
         if (m.gen === this.gen) this.cb.downloaded?.(m);
         return;
       case "error": {
-        const info = m.req !== null && this.flight?.req === m.req ? this.flight : m.req !== null && this.newest?.req === m.req ? this.newest : null;
+        const info = m.req === null ? null : this.flight?.req === m.req ? this.flight : this.newest?.req === m.req ? this.newest : null;
         if (info !== null && this.final_wait === info.req) this.final_wait = null;
         if (m.req !== null) this.on_answered(m.req);
         this.cb.error?.(m, info);
@@ -280,7 +283,7 @@ export class CoreClient {
     this.newest = info;
     this.final_wait = null;
     this.post({ type: "render", req: info.req, gen: info.gen, block: p.block, hidden: p.hidden, umbra: p.umbra, layers: p.layers,
-      quick_layers: p.quick_layers, img_threshold: p.img_threshold, hidden_style: p.hidden_style, two_phase: p.two_phase, art_layers: [...p.art_layers],
-      dragging: p.dragging });
+      quick_layers: p.quick_layers, img_threshold: p.img_threshold, hidden_style: p.hidden_style, two_phase: p.two_phase,
+      art_layers: [...p.art_layers], dragging: p.dragging });
   }
 }
