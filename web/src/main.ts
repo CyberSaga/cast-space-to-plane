@@ -64,7 +64,7 @@ import { PlaneSession, arrow_drag, object_centres, ring_drag, ring_grab } from "
 import { arrowScreenVector, clone, equation, sync } from "./rig.js";
 import type { RigState, RingGrab, ViewName } from "./rig.js";
 import { build_scene3d, built_in_world, display_matrix, set_object_matrix } from "./scene3d.js";
-import { Stage3D, letterbox } from "./stage.js";
+import { Stage3D, letterbox, set_gl_draw } from "./stage.js";
 import { initial_toggles } from "./toggles.js";
 import {
   $, WarningsTable, build_layer_boxes, controls, describe_error, fill_examples, fill_object_select, fill_quick_equations,
@@ -89,6 +89,8 @@ interface FrameRecord {
   phase: "quick" | "final" | "sync";
   /** The stage A that ran for this frame (the worker's for a new pose, or the main thread's live drag step), else null. */
   stage_a_ms: number | null;
+  /** Whether this frame's overlay was applied (a drag frame of a large scene may keep the last picture, `apply_reply`). */
+  overlay: boolean;
 }
 
 interface State {
@@ -453,7 +455,8 @@ function hidden_style(): "dashed" | "omit" {
 }
 view3d.addEventListener("change", () => {
   canvas.classList.toggle("hidden", !view3d.checked);
-  request_render();
+  viewDirty = true;
+  request_observer_render();
 });
 
 /** Download SVG / JSON: the texts of `download.ts` for the resting document of the current camera (the core worker
@@ -1122,9 +1125,15 @@ function layout(): void {
   view.set_size(w, h);
   if (state.obs.on && observer !== null) observer.set_size(ui.observerPane.clientWidth, ui.observerPane.clientHeight);
 }
+/** The observer needs a redraw without a core render (`request_observer_render`). */
+let obsDirty = false;
+/** The drawing pane's three.js view needs a redraw without a core render (a resize, the 3D-view checkbox). */
+let viewDirty = false;
+// a resize changes no document (the overlay scales with its viewBox): only the two three.js views are redrawn
 const resize = new ResizeObserver(() => {
   layout();
-  request_render();
+  viewDirty = true;
+  request_observer_render();
 });
 resize.observe(viewport);
 resize.observe(ui.observerPane);
@@ -1299,22 +1308,42 @@ function show_status(summary: DocSummary, rec: CameraRecord, meta: StatusMeta, o
     obs_ms, pending);
 }
 
+/**
+ * The drawing pane's overlay during a drag is throttled by its own cost: a new SVG costs the main thread its parse,
+ * layout and paint (an `<img>` SVG document is laid out on the main thread like the DOM overlay), which for a large
+ * scene exceeds a frame many times over, while the worker replies at its own pace. The last resting DOM update's
+ * `innerHTML` time (`dom_ms`) scales with the SVG's element count, so a drag frame's overlay is applied only when
+ * `OVERLAY_DRAG_INTERVAL_K · dom_ms` has passed since the last one (the examples: ≈ 1 ms → every reply; a 10 k-element
+ * scene: ≈ 30–90 ms of `innerHTML`, whose `<img>` paint costs about three times that → every 0.5–1.5 s, so the main
+ * thread spends under a fifth of the drag on it). The observer's drawing on the frame, the warnings and the status
+ * follow every reply; the resting frame always applies.
+ */
+export const OVERLAY_DRAG_INTERVAL_K = 16;
+/** When the overlay was last applied, and the `innerHTML` time of the last resting DOM overlay (ms). */
+let overlay_applied_at = -Infinity, resting_dom_ms = 0;
+
 /** Apply a render reply of the core worker: the overlay (the `<img>` for a drag request of a large scene, or a resting
- * `quick` document too long for the DOM; else the DOM overlay), the warnings, the timings, the drawing on the frame,
- * the observer, the frame record and the status line. */
+ * `quick` document too long for the DOM; else the DOM overlay; a drag frame's overlay is throttled, above), the
+ * warnings, the timings, the drawing on the frame, the observer, the frame record and the status line. */
 function apply_reply(r: RenderedReply, info: RequestInfo): void {
   if (state.scene === null || state.plane === null) return;
   const img = info.img || (r.phase === "quick" && r.img);
   const t1 = performance.now();
+  const skip_overlay = info.dragging && t1 - overlay_applied_at < OVERLAY_DRAG_INTERVAL_K * resting_dom_ms;
   try {
-    if (img) overlay.set_img(r.svg);
+    if (skip_overlay) { /* the drawing pane keeps its last picture for now */ }
+    else if (img) overlay.set_img(r.svg);
     else overlay.set_svg(r.svg);
   } catch (e) {
     show_error(describe_error(e));
     return;
   }
   const t2 = performance.now();
-  if (!img) state.full_svg_length = r.svg.length;
+  if (!skip_overlay) overlay_applied_at = t1;
+  if (!img && !skip_overlay) {
+    state.full_svg_length = r.svg.length;
+    resting_dom_ms = t2 - t1;
+  }
   state.svg = r.svg;
   state.rec = r.rec;
   last_rays = r.ray_points;
@@ -1330,7 +1359,7 @@ function apply_reply(r: RenderedReply, info: RequestInfo): void {
   const obs_ms = state.obs.on && observer !== null ? update_observer() : null;
   state.obs.ms = obs_ms;
   state.frames.push({ core_ms: r.core_ms, dom_ms: t2 - t1, obs_ms, mode: overlay.mode, dragging: info.dragging, svg_bytes: r.svg.length,
-    phase: r.phase, stage_a_ms: r.stage_a_ran ? r.stage_a_ms : null });
+    phase: r.phase, stage_a_ms: r.stage_a_ran ? r.stage_a_ms : null, overlay: !skip_overlay });
   if (state.frames.length > 500) state.frames.shift();
   const pending = client !== null && client.final_pending && !client.dirty;
   show_status(r.summary, r.rec, info.meta as StatusMeta, obs_ms, pending);
@@ -1380,8 +1409,6 @@ function start_worker(): void {
 
 // ---------------------------------------------------------------------------- render loop
 let rafPending = false;
-/** The observer needs a redraw without a core render (`request_observer_render`). */
-let obsDirty = false;
 /** Whether a core render was requested during the current drag (its release then needs the resting frame). */
 let drag_rendered = false;
 
@@ -1433,9 +1460,10 @@ function frame(): void {
     if (state.dragging) drag_rendered = true;
     state.doc = null;
     client.request();
-    if (view3d.checked) view.render(pl.block(), state.scene.output.canvas_mm, state.A.scene_scale);
     sync_controls(); // sliders, equation, readouts (the picture delta is measured here, once per frame), notices, undo
-  } else if (!obs) return;
+  } else if (!obs && !viewDirty) return;
+  if ((core || viewDirty) && view3d.checked) view.render(pl.block(), state.scene.output.canvas_mm, state.A.scene_scale);
+  viewDirty = false;
   if (state.obs.on && observer !== null) state.obs.ms = update_observer();
 }
 
@@ -1472,7 +1500,11 @@ function frame_sync(drag_step = false): boolean {
   if (img_mode) overlay.set_img(svg);
   else overlay.set_svg(svg);
   const t2 = performance.now();
-  if (!img_mode) state.full_svg_length = svg.length;
+  if (!img_mode) {
+    state.full_svg_length = svg.length;
+    resting_dom_ms = t2 - t1;
+  }
+  overlay_applied_at = t1;
   state.doc = doc;
   state.svg = svg;
   state.rec = rec;
@@ -1490,7 +1522,7 @@ function frame_sync(drag_step = false): boolean {
   state.timings.dom_ms = t2 - t1;
   state.timings.mode = overlay.mode;
   state.frames.push({ core_ms: t1 - t0, dom_ms: t2 - t1, obs_ms, mode: overlay.mode, dragging: state.dragging, svg_bytes: svg.length,
-    phase: "sync", stage_a_ms: ran_a ? state.timings.stage_a_ms : null });
+    phase: "sync", stage_a_ms: ran_a ? state.timings.stage_a_ms : null, overlay: true });
   if (state.frames.length > 500) state.frames.shift();
   sync_controls(); // sliders, equation, readouts (the picture delta is measured here, once per frame), notices, undo
   show_status(summary, rec, { focal_mm: block.focal_length_mm, form: pl.scene_block ? "scene camera" : "picture_plane" }, obs_ms, false);
@@ -1525,6 +1557,9 @@ function settle(): boolean {
     return load(name, () => load_scene(ex.data), display_colours(ex.data), object_groups(ex.data), object_links(ex.data));
   },
   load_text,
+  /** Measurement aid: with `false` the two three.js views skip their WebGL draw calls (`stage.ts::set_gl_draw`), so a
+   * run on a software renderer measures the page's JavaScript only. */
+  set_gl: (on: boolean) => set_gl_draw(on),
   /** With the core worker: render the resting frame synchronously when a render is pending (or the main thread holds
    * no document), so the overlay, the warnings, the status and the document hooks are the current camera's; true when
    * it rendered. Without the worker: false (every frame is synchronous). */

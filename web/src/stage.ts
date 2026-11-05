@@ -11,6 +11,14 @@ import { apply_camera_block } from "./threeCamera.js";
 import type { CameraBlockLike } from "./types.js";
 import { dispose_scene3d } from "./scene3d.js";
 
+/** Measurement aid (`castplane_web.set_gl(false)`): with it off, `render` / `render_with` skip the WebGL draw, so a
+ * benchmark on a software renderer (headless Chromium's SwiftShader) measures the page's own JavaScript. Never off in
+ * normal use. */
+export let GL_DRAW = true;
+export function set_gl_draw(on: boolean): void {
+  GL_DRAW = on;
+}
+
 export class Stage3D {
   readonly renderer: THREE.WebGLRenderer;
   readonly scene3: THREE.Scene;
@@ -49,12 +57,12 @@ export class Stage3D {
   /** Draw the scene through a castplane camera block. */
   render(block: CameraBlockLike, canvas_mm: readonly number[], scene_scale: number): void {
     apply_camera_block(this.camera3, block, canvas_mm, scene_scale);
-    this.renderer.render(this.scene3, this.camera3);
+    if (GL_DRAW) this.renderer.render(this.scene3, this.camera3);
   }
 
   /** Draw the scene through any three.js camera (the M9 observer camera, §5.6.4; not a castplane camera). */
   render_with(camera: THREE.Camera): void {
-    this.renderer.render(this.scene3, camera);
+    if (GL_DRAW) this.renderer.render(this.scene3, camera);
   }
 }
 
