@@ -243,8 +243,10 @@ async function arrow_push(k, n = 8) {
   await drag(n, "#observer", [dx / n, dy / n], h.tip);
 }
 
-async function drag_stats() {
+async function drag_stats(label = null) {
   await camera_drag(30);
+  // D87: what the worker shows once the drag has come to rest, before any synchronous render replaces it
+  if (label !== null) await worker_matches_sync(label);
   await settle(); // the resting frame recorded before the frames are read
   const frames = await page.evaluate(() => window.castplane_web.frames);
   const d = frames.filter((f) => f.dragging), rest = frames.filter((f) => !f.dragging);
@@ -411,8 +413,7 @@ for (const name of first.examples) {
   if (ref.name !== name) throw new Error(`reference_render rendered ${ref.name}, not ${name}`);
   writeFileSync(join(outdir, `${name}.svg`), ref.svg);
   writeFileSync(join(outdir, `${name}.json`), ref.json + "\n");
-  rows[name] = await drag_stats();
-  await worker_matches_sync(`${name}: after the drag`);
+  rows[name] = await drag_stats(`${name}: after the drag`);
 }
 toggle_checks.after_every_example = await toggles();
 check(is_default(toggle_checks.after_every_example), "toggles: still the defaults after loading every example");
