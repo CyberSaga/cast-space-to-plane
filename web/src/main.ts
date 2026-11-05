@@ -1691,8 +1691,13 @@ function settle(): boolean {
       umbra_pieces: umbra_count(d),
     };
   },
-  /** M11 (contract §5.8.4): object `id`'s current transform (a copy; null when unknown). */
-  object_transform: (id: string) => current_transform(id),
+  /** M11 (contract §5.8.4): object `id`'s current transform (a copy; null when unknown). With the core worker an object
+   * drag is a proxy drag (the scene is committed at release), so while one is held the shown pose is the candidate's:
+   * that transform for the ids it holds (as the live drag of the synchronous path would have committed it). */
+  object_transform: (id: string) => {
+    const t = client !== null && state.handle?.kind === "object" ? obj_drag.pending?.transforms.get(id) : undefined;
+    return t !== undefined ? clone_transform(t) : current_transform(id);
+  },
   /** M11: object `id`'s stage-A world vertices (`world_lists` of its record; null when unknown). */
   object_vertices: (id: string) => {
     const rec = state.A?.objects.find((o) => o.id === id);
