@@ -84,9 +84,10 @@ console.log("click:", JSON.stringify(out.click));
 m = await mark(); const tc1 = Date.now();
 await page.mouse.down(); await page.mouse.up();
 await page.waitForFunction(() => window.castplane_web.object_rings_px !== null, null, { timeout: 30000 });
+const rings_wall2 = Date.now() - tc1;
 await settle(1500);
 r = await since(m);
-out.click2 = { rings_wall_ms: Date.now() - tc1, longtasks: r.lt, selection: await page.evaluate(() => window.castplane_web.selection()) };
+out.click2 = { rings_wall_ms: rings_wall2, longtasks: r.lt, selection: await page.evaluate(() => window.castplane_web.selection()) };
 console.log("click2:", JSON.stringify(out.click2));
 
 // ---- ring drag: find a hit-testable ring point

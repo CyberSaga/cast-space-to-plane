@@ -12,8 +12,9 @@
 // with the Python reference); a 30-step drag per example (a ring drag in the observer pane: the drawing pane is
 // view-only) records the drag frames' `core ms` / `dom ms` and overlay mode (web/README.md); the optional scene file
 // is loaded through the file picker and dragged likewise; with the core worker (D87) the resting overlay, warnings
-// and counts the worker put on screen after each load and drag must equal the synchronous render (`settle()`); a page-wide
-// drop loads a scene; the three downloads are saved to out/; a non-JSON file and an invalid scene show the error
+// and counts the worker put on screen after each load and drag (also of the optional scene file, D88) must equal the
+// synchronous render (`settle()`); a page-wide drop loads a scene; the three downloads are saved to out/; a non-JSON
+// file and an invalid scene show the error
 // panel. Phase 2 (contract §5.4.10): an example that fails to load (the path-only `mesh_demo`, the core has no loader)
 // is reported and loaded instead from its Python expansion (`ts/test/fixtures/<name>.expanded.json`) through the file
 // picker; the phase-2 checks load `wall_and_ground` (hidden lines on: the hidden sub-groups in the overlay, the
@@ -502,7 +503,10 @@ if (sceneFile) {
   await page.setInputFiles("#file", sceneFile);
   await page.waitForFunction((s) => document.getElementById("status").textContent.startsWith(s), stem, { timeout: 120000 });
   await frames2();
-  rows[stem] = await drag_stats();
+  // D88: a heavy scene (the optional file) exercises the heavy overlay's rule; at rest the worker's picture is still
+  // the synchronous render's
+  await worker_matches_sync(`${stem}: load`);
+  rows[stem] = await drag_stats(`${stem}: after the drag`);
 }
 
 // M9 (contract §5.6.9): the observer switch

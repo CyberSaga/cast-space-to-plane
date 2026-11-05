@@ -4357,6 +4357,34 @@ and the hidden-run SVG groups (§5.1.8). Nothing an M4–M6 case needs lies beyo
   warnings, the status or the frames after a drag; every check is kept. `web/scripts/interact_bench.mjs` is a dev helper
   that measures click-to-rings, the first proxy motion, the animation-frame gaps and the long tasks of a ring drag. The
   core, the output bytes of `ts/src`, the conformance set and the warning codes are unchanged (docs/DECISIONS.md D87).
+- **[decision, implementation] (web smooth interaction, D88) A heavy overlay waits for the pointer, not for the
+  replies.** Amends, by reference and with the existing text unchanged, item (5) of the D87 note above and its item (7)
+  (`FrameRecord.overlay`). Re-measured at the D87 head on the 19-mesh character scene (`--nogl`, three runs), a 1.0–1.9
+  s ring drag still had 2–4 long tasks of 62–310 ms and frame gaps of up to 350–500 ms, and its release 5–6 long tasks
+  of up to 336 ms (the D87 table's single long task was a run in which few reply gaps reached the pause). Three causes:
+  (a) that scene's worker replies come 110–160 ms apart (the candidate's stage A plus B + C + SVG), so the 150 ms
+  debounce keyed to the replies fired while the pointer still moved; (b) the interval update (`K · resting_dom_ms`,
+  every 1.0–1.8 s) and the first reply of a drag (whose interval had long passed) were shown at once; (c) at the release
+  a waiting drag reply fired, and then the resting `quick` document (an `<img>`, about three DOM times) and the `final`
+  one each paid a full overlay update. The rule is now the pure `web/src/overlay_policy.ts::overlay_wait(kind, clock)`:
+  `kind` is `drag` for a drag request's reply, else the reply's phase; it returns the wait in ms (0: now) or null
+  (never); a waiting reply's timer re-evaluates it, and any newer reply drops it. (i) A light overlay (unchanged:
+  `resting_dom_ms < OVERLAY_HEAVY_MS = 3`) shows every reply at once. (ii) A heavy one, while a drag is held, shows a
+  reply (also a resting one that arrives after a new drag began) only when the pointer has not moved for
+  `OVERLAY_DRAG_PAUSE_MS = 250`, measured from its last move (`drag_moved_at`, set when the drag begins and in every
+  move); there is no periodic update and `OVERLAY_DRAG_INTERVAL_K` is removed. (iii) A drag reply that arrives, or whose
+  wait ends, after its drag ended is never shown: the release always requests the resting frame (`finish_object_drag`,
+  `request_after_drag`), which replaces it. (iv) A heavy resting `quick` reply waits up to `OVERLAY_QUICK_HOLD_MS = 500`
+  for its `final` reply, which replaces it at once; a later final still lets the quick one show (through the `<img>` of
+  D87 item (4) when it is long). (v) A resting `final` reply shows at once. The observer's drawing on the frame, the
+  warnings and the status still follow every reply (the status keeps 「（隱藏線計算中）」 while the final is pending), `settle()`
+  and a load drop a waiting reply, and `FrameRecord.overlay` is true only for a reply shown on arrival. On the same
+  scene and setup the ring and board-ring drags have no long task and frame gaps of at most 16.8 ms, with no overlay
+  update during the drag (0 of 10–13 replies); the ring release has two long tasks of 65–167 ms (the main-thread stage A
+  of `end()` and the final DOM overlay), the board-ring release one or two of 75–243 ms; the bundled examples are
+  unchanged (light: 40 / 40 drag overlays, no long task). Tests: `web/test/overlay_policy.test.ts` (7), 197 → 204 web
+  tests; `interact_bench.mjs` reports the second click's time without its settling pause. No output byte, document,
+  conformance case or warning code changes (docs/DECISIONS.md D88).
 
 ### 5.5 M8 — STEP import (spec §9 row "STEP", spec §10 M8) — a loader, outside the core
 

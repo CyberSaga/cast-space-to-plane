@@ -60,6 +60,8 @@ import {
 import type { Axis, ObjectRings, UnitPose } from "./object_rotate.js";
 import { IMG_MODE_THRESHOLD, Overlay } from "./overlay.js";
 import type { OverlayMode } from "./overlay.js";
+import { OVERLAY_DRAG_PAUSE_MS, OVERLAY_HEAVY_MS, OVERLAY_QUICK_HOLD_MS, overlay_kind, overlay_wait } from "./overlay_policy.js";
+import type { OverlayKind } from "./overlay_policy.js";
 import { PlaneSession, arrow_drag, object_centres, ring_drag, ring_grab } from "./plane.js";
 import { arrowScreenVector, clone, equation, sync } from "./rig.js";
 import type { RigState, RingGrab, ViewName } from "./rig.js";
@@ -531,6 +533,7 @@ const handle_input: HandleInput = {
     }
     pl.begin();
     state.dragging = true;
+    drag_moved_at = performance.now();
     drag_rendered = false;
     sync_controls(); // 復原 off while the drag is held
     request_observer_render(); // nothing changed yet: the active handle is drawn thicker
@@ -538,6 +541,7 @@ const handle_input: HandleInput = {
   move: (dx, dy, alt) => {
     const pl = state.plane, hd = state.handle;
     if (pl === null || hd === null) return;
+    drag_moved_at = performance.now(); // a heavy overlay waits for the pointer's pause (overlay_policy.ts)
     const snap = ui.snap.checked && !alt;
     if (hd.kind === "object") {
       // §5.8.4: the ring rule of §5.7.8 item 1 from the pointer-down grab and the total displacement; only the pending
@@ -796,6 +800,7 @@ function start_unit_drag(sel: Exclude<Selection, null>, axis: Axis, grab: { w: V
   } else pl.begin_objects(pose0.transforms, pose0.group);
   state.handle = { kind: "object", sel, axis, pose0: clone_pose(pose0), A0: A, ...grab };
   state.dragging = true;
+  drag_moved_at = performance.now();
   drag_rendered = false;
   // M11 review: a drag drops any typed angle and the field's focus, so the fields follow the pose while it turns
   blur_object_field();
@@ -1311,27 +1316,20 @@ function show_status(summary: DocSummary, rec: CameraRecord, meta: StatusMeta, o
 }
 
 /**
- * The drawing pane's overlay during a drag. A new SVG costs the main thread its parse, layout and paint (an `<img>` SVG
- * document is laid out and painted on the main thread like the DOM overlay); for a large drawing that is a long task of
- * 100–400 ms, which would stall the pointer and the observer at every update. The cost scales with the SVG's element
- * count, measured by the smallest resting DOM update's `innerHTML` time since the load (`resting_dom_ms`; the first,
- * cold one overstates it). A **light** overlay (under {@link OVERLAY_HEAVY_MS}; every bundled example, 0.5–2 ms) takes
- * every reply. A **heavy** one is not replaced while the pointer moves: a drag reply is shown when the replies pause for
- * {@link OVERLAY_DRAG_PAUSE_MS} (the pointer stopped; a debounce: each newer reply restarts the wait), or at once when
- * {@link OVERLAY_DRAG_INTERVAL_K} times the cost has passed since the last update (a long continuous drag still shows
- * progress: the 19-mesh character scene, about 35 ms, every 1.4 s). The observer's drawing on the frame (cheap: GPU
- * lines), the warnings and the status follow every reply, and the resting frame always applies, so a pointer held still
- * or released never leaves a stale picture.
+ * The drawing pane's overlay (D87, D88; the rule is `overlay_policy.ts::overlay_wait`): a light overlay takes every
+ * reply; a heavy one is replaced only when nothing moves (during a drag: when the pointer has rested for
+ * {@link OVERLAY_DRAG_PAUSE_MS} since its last move; never by a drag reply that arrives after the release; a resting
+ * `quick` reply waits up to {@link OVERLAY_QUICK_HOLD_MS} for its `final` one). The observer's drawing on the frame,
+ * the warnings and the status follow every reply, and every resting frame is shown, so a pointer held still or released
+ * never leaves a stale picture.
  */
-export const OVERLAY_HEAVY_MS = 3;
-export const OVERLAY_DRAG_PAUSE_MS = 150;
-export const OVERLAY_DRAG_INTERVAL_K = 40;
-/** When the overlay was last applied, and the smallest resting DOM `innerHTML` time since the load (ms; `Infinity`
- * until one was measured: the overlay then counts as light). */
-let overlay_applied_at = -Infinity, resting_dom_ms = Infinity;
-/** A drag reply whose overlay is waiting (the debounce of a heavy overlay): applied when its timer fires unless a newer
- * reply is applied first. */
-let pending_overlay: { svg: string; img: boolean; timer: number } | null = null;
+/** The smallest resting DOM `innerHTML` time since the load (ms; `Infinity` until one was measured: the overlay then
+ * counts as light; the first, cold one overstates it). */
+let resting_dom_ms = Infinity;
+/** When the pointer last moved during the held drag (or the drag began; `performance.now()`). */
+let drag_moved_at = -Infinity;
+/** A reply whose overlay is waiting (`overlay_wait`): its timer re-evaluates the wait, and any newer reply drops it. */
+let pending_overlay: { timer: number } | null = null;
 
 function drop_pending_overlay(): void {
   if (pending_overlay === null) return;
@@ -1339,7 +1337,7 @@ function drop_pending_overlay(): void {
   pending_overlay = null;
 }
 
-/** Whether the current scene's overlay is heavy (see above). */
+/** Whether the current scene's overlay is heavy (`overlay_policy.ts`). */
 const heavy_overlay = (): boolean => Number.isFinite(resting_dom_ms) && resting_dom_ms >= OVERLAY_HEAVY_MS;
 
 /** Show `svg` in the drawing pane (`<img>` or DOM), now. */
@@ -1347,39 +1345,49 @@ function apply_overlay(svg: string, img: boolean): void {
   drop_pending_overlay();
   if (img) overlay.set_img(svg);
   else overlay.set_svg(svg);
-  overlay_applied_at = performance.now();
+}
+
+/** Show a reply's overlay now, later, or never (`overlay_wait`; any waiting older reply is dropped first). Returns
+ * whether it was shown now. */
+function show_or_wait(svg: string, img: boolean, kind: OverlayKind, arrived: number): boolean {
+  drop_pending_overlay();
+  const wait = overlay_wait(kind, { now: performance.now(), heavy: heavy_overlay(), dragging: state.dragging, moved_at: drag_moved_at, arrived });
+  if (wait === null) return false;
+  if (wait <= 0) {
+    apply_overlay(svg, img);
+    return true;
+  }
+  const p = { timer: 0 };
+  p.timer = window.setTimeout(() => {
+    if (pending_overlay !== p) return;
+    pending_overlay = null;
+    try {
+      show_or_wait(svg, img, kind, arrived); // a pointer that moved meanwhile restarts the wait
+    } catch (e) {
+      show_error(describe_error(e));
+    }
+  }, wait);
+  pending_overlay = p;
+  return false;
 }
 
 /** Apply a render reply of the core worker: the overlay (the `<img>` for a drag request of a large scene, or a resting
- * `quick` document too long for the DOM; else the DOM overlay; a drag frame's overlay is throttled, above), the
- * warnings, the timings, the drawing on the frame, the observer, the frame record and the status line. */
+ * `quick` document too long for the DOM; else the DOM overlay; shown now, later or never, above), the warnings, the
+ * timings, the drawing on the frame, the observer, the frame record and the status line. */
 function apply_reply(r: RenderedReply, info: RequestInfo): void {
   if (state.scene === null || state.plane === null) return;
   const img = info.img || (r.phase === "quick" && r.img);
   const t1 = performance.now();
-  const skip_overlay = info.dragging && heavy_overlay() && t1 - overlay_applied_at < OVERLAY_DRAG_INTERVAL_K * resting_dom_ms;
+  let shown: boolean;
   try {
-    if (skip_overlay) {
-      // a heavy overlay keeps its last picture while the pointer moves; this reply is shown if no newer one arrives
-      // within the pause (the debounce), or replaced by a newer one
-      drop_pending_overlay();
-      const svg = r.svg;
-      pending_overlay = { svg, img, timer: window.setTimeout(() => {
-        pending_overlay = null;
-        try {
-          apply_overlay(svg, img);
-        } catch (e) {
-          show_error(describe_error(e));
-        }
-      }, OVERLAY_DRAG_PAUSE_MS) };
-    } else apply_overlay(r.svg, img);
+    shown = show_or_wait(r.svg, img, overlay_kind(info.dragging, r.phase), t1);
   } catch (e) {
     show_error(describe_error(e));
     return;
   }
   const t2 = performance.now();
-  if (!img && !skip_overlay) state.full_svg_length = r.svg.length;
-  if (!img && !info.dragging) resting_dom_ms = Math.min(resting_dom_ms, t2 - t1); // a resting DOM frame's cost
+  if (!img && shown) state.full_svg_length = r.svg.length;
+  if (!img && shown && !info.dragging) resting_dom_ms = Math.min(resting_dom_ms, t2 - t1); // a resting DOM frame's cost
   state.svg = r.svg;
   state.rec = r.rec;
   last_rays = r.ray_points;
@@ -1395,7 +1403,7 @@ function apply_reply(r: RenderedReply, info: RequestInfo): void {
   const obs_ms = state.obs.on && observer !== null ? update_observer() : null;
   state.obs.ms = obs_ms;
   state.frames.push({ core_ms: r.core_ms, dom_ms: t2 - t1, obs_ms, mode: overlay.mode, dragging: info.dragging, svg_bytes: r.svg.length,
-    phase: r.phase, stage_a_ms: r.stage_a_ran ? r.stage_a_ms : null, overlay: !skip_overlay });
+    phase: r.phase, stage_a_ms: r.stage_a_ran ? r.stage_a_ms : null, overlay: shown });
   if (state.frames.length > 500) state.frames.shift();
   const pending = client !== null && client.final_pending && !client.dirty;
   show_status(r.summary, r.rec, info.meta as StatusMeta, obs_ms, pending);

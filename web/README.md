@@ -11,7 +11,7 @@ npm run -w ts build        # the core package "castplane" the UI imports
 npm run -w web dev         # vite dev server
 npm run -w web build       # tsc type check + vite build -> web/dist (static, base './')
 npm run -w web preview     # serve web/dist locally
-npm run -w web test        # orbit / download / colours / rig / equation / observer / plane / object-rotation / limits / core-worker (core_client, core_engine, doc_summary, art_buffers) unit tests (node:test, web/test/; 197 tests)
+npm run -w web test        # orbit / download / colours / rig / equation / observer / plane / object-rotation / limits / core-worker (core_client, core_engine, doc_summary, art_buffers, overlay_policy) unit tests (node:test, web/test/; 204 tests)
 ```
 
 ![web UI](../docs/images/web_ui.png)
@@ -302,13 +302,15 @@ start or fails, the page falls back to the synchronous frame of before (`frame_s
   (both off, the drag document) and then with the `final` one; the status line's second line reads 「（隱藏線計算中）」 until it
   arrives. A resting `quick` document longer than `IMG_MODE_THRESHOLD` is shown through the `<img>` overlay until the
   `final` one restores the DOM overlay.
-- **The drawing pane during a drag.** A light overlay (the smallest resting `innerHTML` time since the load under
-  `OVERLAY_HEAVY_MS` = 3 ms: every bundled example, ≈ 0.5–2 ms) takes every reply. A heavy one (the 19-mesh character
-  scene, ≈ 35 ms; replacing it is a 100–400 ms long task) is not replaced while the pointer moves: a drag reply is shown
-  when the replies pause for `OVERLAY_DRAG_PAUSE_MS` = 150 ms (the pointer stopped), or when `OVERLAY_DRAG_INTERVAL_K`
-  (40) × that time has passed since the last update (≈ every 1.4 s of continuous motion). The observer's drawing on the
-  frame, the warnings and the status follow every reply; the resting frame always applies. `FrameRecord` carries `phase`
-  (`quick` | `final` | `sync`), `stage_a_ms` and `overlay`.
+- **The drawing pane's overlay** (D87, D88; `src/overlay_policy.ts::overlay_wait`). A light overlay (the smallest
+  resting `innerHTML` time since the load under `OVERLAY_HEAVY_MS` = 3 ms: every bundled example, ≈ 0.5–2 ms) takes
+  every reply. A heavy one (the 19-mesh character scene, ≈ 30–40 ms; replacing it is a 100–400 ms long task, DOM or
+  `<img>`) is replaced only when nothing moves: during a drag when the pointer has not moved for
+  `OVERLAY_DRAG_PAUSE_MS` = 250 ms (measured from the pointer's last move, not from the replies, which for that scene
+  come 110–160 ms apart), never by a drag reply that arrives after the release (the resting frame replaces it), and a
+  resting `quick` reply waits up to `OVERLAY_QUICK_HOLD_MS` = 500 ms for its `final` one. The observer's drawing on the
+  frame, the warnings and the status follow every reply; every resting frame is shown. `FrameRecord` carries `phase`
+  (`quick` | `final` | `sync`), `stage_a_ms` and `overlay` (shown on arrival).
 - **Object drags** run the `UnitDrag` machine with `live: false`: the 3D proxies and the panel follow the pointer at
   frame rate, the worker recomputes at its own pace, and release (`end()`) still runs stage A synchronously. The
   slow-scene notice 此場景拖動放開後更新 appears only in the synchronous fallback.
@@ -333,20 +335,24 @@ Setup: `vite build` + `vite preview`, headless Chromium 141 (WebGL through Swift
 mouse click on an object, a 40-step ring drag and a 30-step board-ring drag. The scene is the 19-mesh character scene
 (4 922 triangles, 9 324 document edges, a 644 k-character SVG, ≈ 10.5 k elements). "After" is measured with `--nogl`
 (`set_gl(false)`), which skips the WebGL draw calls so that it shows the page's JavaScript; the WebGL draws of a real
-GPU cost ≈ 1–2 ms per frame.
+GPU cost ≈ 1–2 ms per frame. "D87 head" is a re-measurement (three runs) of the D87 commit, whose own first table
+understated the drag's long tasks; "now" adds D88 (three runs).
 
-| measurement | before (main) | after |
-| --- | --- | --- |
-| click → rings shown | 3.1 s (long tasks 1 767 + 1 327 ms: compose with hidden lines 1.3 s, `innerHTML`, observer rebuild) | 15–16 ms, no long task |
-| ring drag: first proxy motion | 5.9 s | 18–32 ms |
-| ring drag: animation-frame gaps median / p90 / max | 117 / 433 / 650 ms | 16.7 / 16.7 / 133–183 ms |
-| ring drag: long tasks | 50–653 ms every frame | one of 109–143 ms in 1.8 s |
-| release | 1 265 ms long task | several of 69–405 ms (stage A on the main thread ≈ 100 ms, the final DOM overlay's layout up to ≈ 400 ms) |
-| board-ring drag: frame gaps median / p90 | 133 / 400 ms | 16.7 / 16.7 ms (two long tasks of 58–256 ms in 1.5 s) |
-| worker `core ms` per drag frame (B + C + SVG) | 28 ms median on the main thread | 28–32 ms median in the worker |
+| measurement | before (main) | D87 head | now (D87 + D88) |
+| --- | --- | --- | --- |
+| click → rings shown | 3.1 s (long tasks 1 767 + 1 327 ms: compose with hidden lines 1.3 s, `innerHTML`, observer rebuild) | 14–25 ms, no long task | 17–23 ms (a second click for the part: 11–20 ms), no long task |
+| ring drag: first proxy motion | 5.9 s | 27–28 ms | 16–32 ms |
+| ring drag: animation-frame gaps median / p90 / max | 117 / 433 / 650 ms | 16.7 / 16.7 / 350–500 ms | 16.7 / 16.7 / 16.8 ms |
+| ring drag: long tasks | 50–653 ms every frame | 2–4 of 62–310 ms in 1.0–1.9 s | none |
+| ring drag: drawing-pane overlay updates | every frame | 1–2 | 0 (of 10–13 replies) |
+| ring release: long tasks | one of 1 265 ms | 5–6 of 56–336 ms | 2 of 65–167 ms (the main-thread stage A of `end()`, the final DOM overlay) |
+| board-ring drag: frame gaps median / p90 / max | 133 / 400 ms / – | 16.7 / 16.8 / 200–350 ms (2 long tasks of 90–228 ms) | 16.7 / 16.7 / 16.8 ms, no long task |
+| board-ring release: long tasks | – | 4 of 91–275 ms | 1–2 of 75–243 ms |
+| worker `core ms` per drag frame (B + C + SVG) | 28 ms median on the main thread | 34–35 ms median in the worker | 29–31 ms median in the worker |
 
-The bundled examples after (`basic`, `two_lights`, `wall_and_ground`): click 13–15 ms, first proxy motion 13–29 ms,
-every frame gap 16.7–16.8 ms, no long tasks, every drag overlay applied (40 / 40), `core ms` 0.6–2.1 ms median.
+The bundled examples now (`basic`, `two_lights`, `wall_and_ground`; unchanged by D88, their overlays are light): click
+18–19 ms, first proxy motion 18–28 ms, every frame gap 16.6–16.8 ms, no long tasks, every drag overlay applied
+(40 / 40), `core ms` 0.6–1.9 ms median.
 
 **GL caveat.** With the WebGL draws on, SwiftShader (software rasteriser) spends ≈ 100–130 ms per frame in the
 observer's `renderer.render` alone for the character scene (≈ 9 k fat-line instances), so the frame gaps of a GL run
