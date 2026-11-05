@@ -1311,27 +1311,26 @@ function show_status(summary: DocSummary, rec: CameraRecord, meta: StatusMeta, o
 }
 
 /**
- * The drawing pane's overlay during a drag is throttled by its own cost: a new SVG costs the main thread its parse,
- * layout and paint (an `<img>` SVG document is laid out on the main thread like the DOM overlay), which for a large
- * scene exceeds a frame many times over, while the worker replies at its own pace. The last resting DOM update's
- * `innerHTML` time (`dom_ms`) scales with the SVG's element count, so a drag frame's overlay is applied only when
- * `OVERLAY_DRAG_INTERVAL_K · dom_ms` has passed since the last one (`basic`: ≈ 0.5 ms → an interval under one frame,
- * so no throttling and every reply; `two_lights`: ≈ 1–2 ms → at most every other frame; a 10 k-element scene: ≈ 30–90
- * ms of `innerHTML`, whose `<img>` paint costs about three times that → every 0.5–1.5 s, so the main thread spends
- * under a fifth of the drag on it). A skipped reply is
- * applied when the interval has passed unless a newer one came first (`pending_overlay`), so a pointer held still
- * never leaves a stale picture. The observer's drawing on the frame, the warnings and the status follow every reply;
- * the resting frame always applies.
+ * The drawing pane's overlay during a drag. A new SVG costs the main thread its parse, layout and paint (an `<img>` SVG
+ * document is laid out and painted on the main thread like the DOM overlay); for a large drawing that is a long task of
+ * 100–400 ms, which would stall the pointer and the observer at every update. The cost scales with the SVG's element
+ * count, measured by the smallest resting DOM update's `innerHTML` time since the load (`resting_dom_ms`; the first,
+ * cold one overstates it). A **light** overlay (under {@link OVERLAY_HEAVY_MS}; every bundled example, 0.5–2 ms) takes
+ * every reply. A **heavy** one is not replaced while the pointer moves: a drag reply is shown when the replies pause for
+ * {@link OVERLAY_DRAG_PAUSE_MS} (the pointer stopped; a debounce: each newer reply restarts the wait), or at once when
+ * {@link OVERLAY_DRAG_INTERVAL_K} times the cost has passed since the last update (a long continuous drag still shows
+ * progress: the 19-mesh character scene, about 35 ms, every 1.4 s). The observer's drawing on the frame (cheap: GPU
+ * lines), the warnings and the status follow every reply, and the resting frame always applies, so a pointer held still
+ * or released never leaves a stale picture.
  */
-export const OVERLAY_DRAG_INTERVAL_K = 16;
-/** No throttling at all when the interval would be shorter than one animation frame (ms): the examples get every reply. */
-export const OVERLAY_DRAG_MIN_INTERVAL_MS = 17;
-/** When the overlay was last applied, and the resting DOM overlay's `innerHTML` time (ms): the smallest measured since
- * the load (the first resting frame after a load is cold and overstates it; `Infinity` until one was measured, which
- * means no throttling). */
+export const OVERLAY_HEAVY_MS = 3;
+export const OVERLAY_DRAG_PAUSE_MS = 150;
+export const OVERLAY_DRAG_INTERVAL_K = 40;
+/** When the overlay was last applied, and the smallest resting DOM `innerHTML` time since the load (ms; `Infinity`
+ * until one was measured: the overlay then counts as light). */
 let overlay_applied_at = -Infinity, resting_dom_ms = Infinity;
-/** A drag reply whose overlay was skipped: applied when the interval has passed (a trailing apply, so the drawing pane
- * never keeps a stale picture while the pointer is held still), unless a newer reply applies first. */
+/** A drag reply whose overlay is waiting (the debounce of a heavy overlay): applied when its timer fires unless a newer
+ * reply is applied first. */
 let pending_overlay: { svg: string; img: boolean; timer: number } | null = null;
 
 function drop_pending_overlay(): void {
@@ -1340,11 +1339,8 @@ function drop_pending_overlay(): void {
   pending_overlay = null;
 }
 
-/** The drag-frame overlay interval now (0: no throttling). */
-function overlay_interval(): number {
-  const ms = OVERLAY_DRAG_INTERVAL_K * resting_dom_ms;
-  return !Number.isFinite(ms) || ms < OVERLAY_DRAG_MIN_INTERVAL_MS ? 0 : ms;
-}
+/** Whether the current scene's overlay is heavy (see above). */
+const heavy_overlay = (): boolean => Number.isFinite(resting_dom_ms) && resting_dom_ms >= OVERLAY_HEAVY_MS;
 
 /** Show `svg` in the drawing pane (`<img>` or DOM), now. */
 function apply_overlay(svg: string, img: boolean): void {
@@ -1361,11 +1357,11 @@ function apply_reply(r: RenderedReply, info: RequestInfo): void {
   if (state.scene === null || state.plane === null) return;
   const img = info.img || (r.phase === "quick" && r.img);
   const t1 = performance.now();
-  const wait = info.dragging ? overlay_interval() - (t1 - overlay_applied_at) : 0;
-  const skip_overlay = wait > 0;
+  const skip_overlay = info.dragging && heavy_overlay() && t1 - overlay_applied_at < OVERLAY_DRAG_INTERVAL_K * resting_dom_ms;
   try {
     if (skip_overlay) {
-      // the drawing pane keeps its last picture until the interval has passed, then shows this reply (or a newer one)
+      // a heavy overlay keeps its last picture while the pointer moves; this reply is shown if no newer one arrives
+      // within the pause (the debounce), or replaced by a newer one
       drop_pending_overlay();
       const svg = r.svg;
       pending_overlay = { svg, img, timer: window.setTimeout(() => {
@@ -1375,7 +1371,7 @@ function apply_reply(r: RenderedReply, info: RequestInfo): void {
         } catch (e) {
           show_error(describe_error(e));
         }
-      }, Math.ceil(wait)) };
+      }, OVERLAY_DRAG_PAUSE_MS) };
     } else apply_overlay(r.svg, img);
   } catch (e) {
     show_error(describe_error(e));

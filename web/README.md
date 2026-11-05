@@ -302,14 +302,13 @@ or fails, the page falls back to the synchronous frame of before (`frame_sync`).
   (both off, the drag document) and then with the `final` one; the status line's second line reads 「（隱藏線計算中）」
   until it arrives. A resting `quick` document longer than `IMG_MODE_THRESHOLD` is shown through the `<img>` overlay
   until the `final` one restores the DOM overlay.
-- **Overlay throttle during drags.** A drag frame's overlay is applied only when `OVERLAY_DRAG_INTERVAL_K · dom_ms`
-  (`OVERLAY_DRAG_INTERVAL_K = 16`, `dom_ms` the smallest resting `innerHTML` time since the load) has passed since the
-  last one; an interval under one frame (17 ms) means no throttling, so `basic` (≈ 0.5 ms) applies every reply,
-  `two_lights` (≈ 1–2 ms) at most every other frame, while the 19-mesh character scene (≈ 35 ms) applies about every
-  0.6 s, and a skipped reply is applied late when the interval
-  has passed unless a newer one came first (so a pointer held still never leaves a stale picture). The observer's
-  drawing, the warnings and the status follow every reply. `FrameRecord` carries `phase` (`quick` | `final` | `sync`),
-  `stage_a_ms` and `overlay`.
+- **The drawing pane during a drag.** A light overlay (the smallest resting `innerHTML` time since the load under
+  `OVERLAY_HEAVY_MS` = 3 ms: every bundled example, ≈ 0.5–2 ms) takes every reply. A heavy one (the 19-mesh character
+  scene, ≈ 35 ms; replacing it is a 100–400 ms long task) is not replaced while the pointer moves: a drag reply is
+  shown when the replies pause for `OVERLAY_DRAG_PAUSE_MS` = 150 ms (the pointer stopped), or when
+  `OVERLAY_DRAG_INTERVAL_K` (40) × that time has passed since the last update (≈ every 1.4 s of continuous motion).
+  The observer's drawing on the frame, the warnings and the status follow every reply; the resting frame always
+  applies. `FrameRecord` carries `phase` (`quick` | `final` | `sync`), `stage_a_ms` and `overlay`.
 - **Object drags** run the `UnitDrag` machine with `live: false`: the 3D proxies and the panel follow the pointer at frame
   rate, the worker recomputes at its own pace, and release (`end()`) still runs stage A synchronously. The slow-scene
   notice 此場景拖動放開後更新 appears only in the synchronous fallback.
@@ -337,16 +336,16 @@ cost ≈ 1–2 ms per frame.
 
 | measurement | before (main) | after |
 | --- | --- | --- |
-| click → rings shown | 3.1 s (long tasks 1 767 + 1 327 ms: compose with hidden lines 1.3 s, `innerHTML`, observer rebuild) | 26 ms, no long task |
-| ring drag: first proxy motion | 5.9 s | 37 ms |
-| ring drag: animation-frame gaps median / p90 / max | 117 / 433 / 650 ms | 16.7 / 16.8 / 217 ms (the throttled overlay paints) |
-| ring drag: long tasks | 50–653 ms every frame | 3 overlay paints of 67–162 ms in 1.8 s |
-| release | 1 265 ms long task | 101 + 125 + 65 ms (stage A on the main thread, the final DOM overlay) |
-| board-ring drag: frame gaps median / p90 | 133 / 400 ms | 16.7 / 16.8 ms |
-| worker `core ms` per drag frame (B + C + SVG) | 28 ms median on the main thread | 40 ms median in the worker |
+| click → rings shown | 3.1 s (long tasks 1 767 + 1 327 ms: compose with hidden lines 1.3 s, `innerHTML`, observer rebuild) | 15–16 ms, no long task |
+| ring drag: first proxy motion | 5.9 s | 18–32 ms |
+| ring drag: animation-frame gaps median / p90 / max | 117 / 433 / 650 ms | 16.7 / 16.7 / 133–183 ms |
+| ring drag: long tasks | 50–653 ms every frame | one of 109–143 ms in 1.8 s |
+| release | 1 265 ms long task | several of 69–405 ms (stage A on the main thread ≈ 100 ms, the final DOM overlay's layout up to ≈ 400 ms) |
+| board-ring drag: frame gaps median / p90 | 133 / 400 ms | 16.7 / 16.7 ms (two long tasks of 58–256 ms in 1.5 s) |
+| worker `core ms` per drag frame (B + C + SVG) | 28 ms median on the main thread | 28–32 ms median in the worker |
 
-`examples/basic.json` after: click 13 ms, first proxy motion 13 ms, every frame gap 16.6–16.8 ms, no long tasks, every drag
-overlay applied (40 / 40), `core ms` 1 ms median.
+The bundled examples after (`basic`, `two_lights`, `wall_and_ground`): click 13–15 ms, first proxy motion 13–29 ms, every
+frame gap 16.7–16.8 ms, no long tasks, every drag overlay applied (40 / 40), `core ms` 0.6–2.1 ms median.
 
 **GL caveat.** With the WebGL draws on, SwiftShader (software rasteriser) spends ≈ 100–130 ms per frame in the observer's
 `renderer.render` alone for the character scene (≈ 9 k fat-line instances), so the frame gaps of a GL run stay ≈ 300 ms

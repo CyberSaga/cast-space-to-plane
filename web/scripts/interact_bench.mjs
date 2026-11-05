@@ -140,6 +140,7 @@ await settle(2500);
 const ru = await since(mu);
 const frames = await page.evaluate(() => window.castplane_web.frames);
 const dragFrames = frames.filter((f) => f.dragging);
+out.drag_frame_list = dragFrames.map((f) => [f.phase, +f.dom_ms.toFixed(1), f.overlay]);
 out.drag = { axis: grab.axis, down_wall_ms: down_wall, first_proxy_move_ms: firstMoveWall, first_stage_a_ms: firstStageA, drag_wall_ms: drag_wall,
   raf_gaps: stats(rd.gaps), longtasks: rd.lt, drag_frames: dragFrames.length, overlays_applied: dragFrames.filter((f) => f.overlay !== false).length,
   core_ms: stats(dragFrames.map((f) => f.core_ms)), dom_ms: stats(dragFrames.map((f) => f.dom_ms)), obs_ms: stats(dragFrames.map((f) => f.obs_ms ?? 0)),
