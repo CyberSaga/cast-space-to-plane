@@ -1352,8 +1352,9 @@ function drop_pending_overlay(): void {
 }
 
 /** Whether a reply since the load carried an SVG longer than `IMG_MODE_THRESHOLD` (or one the worker wrote again for
- * the `<img>`): for a drag the overlay counts as heavy before its cost is measured (D88 review). A resting reply of an
- * unmeasured scene is still shown at once: the pane must replace the previous scene's picture after a load. */
+ * the `<img>`): for a drag the overlay counts as heavy before its cost is measured (D88 review), and so does a
+ * resting `quick` reply (D90: it waits for its `final` one, also after a load). A resting `final` reply of an unmeasured
+ * scene is shown at once. */
 let overlay_long = false;
 
 /** Whether the current scene's overlay is heavy for a reply of `kind` (`overlay_policy.ts::overlay_heavy`). */

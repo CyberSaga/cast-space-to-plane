@@ -7,8 +7,8 @@
  * {@link OVERLAY_HEAVY_MS} (the smallest resting `innerHTML` time since the load; every bundled example takes 0.5–2 ms)
  * the overlay is **light** and every reply is shown at once; until that time is measured, a scene counts as heavy for a
  * drag when a reply since the load was longer than the `<img>` threshold ({@link overlay_heavy}; the caller passes
- * that flag only for a held drag or a drag reply, so a load's resting replies still replace the previous scene's
- * picture at once). A **heavy** overlay is shown only when nothing moves:
+ * that flag for a held drag, a drag reply or a resting `quick` reply (D90), so a load's resting `final` reply is still
+ * shown at once). A **heavy** overlay is shown only when nothing moves:
  * - **During a held drag** (any reply, also a resting one that arrives after a new drag began): when the pointer has
  *   not moved for {@link OVERLAY_DRAG_PAUSE_MS}. The pause is measured from the pointer's last move, not from the last
  *   reply: a slow scene's replies come about as far apart as the pause, so a reply-keyed wait would fire while the
