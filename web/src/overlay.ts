@@ -6,6 +6,8 @@
 
 import { LAYER_IDS } from "castplane";
 
+import { LABEL_CHUNK, split_labels, split_svg } from "./overlay_split.js";
+
 /** SVG length (characters) above which a drag frame uses the `<img>` mode (recorded in `web/README.md`). */
 export const IMG_MODE_THRESHOLD = 250_000;
 
@@ -13,21 +15,15 @@ export const LAYERS = LAYER_IDS;
 
 export type OverlayMode = "dom" | "img";
 
-/** The pieces of the writer's text: the root element's `viewBox` and the markup between `<svg …>` and `</svg>`. */
-export function split_svg(text: string): { viewBox: string | null; inner: string } {
-  const start = text.indexOf("<svg");
-  const open_end = start < 0 ? -1 : text.indexOf(">", start);
-  const close = text.lastIndexOf("</svg>");
-  if (start < 0 || open_end < 0 || close < open_end) throw new Error("set_svg: not an SVG document");
-  const m = /viewBox="([^"]*)"/.exec(text.slice(start, open_end));
-  return { viewBox: m ? m[1]! : null, inner: text.slice(open_end + 1, close) };
-}
+export { LABEL_CHUNK, split_labels, split_svg };
 
 export class Overlay {
   readonly svg: SVGSVGElement;
   readonly img: HTMLImageElement;
   mode: OverlayMode = "dom";
   private url: string | null = null;
+  /** D89: the label chunks not yet inserted, their group and the animation-frame request. */
+  private rest: { group: Element; chunks: string[]; next: number; raf: number } | null = null;
 
   constructor(parent: HTMLElement) {
     this.svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
@@ -41,19 +37,60 @@ export class Overlay {
     parent.append(this.svg, this.img);
   }
 
-  /** The DOM mode: replace the overlay's children with the writer's inner markup (the header is not inserted twice). */
-  set_svg(text: string): void {
+  /** Whether label chunks of the last DOM document are still to be inserted (D89). */
+  get filling(): boolean {
+    return this.rest !== null;
+  }
+
+  /** Insert the remaining label chunks now (D89): the overlay's DOM is then the whole document. */
+  flush(): void {
+    const r = this.rest;
+    if (r === null) return;
+    this.drop_rest();
+    r.group.insertAdjacentHTML("beforeend", r.chunks.slice(r.next).join(""));
+  }
+
+  private drop_rest(): void {
+    if (this.rest === null) return;
+    cancelAnimationFrame(this.rest.raf);
+    this.rest = null;
+  }
+
+  private fill_step(): void {
+    const r = this.rest;
+    if (r === null) return;
+    r.group.insertAdjacentHTML("beforeend", r.chunks[r.next]!);
+    r.next += 1;
+    if (r.next >= r.chunks.length) this.rest = null;
+    else r.raf = requestAnimationFrame(() => this.fill_step());
+  }
+
+  /**
+   * The DOM mode: replace the overlay's children with the writer's inner markup (the header is not inserted twice).
+   * D89: a `labels` layer of more than `LABEL_CHUNK` `<text>` elements is inserted `LABEL_CHUNK` per animation frame
+   * (the same markup, the same final DOM; `flush()` completes it at once). Returns whether chunks are left to insert.
+   */
+  set_svg(text: string): boolean {
     const { viewBox, inner } = split_svg(text);
     if (viewBox !== null && this.svg.getAttribute("viewBox") !== viewBox) this.svg.setAttribute("viewBox", viewBox);
-    this.svg.innerHTML = inner;
+    this.drop_rest();
+    const parts = split_labels(inner);
+    const group = parts === null ? null : ((this.svg.innerHTML = parts.first), this.svg.querySelector(":scope > #labels"));
+    if (parts === null || group === null) this.svg.innerHTML = inner;
+    else {
+      this.rest = { group, chunks: parts.chunks, next: 0, raf: 0 };
+      this.rest.raf = requestAnimationFrame(() => this.fill_step());
+    }
     this.revoke();
     this.img.hidden = true;
     this.svg.style.display = "";
     this.mode = "dom";
+    return this.rest !== null;
   }
 
   /** The `<img>` mode: the writer's unchanged text as an image (the previous blob URL is revoked). */
   set_img(text: string): void {
+    this.drop_rest();
     const url = URL.createObjectURL(new Blob([text], { type: "image/svg+xml" }));
     this.img.src = url;
     this.revoke();
@@ -69,6 +106,7 @@ export class Overlay {
   }
 
   clear(): void {
+    this.drop_rest();
     this.svg.innerHTML = "";
     this.revoke();
     this.img.removeAttribute("src");

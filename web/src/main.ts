@@ -20,7 +20,7 @@ import "./style.css";
 import * as THREE from "three";
 
 import {
-  LAYER_IDS, camera_matrix, compose, curved, dumps, load_scene, load_scene_text, project_scene, shadow_geometry, write_svg,
+  LAYER_IDS, PrepCache, camera_matrix, compose, curved, dumps, load_scene, load_scene_text, project_scene, shadow_geometry, write_svg,
 } from "castplane";
 import type { CameraRecord, GeometryDocument, Scene, SceneObject, StageA, Transform, Vec2, Vec3 } from "castplane";
 
@@ -61,7 +61,7 @@ import type { Axis, ObjectRings, UnitPose } from "./object_rotate.js";
 import { IMG_MODE_THRESHOLD, Overlay } from "./overlay.js";
 import type { OverlayMode } from "./overlay.js";
 import {
-  OVERLAY_DRAG_PAUSE_MS, OVERLAY_QUICK_HOLD_MS, overlay_heavy, overlay_kind, overlay_wait,
+  OVERLAY_DRAG_PAUSE_MS, OVERLAY_HEAVY_MS, OVERLAY_QUICK_HOLD_MS, overlay_heavy, overlay_kind, overlay_wait,
 } from "./overlay_policy.js";
 import type { OverlayKind } from "./overlay_policy.js";
 import { PlaneSession, arrow_drag, object_centres, ring_drag, ring_grab } from "./plane.js";
@@ -224,10 +224,12 @@ function load(name: string, make: () => Scene, colours: Map<string, number>, gro
   let scene: Scene;
   let A: StageA;
   let stage_a_ms: number;
+  let prep: PrepCache;
   try {
     scene = make();
     const t0 = performance.now();
-    A = shadow_geometry(scene);
+    prep = new PrepCache();
+    A = shadow_geometry(scene, prep);
     stage_a_ms = performance.now() - t0;
   } catch (e) {
     show_error(describe_error(e)); // the previous scene stays
@@ -238,6 +240,7 @@ function load(name: string, make: () => Scene, colours: Map<string, number>, gro
   obj_drag.abandon();
   drop_pending_overlay();
   resting_dom_ms = Infinity; // the new scene's overlay cost is measured afresh
+  prep_cache = prep;
   overlay_long = false;
   state.object_error = false;
   state.scene = scene;
@@ -716,7 +719,7 @@ function apply_pose(pose: UnitPose, record: { kind: "none" | "step" } = { kind: 
   let A1: StageA, ms: number;
   try {
     const t0 = performance.now();
-    A1 = shadow_geometry(scene1);
+    A1 = shadow_geometry(scene1, prep_cache);
     ms = performance.now() - t0;
   } catch (e) {
     state.object_error = true;
@@ -1334,6 +1337,9 @@ function show_status(summary: DocSummary, rec: CameraRecord, meta: StatusMeta, o
 /** The smallest resting DOM `innerHTML` time since the load (ms; `Infinity` until one was measured: the overlay then
  * counts as light; the first, cold one overstates it). */
 let resting_dom_ms = Infinity;
+/** D89: the mesh preprocessing of the loaded scene's objects, shared by its stage-A runs (`apply_pose` moves objects
+ * only, so each run reuses it; a load starts a new one). */
+let prep_cache = new PrepCache();
 /** When the pointer last moved during the held drag (or the drag began; `performance.now()`). */
 let drag_moved_at = -Infinity;
 /** A reply whose overlay is waiting (`overlay_wait`): its timer re-evaluates the wait, and any newer reply drops it. */
@@ -1354,11 +1360,18 @@ let overlay_long = false;
 const heavy_overlay = (kind: OverlayKind): boolean =>
   overlay_heavy(resting_dom_ms, overlay_long && (state.dragging || kind === "drag"));
 
-/** Show `svg` in the drawing pane (`<img>` or DOM), now. */
+/** Show `svg` in the drawing pane (`<img>` or DOM), now. A DOM document whose labels are inserted over the next
+ * frames (D89, `Overlay.set_svg`) is heavy whatever its first insertion took. */
 function apply_overlay(svg: string, img: boolean): void {
   drop_pending_overlay();
   if (img) overlay.set_img(svg);
-  else overlay.set_svg(svg);
+  else if (overlay.set_svg(svg)) resting_dom_ms = Math.min(resting_dom_ms, OVERLAY_HEAVY_MS);
+}
+
+/** Record a resting DOM frame's `innerHTML` time. A document still filling its labels (D89) took only its first
+ * insertion: it stays heavy (`apply_overlay`) and is not a measurement. */
+function note_resting_dom(ms: number): void {
+  if (!overlay.filling) resting_dom_ms = Math.min(resting_dom_ms, ms);
 }
 
 /** Show a reply's overlay now, later, or never (`overlay_wait`; any waiting older reply is dropped first). Returns
@@ -1403,7 +1416,7 @@ function apply_reply(r: RenderedReply, info: RequestInfo): void {
   }
   const t2 = performance.now();
   if (!img && shown) state.full_svg_length = r.svg.length;
-  if (!img && shown && !info.dragging) resting_dom_ms = Math.min(resting_dom_ms, t2 - t1); // a resting DOM frame's cost
+  if (!img && shown && !info.dragging) note_resting_dom(t2 - t1); // a resting DOM frame's cost
   state.svg = r.svg;
   state.rec = r.rec;
   last_rays = r.ray_points;
@@ -1561,7 +1574,7 @@ function frame_sync(drag_step = false): boolean {
   const t2 = performance.now();
   if (!img_mode) {
     state.full_svg_length = svg.length;
-    if (!state.dragging) resting_dom_ms = Math.min(resting_dom_ms, t2 - t1);
+    if (!state.dragging) note_resting_dom(t2 - t1);
   }
   state.doc = doc;
   state.svg = svg;
@@ -1594,11 +1607,14 @@ function frame_sync(drag_step = false): boolean {
  * worker every frame is synchronous and nothing is done.
  */
 function settle(): boolean {
+  overlay.flush(); // D89: the hooks read the whole overlay
   if (client === null) return false;
   if (!client.in_flight && !client.dirty && !client.final_pending && !state.dirty && state.doc !== null) return false;
   client.settle();
   state.dirty = false;
-  return frame_sync();
+  const rendered = frame_sync();
+  overlay.flush();
+  return rendered;
 }
 
 // ---------------------------------------------------------------------------- start
@@ -1625,6 +1641,8 @@ function settle(): boolean {
   /** Whether stages B + C + SVG run in the core worker (false: the synchronous fallback). */
   get worker() { return client !== null; },
   get frames() { return state.frames.slice(); },
+  /** D89: whether label chunks of the DOM overlay are still to be inserted (read-only; `settle()` inserts them). */
+  get overlay_filling() { return overlay.filling; },
   get timings() { return { ...state.timings }; },
   get camera() { return state.plane === null ? null : state.plane.block(); },
   /** M10: the rig and what is derived from it (read-only), the pivot selection, the undo depth, the readouts. */

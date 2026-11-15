@@ -16,7 +16,7 @@
  * worker's global scope.
  */
 
-import { LAYER_IDS, SceneError, compose, project_scene, shadow_geometry, write_svg } from "castplane";
+import { LAYER_IDS, PrepCache, SceneError, compose, project_scene, shadow_geometry, write_svg } from "castplane";
 import type { CameraRecord, GeometryDocument, Scene, StageA } from "castplane";
 
 import { art_transferables, pack_art } from "./art_buffers.js";
@@ -40,6 +40,8 @@ interface Held {
   stage_a_ms: number;
   /** A stage A ran (a `pose`) and no reply has reported it yet. */
   unreported: boolean;
+  /** D89: the mesh preprocessing of `scene0`, shared by the stage-A runs of its poses. */
+  prep: PrepCache;
 }
 
 /** The last rendered document of the current gen (any phase), with what it was rendered with. */
@@ -108,11 +110,11 @@ export class CoreEngine {
     this.drop_final();
     this.last = null;
     const scene = m.scene as Scene;
-    const h: Held = { gen: m.gen, scene0: scene, scene, A: null, failed: null, stage_a_ms: 0, unreported: false };
+    const h: Held = { gen: m.gen, scene0: scene, scene, A: null, failed: null, stage_a_ms: 0, unreported: false, prep: new PrepCache() };
     this.held = h;
     const t0 = performance.now();
     try {
-      h.A = shadow_geometry(scene);
+      h.A = shadow_geometry(scene, h.prep);
     } catch (e) {
       h.failed = describe(e);
     }
@@ -135,7 +137,7 @@ export class CoreEngine {
     h.failed = null;
     const t0 = performance.now();
     try {
-      h.A = shadow_geometry(scene);
+      h.A = shadow_geometry(scene, h.prep);
     } catch (e) {
       h.failed = describe(e);
     }

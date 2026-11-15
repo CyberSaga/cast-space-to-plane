@@ -4399,6 +4399,43 @@ and the hidden-run SVG groups (§5.1.8). Nothing an M4–M6 case needs lies beyo
   compares the optional scene file's resting picture with the synchronous render; `interact_bench.mjs` counts overlay
   replacements with a `MutationObserver` and reports the second click's time without its settling pause. No output byte,
   document, conformance case or warning code changes (docs/DECISIONS.md D88).
+- **[decision, implementation] (web smooth interaction, D89) Stage A reuses the mesh preprocessing, and a long
+  `labels` layer enters the DOM overlay over several frames.** Amends nothing above; both parts change no output byte.
+  Measured at the D88 head on the 19-mesh character scene, the two long tasks left at a ring release were the
+  main-thread stage A of `end()` and the final DOM overlay. (1) *Stage A.* A pose change re-runs `shadow_geometry` on
+  the same objects with new transforms, and `build_object` repeated the §5.2 mesh preprocessing (weld, winding repair,
+  smooth groups) of every mesh although its inputs (`data`, `scale`, `weld_tolerance`, `smooth_angle_deg`, `id`) had
+  not changed: about three quarters of that scene's stage A. `ts/src/primitives.ts::PrepCache` (port-only; Python is
+  unchanged) remembers the `PreparedMesh` record per `data` object (a `WeakMap`, by identity) and per key
+  `scale|weld_tolerance|smooth_angle_deg|id` (`-0` kept apart from `0`); `shadow_geometry(scene, prep_cache?)` passes
+  it to `build_object`, and without the argument nothing is remembered. The record is read-only (the transform is
+  applied to a copy, as before), so stage A with the cache equals stage A without it. The web page holds one cache per
+  loaded scene on the main thread (`load`, `apply_pose`) and one per `scene` message in the worker (`on_scene`,
+  `on_pose`); both derive a pose's scene from the loaded objects, whose `data` objects stay the same. Stage A of that
+  scene: 51.5 → 13.3 ms median in node (24 documents byte-identical with and without the cache). (2) *Overlay.* Of that
+  scene's 9 806 overlay elements 4 618 are the `<text>` elements of the `labels` layer; alone they cost 16 ms of
+  `innerHTML` and a 56 ms long task (text shaping and layout: the same elements without their text content, or as many
+  `<line>` elements, cause none), and the whole document 100–117 ms to the next frame with one long task of 74–119 ms
+  against 33 ms (the two-frame floor) without the labels; hiding the layer with CSS does not remove the parse. The DOM
+  mode (`Overlay.set_svg`) now inserts a document whose `labels` group holds more than `LABEL_CHUNK = 1000` `<text>`
+  elements in steps: first the writer's inner markup with that group empty, then, one per animation frame, the group's
+  content in order, `LABEL_CHUNK` elements at a time (`web/src/overlay_split.ts::split_labels`: the chunks joined
+  inside the group are the writer's markup again; a document with at most `LABEL_CHUNK` labels, no `labels` group or a
+  nested group in it is inserted whole, so every bundled example is unchanged). This is the §5.4.11 row "showing the
+  writer's unchanged SVG text": the same text reaches the same DOM (smoke: `innerHTML` equal to a single insertion's),
+  only spread over 5 frames for that scene; it is not a sparser document (no reply is written differently, and the
+  download, the hooks and the observer's drawing read the full text at once). A newer document, the `<img>` mode and a
+  load drop the chunks not yet inserted; `Overlay.flush()` inserts them at once and `settle()` calls it, so a hook that
+  reads the DOM reads the whole document; the read-only hook `overlay_filling` tells whether chunks are left. A document
+  inserted in steps counts as heavy for `overlay_policy.ts` whatever its first insertion took (`apply_overlay`), and
+  only a document inserted whole updates `resting_dom_ms`. On the same scene and setup as the D88 note (three runs):
+  the ring release and the board-ring release have no long task (D88: two of 67–90 ms, one or two of 51–82 ms) and
+  frame gaps of at most 33.4 ms; a ring drag gets 15–18 worker replies (D88: 9–11) with a median `core ms` of 25–29
+  (D88: 31–35); the drags are unchanged (no long task, gaps of at most 16.8 ms, no
+  overlay replacement). Tests: two in `ts/test/mesh_pipeline.test.ts` (equal stage A and document with and without the
+  cache over three poses; the key), `web/test/overlay.test.ts` (3): 206 → 209 web tests; `web/scripts/smoke.mjs` waits
+  for the labels in `idle()` and compares the optional scene file's overlay, filled without `settle()`, with a single
+  insertion of the same text. No document, conformance case or warning code changes (docs/DECISIONS.md D89).
 
 ### 5.5 M8 — STEP import (spec §9 row "STEP", spec §10 M8) — a loader, outside the core
 

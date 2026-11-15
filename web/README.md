@@ -314,6 +314,16 @@ start or fails, the page falls back to the synchronous frame of before (`frame_s
   whose SVG is longer than `IMG_MODE_THRESHOLD` counts as heavy for a drag. The observer's drawing on the frame, the
   warnings and the status follow every reply; the last resting document is always shown. `FrameRecord` carries
   `phase` (`quick` | `final` | `sync`), `stage_a_ms` and `overlay` (shown on arrival).
+- **Many labels** (D89; `src/overlay_split.ts::split_labels`, `Overlay.set_svg`). A DOM document whose `labels` group
+  holds more than `LABEL_CHUNK` = 1000 `<text>` elements is inserted as the writer's markup with that group empty,
+  then 1000 labels per animation frame, in order: the same text and the same final DOM as one insertion, without the
+  long task of laying out thousands of text elements at once (the character scene's 4 618 labels: 56 ms alone, 74–119
+  ms with the rest of the document). A newer document, the `<img>` mode and a load drop the chunks not yet inserted;
+  `settle()` inserts them at once (`Overlay.flush()`), and the read-only hook `overlay_filling` tells whether any are
+  left. Such a document always counts as heavy. Documents with at most 1000 labels (every bundled example) are
+  inserted whole. A background tab gets no animation frames, so its labels complete when it is shown again.
+- **Stage A on a pose change** (D89). The page and the worker each hold a `PrepCache` (`castplane`, port-only) for the
+  loaded scene, so a moved mesh is not welded and repaired again: stage A of the character scene 51.5 → 13.3 ms.
 - **Object drags** run the `UnitDrag` machine with `live: false`: the 3D proxies and the panel follow the pointer at
   frame rate, the worker recomputes at its own pace, and release (`end()`) still runs stage A synchronously. The
   slow-scene notice 此場景拖動放開後更新 appears only in the synchronous fallback.
@@ -356,6 +366,10 @@ understated the drag's long tasks; "now" adds D88 (three runs).
 The bundled examples now (`basic`, `two_lights`, `wall_and_ground`; unchanged by D88, their overlays are light): click
 15–17 ms, first proxy motion 12–27 ms, every frame gap 16.5–16.8 ms, no long tasks, every reply replaces the overlay
 (40 / 40 in the ring drag, 30 / 30 in the board-ring drag), `core ms` 0.7–2.2 ms median.
+
+With D89 (same scene and setup, three runs): the ring release and the board-ring release have no long task (frame gaps
+of at most 33.4 ms, one overlay replacement), a ring drag gets 15–18 worker replies (9–11 before) with a median
+`core ms` of 25–29, and the drags are as in the table (no long task, gaps of at most 16.8 ms, no overlay replacement).
 
 **GL caveat.** With the WebGL draws on, SwiftShader (software rasteriser) spends ≈ 100–130 ms per frame in the
 observer's `renderer.render` alone for the character scene (≈ 9 k fat-line instances), so the frame gaps of a GL run
