@@ -344,7 +344,8 @@ start or fails, the page falls back to the synchronous frame of before (`frame_s
   measuring the page's own cost). `smoke.mjs` calls `settle()` before it reads the DOM after a drag.
 - **Tool**: `web/scripts/interact_bench.mjs` (a dev helper like `smoke.mjs`) times a real click on an object, the
   first proxy motion, the animation-frame gaps and the long tasks of a ring drag and of a board-ring drag, and the
-  release.
+  release. It also reports each phase's long animation frames (Long Animation Frames API: script, render,
+  style-and-layout and forced-layout time per frame; `loaf: null` where unsupported).
 
 #### Interaction latency (`web/scripts/interact_bench.mjs`)
 

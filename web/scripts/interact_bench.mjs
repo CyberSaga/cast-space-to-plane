@@ -2,7 +2,9 @@
 // Chromium (a Playwright installed outside the repository, as web/scripts/smoke.mjs). Loads a scene, clicks an object in
 // the observer pane (its rings), drags one of its rings, drags the board ring, and reports long tasks, animation-frame
 // gaps, the frame records and the hook timings. `--nogl` skips the WebGL draw calls (`castplane_web.set_gl(false)`) so
-// a run on a software renderer measures the page JavaScript.
+// a run on a software renderer measures the page JavaScript. Each phase that reports `longtasks` also reports `loaf`:
+// its Long Animation Frames ({n, frames: [{dur, blocking, script, render, style_layout, forced, top}]}, ms), or null
+// where the API is unsupported (`loaf_supported` in the output says which).
 //
 //   npm run -w web build && (cd web && npx vite preview --port 4173 --strictPort) &
 //   node web/scripts/interact_bench.mjs http://localhost:4173/ examples/basic.json crate [--nogl] [--json out.json]
@@ -32,6 +34,29 @@ await page.evaluate(() => {
   const tick = (t) => { window.__raf.push(t); requestAnimationFrame(tick); };
   requestAnimationFrame(tick);
   new PerformanceObserver((l) => { for (const e of l.getEntries()) window.__lt.push([e.startTime, e.duration]); }).observe({ entryTypes: ["longtask"] });
+  // Long Animation Frames (Chromium >= 123): a frame whose update took > 50 ms. Per frame (end = startTime + duration):
+  //   script_ms = sum scripts[].duration; render_ms = end - renderStart (renderStart > 0); style_layout_ms = end -
+  //   styleAndLayoutStart (> 0); pre_layout_render_ms = styleAndLayoutStart - renderStart (rAF callbacks, observers);
+  //   forced_ms = sum scripts[].forcedStyleAndLayoutDuration. All rounded to 0.1 ms.
+  window.__loaf = []; window.__loaf_ok = !!PerformanceObserver.supportedEntryTypes?.includes("long-animation-frame");
+  if (window.__loaf_ok) {
+    const r1 = (x) => +x.toFixed(1), sum = (a, k) => a.reduce((s, x) => s + (x[k] || 0), 0);
+    new PerformanceObserver((l) => {
+      for (const e of l.getEntries()) {
+        const end = e.startTime + e.duration, sc = [...(e.scripts || [])];
+        const scripts = sc.map((s) => ({ invoker: s.invoker, invokerType: s.invokerType, duration: r1(s.duration),
+          forcedStyleAndLayoutDuration: r1(s.forcedStyleAndLayoutDuration || 0), sourceFunctionName: s.sourceFunctionName,
+          sourceURL: (s.sourceURL || "").split("/").pop() }));
+        window.__loaf.push({ startTime: r1(e.startTime), duration: r1(e.duration), renderStart: r1(e.renderStart),
+          styleAndLayoutStart: r1(e.styleAndLayoutStart), blockingDuration: r1(e.blockingDuration || 0),
+          firstUIEventTimestamp: e.firstUIEventTimestamp ? r1(e.firstUIEventTimestamp) : 0, scripts,
+          script_ms: r1(sum(sc, "duration")), render_ms: e.renderStart > 0 ? r1(end - e.renderStart) : 0,
+          style_layout_ms: e.styleAndLayoutStart > 0 ? r1(end - e.styleAndLayoutStart) : 0,
+          pre_layout_render_ms: e.renderStart > 0 && e.styleAndLayoutStart > 0 ? r1(e.styleAndLayoutStart - e.renderStart) : 0,
+          forced_ms: r1(sum(sc, "forcedStyleAndLayoutDuration")) });
+      }
+    }).observe({ type: "long-animation-frame", buffered: true });
+  }
   // every replacement of the drawing pane's overlay (the DOM overlay's children, the <img>'s source), whichever path
   // applied it (on arrival or from a waiting reply's timer, D88)
   window.__ov = [];
@@ -39,11 +64,17 @@ await page.evaluate(() => {
   new MutationObserver(() => window.__ov.push(performance.now())).observe(sv, { childList: true });
   new MutationObserver(() => window.__ov.push(performance.now())).observe(im, { attributes: true, attributeFilter: ["src"] });
 });
-const mark = () => page.evaluate(() => ({ t: performance.now(), raf: window.__raf.length, lt: window.__lt.length, ov: window.__ov.length }));
+const mark = () => page.evaluate(() => ({ t: performance.now(), raf: window.__raf.length, lt: window.__lt.length, ov: window.__ov.length, loaf: window.__loaf.length }));
 const since = (m) => page.evaluate((m) => {
   const raf = window.__raf.slice(m.raf), lt = window.__lt.slice(m.lt);
   const gaps = []; for (let i = 1; i < raf.length; i++) gaps.push(raf[i] - raf[i - 1]);
-  return { gaps, lt: lt.map(([s, d]) => +d.toFixed(0)), t: performance.now() - m.t, ov: window.__ov.length - m.ov };
+  // LoAF entries are delivered a little after their frame, so a phase that has just ended may miss its last frame
+  const loaf = !window.__loaf_ok ? null : window.__loaf.slice(m.loaf).map((f) => {
+    const top = [...f.scripts].sort((a, b) => b.duration - a.duration)[0];
+    return { dur: f.duration, blocking: f.blockingDuration, script: f.script_ms, render: f.render_ms, style_layout: f.style_layout_ms,
+      forced: f.forced_ms, top: top ? ((top.invokerType ? top.invokerType + ":" : "") + (top.invoker || top.sourceFunctionName || "")).slice(0, 60) : null };
+  });
+  return { gaps, lt: lt.map(([s, d]) => +d.toFixed(0)), t: performance.now() - m.t, ov: window.__ov.length - m.ov, loaf: loaf && { n: loaf.length, frames: loaf } };
 }, m);
 const settle = async (ms = 400) => { await sleep(ms); };
 
@@ -57,7 +88,8 @@ const ok = await page.evaluate((args) => window.castplane_web.load_text(args.nam
 await page.waitForFunction(() => window.__raf.length > 0);
 await settle(1500);
 let r = await since(m);
-out.load = { ok, wall_ms: Date.now() - t0, longtasks: r.lt, timings: await page.evaluate(() => window.castplane_web.timings) };
+out.loaf_supported = await page.evaluate(() => window.__loaf_ok);
+out.load = { ok, wall_ms: Date.now() - t0, longtasks: r.lt, loaf: r.loaf, timings: await page.evaluate(() => window.castplane_web.timings) };
 console.log("load:", JSON.stringify(out.load));
 
 // ---- click an object
@@ -83,7 +115,7 @@ const rings_wall = Date.now() - tc0;
 await settle(1500);
 r = await since(m);
 const clickFrames = await page.evaluate((n) => window.castplane_web.frames.slice(n).map((f) => [f.phase ?? "?", f.dragging, +f.core_ms.toFixed(0), +f.dom_ms.toFixed(0), f.obs_ms === null ? null : +f.obs_ms.toFixed(0), f.overlay ?? null]), nf0);
-out.click = { id: target.id, rings_wall_ms: rings_wall, longtasks: r.lt, raf_gaps: stats(r.gaps), core_frames_during_click: clickFrames, selection: await page.evaluate(() => window.castplane_web.selection()) };
+out.click = { id: target.id, rings_wall_ms: rings_wall, longtasks: r.lt, loaf: r.loaf, raf_gaps: stats(r.gaps), core_frames_during_click: clickFrames, selection: await page.evaluate(() => window.castplane_web.selection()) };
 console.log("click:", JSON.stringify(out.click));
 
 // ---- second click (part focus, for grouped scenes) to see the cost again
@@ -93,7 +125,7 @@ await page.waitForFunction(() => window.castplane_web.object_rings_px !== null, 
 const rings_wall2 = Date.now() - tc1;
 await settle(1500);
 r = await since(m);
-out.click2 = { rings_wall_ms: rings_wall2, longtasks: r.lt, selection: await page.evaluate(() => window.castplane_web.selection()) };
+out.click2 = { rings_wall_ms: rings_wall2, longtasks: r.lt, loaf: r.loaf, selection: await page.evaluate(() => window.castplane_web.selection()) };
 console.log("click2:", JSON.stringify(out.click2));
 
 // ---- ring drag: find a hit-testable ring point
@@ -149,11 +181,11 @@ const frames = await page.evaluate(() => window.castplane_web.frames);
 const dragFrames = frames.filter((f) => f.dragging);
 out.drag_frame_list = dragFrames.map((f) => [f.phase, +f.dom_ms.toFixed(1), f.overlay]);
 out.drag = { axis: grab.axis, down_wall_ms: down_wall, first_proxy_move_ms: firstMoveWall, first_stage_a_ms: firstStageA, drag_wall_ms: drag_wall,
-  raf_gaps: stats(rd.gaps), longtasks: rd.lt, drag_frames: dragFrames.length, overlays_applied: dragFrames.filter((f) => f.overlay !== false).length,
+  raf_gaps: stats(rd.gaps), longtasks: rd.lt, loaf: rd.loaf, drag_frames: dragFrames.length, overlays_applied: dragFrames.filter((f) => f.overlay !== false).length,
   overlay_replacements: rd.ov,
   core_ms: stats(dragFrames.map((f) => f.core_ms)), dom_ms: stats(dragFrames.map((f) => f.dom_ms)), obs_ms: stats(dragFrames.map((f) => f.obs_ms ?? 0)),
   mode: [...new Set(dragFrames.map((f) => f.mode))], stage_a_runs: (await page.evaluate(() => window.castplane_web.timings)).stage_a_runs - runs0,
-  release: { up_wall_ms: up_wall, longtasks: ru.lt, raf_gaps: stats(ru.gaps), overlay_replacements: ru.ov }, undo: (await page.evaluate(() => window.castplane_web.rig)).undo };
+  release: { up_wall_ms: up_wall, longtasks: ru.lt, loaf: ru.loaf, raf_gaps: stats(ru.gaps), overlay_replacements: ru.ov }, undo: (await page.evaluate(() => window.castplane_web.rig)).undo };
 console.log("drag:", JSON.stringify(out.drag));
 
 // ---- board ring drag (camera) for reference
@@ -169,7 +201,7 @@ if (bq !== null) {
   await page.mouse.up(); await settle(2500);
   const rbu = await since(mb);
   const fr = (await page.evaluate(() => window.castplane_web.frames)).filter((f) => f.dragging);
-  out.camera_drag = { raf_gaps: stats(rb.gaps), longtasks: rb.lt, overlay_replacements: rb.ov, release_overlay_replacements: rbu.ov, core_ms: stats(fr.map((f) => f.core_ms)), dom_ms: stats(fr.map((f) => f.dom_ms)), obs_ms: stats(fr.map((f) => f.obs_ms ?? 0)), release_longtasks: rbu.lt };
+  out.camera_drag = { raf_gaps: stats(rb.gaps), longtasks: rb.lt, loaf: rb.loaf, release_loaf: rbu.loaf, overlay_replacements: rb.ov, release_overlay_replacements: rbu.ov, core_ms: stats(fr.map((f) => f.core_ms)), dom_ms: stats(fr.map((f) => f.dom_ms)), obs_ms: stats(fr.map((f) => f.obs_ms ?? 0)), release_longtasks: rbu.lt };
   console.log("camera_drag:", JSON.stringify(out.camera_drag));
 }
 out.status = await page.evaluate(() => document.getElementById("status").textContent);
