@@ -580,22 +580,18 @@ if (sceneFile) {
   {
     // D89: a labels layer of more than LABEL_CHUNK <text> elements is inserted over several frames; once it has
     // filled by itself (no settle()), the overlay's DOM is the one a single insertion of the same text gives
-    const filled = await page.evaluate(async () => {
+    // (D90: a long scene's first picture is its final document; idle() reads no document, so nothing is flushed)
+    const quiet = await idle();
+    const filled = await page.evaluate(() => {
       const ov = document.querySelector("svg.overlay");
-      const count = () => ov.querySelectorAll(":scope > #labels > text").length;
-      const frame = () => new Promise((r) => requestAnimationFrame(r));
-      for (let n = count(), still = 0; still < 20; still++) {
-        await frame();
-        if (count() !== n) { n = count(); still = 0; }
-      }
-      const natural = ov.innerHTML, labels = count();
+      const natural = ov.innerHTML, labels = ov.querySelectorAll(":scope > #labels > text").length;
       const text = window.castplane_web.svg; // settles: nothing is left to insert
       const whole = document.createElementNS("http://www.w3.org/2000/svg", "svg");
       whole.innerHTML = text.slice(text.indexOf(">", text.indexOf("<svg")) + 1, text.lastIndexOf("</svg>"));
       return { labels, same: natural === whole.innerHTML, settled_same: ov.innerHTML === whole.innerHTML,
         svg_ns: [...ov.querySelectorAll("#labels > text")].every((e) => e.namespaceURI === "http://www.w3.org/2000/svg") };
     });
-    check(filled.same && filled.settled_same && filled.svg_ns,
+    check(quiet && filled.same && filled.settled_same && filled.svg_ns,
       `${stem}: the overlay filled over several frames is the single insertion's DOM (${filled.labels} labels) ${JSON.stringify(filled)}`);
   }
   // D88: a heavy scene (the optional file) exercises the heavy overlay's rule; at rest the worker's picture is still

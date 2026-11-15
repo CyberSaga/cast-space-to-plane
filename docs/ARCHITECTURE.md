@@ -4436,6 +4436,30 @@ and the hidden-run SVG groups (§5.1.8). Nothing an M4–M6 case needs lies beyo
   cache over three poses; the key), `web/test/overlay.test.ts` (3): 206 → 209 web tests; `web/scripts/smoke.mjs` waits
   for the labels in `idle()` and compares the optional scene file's overlay, filled without `settle()`, with a single
   insertion of the same text. No document, conformance case or warning code changes (docs/DECISIONS.md D89).
+- **[decision, implementation] (web smooth interaction, D90) A long scene's resting `quick` reply waits for its `final`
+  one before the overlay's cost is measured, also after a load.** Amends, by reference and with the existing text
+  unchanged, item (i) of the D88 note above ("a load's resting replies are still shown at once"). At the D89 head a
+  load of the 19-mesh character scene had three long tasks (three runs: 137–165, 126–151 and 57–95 ms): the
+  synchronous load (validation, the main thread's stage A, the worker's copy of the scene, the two 3D views), the
+  `quick` document shown through the `<img>` (D87 item (4); an SVG image of that size is parsed, laid out and painted
+  in one task), and the `final` DOM document about 160 ms later. D89 removed the third. The second paid a full overlay
+  update for a picture that stayed about 160 ms, and the reason D88 gave for showing it at once no longer holds in
+  worker mode, where `load` clears the overlay (`overlay.clear()`) and the status reads `rendering…`. `heavy_overlay`
+  now passes `long_svg` to `overlay_heavy` for every reply kind but `final`, so an unmeasured scene whose reply was
+  longer than `IMG_MODE_THRESHOLD` (or written for the `<img>`) holds its resting `quick` reply for
+  `OVERLAY_QUICK_HOLD_MS` like a measured heavy one (D88 item (iv)): the `final` reply replaces it, and a `final` later
+  than the hold still lets the `quick` one show. A resting `final` reply, a scene without a `final` phase and every
+  scene below the threshold (the bundled examples) are unchanged. Same scene and setup, three runs: one long task of
+  114–123 ms at the load (the synchronous load; D89 head: three), the drawing pane's first picture is the `final`
+  document about 350–370 ms after the load instead of the `quick` `<img>` at about 180–190 ms; the drags and releases
+  are as in the D89 note. Not done: the synchronous load itself (cold, about 25 ms validation, 50–76 ms stage A whose
+  mesh preprocessing is spread over the §5.2 steps with no single hot spot, 10–13 ms for the worker's copy, 20–40 ms
+  for the views) stays one task, since `load` returns whether the scene was accepted and the hooks and the smoke test
+  read its state synchronously. `contain: layout style paint`, `contain: strict` and `content-visibility: auto` on the
+  overlay were measured on that scene's document and change nothing (100, 101, 103 and 86 ms to the next frame against
+  100 ms; the long task stays 71–154 ms), so none is applied. `web/scripts/smoke.mjs`'s D89 check waits for `idle()`
+  before it reads the overlay. No output byte, document, conformance case or warning code changes
+  (docs/DECISIONS.md D90).
 
 ### 5.5 M8 — STEP import (spec §9 row "STEP", spec §10 M8) — a loader, outside the core
 

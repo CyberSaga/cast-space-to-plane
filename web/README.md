@@ -324,6 +324,10 @@ start or fails, the page falls back to the synchronous frame of before (`frame_s
   inserted whole. A background tab gets no animation frames, so its labels complete when it is shown again.
 - **Stage A on a pose change** (D89). The page and the worker each hold a `PrepCache` (`castplane`, port-only) for the
   loaded scene, so a moved mesh is not welded and repaired again: stage A of the character scene 51.5 → 13.3 ms.
+- **A long scene's first picture** (D90). Before the overlay's cost is measured, a scene whose reply is longer than
+  `IMG_MODE_THRESHOLD` holds its resting `quick` reply for the `final` one like a heavy overlay, also after a load
+  (the pane is already cleared and the status reads `rendering…`): the character scene's load has one long task
+  (114–123 ms, the synchronous load itself) instead of three, and its first picture is the final document.
 - **Object drags** run the `UnitDrag` machine with `live: false`: the 3D proxies and the panel follow the pointer at
   frame rate, the worker recomputes at its own pace, and release (`end()`) still runs stage A synchronously. The
   slow-scene notice 此場景拖動放開後更新 appears only in the synchronous fallback.

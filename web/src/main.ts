@@ -1358,7 +1358,7 @@ let overlay_long = false;
 
 /** Whether the current scene's overlay is heavy for a reply of `kind` (`overlay_policy.ts::overlay_heavy`). */
 const heavy_overlay = (kind: OverlayKind): boolean =>
-  overlay_heavy(resting_dom_ms, overlay_long && (state.dragging || kind === "drag"));
+  overlay_heavy(resting_dom_ms, overlay_long && (state.dragging || kind !== "final"));
 
 /** Show `svg` in the drawing pane (`<img>` or DOM), now. A DOM document whose labels are inserted over the next
  * frames (D89, `Overlay.set_svg`) is heavy whatever its first insertion took. */
