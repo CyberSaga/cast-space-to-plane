@@ -142,6 +142,12 @@ main is merged into it from time to time.
   - Benchmark gate limits change only with a newly recorded measurement in `benchmarks/README.md`; never loosen them to
     absorb a regression.
 
+## Context loading
+
+- Search and read with Grep/Read, not `grep`/`sed`/`cat` through the shell. Read big files by offset/limit (300 lines at most), never whole.
+- Cap shell output (`| head -60`, `| cut -c1-300`). Test runs: write output to a file and read its tail.
+- Python over ~15 lines goes in a scratchpad `.py` file, not a heredoc or `python -c`.
+
 ## Subagents: splitting work for performance and cost
 
 Do the work yourself when it touches one or two files or one known symbol. Delegate when a task splits into parts that
