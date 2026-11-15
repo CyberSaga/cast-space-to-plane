@@ -54,7 +54,7 @@ export {
   mesh_from_faces, prism_mesh, sphere_mesh, transform_mesh, triangulate_faces,
 } from "./mesh.js";
 export type { Mesh } from "./mesh.js";
-export { CURVED_TYPES, analytic_record, build_object, face_tables, local_mesh, point_inside_solid, prepared_mesh } from "./primitives.js";
+export { CURVED_TYPES, PrepCache, analytic_record, build_object, face_tables, local_mesh, point_inside_solid, prepared_mesh } from "./primitives.js";
 export type { ObjectRecord, PreparedMesh } from "./primitives.js";
 export {
   LINE_PARALLEL_REL, LINE_ZERO_REL, RAY_EXTENSION, clip_segments_uv, coincidence_check, covering_segments, extended_segments,

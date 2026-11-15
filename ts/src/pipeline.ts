@@ -37,6 +37,7 @@ import type { FormItem, UmbraStageEntry } from "./multilight.js";
 import { canonical } from "./output/geometry_json.js";
 import { write_svg } from "./output/svg.js";
 import { build_object, point_inside_solid } from "./primitives.js";
+import type { PrepCache } from "./primitives.js";
 import type { EdgeTemplate, ObjectRecord } from "./primitives.js";
 import { validate_camera } from "./scene.js";
 import type { Light, Receiver, Scene } from "./scene.js";
@@ -708,9 +709,10 @@ function canonical3(v: readonly number[]): Vec3 {
 
 /** Stage A: camera-independent geometry (contract §3, §5.1.2, §5.1.3). Never touches `scene.camera`. `shadows` is
  * ordered receiver (scene order) → light (scene order) → caster (objects in scene order, then the other bounded
- * receivers), contract §5.1.3.1. */
-export function shadow_geometry(scene: Scene): StageA {
-  const objects = scene.objects.map((o) => build_object(o) as StageAObject);
+ * receivers), contract §5.1.3.1. `prep_cache` (port-only, optional, D89): a `primitives.PrepCache` shared by the
+ * caller's stage-A runs on one scene whose objects only move; the result is equal with and without it. */
+export function shadow_geometry(scene: Scene, prep_cache?: PrepCache): StageA {
+  const objects = scene.objects.map((o) => build_object(o, prep_cache) as StageAObject);
   const receivers = scene.receivers.map((r, i) => receiver_record(r, i));
   // contract §5.1.2: bounds vertices are scene geometry (the ground has none: v2 scales unchanged)
   const vertices: Vec3[] = [];

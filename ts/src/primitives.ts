@@ -79,7 +79,38 @@ export interface PreparedMesh {
   scale_A: number;
 }
 
-export function prepared_mesh(obj: SceneObject): PreparedMesh {
+/** `-0` and `0` are different keys (a number's own string does not tell them apart). */
+function key_number(x: number): string {
+  return Object.is(x, -0) ? "-0" : String(x);
+}
+
+/**
+ * An opt-in memo of {@link prepared_mesh} (port-only; contract §5.4 implementation note "Preprocessing memo", D89).
+ * The preprocessing of a `mesh` object reads its `data`, `scale`, `weld_tolerance`, `smooth_angle_deg` and `id` and
+ * never its `transform`, so a caller that re-runs stage A on a scene whose objects only moved (the web UI's object
+ * rotation) passes one cache to every run and the meshes are preprocessed once. A hit returns the **same** record as
+ * the first run, so its lists are shared by reference between the stage-A results (read-only, like every stage-A
+ * list). Keyed by the identity of the `data` object (held weakly: a dropped scene frees its entries) and by the other
+ * four values; `data` must not be mutated while the cache is in use. Without a cache nothing is remembered.
+ */
+export class PrepCache {
+  private readonly by_data = new WeakMap<object, Map<string, PreparedMesh>>();
+
+  /** The remembered record of `obj`, or `make()` (remembered when it returns). */
+  get(obj: SceneObject, make: () => PreparedMesh): PreparedMesh {
+    const data = obj.data as object;
+    const key = [key_number(obj.scale ?? 1.0), key_number(obj.weld_tolerance ?? WELD_TOLERANCE_DEFAULT),
+      key_number(obj.smooth_angle_deg ?? SMOOTH_ANGLE_DEFAULT), obj.id].join("|");
+    let by_key = this.by_data.get(data);
+    if (by_key === undefined) this.by_data.set(data, (by_key = new Map()));
+    let prep = by_key.get(key);
+    if (prep === undefined) by_key.set(key, (prep = make()));
+    return prep;
+  }
+}
+
+export function prepared_mesh(obj: SceneObject, cache?: PrepCache): PreparedMesh {
+  if (cache !== undefined) return cache.get(obj, () => prepared_mesh(obj));
   const [mesh, triangles, fallback, smooth_groups, warnings, scale_A] = preprocess_mesh(obj.data as MeshInput, obj.scale ?? 1.0,
     obj.weld_tolerance ?? WELD_TOLERANCE_DEFAULT, obj.smooth_angle_deg ?? SMOOTH_ANGLE_DEFAULT, obj.id, true);
   return { mesh, triangles, fallback, smooth_groups, warnings, scale_A };
@@ -137,10 +168,11 @@ export function face_tables(mesh: Mesh, names: readonly string[]): { face_first:
 
 /** The object record of a validated `objects[i]` entry with the world transform applied. M5 (contract §5.2.3 step 8):
  * every record carries `fallback` / `prep_warnings` and `mesh.edge_smooth` (all false for the primitives); mesh records
- * also `triangles`, `smooth_groups` and `mesh_scale_A`, and their edge templates the camera-free `smooth` key. */
-export function build_object(obj: SceneObject): ObjectRecord {
+ * also `triangles`, `smooth_groups` and `mesh_scale_A`, and their edge templates the camera-free `smooth` key.
+ * `prep_cache` (port-only, optional): the {@link PrepCache} of a caller that re-runs stage A on moved objects. */
+export function build_object(obj: SceneObject, prep_cache?: PrepCache): ObjectRecord {
   const [R, position] = transform_frame(obj.transform);
-  const prep = obj.type === "mesh" ? prepared_mesh(obj) : null;
+  const prep = obj.type === "mesh" ? prepared_mesh(obj, prep_cache) : null;
   const mesh = transform_mesh(prep === null ? local_mesh(obj) : prep.mesh, R, position);
   const names = mesh.vertex_names.map((n) => `${obj.id}.${n}`);
   const tables = face_tables(mesh, names);
