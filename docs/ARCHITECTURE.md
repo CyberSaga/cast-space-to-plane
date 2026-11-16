@@ -4532,6 +4532,15 @@ and the hidden-run SVG groups (§5.1.8). Nothing an M4–M6 case needs lies beyo
   `two_lights` never makes it visible and leaves it off when idle, and that loading the optional scene file turns it on
   with the overlay empty until the first picture and off when idle, never inside `#stage`. Web tests 209 → 214 with D91.
   No output byte, document, conformance case or warning code changes (docs/DECISIONS.md D92).
+- **[decision, implementation] (web smooth interaction, D91 and D92 review)** Two corrections to the two notes above.
+  (1) Without the core worker every frame replaces the overlay's document (nothing holds a heavy one back there), and a
+  newer `set_svg` restarts the fill, so continuous input on a heavy scene never showed a picture: on that path
+  `apply_overlay` completes the document at once (`Overlay.flush`), as before D91; the fill over several frames applies
+  with the worker only. (2) Only a load or render failure ends the loading indicator: a clipboard notice or an
+  object-rotation notice in the error panel leaves it on while the first picture is pending (`show_error`'s `render`
+  flag). The D92 note's "shows it for those frames" is amended: a synchronous frame blocks painting, so the indicator
+  cannot appear during it. Reproduction of (1): no `Worker`, `benchmarks/scenes/benchmark_100.json`, 40 frames of
+  `input` on the roll slider.
 
 ### 5.5 M8 — STEP import (spec §9 row "STEP", spec §10 M8) — a loader, outside the core
 

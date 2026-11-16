@@ -213,9 +213,11 @@ ui.construction.addEventListener("change", () => {
   box.dispatchEvent(new Event("change"));
 });
 
-function show_error(message: string | null): void {
+/** Show (or clear) the error panel. `render`: the message is a load or render failure, which ends the pane's loading
+ * indicator (D92); a clipboard or object-rotation notice leaves a pending first picture's indicator on. */
+function show_error(message: string | null, render = true): void {
   set_error_panel(ui.errorPanel, message);
-  if (message !== null) set_loading("error");
+  if (message !== null && render) set_loading("error");
 }
 
 // D92: the drawing pane's loading indicator (`loading.ts`), on from a load until that scene's first picture
@@ -514,7 +516,7 @@ $<HTMLButtonElement>("copy-camera").addEventListener("click", () => {
   const text = camera_block_text(state.plane.block());
   navigator.clipboard.writeText(text).then(
     () => show_error(null),
-    (e) => show_error(`clipboard unavailable (${describe_error(e)}); camera block:\n${text}`),
+    (e) => show_error(`clipboard unavailable (${describe_error(e)}); camera block:\n${text}`, false),
   );
 });
 
@@ -741,7 +743,7 @@ function apply_pose(pose: UnitPose, record: { kind: "none" | "step" } = { kind: 
     ms = performance.now() - t0;
   } catch (e) {
     state.object_error = true;
-    show_error(`${NOTICE_CORE_FAILED}\n${describe_error(e)}`);
+    show_error(`${NOTICE_CORE_FAILED}\n${describe_error(e)}`, false);
     for (const [id, t] of before) set_object_pose_3d(id, t);
     if (request) request_render();
     return false;
@@ -1384,7 +1386,12 @@ const heavy_overlay = (kind: OverlayKind): boolean =>
 function apply_overlay(svg: string, img: boolean): void {
   drop_pending_overlay();
   if (img) overlay.set_img(svg);
-  else if (overlay.set_svg(svg)) resting_dom_ms = Math.min(resting_dom_ms, OVERLAY_HEAVY_MS);
+  else if (overlay.set_svg(svg)) {
+    // without the worker every frame replaces the document (nothing holds a heavy one back, `overlay_wait`), and a
+    // newer `set_svg` restarts the fill: insert it whole, or continuous input would never show a picture
+    if (client === null) overlay.flush();
+    else resting_dom_ms = Math.min(resting_dom_ms, OVERLAY_HEAVY_MS);
+  }
 }
 
 /** Record a resting DOM frame's `innerHTML` time. A document still being inserted (D89, D91) took only its first
