@@ -58,6 +58,8 @@ import {
   snap_angle, translate_pose, world_centre,
 } from "./object_rotate.js";
 import type { Axis, ObjectRings, UnitPose } from "./object_rotate.js";
+import { LOADING_TEXT, loading_after } from "./loading.js";
+import type { LoadingEvent } from "./loading.js";
 import { IMG_MODE_THRESHOLD, Overlay } from "./overlay.js";
 import type { OverlayMode } from "./overlay.js";
 import {
@@ -213,7 +215,20 @@ ui.construction.addEventListener("change", () => {
 
 function show_error(message: string | null): void {
   set_error_panel(ui.errorPanel, message);
+  if (message !== null) set_loading("error");
 }
+
+// D92: the drawing pane's loading indicator (`loading.ts`), on from a load until that scene's first picture
+ui.paneLoading.append(LOADING_TEXT);
+let loading_on = false;
+function set_loading(ev: LoadingEvent): void {
+  const on = loading_after(ev);
+  if (on === loading_on) return;
+  loading_on = on;
+  ui.paneLoading.classList.toggle("active", on);
+  viewport.setAttribute("aria-busy", String(on));
+}
+overlay.onshow = () => set_loading("picture");
 
 // ---------------------------------------------------------------------------- loading
 /** Load a scene: `make` validates it; `colours` are the display colours of the same raw data
@@ -295,6 +310,9 @@ function load(name: string, make: () => Scene, colours: Map<string, number>, gro
   document.title = `${name} — castplane web`;
   request_render();
   if (client !== null) ui.statusLine.textContent = `${name}: rendering…`;
+  // D92: until the new scene's first picture (with the worker the overlay was cleared above; without it the next
+  // animation frame renders the new scene synchronously, and the indicator shows only if that frame outlasts its delay)
+  set_loading("load");
   return true;
 }
 
@@ -1361,15 +1379,15 @@ let overlay_long = false;
 const heavy_overlay = (kind: OverlayKind): boolean =>
   overlay_heavy(resting_dom_ms, overlay_long && (state.dragging || kind !== "final"));
 
-/** Show `svg` in the drawing pane (`<img>` or DOM), now. A DOM document whose labels are inserted over the next
- * frames (D89, `Overlay.set_svg`) is heavy whatever its first insertion took. */
+/** Show `svg` in the drawing pane (`<img>` or DOM), now. A DOM document inserted over the next frames (D89, D91:
+ * more than `FILL_THRESHOLD` elements, `Overlay.set_svg`) is heavy whatever this call took. */
 function apply_overlay(svg: string, img: boolean): void {
   drop_pending_overlay();
   if (img) overlay.set_img(svg);
   else if (overlay.set_svg(svg)) resting_dom_ms = Math.min(resting_dom_ms, OVERLAY_HEAVY_MS);
 }
 
-/** Record a resting DOM frame's `innerHTML` time. A document still filling its labels (D89) took only its first
+/** Record a resting DOM frame's `innerHTML` time. A document still being inserted (D89, D91) took only its first
  * insertion: it stays heavy (`apply_overlay`) and is not a measurement. */
 function note_resting_dom(ms: number): void {
   if (!overlay.filling) resting_dom_ms = Math.min(resting_dom_ms, ms);
@@ -1608,7 +1626,7 @@ function frame_sync(drag_step = false): boolean {
  * worker every frame is synchronous and nothing is done.
  */
 function settle(): boolean {
-  overlay.flush(); // D89: the hooks read the whole overlay
+  overlay.flush(); // D89, D91: the hooks read the whole overlay
   if (client === null) return false;
   if (!client.in_flight && !client.dirty && !client.final_pending && !state.dirty && state.doc !== null) return false;
   client.settle();
@@ -1642,8 +1660,11 @@ function settle(): boolean {
   /** Whether stages B + C + SVG run in the core worker (false: the synchronous fallback). */
   get worker() { return client !== null; },
   get frames() { return state.frames.slice(); },
-  /** D89: whether label chunks of the DOM overlay are still to be inserted (read-only; `settle()` inserts them). */
+  /** D89, D91: whether the DOM overlay's document is still being inserted over several frames (read-only; `settle()`
+   * completes it). */
   get overlay_filling() { return overlay.filling; },
+  /** D92: whether the drawing pane's loading indicator is on (read-only; the CSS shows it only after a delay). */
+  get loading_active() { return loading_on; },
   get timings() { return { ...state.timings }; },
   get camera() { return state.plane === null ? null : state.plane.block(); },
   /** M10: the rig and what is derived from it (read-only), the pivot selection, the undo depth, the readouts. */

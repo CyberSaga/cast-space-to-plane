@@ -25,6 +25,8 @@ export const $ = <T extends HTMLElement>(id: string): T => {
 export interface Controls {
   viewport: HTMLElement;
   stage: HTMLDivElement;
+  /** D92: the drawing pane's loading indicator (`loading.ts`). */
+  paneLoading: HTMLElement;
   canvas: HTMLCanvasElement;
   examplesSelect: HTMLSelectElement;
   fileInput: HTMLInputElement;
@@ -85,6 +87,7 @@ export function controls(): Controls {
   return {
     viewport: $<HTMLElement>("viewport"),
     stage: $<HTMLDivElement>("stage"),
+    paneLoading: $<HTMLElement>("pane-loading"),
     canvas: $<HTMLCanvasElement>("gl"),
     examplesSelect: $<HTMLSelectElement>("examples"),
     fileInput: $<HTMLInputElement>("file"),

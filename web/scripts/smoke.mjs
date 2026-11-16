@@ -71,7 +71,11 @@
 // nothing; set_object_rotation and a typed entry beyond it are refused (the three fields and #obj-limit red, 「套用被拒」,
 // no step), the refusal survives an undo's panel sync and Escape clears it; a typed entry inside is applied; group and
 // parent turns leave the angle; the tip's axis is read in its parent's frame; Download scene keeps joint_limit and the
-// reload keeps the angles. Prints one JSON record.
+// reload keeps the angles. D91: the optional scene file's overlay, when it holds more than 1000 elements, is inserted
+// over at least three frames and is then the single insertion's DOM (every element in the SVG namespace). D92: loading
+// a bundled example never makes the drawing pane's loading indicator visible; loading the optional scene file turns it
+// on, with the overlay empty, until the first picture, and it is off once idle; it is never inside the stage. Prints
+// one JSON record.
 // Exit 1 on a page error or a failed check.
 import { execSync } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
@@ -158,12 +162,12 @@ const worker_sync = {};
 const check = (ok, what) => { if (!ok) failures.push(what); };
 
 /** Wait until the page is idle: the status line and the frame count unchanged five times in a row, no 「計算中」 and
- * no label chunk of the overlay left to insert (D89). */
+ * no part of the overlay's document left to insert (D89, D91). */
 async function idle() {
   let last = "", same = 0;
   for (let i = 0; i < 300; i++) {
     const now = await page.evaluate(() => JSON.stringify([document.getElementById("status").textContent, window.castplane_web.frames.length,
-      window.castplane_web.overlay_filling === true])); // D89: not idle while the overlay's labels are being inserted
+      window.castplane_web.overlay_filling === true])); // D89, D91: not idle while the overlay's document is being inserted
     if (now === last && !now.includes("計算中") && !now.endsWith(",true]")) {
       if (++same >= 5) return true;
     } else same = 0;
@@ -362,6 +366,36 @@ const toggle_checks = {};
   await frames2();
   const back = toggle_checks.after_another_example = await toggles();
   check(is_default(back), `toggles: the defaults after loading another example (${JSON.stringify(back)})`);
+}
+
+/** D92: sample the drawing pane's loading indicator on every animation frame from now (`stop_loading_samples` returns
+ * the samples: the hook, the indicator's computed visibility, and whether the pane shows a picture). */
+const start_loading_samples = () => page.evaluate(() => {
+  const el = document.getElementById("pane-loading"), sv = document.querySelector("svg.overlay"), im = document.querySelector("img.overlay");
+  const w = window;
+  w.__ld = [];
+  w.__ld_on = true;
+  const tick = () => {
+    if (!w.__ld_on) return;
+    w.__ld.push({ active: w.castplane_web.loading_active, visible: getComputedStyle(el).visibility === "visible",
+      picture: sv.childElementCount > 0 || !im.hidden, in_stage: el.closest("#stage") !== null });
+    requestAnimationFrame(tick);
+  };
+  tick();
+});
+const stop_loading_samples = () => page.evaluate(() => { window.__ld_on = false; return window.__ld; });
+{
+  // D92: a bundled example's first picture arrives within a frame or two: the indicator never becomes visible, and is
+  // off once the page is idle; it is never inside the stage (the overlay and the exports)
+  await start_loading_samples();
+  await page.evaluate(() => window.castplane_web.load_example("two_lights"));
+  const quiet = await idle();
+  const s = await stop_loading_samples();
+  check(quiet && s.length > 0 && !s.some((x) => x.visible) && !s.some((x) => x.in_stage) && s[s.length - 1].active === false,
+    `D92: a bundled example never shows the loading indicator (${s.length} frames, ${s.filter((x) => x.active).length} on, ` +
+    `${s.filter((x) => x.visible).length} visible)`);
+  await page.evaluate(() => window.castplane_web.load_example("basic"));
+  await idle();
 }
 
 // D80: the page opens in the edit view (the observer pane shown); "預覽" hides the pane (the drawing pane takes the
@@ -574,25 +608,47 @@ const phase2 = {};
 }
 if (sceneFile) {
   const stem = sceneFile.replace(/^.*\//, "").replace(/\.json$/, "");
+  await start_loading_samples();
+  await page.evaluate(() => {
+    // D91: the animation frames in which the overlay's DOM changed (nested groups included)
+    const w = window;
+    w.__fr = 0;
+    w.__ins = new Set();
+    const tick = () => { w.__fr += 1; if (w.__ld_on) requestAnimationFrame(tick); };
+    tick();
+    w.__mo = new MutationObserver(() => w.__ins.add(w.__fr));
+    w.__mo.observe(document.querySelector("svg.overlay"), { childList: true, subtree: true });
+  });
   await page.setInputFiles("#file", sceneFile);
   await page.waitForFunction((s) => document.getElementById("status").textContent.startsWith(s), stem, { timeout: 120000 });
-  await frames2();
   {
-    // D89: a labels layer of more than LABEL_CHUNK <text> elements is inserted over several frames; once it has
+    // D91 (D89 for the labels): a document of more than 1000 elements is inserted over several frames; once it has
     // filled by itself (no settle()), the overlay's DOM is the one a single insertion of the same text gives
     // (D90: a long scene's first picture is its final document; idle() reads no document, so nothing is flushed)
     const quiet = await idle();
+    const s = await stop_loading_samples();
     const filled = await page.evaluate(() => {
+      window.__mo.disconnect();
       const ov = document.querySelector("svg.overlay");
       const natural = ov.innerHTML, labels = ov.querySelectorAll(":scope > #labels > text").length;
       const text = window.castplane_web.svg; // settles: nothing is left to insert
       const whole = document.createElementNS("http://www.w3.org/2000/svg", "svg");
       whole.innerHTML = text.slice(text.indexOf(">", text.indexOf("<svg")) + 1, text.lastIndexOf("</svg>"));
-      return { labels, same: natural === whole.innerHTML, settled_same: ov.innerHTML === whole.innerHTML,
-        svg_ns: [...ov.querySelectorAll("#labels > text")].every((e) => e.namespaceURI === "http://www.w3.org/2000/svg") };
+      return { labels, elements: ov.querySelectorAll("*").length, insert_frames: window.__ins.size,
+        same: natural === whole.innerHTML, settled_same: ov.innerHTML === whole.innerHTML,
+        svg_ns: [...ov.querySelectorAll("*")].every((e) => e.namespaceURI === "http://www.w3.org/2000/svg") };
     });
-    check(quiet && filled.same && filled.settled_same && filled.svg_ns,
+    check(quiet && filled.same && filled.settled_same && filled.svg_ns && (filled.elements <= 1000 || filled.insert_frames >= 3),
       `${stem}: the overlay filled over several frames is the single insertion's DOM (${filled.labels} labels) ${JSON.stringify(filled)}`);
+    // D92: the loading indicator is on from the load until the first picture, off once idle, never inside the stage
+    // (the samples begin with the previous scene's picture; the load turns the indicator on and clears the overlay)
+    const on = s.findIndex((x) => x.active), first = on < 0 ? -1 : s.findIndex((x, i) => i > on && x.picture);
+    const before = on < 0 || first < 0 ? [] : s.slice(on, first);
+    check(before.length > 0 && before.every((x) => x.active && !x.picture) && !s.some((x) => x.in_stage) && s[s.length - 1].active === false,
+      `D92: ${stem}: the loading indicator is on before the first picture and off when idle (${before.length} frames before the ` +
+      `picture, ${before.filter((x) => x.active).length} on, ${s.filter((x) => x.visible).length} visible)`);
+    console.log(`D92: ${stem}: ${before.length} frames before the first picture, ${s.filter((x) => x.visible).length} with the indicator visible; ` +
+      `D91: ${filled.elements} elements inserted in ${filled.insert_frames} frames`);
   }
   // D88: a heavy scene (the optional file) exercises the heavy overlay's rule; at rest the worker's picture is still
   // the synchronous render's

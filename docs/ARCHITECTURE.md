@@ -4460,6 +4460,78 @@ and the hidden-run SVG groups (§5.1.8). Nothing an M4–M6 case needs lies beyo
   100 ms; the long task stays 71–154 ms), so none is applied. `web/scripts/smoke.mjs`'s D89 check waits for `idle()`
   before it reads the overlay. No output byte, document, conformance case or warning code changes
   (docs/DECISIONS.md D90).
+- **[decision, implementation] (web smooth interaction, D91) Every layer of a heavy DOM document enters the overlay
+  over several frames, starting two frames after the reply.** Generalises the D89 note's item (2) (whose
+  `LABEL_CHUNK` / `split_labels` it replaces) and amends §5.4.10's "`set_svg(text)` replaces its children with the
+  content between the core's `<svg …>` and `</svg>`" by reference: for a heavy document that replacement is spread over
+  animation frames; the text and the final DOM are unchanged. At the D90 head the 19-mesh character scene (≈ 10 570
+  overlay elements, 4 618 of them labels) still had, at a ring release, a long animation frame of 55–73 ms (×2 CPU
+  throttling: 105–132 ms and 3–6 long tasks of 51–94 ms; a board-ring release 52–58 / 106–125 ms): its script was the
+  worker reply's `apply_reply`, which inserted the ~5 000 non-label elements in one `innerHTML` beside the observer
+  update. (1) *The cut.* `web/src/overlay_split.ts::plan_fill(inner)` (pure; a flat scan of the writer's markup, which
+  escapes `<` and `>` in text and attribute values) walks the element tree in document order and returns the frames of
+  a fill plan: each frame a list of steps `{path, html}` (`path`: indices into `children` from the overlay `<svg>`),
+  whose elements cost at most `FILL_BUDGET = 1000`, an element counting 1 and a `<text>` `TEXT_WEIGHT = 2.5` (glyph
+  layout). An element that fits goes in whole; one that does not goes whole into the next frame when it costs at most
+  the budget, else (a large group; the writer nests `<g>` up to four levels, e.g. `objects` → `objects.hidden` →
+  `objects.hidden.<id>`) its start and end tags go in empty and its children follow, cut the same way. Every piece of a
+  parent's content begins with the text before its first element and ends right after an element's end tag (the last
+  piece takes the trailing text), so the first step as `innerHTML` and the others as `insertAdjacentHTML("beforeend")`
+  give exactly one `innerHTML = inner`: the same elements in the same order, the same text nodes, none adjacent, all in
+  the SVG namespace (the parsing context is an SVG element). Markup the writer does not produce (a comment, a stray `<`
+  or `>`, unbalanced or mismatched tags) gives null: inserted whole. Layers come in document order, so the geometry
+  enters before `labels`. (2) *The schedule.* `Overlay.set_svg` inserts a document of at most `FILL_THRESHOLD = 1000`
+  elements whole, at once (`more_elements_than`, a count of start tags that stops at 1 001; every bundled example holds
+  fewer than 500, so all are unchanged). A heavier one only records the text: the first animation-frame callback
+  after the reply runs in that reply's own frame, so the plan is computed in the next frame (4–14 ms at ×2 measured with
+  temporary instrumentation) and the steps follow one frame each; the previous picture (DOM or `<img>`) stays until
+  the first step, which also sets the `viewBox` and shows the DOM overlay. The reply's frame thus holds only the
+  observer update and the status (2–6 ms of `apply_reply` at ×2), so nothing else in `apply_reply` had to move.
+  `overlay.filling` (hook `overlay_filling`) is true from `set_svg` until the last step; `flush()` completes the
+  document at once (whole when no step was inserted yet, else the remaining frames); a newer `set_svg`, `set_img` and
+  `clear()` drop the pending steps; `settle()` flushes before and after its synchronous frame, as before. A document
+  inserted over frames counts as heavy (`apply_overlay`) and does not update `resting_dom_ms`, as in the D89 note.
+  (3) *Measured* (same scene and setup as the D89 note, `web/scripts/interact_bench.mjs --nogl`, now with `--throttle
+  N` and the release's `first_ms` / `complete_ms` / `fill_gaps`; four runs each): unthrottled, neither release has a
+  long animation frame or a long task, every filling frame is 16.6–16.8 ms apart, and the document is complete
+  558–589 ms after a ring release (first step at 267–292 ms) and 494–518 ms after a board-ring release (219–238 ms); at
+  ×2 neither release has a long animation frame, frames while filling are 16.5–50.1 ms apart (median 16.8), the
+  document is complete 727–810 / 651–735 ms after the release, and two of the four runs of each release still log one
+  or two long tasks of 50–60 ms. Attributed with temporary instrumentation: they are `labels` frames whose script is
+  3–4 ms; the rest is rendering, which grows with the overlay already in the DOM (smaller label frames, `TEXT_WEIGHT =
+  4`, left them at 50–54 ms and made the fill about 100 ms longer, so 2.5 is kept). Drags are unchanged: no long
+  animation frame or long task, frame gaps at most 16.8 ms, 16–19 worker replies per ring drag (×2: 19–22). The cost:
+  a heavy document is complete 275–297 ms (×2: 389–489 ms) after its first step, which comes two frames plus the plan
+  after the reply, instead of one frame plus D89's five label frames, and while it fills the pane shows it layer by
+  layer. Not addressed: the release's `pointerup` frame,
+  which commits the last candidate through stage A on the main thread (§5.8.2), was a 52–74 ms long animation frame at
+  ×2 in some exploratory runs (none of the four runs above; one of the four D90-head runs). Tests: `web/test/
+  overlay.test.ts` 3 → 6 (the steps rebuild the markup over nested and self-closed groups, with no step after a text
+  node; geometry before labels and a fitting group never split; the `<text>` weight; light and non-writer markup
+  inserted whole; `more_elements_than`). `web/scripts/smoke.mjs` additionally requires, for an optional scene file of
+  more than 1 000 elements, insertions in at least three frames and every element in the SVG namespace (the Miki
+  scene: 10 570 elements in 20 frames, `innerHTML` equal to a single insertion's). No output byte, document,
+  conformance case or warning code changes (docs/DECISIONS.md D91).
+- **[decision, implementation] (web smooth interaction, D92) A loading indicator in the drawing pane until a loaded
+  scene's first picture.** Since D90 a heavy scene's first picture is its `final` document, and `load` clears the
+  overlay (worker mode), so the drawing pane stayed empty for about 350 ms on that scene (D90 note), and since D91 a few
+  frames more, with only the status line's text as feedback. `#viewport` now also holds `#pane-loading`
+  (`role="status"`), a small box centred over the pane with a spinner and `載入中…` (`web/src/loading.ts::LOADING_TEXT`,
+  the language of the pane's 預覽 button). It is a sibling of `#stage`, not inside it, so §5.4.10's overlay (the `<svg>`
+  in the canvas's CSS box) and every exported SVG / PNG are unchanged; it is absolutely positioned, contained (`contain:
+  layout paint style`) and `pointer-events: none`, so toggling it lays out nothing else. `loading.ts::loading_after`
+  (pure) turns it on at a successful `load` and off at the first picture (`Overlay.onshow`: the first step of a DOM
+  document, D91, or an `<img>` source) and at any error-panel message (a failed render, the worker gone, a load that
+  failed: the previous scene stays); `main.ts` toggles the class `active` and `aria-busy` on `#viewport`. The CSS shows
+  it only after `LOADING_DELAY_MS = 150` (a delayed `visibility` / `opacity` transition; hidden at once), so a scene
+  whose first picture comes within a few frames, every bundled example, never shows it; under `prefers-reduced-motion`
+  the spinner does not turn and nothing fades. Without the core worker `load` does not clear the overlay and the next
+  animation frame renders the new scene synchronously; the indicator follows the same rule there (it is off once that
+  frame's picture is shown; a load whose synchronous frame lasts longer than the delay shows it for those frames). Hook
+  `loading_active` (read-only). Tests: `web/test/loading.test.ts` (2); `web/scripts/smoke.mjs` checks that loading
+  `two_lights` never makes it visible and leaves it off when idle, and that loading the optional scene file turns it on
+  with the overlay empty until the first picture and off when idle, never inside `#stage`. Web tests 209 → 214 with D91.
+  No output byte, document, conformance case or warning code changes (docs/DECISIONS.md D92).
 
 ### 5.5 M8 — STEP import (spec §9 row "STEP", spec §10 M8) — a loader, outside the core
 

@@ -19,6 +19,21 @@ body { display: flex; flex-direction: column; }
 /* the <img> overlay of a drag frame (§5.4.11) is hidden at rest: `display: block` above must not override [hidden] */
 #stage .overlay[hidden] { display: none; }
 #stage canvas.hidden { visibility: hidden; }
+/* D92 (loading.ts): the loading indicator, centred in the drawing pane above the stage (not inside it: never part of
+   the overlay or an export). Shown only after LOADING_DELAY_MS = 150 ms, so a scene whose first picture arrives within
+   a few frames never shows it; hidden at once. Out of flow and size-contained: toggling it lays out nothing else. */
+#pane-loading { position: absolute; left: 50%; top: 50%; z-index: 4; transform: translate(-50%, -50%); contain: layout paint style;
+  display: flex; gap: 8px; align-items: center; padding: 6px 12px; border-radius: 6px; background: rgba(255, 255, 255, 0.9);
+  box-shadow: 0 0 0 1px #ddd; color: #555; font-size: 12px; white-space: nowrap; pointer-events: none;
+  visibility: hidden; opacity: 0; transition: none; }
+#pane-loading.active { visibility: visible; opacity: 1; transition: visibility 0s linear 150ms, opacity 120ms ease-in 150ms; }
+#pane-loading .spinner { width: 14px; height: 14px; border: 2px solid #ccc; border-top-color: #555; border-radius: 50%; }
+#pane-loading.active .spinner { animation: pane-spin 0.8s linear infinite; }
+@keyframes pane-spin { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) {
+  #pane-loading.active { transition: visibility 0s linear 150ms; }
+  #pane-loading.active .spinner { animation: none; border-color: #999; }
+}
 #drop-hint { position: absolute; bottom: 8px; left: 0; right: 0; text-align: center; color: #777; pointer-events: none; }
 #side { width: 340px; overflow: auto; padding: 8px 10px; border-left: 1px solid #ddd; background: #fff; }
 #side h2 { font-size: 13px; margin: 12px 0 4px; }

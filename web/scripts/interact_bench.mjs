@@ -4,10 +4,13 @@
 // gaps, the frame records and the hook timings. `--nogl` skips the WebGL draw calls (`castplane_web.set_gl(false)`) so
 // a run on a software renderer measures the page JavaScript. Each phase that reports `longtasks` also reports `loaf`:
 // its Long Animation Frames ({n, frames: [{dur, blocking, script, render, style_layout, forced, top}]}, ms), or null
-// where the API is unsupported (`loaf_supported` in the output says which).
+// where the API is unsupported (`loaf_supported` in the output says which). The two releases also report `first_ms` /
+// `complete_ms` (the first and the last insertion into the overlay after the release, nested groups included: when a
+// heavy document is complete, D91) and `fill_gaps` (the animation-frame gaps in between). `--throttle N` slows the CPU
+// N× (Chromium's CPU throttling, as DevTools' "N× slowdown") to stand in for slower hardware.
 //
 //   npm run -w web build && (cd web && npx vite preview --port 4173 --strictPort) &
-//   node web/scripts/interact_bench.mjs http://localhost:4173/ examples/basic.json crate [--nogl] [--json out.json]
+//   node web/scripts/interact_bench.mjs http://localhost:4173/ examples/basic.json crate [--nogl] [--throttle 2] [--json out.json]
 import { createRequire } from "node:module";
 import { readFileSync, writeFileSync } from "node:fs";
 import { execSync } from "node:child_process";
@@ -19,12 +22,15 @@ const [url, scenePath, ...rest] = process.argv.slice(2);
 const objArg = rest.find((a) => !a.startsWith("--"));
 const jsonOut = rest.includes("--json") ? rest[rest.indexOf("--json") + 1] : null;
 const nogl = rest.includes("--nogl");
+const thr = rest.includes("--throttle") ? +rest[rest.indexOf("--throttle") + 1] : 1;
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const q = (a, p) => { const s = [...a].sort((x, y) => x - y); return s.length ? s[Math.min(s.length - 1, Math.floor(p * s.length))] : null; };
 const stats = (a) => a.length ? { n: a.length, min: +Math.min(...a).toFixed(1), med: +q(a, 0.5).toFixed(1), p90: +q(a, 0.9).toFixed(1), max: +Math.max(...a).toFixed(1) } : null;
 
 const browser = await chromium.launch({ executablePath: process.env.CHROMIUM || "/opt/pw-browsers/chromium", args: ["--no-sandbox"] });
 const page = await browser.newPage({ viewport: { width: 1500, height: 900 } });
+// --throttle N: Chromium's CPU throttling (DevTools' "N× slowdown"), standing in for slower hardware
+if (thr > 1) await (await page.context().newCDPSession(page)).send("Emulation.setCPUThrottlingRate", { rate: thr });
 page.on("pageerror", (e) => console.log("PAGE ERROR", e.message));
 await page.goto(url);
 await page.waitForFunction(() => window.castplane_web?.svg_length > 0);
@@ -62,6 +68,8 @@ await page.evaluate(() => {
   window.__ov = [];
   const sv = document.querySelector("svg.overlay"), im = document.querySelector("img.overlay");
   new MutationObserver(() => window.__ov.push(performance.now())).observe(sv, { childList: true });
+  // every insertion into the DOM overlay, nested groups included (D91: a heavy document fills over several frames)
+  window.__ovs = []; new MutationObserver(() => window.__ovs.push(performance.now())).observe(sv, { childList: true, subtree: true });
   new MutationObserver(() => window.__ov.push(performance.now())).observe(im, { attributes: true, attributeFilter: ["src"] });
 });
 const mark = () => page.evaluate(() => ({ t: performance.now(), raf: window.__raf.length, lt: window.__lt.length, ov: window.__ov.length, loaf: window.__loaf.length }));
@@ -74,7 +82,12 @@ const since = (m) => page.evaluate((m) => {
     return { dur: f.duration, blocking: f.blockingDuration, script: f.script_ms, render: f.render_ms, style_layout: f.style_layout_ms,
       forced: f.forced_ms, top: top ? ((top.invokerType ? top.invokerType + ":" : "") + (top.invoker || top.sourceFunctionName || "")).slice(0, 60) : null };
   });
-  return { gaps, lt: lt.map(([s, d]) => +d.toFixed(0)), t: performance.now() - m.t, ov: window.__ov.length - m.ov, loaf: loaf && { n: loaf.length, frames: loaf } };
+  // D91: the first and the last insertion into the overlay since the mark (ms after it) and the animation-frame gaps in
+  // between (the frames that filled a heavy document)
+  const ins = window.__ovs.filter((x) => x >= m.t), fill = [];
+  if (ins.length) for (let i = 1; i < raf.length; i++) if (raf[i] > ins[0] && raf[i - 1] < ins[ins.length - 1] + 1) fill.push(+(raf[i] - raf[i - 1]).toFixed(1));
+  return { gaps, lt: lt.map(([s, d]) => +d.toFixed(0)), t: performance.now() - m.t, ov: window.__ov.length - m.ov, loaf: loaf && { n: loaf.length, frames: loaf },
+    first_ms: ins.length ? +(ins[0] - m.t).toFixed(0) : null, complete_ms: ins.length ? +(ins[ins.length - 1] - m.t).toFixed(0) : null, fill_gaps: fill };
 }, m);
 const settle = async (ms = 400) => { await sleep(ms); };
 
@@ -185,7 +198,7 @@ out.drag = { axis: grab.axis, down_wall_ms: down_wall, first_proxy_move_ms: firs
   overlay_replacements: rd.ov,
   core_ms: stats(dragFrames.map((f) => f.core_ms)), dom_ms: stats(dragFrames.map((f) => f.dom_ms)), obs_ms: stats(dragFrames.map((f) => f.obs_ms ?? 0)),
   mode: [...new Set(dragFrames.map((f) => f.mode))], stage_a_runs: (await page.evaluate(() => window.castplane_web.timings)).stage_a_runs - runs0,
-  release: { up_wall_ms: up_wall, longtasks: ru.lt, loaf: ru.loaf, raf_gaps: stats(ru.gaps), overlay_replacements: ru.ov }, undo: (await page.evaluate(() => window.castplane_web.rig)).undo };
+  release: { up_wall_ms: up_wall, first_ms: ru.first_ms, complete_ms: ru.complete_ms, fill_gaps: ru.fill_gaps, longtasks: ru.lt, loaf: ru.loaf, raf_gaps: stats(ru.gaps), overlay_replacements: ru.ov }, undo: (await page.evaluate(() => window.castplane_web.rig)).undo };
 console.log("drag:", JSON.stringify(out.drag));
 
 // ---- board ring drag (camera) for reference
@@ -201,7 +214,7 @@ if (bq !== null) {
   await page.mouse.up(); await settle(2500);
   const rbu = await since(mb);
   const fr = (await page.evaluate(() => window.castplane_web.frames)).filter((f) => f.dragging);
-  out.camera_drag = { raf_gaps: stats(rb.gaps), longtasks: rb.lt, loaf: rb.loaf, release_loaf: rbu.loaf, overlay_replacements: rb.ov, release_overlay_replacements: rbu.ov, core_ms: stats(fr.map((f) => f.core_ms)), dom_ms: stats(fr.map((f) => f.dom_ms)), obs_ms: stats(fr.map((f) => f.obs_ms ?? 0)), release_longtasks: rbu.lt };
+  out.camera_drag = { raf_gaps: stats(rb.gaps), longtasks: rb.lt, loaf: rb.loaf, release_loaf: rbu.loaf, release_first_ms: rbu.first_ms, release_complete_ms: rbu.complete_ms, release_fill_gaps: rbu.fill_gaps, overlay_replacements: rb.ov, release_overlay_replacements: rbu.ov, core_ms: stats(fr.map((f) => f.core_ms)), dom_ms: stats(fr.map((f) => f.dom_ms)), obs_ms: stats(fr.map((f) => f.obs_ms ?? 0)), release_longtasks: rbu.lt };
   console.log("camera_drag:", JSON.stringify(out.camera_drag));
 }
 out.status = await page.evaluate(() => document.getElementById("status").textContent);

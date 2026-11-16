@@ -314,20 +314,28 @@ start or fails, the page falls back to the synchronous frame of before (`frame_s
   whose SVG is longer than `IMG_MODE_THRESHOLD` counts as heavy for a drag. The observer's drawing on the frame, the
   warnings and the status follow every reply; the last resting document is always shown. `FrameRecord` carries
   `phase` (`quick` | `final` | `sync`), `stage_a_ms` and `overlay` (shown on arrival).
-- **Many labels** (D89; `src/overlay_split.ts::split_labels`, `Overlay.set_svg`). A DOM document whose `labels` group
-  holds more than `LABEL_CHUNK` = 1000 `<text>` elements is inserted as the writer's markup with that group empty,
-  then 1000 labels per animation frame, in order: the same text and the same final DOM as one insertion, without the
-  long task of laying out thousands of text elements at once (the character scene's 4 618 labels: 56 ms alone, 74–119
-  ms with the rest of the document). A newer document, the `<img>` mode and a load drop the chunks not yet inserted;
-  `settle()` inserts them at once (`Overlay.flush()`), and the read-only hook `overlay_filling` tells whether any are
-  left. Such a document always counts as heavy. Documents with at most 1000 labels (every bundled example) are
-  inserted whole. A background tab gets no animation frames, so its labels complete when it is shown again.
+- **Heavy documents fill over several frames** (D89 for the labels, D91 for every layer; `src/overlay_split.ts::
+  plan_fill`, `Overlay.set_svg`). A DOM document of more than `FILL_THRESHOLD` = 1000 elements is not inserted by the
+  reply: the next animation frame computes a fill plan, and each later one inserts elements costing `FILL_BUDGET` =
+  1000 (a `<text>` counts `TEXT_WEIGHT` = 2.5) in document order, geometry layers before the labels; a large group goes
+  in empty and its children follow. The previous picture stays until the first step. It is the same text and the same
+  final DOM as one insertion (the smoke test compares `innerHTML`), without one long frame for thousands of elements
+  (the character scene: 10 570 elements in about 20 frames). A newer document, the `<img>` mode and a load drop the
+  steps not yet inserted; `settle()` completes the document at once (`Overlay.flush()`), and the read-only hook
+  `overlay_filling` tells whether it is still filling. Such a document always counts as heavy. Documents of at most
+  1000 elements (every bundled example) are inserted whole, at once. A background tab gets no animation frames, so its
+  document completes when it is shown again.
 - **Stage A on a pose change** (D89). The page and the worker each hold a `PrepCache` (`castplane`, port-only) for the
   loaded scene, so a moved mesh is not welded and repaired again: stage A of the character scene 51.5 → 13.3 ms.
 - **A long scene's first picture** (D90). Before the overlay's cost is measured, a scene whose reply is longer than
   `IMG_MODE_THRESHOLD` holds its resting `quick` reply for the `final` one like a heavy overlay, also after a load
   (the pane is already cleared and the status reads `rendering…`): the character scene's load has one long task
   (114–123 ms, the synchronous load itself) instead of three, and its first picture is the final document.
+- **Loading indicator** (D92; `src/loading.ts`). From a load until that scene's first picture (or an error, or a
+  failed load) the drawing pane shows 「載入中…」 with a spinner, centred, outside the stage (never in the overlay or an
+  export), `pointer-events: none`, `role="status"`. It appears only after 150 ms, so the bundled examples, whose first
+  picture comes within a frame or two, never show it; with `prefers-reduced-motion` the spinner stands still. Hook:
+  `loading_active`.
 - **Object drags** run the `UnitDrag` machine with `live: false`: the 3D proxies and the panel follow the pointer at
   frame rate, the worker recomputes at its own pace, and release (`end()`) still runs stage A synchronously. The
   slow-scene notice 此場景拖動放開後更新 appears only in the synchronous fallback.
@@ -345,7 +353,9 @@ start or fails, the page falls back to the synchronous frame of before (`frame_s
 - **Tool**: `web/scripts/interact_bench.mjs` (a dev helper like `smoke.mjs`) times a real click on an object, the
   first proxy motion, the animation-frame gaps and the long tasks of a ring drag and of a board-ring drag, and the
   release. It also reports each phase's long animation frames (Long Animation Frames API: script, render,
-  style-and-layout and forced-layout time per frame; `loaf: null` where unsupported).
+  style-and-layout and forced-layout time per frame; `loaf: null` where unsupported), when the overlay's document is
+  complete after each release (`first_ms`, `complete_ms`, `fill_gaps`), and with `--throttle N` slows the CPU N×
+  (Chromium's CPU throttling) to stand in for slower hardware.
 
 #### Interaction latency (`web/scripts/interact_bench.mjs`)
 
@@ -375,6 +385,23 @@ The bundled examples now (`basic`, `two_lights`, `wall_and_ground`; unchanged by
 With D89 (same scene and setup, three runs): the ring release and the board-ring release have no long task (frame gaps
 of at most 33.4 ms, one overlay replacement), a ring drag gets 15–18 worker replies (9–11 before) with a median
 `core ms` of 25–29, and the drags are as in the table (no long task, gaps of at most 16.8 ms, no overlay replacement).
+
+With D91 (same scene and setup, four runs unthrottled and four with `--throttle 2`; D90 head: a ring release had a
+long animation frame of 55–73 ms, 105–132 ms at ×2 with 3–6 long tasks of 51–94 ms, a board-ring release 52–58 /
+106–125 ms):
+
+| measurement (D91) | unthrottled | `--throttle 2` |
+| --- | --- | --- |
+| ring release: long animation frames / long tasks | none / none | none / 1–2 of 54–60 ms in 2 of 4 runs |
+| board-ring release: long animation frames / long tasks | none / none | none / one of 50–56 ms in 2 of 4 runs |
+| frame gaps while the document fills (both releases) | 16.6–16.8 ms | 16.5–50.1 ms, median 16.8 |
+| ring release → first step / document complete | 267–292 / 558–589 ms | 299–325 / 727–810 ms |
+| board-ring release → first step / document complete | 219–238 / 494–518 ms | 253–310 / 651–735 ms |
+| ring and board-ring drags | no long frame or task, gaps ≤ 16.8 ms | the same |
+| worker replies per ring drag | 16–19 | 19–22 |
+
+The remaining long tasks at ×2 are label frames whose script takes 3–4 ms: the rest is the browser's rendering, which
+grows with the part of the document already in the overlay.
 
 **GL caveat.** With the WebGL draws on, SwiftShader (software rasteriser) spends ≈ 100–130 ms per frame in the
 observer's `renderer.render` alone for the character scene (≈ 9 k fat-line instances), so the frame gaps of a GL run
