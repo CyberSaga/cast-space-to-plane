@@ -12,7 +12,7 @@ import { test } from "node:test";
 import { prism_mesh, sphere_mesh } from "../src/mesh.js";
 import { dumps } from "../src/output/geometry_json.js";
 import { compose, project_scene, render, shadow_geometry } from "../src/pipeline.js";
-import { build_object, local_mesh, point_inside_solid, prepared_mesh } from "../src/primitives.js";
+import { PrepCache, build_object, local_mesh, point_inside_solid, prepared_mesh } from "../src/primitives.js";
 import { load_scene } from "../src/scene.js";
 import { CUBE_F, CUBE_V, SPLIT_F, SPLIT_V } from "./mesh_fixtures.js";
 import { read_json, repo_path } from "./helpers.js";
@@ -605,4 +605,37 @@ test("the contact tolerance does not reach a buried mesh", () => {
   const doc = doc_of(noisy_l_scene([-0.2, -0.2, -0.2, -0.2, -0.2, -0.2]));
   assert.ok(warning_set(doc).includes("OBJECT_BELOW_RECEIVER:m"));
   assert.ok(doc.shadows[0].outline.some((n: string) => n.startsWith("m.s")));
+});
+
+test("PrepCache (D89): stage A of a moved mesh is equal with and without the cache, and the record is reused", () => {
+  const scene = load_scene(mesh_box_scene());
+  const cache = new PrepCache();
+  let made = 0;
+  const first = cache.get(scene.objects[0]!, () => (made += 1, prepared_mesh(scene.objects[0]!)));
+  for (const position of [[0, 0, 0], [0.3, -0.2, 0], [0.3, -0.2, 0.5]] as [number, number, number][]) {
+    const moved = { ...scene, objects: scene.objects.map((o) => ({ ...o, transform: { ...o.transform, position } })) };
+    const A = shadow_geometry(moved), A_cached = shadow_geometry(moved, cache);
+    assert.deepEqual(A_cached, A);
+    assert.equal(dumps(compose(moved, project_scene(moved, A_cached))), dumps(compose(moved, project_scene(moved, A))));
+    // the moved object keeps its `data`: the same record, not made again
+    assert.equal(cache.get(moved.objects[0]!, () => (made += 1, prepared_mesh(moved.objects[0]!))), first);
+  }
+  assert.equal(made, 1);
+});
+
+test("PrepCache (D89): the key holds every preprocessing input (data identity, scale incl. -0, tolerances, id)", () => {
+  const obj = load_scene(mesh_box_scene()).objects[0]!;
+  const cache = new PrepCache();
+  const rec = (o: typeof obj) => cache.get(o, () => prepared_mesh(o));
+  const base = rec(obj);
+  assert.equal(rec({ ...obj }), base);
+  assert.notEqual(rec({ ...obj, scale: 2 }), base);
+  assert.notEqual(rec({ ...obj, weld_tolerance: 1e-3 }), base);
+  assert.notEqual(rec({ ...obj, smooth_angle_deg: 10 }), base);
+  assert.notEqual(rec({ ...obj, id: "other" }), base);
+  assert.notEqual(rec({ ...obj, data: clone(obj.data) }), base);
+  const zero = rec({ ...obj, smooth_angle_deg: 0 });
+  assert.notEqual(rec({ ...obj, smooth_angle_deg: -0 }), zero);
+  assert.equal(rec({ ...obj, smooth_angle_deg: 0 }), zero);
+  assert.deepEqual(rec({ ...obj, scale: 2 }), prepared_mesh({ ...obj, scale: 2 }));
 });

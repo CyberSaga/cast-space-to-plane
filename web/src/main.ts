@@ -8,7 +8,9 @@
  * session: the rig of `rig.ts`, undo, pivot, readouts), `stage.ts` (one three.js view), `input.ts` (file drop),
  * `ui.ts` (controls and panels), `toggles.ts` (the page-level view toggles and their defaults), `overlay.ts` (the SVG
  * overlay), and, behind the "旁觀視角" switch (M9, contract §5.6), `observer.ts` / `observer3d.ts` (the observer pane
- * with the ring and arrow handles). The drawing pane (`#stage`) is view-only: no pointer or wheel listener is
+ * with the ring and arrow handles). Stages B + C + SVG (and the stage A of a dragged object pose) run in a Web Worker
+ * (`core_worker.ts`, scheduled by `core_client.ts`, contract §5.4.11) when one can be started; without one the page
+ * renders synchronously as before (`frame_sync`). The drawing pane (`#stage`) is view-only: no pointer or wheel listener is
  * registered on it, so drags and wheel there do nothing (the page scrolls natively); the board is moved only in the
  * observer pane and with the controls.
  */
@@ -17,9 +19,17 @@ import "./style.css";
 
 import * as THREE from "three";
 
-import { LAYER_IDS, compose, curved, dumps, load_scene, load_scene_text, project_scene, shadow_geometry, write_svg } from "castplane";
+import {
+  LAYER_IDS, PrepCache, camera_matrix, compose, curved, dumps, load_scene, load_scene_text, project_scene, shadow_geometry, write_svg,
+} from "castplane";
 import type { CameraRecord, GeometryDocument, Scene, SceneObject, StageA, Transform, Vec2, Vec3 } from "castplane";
 
+import { art_frame_matrix, pack_art } from "./art_buffers.js";
+import type { ArtBuffers } from "./art_buffers.js";
+import { CoreClient } from "./core_client.js";
+import type { PoseEntries, RenderParams, RenderedReply, RequestInfo } from "./core_client.js";
+import { doc_summary_of } from "./doc_summary.js";
+import type { DocSummary } from "./doc_summary.js";
 import { display_colours, display_colours_text } from "./colours.js";
 import {
   GROUP_VALUE_PREFIX, group_members, group_option_label, next_selection, object_groups, object_groups_text, same_selection,
@@ -36,10 +46,10 @@ import { QUICK_EQUATIONS } from "./equation.js";
 import { attach_file_drop } from "./input.js";
 import { focal_from_slider } from "./orbit.js";
 import {
-  derive_board, framing_points, frame_view, handles_of, hit_handles, initial_view, line_art, observer_basis, observer_project,
-  scene_centre, vertex_rays,
+  DRAWING_OFFSET_M, derive_board, framing_points, frame_view, handles_of, hit_handles, initial_view, line_art, observer_basis,
+  observer_project, rays_from_points, scene_centre, vertex_ray_points,
 } from "./observer.js";
-import type { HandleHit } from "./observer.js";
+import type { HandleHit, RayPoints } from "./observer.js";
 import { ObserverPane } from "./observer3d.js";
 import type { HandleInput } from "./observer3d.js";
 import {
@@ -48,13 +58,19 @@ import {
   snap_angle, translate_pose, world_centre,
 } from "./object_rotate.js";
 import type { Axis, ObjectRings, UnitPose } from "./object_rotate.js";
+import { LOADING_TEXT, loading_after } from "./loading.js";
+import type { LoadingEvent } from "./loading.js";
 import { IMG_MODE_THRESHOLD, Overlay } from "./overlay.js";
 import type { OverlayMode } from "./overlay.js";
+import {
+  OVERLAY_DRAG_PAUSE_MS, OVERLAY_HEAVY_MS, OVERLAY_QUICK_HOLD_MS, overlay_heavy, overlay_kind, overlay_wait,
+} from "./overlay_policy.js";
+import type { OverlayKind } from "./overlay_policy.js";
 import { PlaneSession, arrow_drag, object_centres, ring_drag, ring_grab } from "./plane.js";
 import { arrowScreenVector, clone, equation, sync } from "./rig.js";
 import type { RigState, RingGrab, ViewName } from "./rig.js";
 import { build_scene3d, built_in_world, display_matrix, set_object_matrix } from "./scene3d.js";
-import { Stage3D, letterbox } from "./stage.js";
+import { Stage3D, letterbox, set_gl_draw } from "./stage.js";
 import { initial_toggles } from "./toggles.js";
 import {
   $, WarningsTable, build_layer_boxes, controls, describe_error, fill_examples, fill_object_select, fill_quick_equations,
@@ -74,6 +90,13 @@ interface FrameRecord {
   mode: OverlayMode;
   dragging: boolean;
   svg_bytes: number;
+  /** Which document this frame applied: the core worker's `quick` (hidden lines and umbra off) or `final` reply, or a
+   * synchronous render on the main thread (`sync`: the fallback, `settle()`, `probe_rig`). */
+  phase: "quick" | "final" | "sync";
+  /** The stage A that ran for this frame (the worker's for a new pose, or the main thread's live drag step), else null. */
+  stage_a_ms: number | null;
+  /** Whether this frame's overlay was applied (a drag frame of a large scene may keep the last picture, `apply_reply`). */
+  overlay: boolean;
 }
 
 interface State {
@@ -91,6 +114,8 @@ interface State {
   plane: PlaneSession | null;
   /** The checked layer checkboxes: page-level, kept across scene loads (`toggles.ts`). */
   layersChecked: Set<string>;
+  /** The resting document of the last synchronous render. With the core worker it is null from the moment a render is
+   * posted until a `settle()` (nothing on the main thread reads the worker's documents; hooks that need one settle). */
   doc: GeometryDocument | null;
   svg: string;
   /** `stage_a_ms`: the last stage A (the load's, or M11 an object rotation's); `stage_a_runs`: stage A runs since the
@@ -176,8 +201,10 @@ const layerBoxes = build_layer_boxes(ui.layersBox, LAYER_IDS, state.layersChecke
   else state.layersChecked.delete(id);
   overlay.set_hidden_layers(state.layersChecked);
   if (id === "construction") ui.construction.checked = checked; // "作圖線" mirrors the construction layer
+  // the <img> mode writes the checked layers: a new render (its reply carries the drawing on the frame too); the DOM
+  // mode only hides layers with CSS, and the drawing on the frame follows the checkboxes
   if (overlay.mode === "img") request_render();
-  observer_refresh(true); // the drawing on the frame follows the layer checkboxes
+  else observer_refresh(true);
 });
 ui.construction.addEventListener("change", () => {
   const box = layerBoxes.get("construction");
@@ -186,9 +213,24 @@ ui.construction.addEventListener("change", () => {
   box.dispatchEvent(new Event("change"));
 });
 
-function show_error(message: string | null): void {
+/** Show (or clear) the error panel. `render`: the message is a load or render failure, which ends the pane's loading
+ * indicator (D92); a clipboard or object-rotation notice leaves a pending first picture's indicator on. */
+function show_error(message: string | null, render = true): void {
   set_error_panel(ui.errorPanel, message);
+  if (message !== null && render) set_loading("error");
 }
+
+// D92: the drawing pane's loading indicator (`loading.ts`), on from a load until that scene's first picture
+ui.paneLoading.append(LOADING_TEXT);
+let loading_on = false;
+function set_loading(ev: LoadingEvent): void {
+  const on = loading_after(ev);
+  if (on === loading_on) return;
+  loading_on = on;
+  ui.paneLoading.classList.toggle("active", on);
+  viewport.setAttribute("aria-busy", String(on));
+}
+overlay.onshow = () => set_loading("picture");
 
 // ---------------------------------------------------------------------------- loading
 /** Load a scene: `make` validates it; `colours` are the display colours of the same raw data
@@ -199,10 +241,12 @@ function load(name: string, make: () => Scene, colours: Map<string, number>, gro
   let scene: Scene;
   let A: StageA;
   let stage_a_ms: number;
+  let prep: PrepCache;
   try {
     scene = make();
     const t0 = performance.now();
-    A = shadow_geometry(scene);
+    prep = new PrepCache();
+    A = shadow_geometry(scene, prep);
     stage_a_ms = performance.now() - t0;
   } catch (e) {
     show_error(describe_error(e)); // the previous scene stays
@@ -211,6 +255,10 @@ function load(name: string, make: () => Scene, colours: Map<string, number>, gro
   show_error(null);
   // M11: an object drag held across the load belongs to the old scene (forgotten, nothing restored)
   obj_drag.abandon();
+  drop_pending_overlay();
+  resting_dom_ms = Infinity; // the new scene's overlay cost is measured afresh
+  prep_cache = prep;
+  overlay_long = false;
   state.object_error = false;
   state.scene = scene;
   state.sceneName = name;
@@ -245,6 +293,14 @@ function load(name: string, make: () => Scene, colours: Map<string, number>, gro
   state.rec = null;
   state.full_svg_length = 0;
   state.frames = [];
+  state.doc = null;
+  last_rays = null;
+  observer_set_art(EMPTY_ART);
+  if (client !== null) {
+    // the worker gets the validated scene (a new gen); the old scene's picture must not stay under the new 3D view
+    client.load(scene, pose_entries(scene));
+    overlay.clear();
+  }
   view.replace_group(() => build_scene3d(scene, A, colours));
   observer?.set_scene(scene, A, colours);
   // the layer, "Hidden lines" and "3D view" checkboxes are page-level (toggles.ts): the scene's output.layers and
@@ -255,6 +311,10 @@ function load(name: string, make: () => Scene, colours: Map<string, number>, gro
   layout();
   document.title = `${name} — castplane web`;
   request_render();
+  if (client !== null) ui.statusLine.textContent = `${name}: rendering…`;
+  // D92: until the new scene's first picture (with the worker the overlay was cleared above; without it the next
+  // animation frame renders the new scene synchronously, and the indicator shows only if that frame outlasts its delay)
+  set_loading("load");
   return true;
 }
 
@@ -425,15 +485,25 @@ function hidden_style(): "dashed" | "omit" {
 }
 view3d.addEventListener("change", () => {
   canvas.classList.toggle("hidden", !view3d.checked);
-  request_render();
+  viewDirty = true;
+  request_observer_render();
 });
 
-$<HTMLButtonElement>("dl-svg").addEventListener("click", () => {
-  if (state.doc !== null) save(svg_blob(state.doc, state.layersChecked, state.sceneName, hidden_style()));
-});
-$<HTMLButtonElement>("dl-json").addEventListener("click", () => {
-  if (state.doc !== null) save(json_blob(state.doc, state.sceneName));
-});
+/** Download SVG / JSON: the texts of `download.ts` for the resting document of the current camera (the core worker
+ * renders it when its last document is not that one; a reply of an older scene generation is dropped). */
+function download(kind: "svg" | "json"): void {
+  const pl = state.plane;
+  if (client !== null) {
+    if (state.scene === null || pl === null) return;
+    client.download({ kind, layers: ordered_layers(state.layersChecked), hidden_style: hidden_style(), hidden: hiddenLines.checked,
+      umbra: true, block: pl.block(), scene_name: state.sceneName });
+    return;
+  }
+  if (state.doc === null) return;
+  save(kind === "svg" ? svg_blob(state.doc, state.layersChecked, state.sceneName, hidden_style()) : json_blob(state.doc, state.sceneName));
+}
+$<HTMLButtonElement>("dl-svg").addEventListener("click", () => download("svg"));
+$<HTMLButtonElement>("dl-json").addEventListener("click", () => download("json"));
 $<HTMLButtonElement>("dl-scene").addEventListener("click", () => {
   // the loaded scene's display colours, groups (D84) and links (D85) go back into the file (the core ignores them, §2.0)
   if (state.scene !== null && state.plane !== null) {
@@ -446,7 +516,7 @@ $<HTMLButtonElement>("copy-camera").addEventListener("click", () => {
   const text = camera_block_text(state.plane.block());
   navigator.clipboard.writeText(text).then(
     () => show_error(null),
-    (e) => show_error(`clipboard unavailable (${describe_error(e)}); camera block:\n${text}`),
+    (e) => show_error(`clipboard unavailable (${describe_error(e)}); camera block:\n${text}`, false),
   );
 });
 
@@ -489,12 +559,15 @@ const handle_input: HandleInput = {
     }
     pl.begin();
     state.dragging = true;
+    drag_moved_at = performance.now();
+    drag_rendered = false;
     sync_controls(); // 復原 off while the drag is held
-    request_render();
+    request_observer_render(); // nothing changed yet: the active handle is drawn thicker
   },
   move: (dx, dy, alt) => {
     const pl = state.plane, hd = state.handle;
     if (pl === null || hd === null) return;
+    drag_moved_at = performance.now(); // a heavy overlay waits for the pointer's pause (overlay_policy.ts)
     const snap = ui.snap.checked && !alt;
     if (hd.kind === "object") {
       // §5.8.4: the ring rule of §5.7.8 item 1 from the pointer-down grab and the total displacement; only the pending
@@ -515,7 +588,7 @@ const handle_input: HandleInput = {
     state.handle = null;
     state.dragging = false;
     sync_controls();
-    request_render();
+    request_after_drag();
   },
   cancel: () => {
     if (state.handle?.kind === "object") {
@@ -526,7 +599,7 @@ const handle_input: HandleInput = {
     state.handle = null;
     state.dragging = false;
     sync_controls();
-    request_render();
+    request_after_drag();
   },
   click: (p) => {
     const pl = state.plane;
@@ -569,14 +642,16 @@ function valid_selection(sel: Selection): boolean {
  * preorder; `group: null`; `PlaneSession.part_pose`), a part without them its own transform as in D84. Null when
  * unknown.
  */
-function unit_pose(sel: Selection): UnitPose | null {
+function unit_pose(sel: Selection, tr: (id: string) => Transform | null = current_transform,
+  pending: UnitPose | null = null): UnitPose | null {
   if (sel === null) return null;
-  if (sel.kind === "part") return state.plane?.part_pose(sel.id, current_transform) ?? null;
-  const ids = scene_groups().get(sel.group), frame = state.plane?.group_frame(sel.group) ?? null;
+  if (sel.kind === "part") return state.plane?.part_pose(sel.id, tr) ?? null;
+  const ids = scene_groups().get(sel.group);
+  const frame = pending?.group != null && pending.group.name === sel.group ? pending.group : state.plane?.group_frame(sel.group) ?? null;
   if (ids === undefined || frame === null) return null;
   const transforms = new Map<string, Transform>();
   for (const id of ids) {
-    const t = current_transform(id);
+    const t = tr(id);
     if (t === null) return null;
     transforms.set(id, t);
   }
@@ -587,10 +662,11 @@ function unit_pose(sel: Selection): UnitPose | null {
  * part, the target of `PlaneSession.part_restore_pose` (G3): its load pose relative to its parent's current pose (a
  * root part or a lone object: its load transform exactly, as D84), its descendants carried; the current pose itself
  * when that is no action (the 1e-9 rule of a part with a parent), so 還原此物體 is disabled exactly then. */
-function initial_pose(sel: Selection): UnitPose | null {
+function initial_pose(sel: Selection, tr: (id: string) => Transform | null = current_transform,
+  pending: UnitPose | null = null): UnitPose | null {
   const pl = state.plane;
-  if (sel?.kind === "part") return pl?.part_restore_pose(sel.id, current_transform) ?? null;
-  const pose = unit_pose(sel);
+  if (sel?.kind === "part") return pl?.part_restore_pose(sel.id, tr) ?? null;
+  const pose = unit_pose(sel, tr, pending);
   if (pose === null || pl === null) return null;
   const transforms = new Map<string, Transform>();
   for (const id of pose.transforms.keys()) {
@@ -663,11 +739,11 @@ function apply_pose(pose: UnitPose, record: { kind: "none" | "step" } = { kind: 
   let A1: StageA, ms: number;
   try {
     const t0 = performance.now();
-    A1 = shadow_geometry(scene1);
+    A1 = shadow_geometry(scene1, prep_cache);
     ms = performance.now() - t0;
   } catch (e) {
     state.object_error = true;
-    show_error(`${NOTICE_CORE_FAILED}\n${describe_error(e)}`);
+    show_error(`${NOTICE_CORE_FAILED}\n${describe_error(e)}`, false);
     for (const [id, t] of before) set_object_pose_3d(id, t);
     if (request) request_render();
     return false;
@@ -677,6 +753,7 @@ function apply_pose(pose: UnitPose, record: { kind: "none" | "step" } = { kind: 
     show_error(null);
   }
   state.scene = scene1;
+  publish_pose(); // the worker's scene follows (nothing is posted when it already holds this pose: a drag's last candidate)
   state.A = A1;
   state.timings.stage_a_ms = ms;
   state.timings.stage_a_runs += 1;
@@ -698,13 +775,17 @@ function apply_pose(pose: UnitPose, record: { kind: "none" | "step" } = { kind: 
 const obj_drag = new UnitDrag<Scene, StageA>({
   // from `frame()` (no extra frame request) and from `end()` (the caller requests the resting frame)
   apply: (pose) => apply_pose(pose, { kind: "none" }, true, false),
-  // D86 review R8: a slow scene runs no stage A during a drag, so the joint-limit line follows the candidate here
+  // D86 review R8: a slow scene runs no stage A during a drag, so the joint-limit line follows the candidate here. With
+  // the core worker every drag is a proxy drag: the panel (fields, c_w readout, limit line) reads the candidate, and the
+  // candidate goes to the worker with the next render request (`render_params`), which runs its stage A
   proxy: (pose) => {
     set_pose_3d(pose);
-    if (selected_part() !== null) render_object_limit(pose);
+    if (client !== null) sync_object_panel(false, pose);
+    else if (selected_part() !== null) render_object_limit(pose);
   },
   restore: (pose0, scene0, A0) => {
     state.scene = scene0;
+    publish_pose();
     state.A = A0;
     state.plane?.update_scene(A0.objects, A0);
     if (pose0.group !== null) state.plane?.set_group_frame(pose0.group);
@@ -734,7 +815,9 @@ function start_unit_drag(sel: Exclude<Selection, null>, axis: Axis, grab: { w: V
   // D86: a part with a joint limit gets the closed-form clamp of the drag angle (null: the D85 path bit for bit)
   const clamp = sel.kind !== "part" || t_sel === undefined ? null : pl.part_drag_clamp(sel.id, axis, t_sel, current_transform);
   object_seq += 1;
-  obj_drag.begin(pose0, scene, A, object_seq, { live: !slow_scene(), axis, c_locals, pivot, clamp });
+  // with the core worker the drag only moves the proxies on the main thread (`live: false`); the worker runs the
+  // candidate's stage A and the release commits it synchronously (§5.8.2)
+  obj_drag.begin(pose0, scene, A, object_seq, { live: client === null && !slow_scene(), axis, c_locals, pivot, clamp });
   // D85: the step's kind follows the number of objects (as `apply_pose`'s record): `end_object` refuses an `objects`
   // step, so a subtree opened as one object would record nothing
   if (pose0.group === null && pose0.transforms.size === 1) {
@@ -743,11 +826,13 @@ function start_unit_drag(sel: Exclude<Selection, null>, axis: Axis, grab: { w: V
   } else pl.begin_objects(pose0.transforms, pose0.group);
   state.handle = { kind: "object", sel, axis, pose0: clone_pose(pose0), A0: A, ...grab };
   state.dragging = true;
+  drag_moved_at = performance.now();
+  drag_rendered = false;
   // M11 review: a drag drops any typed angle and the field's focus, so the fields follow the pose while it turns
   blur_object_field();
   sync_object_panel(true);
   sync_controls(); // 復原 off while the drag is held
-  request_render();
+  request_observer_render(); // nothing changed yet: the active ring is drawn thicker
   return true;
 }
 
@@ -762,7 +847,8 @@ function finish_object_drag(): void {
   } else state.plane?.cancel_object();
   sync_controls();
   sync_object_panel();
-  request_render();
+  if (res !== null && res.ok && res.changed) request_render();
+  else request_after_drag();
 }
 
 /** A second finger: the object drag is abandoned and the pointer-down state restored (§5.8.2), no step. */
@@ -773,7 +859,7 @@ function cancel_object_drag(): void {
   state.dragging = false;
   sync_controls();
   sync_object_panel();
-  request_render();
+  request_after_drag();
 }
 
 /** A discrete action on a unit (numeric apply, 還原此物體, 落地): one undo step when the pose changed. */
@@ -890,7 +976,7 @@ function select(sel: Selection): void {
   const changed = !same_selection(sel, state.rotate.sel);
   state.rotate.sel = sel;
   sync_object_panel(changed);
-  request_render();
+  request_observer_render(); // the rings: the picture does not depend on the selection
 }
 
 /** Select object `id` as a part (M11 / D83: also a grouped object; `click_object` runs the D84 click cycle). */
@@ -913,7 +999,16 @@ function click_object(id: string | null): void {
     return;
   }
   const next = next_selection(state.rotate.sel, id, state.groups, scene_groups());
-  if (pl.pivot.mode === "object" && next !== null) after_action(next.kind === "group" ? pl.pick_group(next.group) : pl.pick_object(next.id));
+  if (pl.pivot.mode === "object" && next !== null) {
+    // a pivot pick moves the board's pivot, not the camera: a core render only if the block changed after all
+    const block0 = JSON.stringify(pl.block());
+    const r = next.kind === "group" ? pl.pick_group(next.group) : pl.pick_object(next.id);
+    if (JSON.stringify(pl.block()) !== block0) after_action(r);
+    else {
+      if (r.framing) state.obs.needs_framing = true;
+      sync_controls();
+    }
+  }
   select(next);
 }
 
@@ -957,8 +1052,13 @@ function blur_object_field(): void {
  * pivot `c`. D85: a part's line counts the parts it carries, the readout names its pivot (「關節 j_w」 for a joint, else
  * 「中心 c_w」), and 落地 is hidden for a part with a parent.
  */
-function sync_object_panel(force = false): void {
-  const scene = state.scene, pl = state.plane, sel = state.rotate.sel, pose = unit_pose(sel), angles = unit_angles(pose);
+function sync_object_panel(force = false, pending: UnitPose | null = null): void {
+  // the core worker's proxy drag: the candidate's transforms first (the ids it holds), the committed scene for the rest
+  const tr = (id: string): Transform | null => {
+    const t = pending?.transforms.get(id);
+    return t !== undefined ? clone_transform(t) : current_transform(id);
+  };
+  const scene = state.scene, pl = state.plane, sel = state.rotate.sel, pose = unit_pose(sel, tr, pending), angles = unit_angles(pose);
   if (force) state.limit_refusal = null;
   const value = selection_value(sel);
   if (ui.objectSelect.value !== value) ui.objectSelect.value = value;
@@ -974,7 +1074,7 @@ function sync_object_panel(force = false): void {
     el.setAttribute("aria-invalid", "false");
   });
   ui.objectApply.disabled = pose === null;
-  const init = initial_pose(sel);
+  const init = initial_pose(sel, tr, pending);
   ui.objectRestore.disabled = pose === null || init === null || same_pose(pose, init);
   // D85: a translation cannot keep a part's joint on its unmoved parent, so 落地 is offered for a group, a lone object
   // and a root part only
@@ -984,13 +1084,14 @@ function sync_object_panel(force = false): void {
   let centre: Vec3 | null = null, joint = false;
   if (pose?.group != null) centre = pose.group.c;
   else if (sel?.kind === "part") {
-    const t = current_transform(sel.id), c = pl?.pivot_local(sel.id) ?? null;
+    const t = tr(sel.id), c = pl?.pivot_local(sel.id) ?? null;
     centre = t === null || c === null ? null : world_centre(t, c);
     joint = centre !== null && pl?.joint(sel.id) != null;
   }
   ui.objectCentre.textContent = object_centre_text(centre, joint);
-  render_object_limit();
-  ui.objectNotice.textContent = scene !== null && slow_scene() ? NOTICE_SLOW_SCENE : "";
+  render_object_limit(pending);
+  // the slow-scene rule is the synchronous path's: with the core worker every drag runs its stage A off the main thread
+  ui.objectNotice.textContent = scene !== null && slow_scene() && client === null ? NOTICE_SLOW_SCENE : "";
 }
 
 /**
@@ -1057,59 +1158,83 @@ function layout(): void {
   view.set_size(w, h);
   if (state.obs.on && observer !== null) observer.set_size(ui.observerPane.clientWidth, ui.observerPane.clientHeight);
 }
+/** The observer needs a redraw without a core render (`request_observer_render`). */
+let obsDirty = false;
+/** The drawing pane's three.js view needs a redraw without a core render (a resize, the 3D-view checkbox). */
+let viewDirty = false;
+// a resize changes no document (the overlay scales with its viewBox): only the two three.js views are redrawn
 const resize = new ResizeObserver(() => {
   layout();
-  request_render();
+  viewDirty = true;
+  request_observer_render();
 });
 resize.observe(viewport);
 resize.observe(ui.observerPane);
 
 // ---------------------------------------------------------------------------- observer (M9, contract §5.6)
 
-/** Update the observer from the drawing camera's record and document (§5.6.2, §5.6.5): board, drawing on the frame
- * (checked layers), vertex rays; frame it when a framing is pending and no drag is running (§5.6.4); then draw it.
- * Returns the observer's own cost in ms. Reads `rec` and `doc` only. */
-function update_observer(rec: CameraRecord, doc: GeometryDocument): number {
-  const pl = state.plane;
-  if (observer === null || state.scene === null || pl === null) return 0;
+/** The drawing on the frame of no document (a load, before its first render). */
+const EMPTY_ART: ArtBuffers = { lines: [], fills: [] };
+
+/** The drawing the observer shows (canvas mm, `art_buffers.ts`): the last applied document's, kept here so that a pane
+ * created later (`set_observer`) starts with it. */
+let last_art: ArtBuffers = EMPTY_ART;
+
+/** Hand the observer a new drawing on the frame (`ObserverPane.set_art`). */
+function observer_set_art(art: ArtBuffers): void {
+  last_art = art;
+  observer?.set_art(art);
+}
+
+/** The world points of the vertex rays of the last applied document (`observer.ts::vertex_ray_points`). */
+let last_rays: RayPoints | null = null;
+
+/**
+ * Update the observer from the current state and draw it (§5.6.2, §5.6.5): the board of the rig on the record of the
+ * current block (`camera_matrix`, so the board and the drawing's placement move at once with the camera; the drawing's
+ * content is the last document's), the handles, the selected unit's rings, the vertex rays of the last document's
+ * points, and the drawing's frame matrix; frame it when a framing is pending and no drag is running (§5.6.4). Returns
+ * the observer's own cost in ms.
+ */
+function update_observer(): number {
+  const pl = state.plane, scene = state.scene;
+  if (observer === null || scene === null || pl === null) return 0;
   const t0 = performance.now();
   const rig = pl.rig, d = sync(rig);
-  // M10: the board of the rig (§5.6.5): pivot P, R = g + D, D of the rig; the frame from the rendered record
+  let rec: CameraRecord;
+  try {
+    rec = camera_matrix(pl.block() as Parameters<typeof camera_matrix>[0], scene.output.canvas_mm);
+  } catch {
+    return 0; // a block the core refuses: its render reports the error; the observer keeps its last frame
+  }
+  // M10: the board of the rig (§5.6.5): pivot P, R = g + D, D of the rig; the frame from the current record
   const board = derive_board(rec, { target: rig.P, distance: d.R }, rig.D);
-  const art = line_art(doc, rec, rig.D, state.layersChecked);
-  const rays = ui.observerRays.checked ? vertex_rays(doc, state.scene, board, rec.near) : null;
+  const rays = ui.observerRays.checked && last_rays !== null ? rays_from_points(last_rays, scene, board, rec.near) : null;
   const shown = state.board_visible;
   if (state.obs.needs_framing && !state.dragging) {
-    observer.view = frame_view(observer.view, framing_points(board, state.scene, pl.scene.centre), observer.aspect);
+    observer.view = frame_view(observer.view, framing_points(board, scene, pl.scene.centre), observer.aspect);
     state.obs.needs_framing = false;
   }
   // D83: the board's handles and the selected object's rings are drawn together (modeless); 「板子」 unchecked hides the
   // board group and its labels and passes no board handles (not hit-tested, not hover-highlighted)
   const hd = state.handle;
-  observer.update({ board, art, rays, board_visible: shown, handles: shown ? handles_of(rig, state.scene.camera.frame_mm) : null,
+  observer.update({ board, rays, board_visible: shown, handles: shown ? handles_of(rig, scene.camera.frame_mm) : null,
     pivot_id: pl.pivot.mode === "object" ? pivot_label(pl.pivot.object_id) : null,
     active: hd?.kind === "ring" || hd?.kind === "arrow" ? hd.kind : null,
-    object_rings: object_rings_now(), active_axis: hd?.kind === "object" ? hd.axis : null });
+    object_rings: object_rings_now(), active_axis: hd?.kind === "object" ? hd.axis : null,
+    art_matrix: art_frame_matrix(rec, rig.D - DRAWING_OFFSET_M) });
   observer.render();
   return performance.now() - t0;
 }
 
-/** Re-draw the observer without a core frame: `rebuild` re-derives its geometry from the last frame (layer or ray
- * checkboxes), else only its camera changed. */
+/** The drawing on the frame of the checked layers: re-packed from the main thread's document when it has one, else
+ * asked of the core worker (an `art` request); then the observer is redrawn. */
 function observer_refresh(rebuild: boolean): void {
-  if (!state.obs.on || observer === null) return;
-  if (rebuild && state.rec !== null && state.doc !== null) update_observer(state.rec, state.doc);
-  else observer.render();
-}
-
-let obsRafPending = false;
-function request_observer_render(): void {
-  if (obsRafPending) return;
-  obsRafPending = true;
-  requestAnimationFrame(() => {
-    obsRafPending = false;
-    observer_refresh(false);
-  });
+  if (rebuild) {
+    if (state.doc !== null && state.rec !== null) observer_set_art(pack_art(line_art(state.doc, state.rec, 1, state.layersChecked)));
+    else client?.request_art([...state.layersChecked]);
+  }
+  request_observer_render();
 }
 
 /** Show or hide the observer pane (D80: shown at page start; hidden only while "預覽" is pressed, which is the M9
@@ -1125,6 +1250,7 @@ function set_observer(on: boolean): void {
   if (on && observer === null) {
     observer = new ObserverPane(ui.observerCanvas, ui.observerLabels);
     observer.attach_input(ui.observerPane, request_observer_render, handle_input);
+    observer.set_art(last_art); // the last document's drawing (a pane created after a render)
     // the group is built from the loaded scene (M11: a mesh's geometry is the loaded world one), then posed
     if (state.loaded !== null) {
       observer.set_scene(state.loaded.scene, state.loaded.A, state.colours);
@@ -1148,9 +1274,9 @@ window.addEventListener("keydown", (ev) => {
 });
 ui.observerFrame.addEventListener("click", () => {
   state.obs.needs_framing = true;
-  observer_refresh(true);
+  request_observer_render();
 });
-ui.observerRays.addEventListener("change", () => observer_refresh(true));
+ui.observerRays.addEventListener("change", () => request_observer_render());
 
 /** D83: the left pane's 「板子」 checkbox. Left pane only: the drawing pane, the outputs, the camera, undo and framing
  * are unchanged; not an undo step, not stored in the scene. A change while a board-handle drag is held is ignored
@@ -1165,32 +1291,293 @@ function set_board_visible(on: boolean): void {
   if (on === state.board_visible) return;
   state.board_visible = on;
   ui.observerPane.classList.remove("on-handle"); // the hover state is re-computed on the next mouse move
-  observer_refresh(true);
+  request_observer_render();
 }
 ui.observerBoard.checked = state.board_visible;
 ui.observerBoard.addEventListener("change", () => set_board_visible(ui.observerBoard.checked));
 
+// ---------------------------------------------------------------------------- core worker (§5.4.11)
+/** The core worker's client, or null: the synchronous fallback (no `Worker`, or the worker failed). */
+let client: CoreClient | null = null;
+let core_worker: Worker | null = null;
+
+/** Every object's transform of `scene`, the ids of `pending` (a drag candidate) taken from it. */
+function pose_entries(scene: Scene, pending: UnitPose | null = null): PoseEntries {
+  return scene.objects.map((o) => [o.id, clone_transform(pending?.transforms.get(o.id) ?? o.transform)]);
+}
+
+/** After every assignment of `state.scene` outside `load`: the worker's scene follows (a `pose` message only when the
+ * transforms differ from the last posted ones). */
+function publish_pose(): void {
+  if (client !== null && state.scene !== null) client.publish_pose(pose_entries(state.scene));
+}
+
+/** What the status line needs of a render besides its reply. */
+interface StatusMeta {
+  focal_mm: number;
+  form: string;
+}
+
+/** The render the core worker should run now (read when the request is posted: the latest camera / pose wins). */
+function render_params(): RenderParams | null {
+  const pl = state.plane, scene = state.scene;
+  if (pl === null || scene === null) return null;
+  const dragging = state.dragging;
+  // D88 review: a drag request posted for this drag, also the one `CoreClient` posts by itself when the in-flight reply
+  // arrives (a resting request wanted at a release becomes a drag request when a new drag began meanwhile), makes the
+  // release request the resting frame (`request_after_drag`); a heavy overlay never shows that drag's replies after it
+  if (dragging) drag_rendered = true;
+  // §5.4.11: during a drag of a large scene the <img> overlay with the checked layers; hidden lines and umbra off
+  const img = dragging && state.full_svg_length > IMG_MODE_THRESHOLD;
+  const block = pl.block();
+  const meta: StatusMeta = { focal_mm: block.focal_length_mm, form: pl.scene_block ? "scene camera" : "picture_plane" };
+  return { block, hidden: hiddenLines.checked && !dragging, umbra: !dragging, layers: img ? ordered_layers(state.layersChecked) : null,
+    quick_layers: ordered_layers(state.layersChecked), img_threshold: IMG_MODE_THRESHOLD, hidden_style: hidden_style(),
+    two_phase: !dragging, art_layers: [...state.layersChecked], dragging, img,
+    // an object drag's pending candidate goes with the render (the worker runs its stage A)
+    transforms: pose_entries(scene, obj_drag.pending), meta };
+}
+
+/** The status line after a frame (`pending`: the resting frame's final document is still being computed). */
+function show_status(summary: DocSummary, rec: CameraRecord, meta: StatusMeta, obs_ms: number | null, pending: boolean): void {
+  if (state.scene === null) return;
+  ui.statusLine.textContent = status_text(state.sceneName, state.timings, overlay.mode, summary, state.scene, rec, meta.focal_mm, meta.form,
+    obs_ms, pending);
+}
+
+/**
+ * The drawing pane's overlay (D87, D88; the rule is `overlay_policy.ts::overlay_wait`): a light overlay takes every
+ * reply; a heavy one is replaced only when nothing moves (during a drag: when the pointer has rested for
+ * {@link OVERLAY_DRAG_PAUSE_MS} since its last move; never by a drag reply that arrives after the release; a resting
+ * `quick` reply waits up to {@link OVERLAY_QUICK_HOLD_MS} for its `final` one). The observer's drawing on the frame,
+ * the warnings and the status follow every reply, and the last resting document is always shown (every release requests
+ * the resting frame: `render_params` marks `drag_rendered`), so a pointer held still or released never leaves a stale
+ * picture; continuous resting input (a slider, a held key) shows the last document once it stops.
+ */
+/** The smallest resting DOM `innerHTML` time since the load (ms; `Infinity` until one was measured: the overlay then
+ * counts as light; the first, cold one overstates it). */
+let resting_dom_ms = Infinity;
+/** D89: the mesh preprocessing of the loaded scene's objects, shared by its stage-A runs (`apply_pose` moves objects
+ * only, so each run reuses it; a load starts a new one). */
+let prep_cache = new PrepCache();
+/** When the pointer last moved during the held drag (or the drag began; `performance.now()`). */
+let drag_moved_at = -Infinity;
+/** A reply whose overlay is waiting (`overlay_wait`): its timer re-evaluates the wait, and any newer reply drops it. */
+let pending_overlay: { timer: number } | null = null;
+
+function drop_pending_overlay(): void {
+  if (pending_overlay === null) return;
+  clearTimeout(pending_overlay.timer);
+  pending_overlay = null;
+}
+
+/** Whether a reply since the load carried an SVG longer than `IMG_MODE_THRESHOLD` (or one the worker wrote again for
+ * the `<img>`): for a drag the overlay counts as heavy before its cost is measured (D88 review), and so does a
+ * resting `quick` reply (D90: it waits for its `final` one, also after a load). A resting `final` reply of an unmeasured
+ * scene is shown at once. */
+let overlay_long = false;
+
+/** Whether the current scene's overlay is heavy for a reply of `kind` (`overlay_policy.ts::overlay_heavy`). */
+const heavy_overlay = (kind: OverlayKind): boolean =>
+  overlay_heavy(resting_dom_ms, overlay_long && (state.dragging || kind !== "final"));
+
+/** Show `svg` in the drawing pane (`<img>` or DOM), now. A DOM document inserted over the next frames (D89, D91:
+ * more than `FILL_THRESHOLD` elements, `Overlay.set_svg`) is heavy whatever this call took. */
+function apply_overlay(svg: string, img: boolean): void {
+  drop_pending_overlay();
+  if (img) overlay.set_img(svg);
+  else if (overlay.set_svg(svg)) {
+    // without the worker every frame replaces the document (nothing holds a heavy one back, `overlay_wait`), and a
+    // newer `set_svg` restarts the fill: insert it whole, or continuous input would never show a picture
+    if (client === null) overlay.flush();
+    else resting_dom_ms = Math.min(resting_dom_ms, OVERLAY_HEAVY_MS);
+  }
+}
+
+/** Record a resting DOM frame's `innerHTML` time. A document still being inserted (D89, D91) took only its first
+ * insertion: it stays heavy (`apply_overlay`) and is not a measurement. */
+function note_resting_dom(ms: number): void {
+  if (!overlay.filling) resting_dom_ms = Math.min(resting_dom_ms, ms);
+}
+
+/** Show a reply's overlay now, later, or never (`overlay_wait`; any waiting older reply is dropped first). Returns
+ * whether it was shown now. */
+function show_or_wait(svg: string, img: boolean, kind: OverlayKind, arrived: number): boolean {
+  drop_pending_overlay();
+  const now = performance.now();
+  const wait = overlay_wait(kind, { now, heavy: heavy_overlay(kind), dragging: state.dragging, moved_at: drag_moved_at, arrived });
+  if (wait === null) return false;
+  if (wait <= 0) {
+    apply_overlay(svg, img);
+    return true;
+  }
+  const p = { timer: 0 };
+  p.timer = window.setTimeout(() => {
+    if (pending_overlay !== p) return;
+    pending_overlay = null;
+    try {
+      show_or_wait(svg, img, kind, arrived); // a pointer that moved meanwhile restarts the wait
+    } catch (e) {
+      show_error(describe_error(e));
+    }
+  }, wait);
+  pending_overlay = p;
+  return false;
+}
+
+/** Apply a render reply of the core worker: the overlay (the `<img>` for a drag request of a large scene, or a resting
+ * `quick` document too long for the DOM; else the DOM overlay; shown now, later or never, above), the warnings, the
+ * timings, the drawing on the frame, the observer, the frame record and the status line. */
+function apply_reply(r: RenderedReply, info: RequestInfo): void {
+  if (state.scene === null || state.plane === null) return;
+  const img = info.img || (r.phase === "quick" && r.img);
+  if (r.img || r.svg.length > IMG_MODE_THRESHOLD) overlay_long = true;
+  const t1 = performance.now();
+  let shown: boolean;
+  try {
+    shown = show_or_wait(r.svg, img, overlay_kind(info.dragging, r.phase), t1);
+  } catch (e) {
+    show_error(describe_error(e));
+    return;
+  }
+  const t2 = performance.now();
+  if (!img && shown) state.full_svg_length = r.svg.length;
+  if (!img && shown && !info.dragging) note_resting_dom(t2 - t1); // a resting DOM frame's cost
+  state.svg = r.svg;
+  state.rec = r.rec;
+  last_rays = r.ray_points;
+  warnings.update_list(r.warnings);
+  if (r.stage_a_ran && r.stage_a_ms !== null) {
+    state.timings.stage_a_ms = r.stage_a_ms;
+    state.timings.stage_a_runs += 1;
+  }
+  state.timings.core_ms = r.core_ms;
+  state.timings.dom_ms = t2 - t1;
+  state.timings.mode = overlay.mode;
+  observer_set_art(r.art);
+  const obs_ms = state.obs.on && observer !== null ? update_observer() : null;
+  state.obs.ms = obs_ms;
+  state.frames.push({ core_ms: r.core_ms, dom_ms: t2 - t1, obs_ms, mode: overlay.mode, dragging: info.dragging, svg_bytes: r.svg.length,
+    phase: r.phase, stage_a_ms: r.stage_a_ran ? r.stage_a_ms : null, overlay: shown });
+  if (state.frames.length > 500) state.frames.shift();
+  const pending = client !== null && client.final_pending && !client.dirty;
+  show_status(r.summary, r.rec, info.meta as StatusMeta, obs_ms, pending);
+}
+
+/** The worker cannot be used (it failed to start or threw outside a request): the synchronous path from now on. */
+function worker_failed(message: string): void {
+  if (client === null) return;
+  client = null;
+  core_worker?.terminate();
+  core_worker = null;
+  show_error(`core worker unavailable, rendering on the main thread (${message})`);
+  state.doc = null;
+  request_render();
+}
+
+function start_worker(): void {
+  if (typeof Worker === "undefined") return;
+  try {
+    const w = new Worker(new URL("./core_worker.ts", import.meta.url), { type: "module" });
+    const c = new CoreClient((m, transfer) => w.postMessage(m, transfer ?? []), {
+      rendered: apply_reply,
+      art: (m) => {
+        observer_set_art(m.art);
+        last_rays = m.ray_points;
+        request_observer_render();
+      },
+      downloaded: (m) => save({ filename: m.filename, type: m.mime, text: m.text }),
+      error: (m) => show_error(m.message),
+    }, render_params);
+    w.onmessage = (ev: MessageEvent) => {
+      if (client === c) c.on_message(ev.data);
+    };
+    w.onerror = (ev: ErrorEvent) => {
+      ev.preventDefault();
+      worker_failed(ev.message || "worker error");
+    };
+    w.onmessageerror = () => worker_failed("message error");
+    core_worker = w;
+    client = c;
+  } catch (e) {
+    client = null;
+    core_worker = null;
+    console.warn("castplane: no core worker, rendering on the main thread", e);
+  }
+}
+
 // ---------------------------------------------------------------------------- render loop
 let rafPending = false;
+/** Whether a core render was requested during the current drag (its release then needs the resting frame). */
+let drag_rendered = false;
 
 /** Mark the state dirty and schedule one animation frame (pointer events coalesce: the latest camera wins). */
 function request_render(): void {
   state.dirty = true;
+  schedule_frame();
+}
+
+/** Mark only the observer dirty (selection, rings, rays, board checkbox, framing, the observer camera): the next
+ * frame redraws it from the current state without a core render. */
+function request_observer_render(): void {
+  obsDirty = true;
+  schedule_frame();
+}
+
+/** The end of a drag: the resting frame when the drag rendered anything, else only the observer (handles thinner). */
+function request_after_drag(): void {
+  if (drag_rendered || state.dirty) request_render();
+  else request_observer_render();
+  drag_rendered = false;
+}
+
+function schedule_frame(): void {
   if (!rafPending) {
     rafPending = true;
     requestAnimationFrame(frame);
   }
 }
 
+/** One animation frame. Without the core worker: today's synchronous frame (`frame_sync`). With it: the drag step of a
+ * held object drag (the proxies and the panel), a render request with the current camera / pose (sent now, or after the
+ * one in flight), the drawing pane's three.js view, the controls and the observer, all at frame rate; the overlay and
+ * the drawing on the frame follow when the reply arrives (`apply_reply`). */
 function frame(): void {
   rafPending = false;
+  const core = state.dirty, obs = obsDirty;
+  obsDirty = false;
   const pl = state.plane;
-  if (!state.dirty || state.scene === null || state.A === null || pl === null) return;
-  state.dirty = false;
-  // M11 (§5.8.2): the pending object pose of the current gesture first (at most one stage A per frame; the 3D proxy
-  // only for a slow scene); then stages B and C on the result
-  obj_drag.frame();
-  if (state.scene === null || state.A === null) return;
+  if (state.scene === null || state.A === null || pl === null) return;
+  if (core) {
+    state.dirty = false;
+    if (client === null) {
+      frame_sync(true);
+      return;
+    }
+    obj_drag.frame(); // `live: false` with the worker: the 3D proxies and the panel follow the candidate
+    if (state.scene === null || state.A === null) return;
+    if (state.dragging) drag_rendered = true;
+    state.doc = null;
+    client.request();
+    sync_controls(); // sliders, equation, readouts (the picture delta is measured here, once per frame), notices, undo
+  } else if (!obs && !viewDirty) return;
+  if ((core || viewDirty) && view3d.checked) view.render(pl.block(), state.scene.output.canvas_mm, state.A.scene_scale);
+  viewDirty = false;
+  if (state.obs.on && observer !== null) state.obs.ms = update_observer();
+}
+
+/**
+ * The synchronous frame on the main thread (§5.4.10 render loop): `drag_step` runs the pending object pose of the
+ * current gesture first (at most one stage A per frame; the 3D proxy only for a slow scene), then stages B and C, the
+ * SVG, the overlay, the warnings, the observer and the status line. The fallback's frame, `settle()` and `probe_rig`.
+ * Returns whether it rendered.
+ */
+function frame_sync(drag_step = false): boolean {
+  const pl = state.plane;
+  if (state.scene === null || state.A === null || pl === null) return false;
+  const ran_a = drag_step ? obj_drag.frame() : false;
+  if (state.scene === null || state.A === null) return false;
+  if (state.dragging) drag_rendered = true;
   const scene = state.scene;
   const block = pl.block(); // what the core renders: the scene camera until the first change, then the rig's (§5.7.7)
   const img_mode = state.dragging && state.full_svg_length > IMG_MODE_THRESHOLD;
@@ -1206,33 +1593,60 @@ function frame(): void {
     svg = write_svg(doc, img_mode ? ordered_layers(state.layersChecked) : LAYER_IDS, hidden_style());
   } catch (e) {
     show_error(describe_error(e));
-    return;
+    return false;
   }
   const t1 = performance.now();
-  if (img_mode) overlay.set_img(svg);
-  else overlay.set_svg(svg);
+  apply_overlay(svg, img_mode);
   const t2 = performance.now();
-  if (!img_mode) state.full_svg_length = svg.length;
+  if (!img_mode) {
+    state.full_svg_length = svg.length;
+    if (!state.dragging) note_resting_dom(t2 - t1);
+  }
   state.doc = doc;
   state.svg = svg;
   state.rec = rec;
   if (view3d.checked) view.render(block, scene.output.canvas_mm, state.A.scene_scale);
   warnings.update(doc);
-  const obs_ms = state.obs.on ? update_observer(rec, doc) : null;
+  const summary = doc_summary_of(doc);
+  // the drawing on the frame and the ray points of this document (counted in the observer's cost, as before)
+  const t3 = performance.now();
+  observer_set_art(pack_art(line_art(doc, rec, 1, state.layersChecked)));
+  last_rays = vertex_ray_points(doc, scene);
+  const pack_ms = performance.now() - t3;
+  const obs_ms = state.obs.on && observer !== null ? pack_ms + update_observer() : null;
   state.obs.ms = obs_ms;
   state.timings.core_ms = t1 - t0;
   state.timings.dom_ms = t2 - t1;
   state.timings.mode = overlay.mode;
-  state.frames.push({ core_ms: t1 - t0, dom_ms: t2 - t1, obs_ms, mode: overlay.mode, dragging: state.dragging, svg_bytes: svg.length });
+  state.frames.push({ core_ms: t1 - t0, dom_ms: t2 - t1, obs_ms, mode: overlay.mode, dragging: state.dragging, svg_bytes: svg.length,
+    phase: "sync", stage_a_ms: ran_a ? state.timings.stage_a_ms : null, overlay: true });
   if (state.frames.length > 500) state.frames.shift();
   sync_controls(); // sliders, equation, readouts (the picture delta is measured here, once per frame), notices, undo
-  const form = pl.scene_block ? "scene camera" : "picture_plane";
-  ui.statusLine.textContent = status_text(state.sceneName, state.timings, overlay.mode, doc, scene, rec, block.focal_length_mm, form, obs_ms);
+  show_status(summary, rec, { focal_mm: block.focal_length_mm, form: pl.scene_block ? "scene camera" : "picture_plane" }, obs_ms, false);
+  return true;
+}
+
+/**
+ * Hooks that read a document synchronously (`svg`, `svg_length`, `download_texts`, `doc_summary`): with the core worker,
+ * when a render is in flight or wanted, or the main thread holds no document, render the resting frame synchronously
+ * now (`frame_sync`) and ignore the replies of every request posted before. Returns whether it rendered. Without the
+ * worker every frame is synchronous and nothing is done.
+ */
+function settle(): boolean {
+  overlay.flush(); // D89, D91: the hooks read the whole overlay
+  if (client === null) return false;
+  if (!client.in_flight && !client.dirty && !client.final_pending && !state.dirty && state.doc !== null) return false;
+  client.settle();
+  state.dirty = false;
+  const rendered = frame_sync();
+  overlay.flush();
+  return rendered;
 }
 
 // ---------------------------------------------------------------------------- start
 /** Hooks for the smoke test and for measuring `core ms` / `dom ms` (web/README.md); `load_example`, `load_text` and
- * `set_hidden` act as the UI controls would, the rest is read-only. */
+ * `set_hidden` act as the UI controls would, the rest is read-only. With the core worker, the hooks that read a document
+ * (`svg`, `svg_length`, `download_texts`, `doc_summary`) call `settle()` first; `frames` and `timings` do not. */
 (window as unknown as { castplane_web: unknown }).castplane_web = {
   examples: EXAMPLES.map((e) => e.name),
   load_example: (name: string) => {
@@ -1243,7 +1657,21 @@ function frame(): void {
     return load(name, () => load_scene(ex.data), display_colours(ex.data), object_groups(ex.data), object_links(ex.data));
   },
   load_text,
+  /** Measurement aid: with `false` the two three.js views skip their WebGL draw calls (`stage.ts::set_gl_draw`), so a
+   * run on a software renderer measures the page's JavaScript only. */
+  set_gl: (on: boolean) => set_gl_draw(on),
+  /** With the core worker: render the resting frame synchronously when a render is pending (or the main thread holds
+   * no document), so the overlay, the warnings, the status and the document hooks are the current camera's; true when
+   * it rendered. Without the worker: false (every frame is synchronous). */
+  settle: () => settle(),
+  /** Whether stages B + C + SVG run in the core worker (false: the synchronous fallback). */
+  get worker() { return client !== null; },
   get frames() { return state.frames.slice(); },
+  /** D89, D91: whether the DOM overlay's document is still being inserted over several frames (read-only; `settle()`
+   * completes it). */
+  get overlay_filling() { return overlay.filling; },
+  /** D92: whether the drawing pane's loading indicator is on (read-only; the CSS shows it only after a delay). */
+  get loading_active() { return loading_on; },
   get timings() { return { ...state.timings }; },
   get camera() { return state.plane === null ? null : state.plane.block(); },
   /** M10: the rig and what is derived from it (read-only), the pivot selection, the undo depth, the readouts. */
@@ -1279,7 +1707,8 @@ function frame(): void {
     pl.begin(); // a one-move gesture, cancelled after the checks: no undo step, the state comes back
     pl.drag(clone(rig));
     state.dirty = true;
-    frame();
+    client?.settle(); // the synchronous frame below supersedes any pending reply
+    frame_sync();
     const finite = (x: unknown): boolean => typeof x === "number" ? Number.isFinite(x)
       : Array.isArray(x) ? x.every(finite) : x !== null && typeof x === "object" ? Object.values(x).every(finite) : true;
     const bad: string[] = [];
@@ -1301,13 +1730,22 @@ function frame(): void {
   pick_at: (x: number, y: number) => observer?.pick_object([x, y]) ?? null,
   /** M10: the equation field's state. */
   get equation_field() { return { value: ui.equation.value, error: state.equation_error, bad: ui.equation.classList.contains("bad") }; },
-  get svg_length() { return state.svg.length; },
+  get svg_length() {
+    settle();
+    return state.svg.length;
+  },
   /** The writer's SVG text of the last frame (the overlay's source). */
-  get svg() { return state.svg; },
+  get svg() {
+    settle();
+    return state.svg;
+  },
   /** The texts "Download SVG" / "Download JSON" would save now. */
-  download_texts: () => state.doc === null ? null : {
-    svg: svg_blob(state.doc, state.layersChecked, state.sceneName, hidden_style()).text,
-    json: json_blob(state.doc, state.sceneName).text,
+  download_texts: () => {
+    settle();
+    return state.doc === null ? null : {
+      svg: svg_blob(state.doc, state.layersChecked, state.sceneName, hidden_style()).text,
+      json: json_blob(state.doc, state.sceneName).text,
+    };
   },
   /** D80: press / release "預覽" (the observer pane hidden / shown) as a user would. */
   set_preview: (preview: boolean) => {
@@ -1346,6 +1784,7 @@ function frame(): void {
   /** The names of the 3D view's objects (`<object id>`, `light:<id>`, `receiver:<id>`, `outline:<id>`, `grid:<id>`). */
   get scene3d_names() { const g = view.group; return g === null ? [] : g.children.map((c) => c.name).filter((n) => n !== ""); },
   get doc_summary() {
+    settle();
     const d = state.doc;
     if (d === null) return null;
     return {
@@ -1356,8 +1795,13 @@ function frame(): void {
       umbra_pieces: umbra_count(d),
     };
   },
-  /** M11 (contract §5.8.4): object `id`'s current transform (a copy; null when unknown). */
-  object_transform: (id: string) => current_transform(id),
+  /** M11 (contract §5.8.4): object `id`'s current transform (a copy; null when unknown). With the core worker an object
+   * drag is a proxy drag (the scene is committed at release), so while one is held the shown pose is the candidate's:
+   * that transform for the ids it holds (as the live drag of the synchronous path would have committed it). */
+  object_transform: (id: string) => {
+    const t = client !== null && state.handle?.kind === "object" ? obj_drag.pending?.transforms.get(id) : undefined;
+    return t !== undefined ? clone_transform(t) : current_transform(id);
+  },
   /** M11: object `id`'s stage-A world vertices (`world_lists` of its record; null when unknown). */
   object_vertices: (id: string) => {
     const rec = state.A?.objects.find((o) => o.id === id);
@@ -1498,6 +1942,8 @@ function frame(): void {
   },
 };
 
+// §5.4.11: stages B + C + SVG in a Web Worker when one can be started (else the synchronous path)
+start_worker();
 // D80: the page always opens in the edit view (observer pane shown); the old "castplane.observer" storage key is ignored
 set_preview(TOGGLES.preview);
 layout();

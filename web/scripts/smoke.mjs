@@ -11,8 +11,10 @@
 // every example's scene-camera SVG / JSON through the bundled core is written to out/<name>.svg / .json (compare them
 // with the Python reference); a 30-step drag per example (a ring drag in the observer pane: the drawing pane is
 // view-only) records the drag frames' `core ms` / `dom ms` and overlay mode (web/README.md); the optional scene file
-// is loaded through the file picker and dragged likewise; a page-wide
-// drop loads a scene; the three downloads are saved to out/; a non-JSON file and an invalid scene show the error
+// is loaded through the file picker and dragged likewise; with the core worker (D87) the resting overlay, warnings
+// and counts the worker put on screen after each load and drag (also of the optional scene file, D88) must equal the
+// synchronous render (`settle()`); a page-wide drop loads a scene; the three downloads are saved to out/; a non-JSON
+// file and an invalid scene show the error
 // panel. Phase 2 (contract §5.4.10): an example that fails to load (the path-only `mesh_demo`, the core has no loader)
 // is reported and loaded instead from its Python expansion (`ts/test/fixtures/<name>.expanded.json`) through the file
 // picker; the phase-2 checks load `wall_and_ground` (hidden lines on: the hidden sub-groups in the overlay, the
@@ -69,7 +71,11 @@
 // nothing; set_object_rotation and a typed entry beyond it are refused (the three fields and #obj-limit red, 「套用被拒」,
 // no step), the refusal survives an undo's panel sync and Escape clears it; a typed entry inside is applied; group and
 // parent turns leave the angle; the tip's axis is read in its parent's frame; Download scene keeps joint_limit and the
-// reload keeps the angles. Prints one JSON record.
+// reload keeps the angles. D91: the optional scene file's overlay, when it holds more than 1000 elements, is inserted
+// over at least three frames and is then the single insertion's DOM (every element in the SVG namespace). D92: loading
+// a bundled example never makes the drawing pane's loading indicator visible; loading the optional scene file turns it
+// on, with the overlay empty, until the first picture, and it is off once idle; it is never inside the stage. Prints
+// one JSON record.
 // Exit 1 on a page error or a failed check.
 import { execSync } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
@@ -94,11 +100,43 @@ mkdirSync(outdir, { recursive: true });
 
 const browser = await chromium.launch({ args: ["--use-angle=swiftshader", "--enable-unsafe-swiftshader", "--ignore-gpu-blocklist"] });
 const page = await browser.newPage({ viewport: { width: 1500, height: 900 } });
+// D88 review: a gate on the core worker's replies, inert unless a check sets `__gate.hold`, so the re-grab check below
+// keeps a reply in flight across a release and a new press instead of racing it; `posted` counts the render requests
+await page.addInitScript(() => {
+  const W = window.Worker;
+  if (W === undefined) return;
+  const gate = { hold: false, q: [], posted: 0 };
+  gate.flush = () => {
+    gate.hold = false;
+    const q = gate.q;
+    gate.q = [];
+    for (const f of q) f();
+    return q.length;
+  };
+  window.__gate = gate;
+  window.Worker = class extends W {
+    set onmessage(h) {
+      const pass = (ev) => (gate.hold ? gate.q.push(() => h.call(this, ev)) : h.call(this, ev));
+      super.onmessage = h === null ? null : pass;
+    }
+    get onmessage() {
+      return super.onmessage;
+    }
+    postMessage(m, t) {
+      if (m && m.type === "render") gate.posted += 1;
+      return super.postMessage(m, t);
+    }
+  };
+});
 const logs = [];
 page.on("console", (m) => logs.push(`${m.type()}: ${m.text()}`));
 page.on("pageerror", (e) => logs.push(`pageerror: ${e.message}`));
 
 const frames2 = () => page.evaluate(() => new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r))));
+/** With the core worker (`castplane_web.worker`) the overlay, the warnings table and the status follow a render reply
+ * some time after the change: `settle()` renders the resting frame synchronously first (a no-op without the worker, or
+ * when nothing is pending). Called before every check that reads the overlay DOM or the warnings table. */
+const settle = () => page.evaluate(() => window.castplane_web.settle());
 const median = (xs) => {
   const s = [...xs].sort((a, b) => a - b), n = s.length;
   return n === 0 ? NaN : n % 2 ? s[(n - 1) / 2] : (s[n / 2 - 1] + s[n / 2]) / 2;
@@ -119,7 +157,45 @@ async function observer_blank() {
 }
 
 const failures = [];
+/** D87: one entry per `worker_matches_sync` call (label → equal), printed with the results. */
+const worker_sync = {};
 const check = (ok, what) => { if (!ok) failures.push(what); };
+
+/** Wait until the page is idle: the status line and the frame count unchanged five times in a row, no 「計算中」 and
+ * no part of the overlay's document left to insert (D89, D91). */
+async function idle() {
+  let last = "", same = 0;
+  for (let i = 0; i < 300; i++) {
+    const now = await page.evaluate(() => JSON.stringify([document.getElementById("status").textContent, window.castplane_web.frames.length,
+      window.castplane_web.overlay_filling === true])); // D89, D91: not idle while the overlay's document is being inserted
+    if (now === last && !now.includes("計算中") && !now.endsWith(",true]")) {
+      if (++same >= 5) return true;
+    } else same = 0;
+    last = now;
+    await page.waitForTimeout(60);
+  }
+  return false;
+}
+
+/** With the core worker (D87): what the worker put on screen at rest — the DOM overlay, the warnings table and the
+ * status line's counts — must equal the synchronous render of the same state (`settle()`), and the `<img>` overlay must
+ * not be displayed. Without the worker (`castplane_web.worker === false`) `settle()` renders nothing and the check is
+ * trivially true. */
+async function worker_matches_sync(label) {
+  const quiet = await idle();
+  const strip = (t) => t.replace(/core ms [\d.]+ · dom ms [\d.]+( · obs ms [\d.]+)?/, "");
+  const snap = () => page.evaluate(() => ({ ov: document.querySelector("svg.overlay").innerHTML,
+    img: getComputedStyle(document.querySelector("img.overlay")).display, warn: document.getElementById("warnings").innerHTML,
+    status: document.getElementById("status").textContent.split("\n").slice(1, 3).join(" | ") }));
+  const w = await snap();
+  const settled = await page.evaluate(() => window.castplane_web.settle());
+  const s = await snap();
+  const same = w.ov === s.ov && w.warn === s.warn && strip(w.status) === strip(s.status);
+  worker_sync[label] = { same, idle: quiet, settled, img: w.img };
+  check(quiet && same && w.img === "none",
+    `${label}: the worker's resting overlay, warnings and counts equal the synchronous render's (idle ${quiet}, settled ${settled}, overlay ${w.ov.length} vs ${s.ov.length} chars, img ${w.img})`);
+  return same;
+}
 
 /** A mouse drag of `steps` steps of `step` px from pane px `p` of `selector` (the observer: its centre region off the
  * handles when `p` is omitted, i.e. an observer orbit); `mid` runs after the first step with the button held. */
@@ -202,8 +278,11 @@ async function arrow_push(k, n = 8) {
   await drag(n, "#observer", [dx / n, dy / n], h.tip);
 }
 
-async function drag_stats() {
+async function drag_stats(label = null) {
   await camera_drag(30);
+  // D87: what the worker shows once the drag has come to rest, before any synchronous render replaces it
+  if (label !== null) await worker_matches_sync(label);
+  await settle(); // the resting frame recorded before the frames are read
   const frames = await page.evaluate(() => window.castplane_web.frames);
   const d = frames.filter((f) => f.dragging), rest = frames.filter((f) => !f.dragging);
   return {
@@ -218,6 +297,7 @@ async function drag_stats() {
 
 await page.goto(url);
 await page.waitForFunction(() => document.getElementById("status").textContent.includes("core ms"), null, { timeout: 30000 });
+await settle();
 const first = await page.evaluate(() => ({
   status: document.getElementById("status").textContent,
   groups: [...document.querySelectorAll("svg.overlay > g")].map((g) => g.id),
@@ -231,6 +311,7 @@ if (shot) {
 
 // the view toggles are page-level: their defaults at page load, kept (not reset from the scene) across loads
 const toggles = () => page.evaluate(() => {
+  window.castplane_web.settle();
   const gl = document.getElementById("gl");
   // the three.js canvas was never drawn while "3D view" is off: its buffer is still fully transparent
   const c = document.createElement("canvas");
@@ -287,9 +368,40 @@ const toggle_checks = {};
   check(is_default(back), `toggles: the defaults after loading another example (${JSON.stringify(back)})`);
 }
 
+/** D92: sample the drawing pane's loading indicator on every animation frame from now (`stop_loading_samples` returns
+ * the samples: the hook, the indicator's computed visibility, and whether the pane shows a picture). */
+const start_loading_samples = () => page.evaluate(() => {
+  const el = document.getElementById("pane-loading"), sv = document.querySelector("svg.overlay"), im = document.querySelector("img.overlay");
+  const w = window;
+  w.__ld = [];
+  w.__ld_on = true;
+  const tick = () => {
+    if (!w.__ld_on) return;
+    w.__ld.push({ active: w.castplane_web.loading_active, visible: getComputedStyle(el).visibility === "visible",
+      picture: sv.childElementCount > 0 || !im.hidden, in_stage: el.closest("#stage") !== null });
+    requestAnimationFrame(tick);
+  };
+  tick();
+});
+const stop_loading_samples = () => page.evaluate(() => { window.__ld_on = false; return window.__ld; });
+{
+  // D92: a bundled example's first picture arrives within a frame or two: the indicator never becomes visible, and is
+  // off once the page is idle; it is never inside the stage (the overlay and the exports)
+  await start_loading_samples();
+  await page.evaluate(() => window.castplane_web.load_example("two_lights"));
+  const quiet = await idle();
+  const s = await stop_loading_samples();
+  check(quiet && s.length > 0 && !s.some((x) => x.visible) && !s.some((x) => x.in_stage) && s[s.length - 1].active === false,
+    `D92: a bundled example never shows the loading indicator (${s.length} frames, ${s.filter((x) => x.active).length} on, ` +
+    `${s.filter((x) => x.visible).length} visible)`);
+  await page.evaluate(() => window.castplane_web.load_example("basic"));
+  await idle();
+}
+
 // D80: the page opens in the edit view (the observer pane shown); "預覽" hides the pane (the drawing pane takes the
 // full width, the drawing unchanged) and toggles back on a second click or Esc; nothing is remembered across visits
 const preview_state = () => page.evaluate(() => {
+  window.castplane_web.settle(); // the status line below is the resting frame's
   const b = document.getElementById("preview");
   return {
     observer_shown: !document.getElementById("observer").hidden,
@@ -361,17 +473,21 @@ for (const name of first.examples) {
     await load_file_as(name, expanded);
   }
   await frames2();
+  await worker_matches_sync(`${name}: load`);
   const ref = await page.evaluate(() => window.castplane_web.reference_render());
   if (ref.name !== name) throw new Error(`reference_render rendered ${ref.name}, not ${name}`);
   writeFileSync(join(outdir, `${name}.svg`), ref.svg);
   writeFileSync(join(outdir, `${name}.json`), ref.json + "\n");
-  rows[name] = await drag_stats();
+  rows[name] = await drag_stats(`${name}: after the drag`);
 }
 toggle_checks.after_every_example = await toggles();
 check(is_default(toggle_checks.after_every_example), "toggles: still the defaults after loading every example");
 
 // phase 2 (§5.4.10): receivers, mesh objects, several lights, the hidden-line switch and style
-const overlay_ids = () => page.evaluate(() => [...document.querySelectorAll("svg.overlay g[id]")].map((g) => g.id));
+const overlay_ids = () => page.evaluate(() => {
+  window.castplane_web.settle();
+  return [...document.querySelectorAll("svg.overlay g[id]")].map((g) => g.id);
+});
 const ui = () => page.evaluate(() => ({ names: window.castplane_web.scene3d_names, doc: window.castplane_web.doc_summary,
   hidden: window.castplane_web.hidden, status: document.getElementById("status").textContent }));
 async function shoot(name) {
@@ -395,6 +511,7 @@ const phase2 = {};
   check(s.names.includes("receiver:wall") && s.names.includes("outline:wall") && !s.names.includes("grid:wall"),
     "wall_and_ground: the wall as a bounded plate");
   check(JSON.stringify(s.doc.receivers) === '["ground","wall"]', "wall_and_ground: receivers in the document");
+  await settle();
   const dashed = await page.evaluate(() => ({
     dasharray: document.querySelector('svg.overlay g[id="objects.hidden"]')?.getAttribute("stroke-dasharray") ?? null,
     elements: document.querySelectorAll('svg.overlay [id^="objects.hidden."] > *').length,
@@ -404,6 +521,7 @@ const phase2 = {};
   await page.evaluate(() => window.castplane_web.set_hidden(true, "omit"));
   await frames2();
   const omit_ids = await overlay_ids();
+  await settle();
   const omit_hidden_children = await page.evaluate(() => document.querySelectorAll('svg.overlay [id^="objects.hidden."] > *').length);
   check(omit_hidden_children === 0, "wall_and_ground: the omit style draws no hidden runs");
   await page.evaluate(() => window.castplane_web.set_hidden(false));
@@ -422,6 +540,7 @@ const phase2 = {};
   await page.evaluate(() => window.castplane_web.set_hidden(true)); // back to the page default
   await frames2();
   check(s.names.includes("house") && s.names.includes("tank"), "mesh_demo: the house mesh and the tank in the 3D view");
+  await settle();
   const house_edges = await page.evaluate(() => document.querySelectorAll('svg.overlay [id="objects.house"] > *').length);
   check(house_edges > 0, "mesh_demo: the house's edges in the overlay");
   phase2.mesh_demo = { names: s.names, house_elements: house_edges, status: s.status, screenshot: await shoot("mesh_demo") };
@@ -443,18 +562,105 @@ const phase2 = {};
   phase2.two_lights = { names: s.names, umbra_pieces: s.doc.umbra_pieces, umbra_pieces_drag: during.doc.umbra_pieces,
     umbra_pieces_after: after.doc.umbra_pieces, overlay_groups: ids, status: s.status, screenshot: shot_path };
 }
+// D88 review: a re-grab while the release's resting request waits behind an in-flight drag reply. That request is
+// posted when the reply arrives, with the new press held, so it goes out as a drag request; the second release (no
+// motion) must still bring the resting frame. Before the fix the drag document (no hidden lines) stayed at rest.
+{
+  await page.evaluate(() => window.castplane_web.load_example("wall_and_ground"));
+  await frames2();
+  await idle();
+  if (await page.evaluate(() => window.__gate !== undefined && window.castplane_web.worker === true)) {
+    await with_observer(async () => {
+      const box = await page.locator("#observer").boundingBox();
+      const q = await ring_px(80);
+      check(q !== null, "regrab: a ring point for the first drag");
+      if (q === null) return;
+      await page.mouse.move(box.x + q[0], box.y + q[1]);
+      await page.mouse.down();
+      for (let i = 1; i <= 10; i++) {
+        await page.mouse.move(box.x + q[0] + 3 * i, box.y + q[1] + 0.7 * i);
+        await frames2();
+      }
+      await page.evaluate(() => { window.__gate.hold = true; });
+      await page.mouse.move(box.x + q[0] + 40, box.y + q[1] + 9); // a drag request whose reply is held
+      await frames2();
+      await page.mouse.up(); // the release's resting request waits behind it
+      await frames2();
+      await frames2();
+      const q2 = await ring_px(80);
+      check(q2 !== null, "regrab: a ring point for the second press");
+      if (q2 === null) {
+        await page.evaluate(() => window.__gate.flush());
+        return;
+      }
+      await page.mouse.move(box.x + q2[0], box.y + q2[1]);
+      await page.mouse.down();
+      await frames2();
+      const posted = await page.evaluate(() => { const n = window.__gate.posted; window.__gate.flush(); return n; });
+      const deferred = await page.waitForFunction((n) => window.__gate.posted > n, posted, { timeout: 10000 })
+        .then(() => true, () => false);
+      await page.mouse.up(); // no motion: the plane did not change
+      await frames2();
+      check(deferred, "regrab: the waiting request was posted while the second press was held");
+    });
+    await worker_matches_sync("wall_and_ground: after a re-grab across an in-flight reply");
+  }
+}
 if (sceneFile) {
   const stem = sceneFile.replace(/^.*\//, "").replace(/\.json$/, "");
+  await start_loading_samples();
+  await page.evaluate(() => {
+    // D91: the animation frames in which the overlay's DOM changed (nested groups included)
+    const w = window;
+    w.__fr = 0;
+    w.__ins = new Set();
+    const tick = () => { w.__fr += 1; if (w.__ld_on) requestAnimationFrame(tick); };
+    tick();
+    w.__mo = new MutationObserver(() => w.__ins.add(w.__fr));
+    w.__mo.observe(document.querySelector("svg.overlay"), { childList: true, subtree: true });
+  });
   await page.setInputFiles("#file", sceneFile);
   await page.waitForFunction((s) => document.getElementById("status").textContent.startsWith(s), stem, { timeout: 120000 });
-  await frames2();
-  rows[stem] = await drag_stats();
+  {
+    // D91 (D89 for the labels): a document of more than 1000 elements is inserted over several frames; once it has
+    // filled by itself (no settle()), the overlay's DOM is the one a single insertion of the same text gives
+    // (D90: a long scene's first picture is its final document; idle() reads no document, so nothing is flushed)
+    const quiet = await idle();
+    const s = await stop_loading_samples();
+    const filled = await page.evaluate(() => {
+      window.__mo.disconnect();
+      const ov = document.querySelector("svg.overlay");
+      const natural = ov.innerHTML, labels = ov.querySelectorAll(":scope > #labels > text").length;
+      const text = window.castplane_web.svg; // settles: nothing is left to insert
+      const whole = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+      whole.innerHTML = text.slice(text.indexOf(">", text.indexOf("<svg")) + 1, text.lastIndexOf("</svg>"));
+      return { labels, elements: ov.querySelectorAll("*").length, insert_frames: window.__ins.size,
+        same: natural === whole.innerHTML, settled_same: ov.innerHTML === whole.innerHTML,
+        svg_ns: [...ov.querySelectorAll("*")].every((e) => e.namespaceURI === "http://www.w3.org/2000/svg") };
+    });
+    check(quiet && filled.same && filled.settled_same && filled.svg_ns && (filled.elements <= 1000 || filled.insert_frames >= 3),
+      `${stem}: the overlay filled over several frames is the single insertion's DOM (${filled.labels} labels) ${JSON.stringify(filled)}`);
+    // D92: the loading indicator is on from the load until the first picture, off once idle, never inside the stage
+    // (the samples begin with the previous scene's picture; the load turns the indicator on and clears the overlay)
+    const on = s.findIndex((x) => x.active), first = on < 0 ? -1 : s.findIndex((x, i) => i > on && x.picture);
+    const before = on < 0 || first < 0 ? [] : s.slice(on, first);
+    check(before.length > 0 && before.every((x) => x.active && !x.picture) && !s.some((x) => x.in_stage) && s[s.length - 1].active === false,
+      `D92: ${stem}: the loading indicator is on before the first picture and off when idle (${before.length} frames before the ` +
+      `picture, ${before.filter((x) => x.active).length} on, ${s.filter((x) => x.visible).length} visible)`);
+    console.log(`D92: ${stem}: ${before.length} frames before the first picture, ${s.filter((x) => x.visible).length} with the indicator visible; ` +
+      `D91: ${filled.elements} elements inserted in ${filled.insert_frames} frames`);
+  }
+  // D88: a heavy scene (the optional file) exercises the heavy overlay's rule; at rest the worker's picture is still
+  // the synchronous render's
+  await worker_matches_sync(`${stem}: load`);
+  rows[stem] = await drag_stats(`${stem}: after the drag`);
 }
 
 // M9 (contract §5.6.9): the observer switch
 const observer = { rows: {} };
 const PHASE1 = ["basic", "construction_demo", "curved_demo", "directional", "three_point"];
 const drawing = () => page.evaluate(() => ({
+  settled: window.castplane_web.settle(), // before the overlay is read (the svg hook settles too)
   svg: window.castplane_web.svg,
   overlay: document.querySelector("svg.overlay").innerHTML,
   dl: window.castplane_web.download_texts(),
@@ -556,6 +762,7 @@ if (sceneFile) {
   // must not stay on top
   await page.evaluate(() => window.castplane_web.load_example("basic"));
   await frames2();
+  await settle();
   const img = await page.evaluate(() => getComputedStyle(document.querySelector("img.overlay")).display);
   check(img === "none", "the <img> overlay of a drag frame is not displayed at rest");
 }
@@ -1099,7 +1306,10 @@ const objrot = {};
         pivot: r.pivot }) };
   };
   const verts = async (ids) => Object.fromEntries(await Promise.all(ids.map(async (id) => [id, JSON.stringify(await api("object_vertices", id))])));
-  const warning_codes = () => page.evaluate(() => [...document.querySelectorAll("#warnings tbody tr td:first-child")].map((td) => td.textContent));
+  const warning_codes = () => page.evaluate(() => {
+    window.castplane_web.settle();
+    return [...document.querySelectorAll("#warnings tbody tr td:first-child")].map((td) => td.textContent);
+  });
   const undo_size = async () => (await get("rig")).undo;
   /** Render a scene file with the Python CLI; its SVG text. */
   const cli_svg = (path) => {
@@ -1358,6 +1568,7 @@ const objrot = {};
     const ob = await page.locator("#observer").boundingBox();
     const h0 = await get("handles_px"), o0 = await get("observer");
     const svg0 = await get("svg"), dl0 = await api("download_texts"), cam0 = JSON.stringify(await get("camera")), u0 = await undo_size();
+    await settle();
     const overlay0 = await page.evaluate(() => document.querySelector("svg.overlay")?.outerHTML ?? null);
     check(o0.board_shown && o0.labels_shown > 0 && await page.evaluate(() => document.getElementById("observer-board").checked),
       "D83: 板子 is checked by default, the board and its labels shown");
@@ -1379,6 +1590,7 @@ const objrot = {};
     const cur = await page.evaluate(([x, y]) => getComputedStyle(document.elementFromPoint(x, y)).cursor, [ob.x + h0.tip[0], ob.y + h0.tip[1]]);
     check(cur !== "pointer", `D83: the hidden arrow tip is not hover-highlighted (${cur})`);
     await page.mouse.move(ob.x + 4, ob.y + 4);
+    await settle();
     const overlay1 = await page.evaluate(() => document.querySelector("svg.overlay")?.outerHTML ?? null);
     check(await get("svg") === svg0 && JSON.stringify(await api("download_texts")) === JSON.stringify(dl0) && overlay1 === overlay0
       && JSON.stringify(await get("camera")) === cam0 && await undo_size() === u0,
@@ -2127,6 +2339,6 @@ await page.waitForFunction(() => document.getElementById("error").textContent.in
 const scene_error = await page.locator("#error").textContent();
 
 const engine = { chromium: browser.version() };
-console.log(JSON.stringify({ engine, first, toggles: toggle_checks, preview: preview_checks, rows, load_errors, phase2, observer, plane, objrot, failures, downloads, errors: { not_json, scene_error }, logs }, null, 1));
+console.log(JSON.stringify({ engine, first, toggles: toggle_checks, preview: preview_checks, rows, load_errors, phase2, observer, plane, objrot, worker_sync, failures, downloads, errors: { not_json, scene_error }, logs }, null, 1));
 await browser.close();
 process.exitCode = logs.some((l) => l.startsWith("pageerror")) || failures.length > 0 ? 1 : 0;

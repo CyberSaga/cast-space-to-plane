@@ -1587,6 +1587,31 @@ worktree and the merge rule are in `docs/PLAN-v2.md`.
   3 MiB limit of `test_expected_files_are_canonical_and_small`; the next additions should stay small. Also on the
   merge: `conics.classify` / `classify_and_condition` evaluate `det` / `svd` under `np.errstate(all="ignore")` (a singular
   centred conic with subnormal entries made numpy warn "divide by zero"; values unchanged, the conic is degenerate).
+- **[implementation] (web smooth interaction, D87) TS-only, result-identical triangle-BVH prune of `occluded`.** Amends,
+  by reference and with the existing text unchanged, the §5.1.6.2 remark that a BVH is an optional result-identical
+  optimisation, and rests on the culling permission of §5.1.6.4 ("must not change any result … A test compares culled
+  and unculled runs") and on the fast-path rule of §5.4.4 item 6 (each vectorised or pruned path has its result-identity
+  test). In `ts/src/hidden.ts`, `occluded` asks `mesh_blocks(occ, C, D, eps)` for a `kind === "mesh"` occluder instead
+  of running every triangle: `mesh_accel(occ)` builds a flat BVH over the triangle AABBs (median split on the longest
+  centroid axis, leaves of at most 4 triangles, typed arrays), and the segment `C + tD`, `t ∈ [max(0, eps − 1e-9), 1 −
+  eps + 1e-9]`, is walked against the node boxes grown by `PRUNE_MARGIN · mag = 1e-5 · mag`, `mag = max(ext, |C|∞,
+  |X|∞)`. The candidate set is a superset of every triangle that can give `first_mesh(...) < 1 − eps`: the candidates
+  run `first_mesh_tri`, the *same* Möller–Trumbore operations in the same operand order as `first_mesh`, so the boolean
+  is bit-identical, not merely equal within a tolerance. Triangles whose test is ill-conditioned are never pruned and
+  are tested on every ray: slivers (`|e1×e2| ≤ 1e-3·|e1||e2|`), a triangle with a non-finite vertex, and a triangle
+  whose plane lies within `1e-4·mag` of the eye. Polygon faces are never pruned, and a non-finite `mag` or `D` falls
+  back to the plain loop. `first_mesh`, `first_hit_ray` and `first_hit` are unchanged. The BVH is cached per stage-A
+  record (`WeakMap`, validated by the identity of its `triangles` / `vertices` arrays), so a cached stage A keeps its
+  BVHs across camera frames and across the web UI's renders; `set_hlr_prune(on)` switches the prune off (tests only).
+  **Python is unchanged**: it is the reference and keeps the brute-force loop, and no expected file changes (v8 / 63
+  cases, dry run 0 changes). Tests (`ts/test/hidden.test.ts`): for the 63 conformance cases and the expanded
+  `mesh_demo`, `dumps(compose(…, true))` is identical with the prune on and off; 200 seeded random rays against a
+  300-triangle soup that includes a sliver, collinear and repeated vertices give the same boolean; rays from the case
+  camera to every vertex and edge midpoint of every conformance mesh; and a cache test. A mutation (`PRUNE_MARGIN =
+  −3e-2`) makes 8 tests fail. Measured on a 19-mesh / 4 922-triangle / 9 324-edge character scene: `compose(scene, B,
+  true)` 1 320–1 376 ms → 67–111 ms (12–18×), the first compose after a stage A about 150 ms more (the BVH build);
+  `mesh_demo.expanded` 4.9–5.9 ms → 2–5 ms. The TS perf gate passes unchanged (full render median 360.6 ms, limit 1 000;
+  camera-only 78.2 ms, limit 100) and `tools/compare_svg.py` reports 0 mismatches (docs/DECISIONS.md D87).
 
 ### 5.2 M5 — mesh import (spec §9 rows 網格匯入 / 匯入格式, spec §10 M5, spec §11.3)
 
@@ -4274,6 +4299,248 @@ and the hidden-run SVG groups (§5.1.8). Nothing an M4–M6 case needs lies beyo
   object's `faces` / `smooth_groups` text to `json.dumps(indent=1)` at depth 4, and the fifth pins the placeholder guard). No Python change, no conformance
   case change. The core's TypeScript `dumps` still writes mesh indices as floats; no other `web/src` path serialises a
   validated mesh scene.
+- **[decision, implementation] (web smooth interaction, D87) The core runs in a Web Worker.** Uses the permission of
+  §5.4.11 ("running B + C + SVG in a Web Worker: acceptable (pure functions, no shared state)") and amends, by reference
+  and with the existing text unchanged, the sentence of §5.4.10 that each frame runs `project_scene` → `compose` →
+  `write_svg` on the main thread, and the §5.4.10 overlay-mode rule "DOM overlay at rest" in the one respect of item (4)
+  below. (1) **Path.** `main.ts` starts `core_worker.ts` (`new Worker(new URL("./core_worker.ts", import.meta.url),
+  {type: "module"})`, a Vite worker chunk) inside `try/catch`; `onerror`, or a failed construction, selects the
+  **synchronous fallback**, which is the former frame (`frame_sync`, unchanged). The worker holds the loaded scene and
+  its stage A (`CoreEngine` in `core_engine.ts`; the main thread's side is `CoreClient` in `core_client.ts`). Messages
+  to the worker: `scene` (a load, generation 1), `pose` (every object's transform; the worker re-runs stage A; a new
+  generation only when the transforms differ value for value, `CoreClient.publish_pose`), `render` (block, hidden,
+  umbra, layers, hidden_style, `two_phase`, `art_layers`, `dragging`), `art` (re-pack the drawing of the last document
+  for other layers) and `download` (the SVG and JSON download texts of the resting document of a block, rendered in the
+  worker if its last document is not that one). Replies: `rendered {phase: quick | final, svg, img, rec, art
+  (ArtBuffers, transferred), ray_points, warnings, summary, core_ms, stage_a_ms, stage_a_ran}`, `stale`, `art`,
+  `downloaded` and `error`. The documents are the contract documents: `core_engine.test.ts` pins the quick and the final
+  SVG, the downloads, the art buffers, the ray points and the summary byte for byte to the synchronous path. (2)
+  **Scheduling.** One render is in flight and the latest camera wins (`CoreClient` keeps a dirty flag, and the next
+  request is posted with the then-current parameters when the in-flight one is answered). A reply of another generation,
+  a reply to a request older than a `settle()`, and a `final` after a newer render are dropped. The main thread computes
+  the current camera record itself (`camera_matrix(block, canvas_mm)`) in every frame that draws the observer, so the
+  board follows the rig at once and only the drawing's content follows the reply. (3) **Two phases.** A resting render
+  with hidden lines or the umbra on (`two_phase`) is answered first with the `quick` document (hidden lines and umbra
+  off: the §5.4.11 drag document) and then, from a later worker task, with the `final` one; a newer `render`, `pose` or
+  `scene` drops a pending final, and `art` / `download` run it first. While a final is pending the second line of the
+  status carries 「（隱藏線計算中）」. (4) **Overlay-mode amendment.** A resting `quick` reply whose all-layer SVG is longer than
+  `IMG_MODE_THRESHOLD` is written again with the checked layers and shown through the `<img>` overlay (as a drag frame
+  is) until the `final` reply restores the DOM overlay; "DOM overlay at rest" holds for the final document. In both
+  modes the picture is the writer's unchanged text for that document. (5) **The drawing pane during a drag.** A new SVG
+  costs the main thread its parse, layout and paint (an `<img>` SVG document is laid out and painted on the main thread
+  like the DOM overlay): for a 10 k-element drawing a long task of 100–400 ms, which would stall the pointer and the
+  observer at every update. The cost scales with the element count, measured by the smallest resting DOM update's
+  `innerHTML` time since the load (`resting_dom_ms`; never a drag frame's; the first one after a load is cold and
+  overstates it). A **light** overlay (`resting_dom_ms < OVERLAY_HEAVY_MS = 3`; every bundled example, about 0.5–2 ms)
+  takes every reply. A **heavy** one is not replaced while the pointer moves: a drag reply is shown when the replies
+  pause for `OVERLAY_DRAG_PAUSE_MS = 150` (the pointer stopped; a debounce, each newer reply restarting the wait), or at
+  once when `OVERLAY_DRAG_INTERVAL_K · resting_dom_ms` has passed since the last update (`K = 40`; a long continuous
+  drag still shows progress: the character scene, about 35 ms, every 1.4 s); a load or a synchronous render drops a
+  waiting reply. The observer's drawing on the frame (GPU lines, cheap), the warnings and the status follow every reply,
+  and the resting frame always applies, so a pointer held still or released never leaves a stale picture.
+  (`web/scripts/smoke.mjs` checks after every example load and drag that the worker's resting overlay, warnings and
+  counts equal the synchronous render's, `settle()`.) (6) **What requests no core render.** A selection, the 板子 and 視線
+  checkboxes, 整體顯示, the observer orbit, resizes and the 3D-view checkbox request only an observer (and view) redraw
+  (`request_observer_render`); a pivot pick (`點選物體`) requests a core render only when the block changed. (7)
+  **`FrameRecord`** gains `phase` (`quick` | `final` | `sync`), `stage_a_ms` (null when no stage A ran for the frame)
+  and `overlay` (false for a skipped drag overlay). (8) **Hooks.** `settle()` renders synchronously when a render is
+  pending (`svg`, `svg_length`, `download_texts` and `doc_summary` call it first; `probe_rig` uses `frame_sync`),
+  `worker` (true in worker mode) and `set_gl(on)` (a measurement aid that skips the WebGL draw calls). The download
+  buttons go through the worker in worker mode. `status_text` takes a `DocSummary` (`doc_summary.ts`: `doc_summary_of`,
+  `umbra_count`, `ray_count`, re-exported by `ui.ts`), `WarningsTable` gains `update_list(warnings)`, and `observer.ts`
+  gains `vertex_ray_points` / `rays_from_points`, of which `vertex_rays` is the composition (same arrays). (9) **Fixed
+  line boxes.** The panel's status lines (`#obj-selected`, `#obj-centre`, `#obj-limit`, `#obj-notice`) have fixed line
+  boxes in CSS: a selection that changed the controls' height by one pixel resized both panes and re-laid out the whole
+  overlay (about 70 ms). (10) **Tests and tool.** `web/test/core_client.test.ts` (6), `core_engine.test.ts` (3: `basic`,
+  `two_lights`, `wall_and_ground`), `doc_summary.test.ts`, `art_buffers.test.ts` (2) and one more test in
+  `observer.test.ts`: 184 → 197 web tests. `web/scripts/smoke.mjs` calls `settle()` before it reads the overlay DOM, the
+  warnings, the status or the frames after a drag; every check is kept. `web/scripts/interact_bench.mjs` is a dev helper
+  that measures click-to-rings, the first proxy motion, the animation-frame gaps and the long tasks of a ring drag. The
+  core, the output bytes of `ts/src`, the conformance set and the warning codes are unchanged (docs/DECISIONS.md D87).
+- **[decision, implementation] (web smooth interaction, D88) A heavy overlay waits for the pointer, not for the
+  replies.** Amends, by reference and with the existing text unchanged, item (5) of the D87 note above and its item (7)
+  (`FrameRecord.overlay`). Re-measured at the D87 head on the 19-mesh character scene (`--nogl`, three runs), a 1.4–1.9
+  s ring drag still had 2–4 long tasks of 62–301 ms and frame gaps of up to 350–500 ms, and its release 5–6 long tasks
+  of up to 336 ms (the D87 table's single long task was a run in which few reply gaps reached the pause). Three causes:
+  (a) that scene's worker replies come about 60–150 ms apart (the candidate's stage A plus B + C + SVG), so the 150 ms
+  debounce keyed to the replies fired while the pointer still moved; (b) the interval update (`K · resting_dom_ms`,
+  every 1.0–1.8 s) and the first reply of a drag (whose interval had long passed) were shown at once; (c) at the release
+  a waiting drag reply fired, and then the resting `quick` document (an `<img>`, about three DOM times) and the `final`
+  one each paid a full overlay update. The rule is now the pure `web/src/overlay_policy.ts::overlay_wait(kind, clock)`:
+  `kind` is `drag` for a drag request's reply, else the reply's phase; it returns the wait in ms (0: now) or null
+  (never); a waiting reply's timer re-evaluates it, and any newer reply drops it. (i) A light overlay (unchanged:
+  `resting_dom_ms < OVERLAY_HEAVY_MS = 3`) shows every reply at once. Before the cost is measured (`resting_dom_ms` is
+  `Infinity` until the first resting DOM document after a load), a scene counts as heavy for a held drag or a drag reply
+  when a reply since the load was longer than `IMG_MODE_THRESHOLD` or written for the `<img>`
+  (`overlay_heavy(resting_dom_ms, long_svg)`); a load's resting replies are still shown at once, since the pane must
+  replace the previous scene's picture. (ii) A heavy overlay, while a drag is held, shows a reply (also a resting one
+  that arrives after a new drag began) only when the pointer has not moved for `OVERLAY_DRAG_PAUSE_MS = 250`, measured
+  from its last move (`drag_moved_at`, set when the drag begins and in every move); there is no periodic update and
+  `OVERLAY_DRAG_INTERVAL_K` is removed. (iii) A drag reply that arrives, or whose wait ends, after its drag ended is
+  never shown: the release requests the resting frame (`finish_object_drag`, `request_after_drag`), which replaces it.
+  `render_params` sets `drag_rendered` whenever it builds a drag request, including the one `CoreClient` posts by itself
+  when an in-flight reply arrives: a resting request wanted at a release goes out as a drag request when a new press
+  began meanwhile, and that press's release must then request the resting frame even if it moved nothing (before, it
+  requested none, and the pre-release or a drag-quality picture stayed at rest; D87 had the same race). (iv) A heavy
+  resting `quick` reply waits up to `OVERLAY_QUICK_HOLD_MS = 500` for its `final` reply, which replaces it at once; a
+  later final still lets the quick one show (through the `<img>` of D87 item (4) when it is long). Continuous resting
+  input (a slider moved, a key held) counts as moving: each newer quick replaces the waiting one and restarts its hold,
+  and a newer render drops the pending final, so the pane shows the last document once the input stops. (v) A resting
+  `final` reply shows at once. The observer's drawing on the frame, the warnings and the status still follow every reply
+  (the status keeps 「（隱藏線計算中）」 while the final is pending), `settle()` and a load drop a waiting reply, the
+  last resting document is always shown, and `FrameRecord.overlay` is true only for a reply shown on arrival. On the
+  same scene and setup (three runs) the ring and board-ring drags have no long task, frame gaps of at most 16.8 ms and
+  no overlay replacement (counted by a `MutationObserver`; 9–11 replies per ring drag); the ring release replaces the
+  overlay once and has two long tasks of 67–90 ms (the main-thread stage A of `end()` and the final DOM overlay), the
+  board-ring release one or two of 51–82 ms; the bundled examples are unchanged (light: every reply shown, 40 / 40
+  ring-drag and 30 / 30 board-ring-drag replacements, no long task). Tests: `web/test/overlay_policy.test.ts` (9), 197 →
+  206 web tests; `web/scripts/smoke.mjs` gates the worker's replies to force the re-grab race on `wall_and_ground` (it
+  fails without the `render_params` line: the drag document, 7 177 against 9 402 characters, stayed at rest) and
+  compares the optional scene file's resting picture with the synchronous render; `interact_bench.mjs` counts overlay
+  replacements with a `MutationObserver` and reports the second click's time without its settling pause. No output byte,
+  document, conformance case or warning code changes (docs/DECISIONS.md D88).
+- **[decision, implementation] (web smooth interaction, D89) Stage A reuses the mesh preprocessing, and a long
+  `labels` layer enters the DOM overlay over several frames.** Amends nothing above; both parts change no output byte.
+  Measured at the D88 head on the 19-mesh character scene, the two long tasks left at a ring release were the
+  main-thread stage A of `end()` and the final DOM overlay. (1) *Stage A.* A pose change re-runs `shadow_geometry` on
+  the same objects with new transforms, and `build_object` repeated the §5.2 mesh preprocessing (weld, winding repair,
+  smooth groups) of every mesh although its inputs (`data`, `scale`, `weld_tolerance`, `smooth_angle_deg`, `id`) had
+  not changed: about three quarters of that scene's stage A. `ts/src/primitives.ts::PrepCache` (port-only; Python is
+  unchanged) remembers the `PreparedMesh` record per `data` object (a `WeakMap`, by identity) and per key
+  `scale|weld_tolerance|smooth_angle_deg|id` (`-0` kept apart from `0`); `shadow_geometry(scene, prep_cache?)` passes
+  it to `build_object`, and without the argument nothing is remembered. The record is read-only (the transform is
+  applied to a copy, as before), so stage A with the cache equals stage A without it. The web page holds one cache per
+  loaded scene on the main thread (`load`, `apply_pose`) and one per `scene` message in the worker (`on_scene`,
+  `on_pose`); both derive a pose's scene from the loaded objects, whose `data` objects stay the same. Stage A of that
+  scene: 51.5 → 13.3 ms median in node (24 documents byte-identical with and without the cache). (2) *Overlay.* Of that
+  scene's 9 806 overlay elements 4 618 are the `<text>` elements of the `labels` layer; alone they cost 16 ms of
+  `innerHTML` and a 56 ms long task (text shaping and layout: the same elements without their text content, or as many
+  `<line>` elements, cause none), and the whole document 100–117 ms to the next frame with one long task of 74–119 ms
+  against 33 ms (the two-frame floor) without the labels; hiding the layer with CSS does not remove the parse. The DOM
+  mode (`Overlay.set_svg`) now inserts a document whose `labels` group holds more than `LABEL_CHUNK = 1000` `<text>`
+  elements in steps: first the writer's inner markup with that group empty, then, one per animation frame, the group's
+  content in order, `LABEL_CHUNK` elements at a time (`web/src/overlay_split.ts::split_labels`: the chunks joined
+  inside the group are the writer's markup again; a document with at most `LABEL_CHUNK` labels, no `labels` group or a
+  nested group in it is inserted whole, so every bundled example is unchanged). This is the §5.4.11 row "showing the
+  writer's unchanged SVG text": the same text reaches the same DOM (smoke: `innerHTML` equal to a single insertion's),
+  only spread over 5 frames for that scene; it is not a sparser document (no reply is written differently, and the
+  download, the hooks and the observer's drawing read the full text at once). A newer document, the `<img>` mode and a
+  load drop the chunks not yet inserted; `Overlay.flush()` inserts them at once and `settle()` calls it, so a hook that
+  reads the DOM reads the whole document; the read-only hook `overlay_filling` tells whether chunks are left. A document
+  inserted in steps counts as heavy for `overlay_policy.ts` whatever its first insertion took (`apply_overlay`), and
+  only a document inserted whole updates `resting_dom_ms`. On the same scene and setup as the D88 note (three runs):
+  the ring release and the board-ring release have no long task (D88: two of 67–90 ms, one or two of 51–82 ms) and
+  frame gaps of at most 33.4 ms; a ring drag gets 15–18 worker replies (D88: 9–11) with a median `core ms` of 25–29
+  (D88: 31–35); the drags are unchanged (no long task, gaps of at most 16.8 ms, no
+  overlay replacement). Tests: two in `ts/test/mesh_pipeline.test.ts` (equal stage A and document with and without the
+  cache over three poses; the key), `web/test/overlay.test.ts` (3): 206 → 209 web tests; `web/scripts/smoke.mjs` waits
+  for the labels in `idle()` and compares the optional scene file's overlay, filled without `settle()`, with a single
+  insertion of the same text. No document, conformance case or warning code changes (docs/DECISIONS.md D89).
+- **[decision, implementation] (web smooth interaction, D90) A long scene's resting `quick` reply waits for its `final`
+  one before the overlay's cost is measured, also after a load.** Amends, by reference and with the existing text
+  unchanged, item (i) of the D88 note above ("a load's resting replies are still shown at once"). At the D89 head a
+  load of the 19-mesh character scene had three long tasks (three runs: 137–165, 126–151 and 57–95 ms): the
+  synchronous load (validation, the main thread's stage A, the worker's copy of the scene, the two 3D views), the
+  `quick` document shown through the `<img>` (D87 item (4); an SVG image of that size is parsed, laid out and painted
+  in one task), and the `final` DOM document about 160 ms later. D89 removed the third. The second paid a full overlay
+  update for a picture that stayed about 160 ms, and the reason D88 gave for showing it at once no longer holds in
+  worker mode, where `load` clears the overlay (`overlay.clear()`) and the status reads `rendering…`. `heavy_overlay`
+  now passes `long_svg` to `overlay_heavy` for every reply kind but `final`, so an unmeasured scene whose reply was
+  longer than `IMG_MODE_THRESHOLD` (or written for the `<img>`) holds its resting `quick` reply for
+  `OVERLAY_QUICK_HOLD_MS` like a measured heavy one (D88 item (iv)): the `final` reply replaces it, and a `final` later
+  than the hold still lets the `quick` one show. A resting `final` reply, a scene without a `final` phase and every
+  scene below the threshold (the bundled examples) are unchanged. Same scene and setup, three runs: one long task of
+  114–123 ms at the load (the synchronous load; D89 head: three), the drawing pane's first picture is the `final`
+  document about 350–370 ms after the load instead of the `quick` `<img>` at about 180–190 ms; the drags and releases
+  are as in the D89 note. Not done: the synchronous load itself (cold, about 25 ms validation, 50–76 ms stage A whose
+  mesh preprocessing is spread over the §5.2 steps with no single hot spot, 10–13 ms for the worker's copy, 20–40 ms
+  for the views) stays one task, since `load` returns whether the scene was accepted and the hooks and the smoke test
+  read its state synchronously. `contain: layout style paint`, `contain: strict` and `content-visibility: auto` on the
+  overlay were measured on that scene's document and change nothing (100, 101, 103 and 86 ms to the next frame against
+  100 ms; the long task stays 71–154 ms), so none is applied. `web/scripts/smoke.mjs`'s D89 check waits for `idle()`
+  before it reads the overlay. No output byte, document, conformance case or warning code changes
+  (docs/DECISIONS.md D90).
+- **[decision, implementation] (web smooth interaction, D91) Every layer of a heavy DOM document enters the overlay
+  over several frames, starting two frames after the reply.** Generalises the D89 note's item (2) (whose
+  `LABEL_CHUNK` / `split_labels` it replaces) and amends §5.4.10's "`set_svg(text)` replaces its children with the
+  content between the core's `<svg …>` and `</svg>`" by reference: for a heavy document that replacement is spread over
+  animation frames; the text and the final DOM are unchanged. At the D90 head the 19-mesh character scene (≈ 10 570
+  overlay elements, 4 618 of them labels) still had, at a ring release, a long animation frame of 55–73 ms (×2 CPU
+  throttling: 105–132 ms and 3–6 long tasks of 51–94 ms; a board-ring release 52–58 / 106–125 ms): its script was the
+  worker reply's `apply_reply`, which inserted the ~5 000 non-label elements in one `innerHTML` beside the observer
+  update. (1) *The cut.* `web/src/overlay_split.ts::plan_fill(inner)` (pure; a flat scan of the writer's markup, which
+  escapes `<` and `>` in text and attribute values) walks the element tree in document order and returns the frames of
+  a fill plan: each frame a list of steps `{path, html}` (`path`: indices into `children` from the overlay `<svg>`),
+  whose elements cost at most `FILL_BUDGET = 1000`, an element counting 1 and a `<text>` `TEXT_WEIGHT = 2.5` (glyph
+  layout). An element that fits goes in whole; one that does not goes whole into the next frame when it costs at most
+  the budget, else (a large group; the writer nests `<g>` up to four levels, e.g. `objects` → `objects.hidden` →
+  `objects.hidden.<id>`) its start and end tags go in empty and its children follow, cut the same way. Every piece of a
+  parent's content begins with the text before its first element and ends right after an element's end tag (the last
+  piece takes the trailing text), so the first step as `innerHTML` and the others as `insertAdjacentHTML("beforeend")`
+  give exactly one `innerHTML = inner`: the same elements in the same order, the same text nodes, none adjacent, all in
+  the SVG namespace (the parsing context is an SVG element). Markup the writer does not produce (a comment, a stray `<`
+  or `>`, unbalanced or mismatched tags) gives null: inserted whole. Layers come in document order, so the geometry
+  enters before `labels`. (2) *The schedule.* `Overlay.set_svg` inserts a document of at most `FILL_THRESHOLD = 1000`
+  elements whole, at once (`more_elements_than`, a count of start tags that stops at 1 001; every bundled example holds
+  fewer than 500, so all are unchanged). A heavier one only records the text: the first animation-frame callback
+  after the reply runs in that reply's own frame, so the plan is computed in the next frame (4–14 ms at ×2 measured with
+  temporary instrumentation) and the steps follow one frame each; the previous picture (DOM or `<img>`) stays until
+  the first step, which also sets the `viewBox` and shows the DOM overlay. The reply's frame thus holds only the
+  observer update and the status (2–6 ms of `apply_reply` at ×2), so nothing else in `apply_reply` had to move.
+  `overlay.filling` (hook `overlay_filling`) is true from `set_svg` until the last step; `flush()` completes the
+  document at once (whole when no step was inserted yet, else the remaining frames); a newer `set_svg`, `set_img` and
+  `clear()` drop the pending steps; `settle()` flushes before and after its synchronous frame, as before. A document
+  inserted over frames counts as heavy (`apply_overlay`) and does not update `resting_dom_ms`, as in the D89 note.
+  (3) *Measured* (same scene and setup as the D89 note, `web/scripts/interact_bench.mjs --nogl`, now with `--throttle
+  N` and the release's `first_ms` / `complete_ms` / `fill_gaps`; four runs each): unthrottled, neither release has a
+  long animation frame or a long task, every filling frame is 16.6–16.8 ms apart, and the document is complete
+  558–589 ms after a ring release (first step at 267–292 ms) and 494–518 ms after a board-ring release (219–238 ms); at
+  ×2 neither release has a long animation frame, frames while filling are 16.5–50.1 ms apart (median 16.8), the
+  document is complete 727–810 / 651–735 ms after the release, and two of the four runs of each release still log one
+  or two long tasks of 50–60 ms. Attributed with temporary instrumentation: they are `labels` frames whose script is
+  3–4 ms; the rest is rendering, which grows with the overlay already in the DOM (smaller label frames, `TEXT_WEIGHT =
+  4`, left them at 50–54 ms and made the fill about 100 ms longer, so 2.5 is kept). Drags are unchanged: no long
+  animation frame or long task, frame gaps at most 16.8 ms, 16–19 worker replies per ring drag (×2: 19–22). The cost:
+  a heavy document is complete 275–297 ms (×2: 389–489 ms) after its first step, which comes two frames plus the plan
+  after the reply, instead of one frame plus D89's five label frames, and while it fills the pane shows it layer by
+  layer. Not addressed: the release's `pointerup` frame,
+  which commits the last candidate through stage A on the main thread (§5.8.2), was a 52–74 ms long animation frame at
+  ×2 in some exploratory runs (none of the four runs above; one of the four D90-head runs). Tests: `web/test/
+  overlay.test.ts` 3 → 6 (the steps rebuild the markup over nested and self-closed groups, with no step after a text
+  node; geometry before labels and a fitting group never split; the `<text>` weight; light and non-writer markup
+  inserted whole; `more_elements_than`). `web/scripts/smoke.mjs` additionally requires, for an optional scene file of
+  more than 1 000 elements, insertions in at least three frames and every element in the SVG namespace (the Miki
+  scene: 10 570 elements in 20 frames, `innerHTML` equal to a single insertion's). No output byte, document,
+  conformance case or warning code changes (docs/DECISIONS.md D91).
+- **[decision, implementation] (web smooth interaction, D92) A loading indicator in the drawing pane until a loaded
+  scene's first picture.** Since D90 a heavy scene's first picture is its `final` document, and `load` clears the
+  overlay (worker mode), so the drawing pane stayed empty for about 350 ms on that scene (D90 note), and since D91 a few
+  frames more, with only the status line's text as feedback. `#viewport` now also holds `#pane-loading`
+  (`role="status"`), a small box centred over the pane with a spinner and `載入中…` (`web/src/loading.ts::LOADING_TEXT`,
+  the language of the pane's 預覽 button). It is a sibling of `#stage`, not inside it, so §5.4.10's overlay (the `<svg>`
+  in the canvas's CSS box) and every exported SVG / PNG are unchanged; it is absolutely positioned, contained (`contain:
+  layout paint style`) and `pointer-events: none`, so toggling it lays out nothing else. `loading.ts::loading_after`
+  (pure) turns it on at a successful `load` and off at the first picture (`Overlay.onshow`: the first step of a DOM
+  document, D91, or an `<img>` source) and at any error-panel message (a failed render, the worker gone, a load that
+  failed: the previous scene stays); `main.ts` toggles the class `active` and `aria-busy` on `#viewport`. The CSS shows
+  it only after `LOADING_DELAY_MS = 150` (a delayed `visibility` / `opacity` transition; hidden at once), so a scene
+  whose first picture comes within a few frames, every bundled example, never shows it; under `prefers-reduced-motion`
+  the spinner does not turn and nothing fades. Without the core worker `load` does not clear the overlay and the next
+  animation frame renders the new scene synchronously; the indicator follows the same rule there (it is off once that
+  frame's picture is shown; a load whose synchronous frame lasts longer than the delay shows it for those frames). Hook
+  `loading_active` (read-only). Tests: `web/test/loading.test.ts` (2); `web/scripts/smoke.mjs` checks that loading
+  `two_lights` never makes it visible and leaves it off when idle, and that loading the optional scene file turns it on
+  with the overlay empty until the first picture and off when idle, never inside `#stage`. Web tests 209 → 214 with D91.
+  No output byte, document, conformance case or warning code changes (docs/DECISIONS.md D92).
+- **[decision, implementation] (web smooth interaction, D91 and D92 review)** Two corrections to the two notes above.
+  (1) Without the core worker every frame replaces the overlay's document (nothing holds a heavy one back there), and a
+  newer `set_svg` restarts the fill, so continuous input on a heavy scene never showed a picture: on that path
+  `apply_overlay` completes the document at once (`Overlay.flush`), as before D91; the fill over several frames applies
+  with the worker only. (2) Only a load or render failure ends the loading indicator: a clipboard notice or an
+  object-rotation notice in the error panel leaves it on while the first picture is pending (`show_error`'s `render`
+  flag). The D92 note's "shows it for those frames" is amended: a synchronous frame blocks painting, so the indicator
+  cannot appear during it. Reproduction of (1): no `Worker`, `benchmarks/scenes/benchmark_100.json`, 40 frames of
+  `input` on the roll slider.
 
 ### 5.5 M8 — STEP import (spec §9 row "STEP", spec §10 M8) — a loader, outside the core
 
@@ -5196,6 +5463,29 @@ The observer shows lights as in §5.4.10 (`scene3d`). Nothing in this table is w
   is ignored: the checkbox returns to its state, so the held board never vanishes under the pointer; during an
   object-ring drag or an orbit it applies. Hooks: `set_board_visible(on)` (acts as the checkbox; returns the resulting
   state), `board_visible()`, and the `observer` hook's `board_shown` and `labels_shown` (docs/DECISIONS.md D83).
+- **[decision, implementation] (web smooth interaction, D87) The incremental `ObserverPane`.** Amends, by reference and
+  with the existing text unchanged, the "drawing on the frame" row of §5.6.5 (the mapping is the same affine map, now
+  applied as one matrix) and the M9 module note of §5.6.6. (1) **`update(frame: ObserverFrame)`** runs per main-thread
+  frame and redraws only the parts whose inputs changed value for value: the board (D, g, E, Q, P, corners, patch,
+  equation), the handles (active, ring, Q, tip, `b.r`), an object's rings (id, active axis, centre, points) and the rays
+  (the six arrays); the labels are placed on every call. (2) **Pools.** Every line object is a pooled `LineSegments2`
+  whose instance buffer is rewritten in place (`DynamicDrawUsage`, update ranges; a new geometry only when it must grow,
+  ×1.5; dashed styles get their instance distances as `computeLineDistances` would); dots are pooled `Points`
+  (`setDrawRange`); the patch and the frame back are pooled quads, and the drawing's fills are one indexed mesh per
+  style. An empty object is detached, so `names` lists the non-empty styles only; its order is now board parts, art,
+  handles, rays, rings (the smoke test checks membership only). Pooled objects have `frustumCulled = false`. The groups
+  keep their meaning: the board group (board parts, art, handles; hidden together by 「板子」) and the extras (rays, object
+  rings). (3) **The drawing on the frame** (`set_art(art: ArtBuffers)`, `web/src/art_buffers.ts::pack_art`) is kept in
+  canvas mm (`z = 0`) and placed by the art matrix `art_frame_matrix(rec, D − 0.012)`, the affine form of
+  `unproject_to_plane` (§5.6.1) at the same 0.012 m offset, so a camera change moves it without a rebuild;
+  `web/test/art_buffers.test.ts` pins it within 1e-9 m to `unproject_to_plane`. The matrix is right-handed (its z column
+  is `−f = r' × u'`); the pane negates the z column if a left-handed one is passed, because three.js would cull the
+  front-sided line quads. The two dashed art materials get `dashScale = depth / k` (the matrix's mm→m scale) at each
+  update. (4) **Scene and picking.** `scene3d.ts::set_object_matrices(group, entries)` does one `updateMatrixWorld` per
+  pose (`set_object_matrix` wraps it), and `pick_object` updates the world matrices itself before the ray cast. (5)
+  **Material precompile.** At construction the pane calls `renderer.compile` on one temporary object per line, dot and
+  fill material, so the first interactive frame does not pay the shader build. What is drawn, and every number shown, is
+  that of §5.6.5; only how it reaches the GPU changes (docs/DECISIONS.md D87).
 
 ### 5.7 M10 — plane mode, board-first (spec-v0.2 §1, §4, §5, §6, §7)
 
@@ -6252,3 +6542,23 @@ limited part stays inside, and a subnormal axis; `web/scripts/smoke.mjs` drives 
 and parent turns that leave the angle, the tip's parent-frame axis and *Download scene* + reload on the fixture. Core,
 TS port, conformance set and warning codes unchanged; a scene without the key behaves exactly as D85 (docs/DECISIONS.md
 D86, spec-v0.3 §10).
+- **[decision, implementation] (web smooth interaction, D87) Object drags with the core worker.** Amends, by reference
+  and with the existing text unchanged, §5.8.2 (the sentences "`frame()` start: … run steps 1–4 with `record: none`,
+  then stages B and C" and the `LIVE_STAGE_A_MS` bullet), the row "stage A at load > `LIVE_STAGE_A_MS`" of §5.8.7, and
+  the sentences of §5.8.8 and of the D82–D86 notes that name the slow-scene notice 「此場景拖動放開後更新」, in one respect: they
+  describe the synchronous fallback only, i.e. the core worker of the §5.4 D87 note not running. In worker mode an
+  object drag runs the `UnitDrag` machine with `live: false` (the machine is unchanged); its `proxy` effect moves the 3D
+  proxies of both panes and syncs the panel's fields, centre and limit line from the candidate
+  (`sync_object_panel(force, pending)`), and the render request carries the candidate's transforms (published right
+  before the render and deduplicated by value), so the worker runs stage A + B + C + SVG at its own pace while the
+  proxies move at frame rate. `end()` is unchanged and still synchronous (§5.8.2): it takes the last pending candidate,
+  runs stage A on the main thread and only on success records the undo step, never waiting for a frame; the
+  nothing-to-commit rule, `cancel()` (a second finger) and the stage-A exception path hold as written. `LIVE_STAGE_A_MS`
+  and the notice apply only in the synchronous fallback. The hook `object_transform(id)` returns the drag candidate
+  while an object drag is held in worker mode (the pose being shown; `object_matrices` shows it too), while
+  `object_vertices`, `object_centre` and `svg` keep reporting the committed pose until the release, as stage A has not
+  run on the main thread; `timings.stage_a_runs` counts the worker's stage A runs (`stage_a_ran` replies) together with
+  the main thread's. A drag frame's document is the §5.4.11 drag document (hidden lines and umbra off), its overlay
+  follows the light / heavy rule of item (5) of that note, and the resting document arrives in the two phases (all in
+  the §5.4 D87 note). The committed pose, the undo steps, the document and the downloads are those of the synchronous
+  path (docs/DECISIONS.md D87).

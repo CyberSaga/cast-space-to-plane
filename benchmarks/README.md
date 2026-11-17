@@ -349,6 +349,13 @@ the browser's later layout and paint. `web/README.md` has the details and the ov
 At rest, the DOM overlay of `benchmark_100.json` took 98–151 ms of `innerHTML`, plus the browser's layout. The
 UI therefore switches that scene to the `<img>` mode while dragging (§5.4.10 DOM budget).
 
+Hidden lines on a mesh-heavy scene (D87, recorded, not gated; no gate limit changes): `compose(scene, B, true)` in
+the TypeScript port on a 19-mesh / 4 922-triangle / 9 324-edge character scene took 1 320–1 376 ms before and 67–111 ms
+after the result-identical triangle-BVH prune of `occluded` (`ts/src/hidden.ts::mesh_blocks`, contract §5.1 D87 note);
+the first compose after a stage A costs about 150 ms more (the BVH build). The benchmark scenes have no `mesh` object,
+so `node ts/build/bench/camera_only.js --gate both` is unaffected (full render median 360.6 ms, camera-only 78.2 ms).
+The web-path interaction numbers are in `web/README.md` ("Interaction latency").
+
 ## M8 (2026-10-07): STEP import (loader only, not on any benchmark path)
 
 M8 changes no core module: the STEP importer (`castplane/io/part21.py`, `castplane/io/step.py`) runs

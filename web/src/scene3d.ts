@@ -80,11 +80,21 @@ export function built_in_world(obj: SceneObject, A?: StageA): boolean {
   return rec !== undefined && rec.triangles !== undefined;
 }
 
-/** M11: set the matrix of object `id`'s mesh in a `build_scene3d` group (no-op without the group or the object). */
+/** M11: set the matrix of object `id`'s mesh in a `build_scene3d` group (no-op without the group or the object); a
+ * one-entry {@link set_object_matrices}. */
 export function set_object_matrix(group: THREE.Group | null, id: string, M: THREE.Matrix4): void {
+  set_object_matrices(group, [[id, M]]);
+}
+
+/** Set the matrices of several objects (`[id, M]` entries) in a `build_scene3d` group, with one world-matrix update at
+ * the end (a whole pose per frame; no-op without the group). */
+export function set_object_matrices(group: THREE.Group | null, entries: Iterable<readonly [string, THREE.Matrix4]>): void {
   if (group === null) return;
+  const by_id = new Map<string, THREE.Matrix4>(entries);
+  if (by_id.size === 0) return;
   for (const c of group.children) {
-    if (c.userData[OBJECT_ID_KEY] !== id) continue;
+    const M = by_id.get(c.userData[OBJECT_ID_KEY] as string);
+    if (M === undefined) continue;
     c.matrix.copy(M);
     c.matrixWorldNeedsUpdate = true;
   }

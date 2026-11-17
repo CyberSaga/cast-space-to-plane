@@ -1,4 +1,12 @@
 {
+  "extraKnownMarketplaces": {
+    "agent-harness-local": {
+      "source": { "source": "github", "repo": "CyberSaga/agent-harness" }
+    }
+  },
+  "enabledPlugins": {
+    "agent-harness@agent-harness-local": true
+  },
   "permissions": {
     "allow": [
       "Bash(python -m pytest *)",

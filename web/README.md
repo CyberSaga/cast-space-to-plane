@@ -11,7 +11,7 @@ npm run -w ts build        # the core package "castplane" the UI imports
 npm run -w web dev         # vite dev server
 npm run -w web build       # tsc type check + vite build -> web/dist (static, base './')
 npm run -w web preview     # serve web/dist locally
-npm run -w web test        # orbit / download / colours / rig / equation / observer / plane / object-rotation unit tests (node:test, web/test/; 184 tests)
+npm run -w web test        # orbit / download / colours / rig / equation / observer / plane / object-rotation / limits / core-worker (core_client, core_engine, doc_summary, art_buffers, overlay_policy) unit tests (node:test, web/test/; 206 tests)
 ```
 
 ![web UI](../docs/images/web_ui.png)
@@ -216,7 +216,10 @@ drag):
     `test/limits.test.ts` (13) on `test/fixtures/basic_limited.json`.
 - **Overlay** (`src/overlay.ts`): an `<svg>` over the canvas with the same CSS box and `viewBox`. On each
   animation frame where something changed, the frame runs `project_scene` → `compose` → `write_svg` (all six
-  layers) against the cached stage A. Pointer events only update the state and at most one core render runs per
+  layers) against the cached stage A. With the core worker (D87, below) these run in the worker: pointer events only
+  update the state and at most one core render is in flight (the latest camera wins), and a resting document with
+  hidden lines or the umbra on arrives in two phases, `quick` first and `final` later. Without a worker (the
+  synchronous fallback) pointer events only update the state and at most one core render runs per
   frame (the latest camera wins). The layer checkboxes hide groups with CSS (`hide-<layer>` classes). The
   *3D view* checkbox hides the WebGL canvas (hidden, it is not rendered). **The toolbar toggles are page-level UI state
   (D79, spec-v0.2 §2.1):** at page start `horizon`, `objects`, `form_shadow`, `cast_shadow`, `labels` and *Hidden
@@ -282,7 +285,129 @@ last resting SVG is longer than **250 000 characters** (`IMG_MODE_THRESHOLD`) is
 `<img src="blob:…">`. That image is the writer's unchanged SVG text for the checked layers. The blob URL is
 revoked on the next frame, and the DOM overlay comes back on pointer-up (contract §5.4.11). The eight examples
 (8–28 k characters) always use the DOM mode. `benchmark_100.json` (1.96 M characters, ≈ 30 k elements) uses
-the `<img>` mode during a drag.
+the `<img>` mode during a drag. With the core worker (next section) the same holds at rest until the `final` document
+arrives: a resting `quick` document longer than the threshold is shown through the `<img>` too, and the final document
+restores the DOM overlay.
+
+### Core worker and interaction latency
+
+Contract §5.4 (D87 note), §5.6 (D87 note), §5.8 (D87 note). The core (`CoreEngine`, `src/core_engine.ts`) runs in a Web
+Worker (`src/core_worker.ts`, a Vite worker chunk) behind `CoreClient` (`src/core_client.ts`); if the worker cannot
+start or fails, the page falls back to the synchronous frame of before (`frame_sync`).
+
+- **Worker path.** The worker holds the loaded scene and its stage A. The page posts `scene`, `pose` (every object's
+  transform), `render`, `art` and `download` messages; one render is in flight and the latest camera wins. The documents
+  are byte-identical to the synchronous path (`web/test/core_engine.test.ts`).
+- **Two phases at rest.** With hidden lines or the umbra on, a resting render is answered with the `quick` document
+  (both off, the drag document) and then with the `final` one; the status line's second line reads 「（隱藏線計算中）」 until it
+  arrives. A resting `quick` document longer than `IMG_MODE_THRESHOLD` is shown through the `<img>` overlay until the
+  `final` one restores the DOM overlay.
+- **The drawing pane's overlay** (D87, D88; `src/overlay_policy.ts::overlay_wait`). A light overlay (the smallest
+  resting `innerHTML` time since the load under `OVERLAY_HEAVY_MS` = 3 ms: every bundled example, ≈ 0.5–2 ms) takes
+  every reply. A heavy one (the 19-mesh character scene, ≈ 30–40 ms; replacing it is a 100–400 ms long task, DOM or
+  `<img>`) is replaced only when nothing moves: during a drag when the pointer has not moved for
+  `OVERLAY_DRAG_PAUSE_MS` = 250 ms (measured from the pointer's last move, not from the replies, which for that scene
+  come 60–150 ms apart), never by a drag reply that arrives after the release (the resting frame replaces it; every
+  release requests one, also after a re-grab whose drag posted only `CoreClient`'s deferred request), and a resting
+  `quick` reply waits up to `OVERLAY_QUICK_HOLD_MS` = 500 ms for its `final` one. Continuous resting input (a slider,
+  a held key) counts as moving: the pane shows the last document once it stops. Before the cost is measured, a scene
+  whose SVG is longer than `IMG_MODE_THRESHOLD` counts as heavy for a drag. The observer's drawing on the frame, the
+  warnings and the status follow every reply; the last resting document is always shown. `FrameRecord` carries
+  `phase` (`quick` | `final` | `sync`), `stage_a_ms` and `overlay` (shown on arrival).
+- **Heavy documents fill over several frames** (D89 for the labels, D91 for every layer; `src/overlay_split.ts::
+  plan_fill`, `Overlay.set_svg`). A DOM document of more than `FILL_THRESHOLD` = 1000 elements is not inserted by the
+  reply: the next animation frame computes a fill plan, and each later one inserts elements costing `FILL_BUDGET` =
+  1000 (a `<text>` counts `TEXT_WEIGHT` = 2.5) in document order, geometry layers before the labels; a large group goes
+  in empty and its children follow. The previous picture stays until the first step. It is the same text and the same
+  final DOM as one insertion (the smoke test compares `innerHTML`), without one long frame for thousands of elements
+  (the character scene: 10 570 elements in about 20 frames). A newer document, the `<img>` mode and a load drop the
+  steps not yet inserted; `settle()` completes the document at once (`Overlay.flush()`), and the read-only hook
+  `overlay_filling` tells whether it is still filling. Such a document always counts as heavy. Documents of at most
+  1000 elements (every bundled example) are inserted whole, at once. A background tab gets no animation frames, so its
+  document completes when it is shown again.
+- **Stage A on a pose change** (D89). The page and the worker each hold a `PrepCache` (`castplane`, port-only) for the
+  loaded scene, so a moved mesh is not welded and repaired again: stage A of the character scene 51.5 → 13.3 ms.
+- **A long scene's first picture** (D90). Before the overlay's cost is measured, a scene whose reply is longer than
+  `IMG_MODE_THRESHOLD` holds its resting `quick` reply for the `final` one like a heavy overlay, also after a load
+  (the pane is already cleared and the status reads `rendering…`): the character scene's load has one long task
+  (114–123 ms, the synchronous load itself) instead of three, and its first picture is the final document.
+- **Loading indicator** (D92; `src/loading.ts`). From a load until that scene's first picture (or an error, or a
+  failed load) the drawing pane shows 「載入中…」 with a spinner, centred, outside the stage (never in the overlay or an
+  export), `pointer-events: none`, `role="status"`. It appears only after 150 ms, so the bundled examples, whose first
+  picture comes within a frame or two, never show it; with `prefers-reduced-motion` the spinner stands still. Hook:
+  `loading_active`.
+- **Object drags** run the `UnitDrag` machine with `live: false`: the 3D proxies and the panel follow the pointer at
+  frame rate, the worker recomputes at its own pace, and release (`end()`) still runs stage A synchronously. The
+  slow-scene notice 此場景拖動放開後更新 appears only in the synchronous fallback.
+- **What does not render the core**: a selection, the 板子 and 視線 checkboxes, 整體顯示, the observer orbit, a resize and the
+  *3D view* checkbox redraw the observer (and the views) only. The 物體 panel's status lines have fixed line boxes, so a
+  selection no longer resizes the panes.
+- **Incremental observer** (`ObserverPane.update(ObserverFrame)`, `set_art`): only the parts whose inputs changed
+  value for value are redrawn; lines are pooled `LineSegments2` rewritten in place, dots pooled `Points`, the fills one
+  mesh per style, and an empty object is detached. The drawing on the frame is kept in canvas mm and placed by one
+  matrix (`art_frame_matrix`, `src/art_buffers.ts`), so a camera change moves it without a rebuild. Materials are
+  compiled at construction.
+- **Hooks**: `settle()` (renders synchronously when a render is pending; `svg`, `svg_length`, `download_texts` and
+  `doc_summary` call it first), `worker` (true in worker mode) and `set_gl(on)` (skips the WebGL draw calls, for
+  measuring the page's own cost). `smoke.mjs` calls `settle()` before it reads the DOM after a drag.
+- **Tool**: `web/scripts/interact_bench.mjs` (a dev helper like `smoke.mjs`) times a real click on an object, the
+  first proxy motion, the animation-frame gaps and the long tasks of a ring drag and of a board-ring drag, and the
+  release. It also reports each phase's long animation frames (Long Animation Frames API: script, render,
+  style-and-layout and forced-layout time per frame; `loaf: null` where unsupported), when the overlay's document is
+  complete after each release (`first_ms`, `complete_ms`, `fill_gaps`), and with `--throttle N` slows the CPU N×
+  (Chromium's CPU throttling) to stand in for slower hardware.
+
+#### Interaction latency (`web/scripts/interact_bench.mjs`)
+
+Setup: `vite build` + `vite preview`, headless Chromium 141 (WebGL through SwiftShader) on the CI container, a real
+mouse click on an object, a 40-step ring drag and a 30-step board-ring drag. The scene is the 19-mesh character scene
+(4 922 triangles, 9 324 document edges, a 644 k-character SVG, ≈ 10.5 k elements). "After" is measured with `--nogl`
+(`set_gl(false)`), which skips the WebGL draw calls so that it shows the page's JavaScript; the WebGL draws of a real
+GPU cost ≈ 1–2 ms per frame. "D87 head" is a re-measurement (three runs) of the D87 commit, whose own first table
+understated the drag's long tasks; "now" adds D88 (three runs).
+
+| measurement | before (main) | D87 head | now (D87 + D88) |
+| --- | --- | --- | --- |
+| click → rings shown | 3.1 s (long tasks 1 767 + 1 327 ms: compose with hidden lines 1.3 s, `innerHTML`, observer rebuild) | 14–25 ms, no long task | 19–26 ms (a second click for the part: 12–15 ms), no long task |
+| ring drag: first proxy motion | 5.9 s | 27–28 ms | 17–31 ms |
+| ring drag: animation-frame gaps median / p90 / max | 117 / 433 / 650 ms | 16.7 / 16.7 / 350–500 ms | 16.7 / 16.7 / 16.8 ms |
+| ring drag: long tasks | 50–653 ms every frame | 2–4 of 62–301 ms in 1.4–1.9 s | none |
+| ring drag: drawing-pane overlay replacements | every frame | 1 | 0 (of 9–11 replies; counted by a `MutationObserver`) |
+| ring release: long tasks | one of 1 265 ms | 5–6 of 56–336 ms | 2 of 67–90 ms (the main-thread stage A of `end()`, the final DOM overlay); one overlay replacement |
+| board-ring drag: frame gaps median / p90 / max | 133 / 400 ms / – | 16.7 / 16.8 / 200–350 ms (2 long tasks of 90–228 ms) | 16.7 / 16.7 / 16.8 ms, no long task, no overlay replacement |
+| board-ring release: long tasks | – | 4 of 91–275 ms | 1–2 of 51–82 ms |
+| worker `core ms` per drag frame (B + C + SVG) | 28 ms median on the main thread | 34–35 ms median in the worker | 31–35 ms median in the worker |
+
+The bundled examples now (`basic`, `two_lights`, `wall_and_ground`; unchanged by D88, their overlays are light): click
+15–17 ms, first proxy motion 12–27 ms, every frame gap 16.5–16.8 ms, no long tasks, every reply replaces the overlay
+(40 / 40 in the ring drag, 30 / 30 in the board-ring drag), `core ms` 0.7–2.2 ms median.
+
+With D89 (same scene and setup, three runs): the ring release and the board-ring release have no long task (frame gaps
+of at most 33.4 ms, one overlay replacement), a ring drag gets 15–18 worker replies (9–11 before) with a median
+`core ms` of 25–29, and the drags are as in the table (no long task, gaps of at most 16.8 ms, no overlay replacement).
+
+With D91 (same scene and setup, four runs unthrottled and four with `--throttle 2`; D90 head: a ring release had a
+long animation frame of 55–73 ms, 105–132 ms at ×2 with 3–6 long tasks of 51–94 ms, a board-ring release 52–58 /
+106–125 ms):
+
+| measurement (D91) | unthrottled | `--throttle 2` |
+| --- | --- | --- |
+| ring release: long animation frames / long tasks | none / none | none / 1–2 of 54–60 ms in 2 of 4 runs |
+| board-ring release: long animation frames / long tasks | none / none | none / one of 50–56 ms in 2 of 4 runs |
+| frame gaps while the document fills (both releases) | 16.6–16.8 ms | 16.5–50.1 ms, median 16.8 |
+| ring release → first step / document complete | 267–292 / 558–589 ms | 299–325 / 727–810 ms |
+| board-ring release → first step / document complete | 219–238 / 494–518 ms | 253–310 / 651–735 ms |
+| ring and board-ring drags | no long frame or task, gaps ≤ 16.8 ms | the same |
+| worker replies per ring drag | 16–19 | 19–22 |
+
+The remaining long tasks at ×2 are label frames whose script takes 3–4 ms: the rest is the browser's rendering, which
+grows with the part of the document already in the overlay.
+
+**GL caveat.** With the WebGL draws on, SwiftShader (software rasteriser) spends ≈ 100–130 ms per frame in the
+observer's `renderer.render` alone for the character scene (≈ 9 k fat-line instances), so the frame gaps of a GL run
+stay ≈ 300 ms there. That cost is the software rasteriser's, not the page's; the table is therefore the `--nogl` run.
+Hidden-line `compose(…, true)` on the same scene went from 1 320–1 376 ms to 67–111 ms with the TS triangle-BVH prune
+(contract §5.1 D87 note); the first compose after a stage A costs ≈ 150 ms more (the BVH build).
 
 ## Measured `core ms` / `dom ms` (acceptance §5.4.13 (b))
 
@@ -365,6 +490,7 @@ the frame; in the preview its drag frames are unchanged (table above).
 npm run -w web build
 (cd web && npx vite preview --port 4173 --strictPort) &
 node web/scripts/smoke.mjs http://localhost:4173/ out/ docs/images/web_ui.png benchmarks/scenes/benchmark_100.json --shots docs/images
+node web/scripts/interact_bench.mjs http://localhost:4173/ examples/basic.json [OBJECT_ID] [--nogl] [--json out.json]   # D87 interaction latency, no pass/fail
 ```
 
 Run it with `PLAYWRIGHT_BROWSERS_PATH` pointing at an installed Chromium (on the CI container
